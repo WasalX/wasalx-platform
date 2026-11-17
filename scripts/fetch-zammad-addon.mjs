@@ -30,7 +30,7 @@ async function main() {
     git(["init","--quiet",checkout]);
     git(["-C",checkout,"-c","core.hooksPath=/dev/null","-c","credential.helper=","fetch","--depth=1","https://github.com/"+pin.repository+".git",pin.commit]);
     assert.equal(git(["-C",checkout,"rev-parse","FETCH_HEAD"]),pin.commit);
-    git(["-C",checkout,"-c","core.hooksPath=/dev/null","checkout","--detach","FETCH_HEAD"]);
+    git(["-C",checkout,"-c","core.hooksPath=/dev/null","-c","core.autocrlf=false","checkout","--detach","FETCH_HEAD"]);
   }
   assert.equal(git(["-C",checkout,"rev-parse","HEAD"]),pin.commit);
   assert.equal(git(["-C",checkout,"status","--porcelain"]),"");

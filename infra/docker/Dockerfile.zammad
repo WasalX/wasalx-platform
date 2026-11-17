@@ -12,7 +12,7 @@ RUN node scripts/build-zammad-package.mjs
 
 FROM ${ZAMMAD_BASE_IMAGE} AS package-source
 ARG WASALX_PACKAGE_VERSION=0.5.83
-ARG WASALX_PACKAGE_SHA256=fd0f7e71bec0e18527c2d928999e0aad0c1ed32e5259200fb02004d69f33903b
+ARG WASALX_PACKAGE_SHA256=00069cb9565f2a9002d5df73cc29532f3adde2fce28f4f09400370f9c9d11153
 USER 0:0
 COPY --from=node-toolchain /usr/local/lib/node_modules /usr/local/lib/node_modules
 COPY --from=node-toolchain /usr/local/bin /usr/local/bin
@@ -73,7 +73,7 @@ RUN rm -rf \
 
 FROM cgr.dev/chainguard/ruby@sha256:9caaf3d52f9d9a18ace549352136816d4bfe2bc8bbecec1318ea059ab2503ccb
 ARG WASALX_PACKAGE_VERSION=0.5.83
-ARG WASALX_PACKAGE_SHA256=fd0f7e71bec0e18527c2d928999e0aad0c1ed32e5259200fb02004d69f33903b
+ARG WASALX_PACKAGE_SHA256=00069cb9565f2a9002d5df73cc29532f3adde2fce28f4f09400370f9c9d11153
 
 USER 0:0
 RUN apk update && apk add --no-cache \
