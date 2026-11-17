@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import re
 import tarfile
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -16,6 +17,31 @@ spec.loader.exec_module(images)
 
 
 class ImagePublicationTests(unittest.TestCase):
+    def test_build_rewrites_layer_timestamps_using_the_source_commit_time(self):
+        row = {"image": "secret-sidecar", "dockerfile": "Dockerfile.secret-sidecar"}
+        commit, tree, epoch = "a" * 40, "b" * 40, "1794938086"
+
+        def invoke(args, **kwargs):
+            if args[:2] == ["git", "archive"]:
+                with tarfile.open(args[3].removeprefix("--output="), "w") as archive:
+                    archive.add(ROOT / row["dockerfile"], arcname=row["dockerfile"])
+
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(images, "catalog", return_value=[row]), \
+                patch.object(images, "coordinates", return_value=(commit, tree)), \
+                patch.object(images, "run", return_value=epoch) as git, \
+                patch.object(images.subprocess, "run", side_effect=invoke) as execute, \
+                patch.object(images, "inspect_image", return_value={}), \
+                patch.dict(images.os.environ, {"SOURCE_DATE_EPOCH": "1"}):
+            images.build(row["image"], Path(directory) / "receipt.json")
+        git.assert_called_once_with("git", "log", "-1", "--format=%ct", commit, cwd=ROOT)
+        args = execute.call_args.args[0]
+        self.assertEqual(args[:3], ["docker", "buildx", "build"])
+        self.assertEqual(args[args.index("--output") + 1], "type=docker,rewrite-timestamp=true")
+        self.assertIn(["--build-arg", "SOURCE_DATE_EPOCH=" + epoch], [args[i:i + 2] for i in range(len(args) - 1)])
+        self.assertIn("--provenance=false", args)
+        self.assertIn("--sbom=false", args)
+
     def test_loaded_config_checks_exported_bytes_and_manifest_binding(self):
         raw = b'{"os":"linux","architecture":"amd64","config":{"Labels":{}}}'
         digest = images.sha256(raw)
@@ -205,6 +231,7 @@ class ImagePublicationTests(unittest.TestCase):
 
     def test_workflow_restricts_writes_and_oidc_to_main_publish(self):
         text = (ROOT / ".github/workflows/branch-image.yml").read_text()
+        self.assertEqual(text.count("driver-opts: image=moby/buildkit:v0.26.3"), 2)
         self.assertNotIn("pull_request_target", text)
         self.assertEqual(text.count("packages: write"), 1)
         self.assertEqual(text.count("id-token: write"), 1)

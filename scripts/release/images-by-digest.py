@@ -316,6 +316,7 @@ def inspect_image(reference, row, commit, tree, directory, licenses=None):
 def build(image, output):
     row = next(r for r in catalog() if r["image"] == image)
     commit, tree = coordinates()
+    epoch = run("git", "log", "-1", "--format=%ct", commit, cwd=ROOT)
     reference = "ghcr.io/wasalx/" + image + ":" + commit
     addon = public_addon_source() if image in ADDON_IMAGES else None
     require(image not in ADDON_IMAGES or addon is not None, "pending add-on source")
@@ -345,9 +346,11 @@ def build(image, output):
                     for name in ["LICENSE", "COPYING", "THIRD-PARTY-NOTICES"]} if addon else {}
         dockerfile_digest = sha256((context / row["dockerfile"]).read_bytes())
         # No host context, cache imports, secret/SSH mounts, registry overrides or private build arguments.
-        subprocess.run(["docker", "buildx", "build", "--platform", "linux/amd64", "--load",
+        subprocess.run(["docker", "buildx", "build", "--platform", "linux/amd64",
+                        "--output", "type=docker,rewrite-timestamp=true",
                         "--provenance=false", "--sbom=false", "--file", str(context / row["dockerfile"]),
                         "--tag", reference, "--build-arg", "WASALX_CANDIDATE_SHA=" + commit,
+                        "--build-arg", "SOURCE_DATE_EPOCH=" + epoch,
                         "--build-arg", "COMMIT_SHA=" + commit, "--build-arg", "WASALX_CANDIDATE_TREE=" + tree,
                         "--label", "org.opencontainers.image.source=" + SOURCE,
                         "--label", "org.opencontainers.image.revision=" + commit,
