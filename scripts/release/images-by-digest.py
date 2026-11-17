@@ -78,16 +78,18 @@ def catalog():
 
 
 def public_addon_source(raw=None):
+    pin = json.loads((ROOT / "zammad-addon.json").read_text())
+    expected = {"repository": "https://github.com/" + pin["repository"], "commit": pin["commit"]}
     raw = os.environ.get("PUBLIC_ADDON_SOURCE", "") if raw is None else raw
-    source = json.loads(raw) if raw else None
-    if source is None:
-        return None
+    source = json.loads(raw) if raw else expected
     require(isinstance(source, dict) and set(source) == {"repository", "commit"}, "Invalid public add-on source fields")
     require(isinstance(source["repository"], str) and
             re.fullmatch(r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", source["repository"]),
             "Public add-on source requires a GitHub HTTPS repository URL")
     require(isinstance(source["commit"], str) and SHA.fullmatch(source["commit"]), "Public add-on source requires a full commit")
-    return {**source, "repository": source["repository"].removesuffix(".git")}
+    source = {**source, "repository": source["repository"].removesuffix(".git")}
+    require(source == expected, "Public add-on source differs from the pin")
+    return source
 
 
 def matrix():

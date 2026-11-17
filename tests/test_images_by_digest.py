@@ -51,18 +51,21 @@ class ImagePublicationTests(unittest.TestCase):
                 images.inspect_loaded_config("fixture:local", digest)
             child.kill.assert_called_once()
 
-    def test_unset_addon_source_keeps_all_images_but_marks_only_two_pending(self):
+    def test_addon_source_uses_the_pin_and_rejects_overrides(self):
+        pin = json.loads((ROOT / "zammad-addon.json").read_text())
+        source = {"repository": "https://github.com/" + pin["repository"], "commit": pin["commit"]}
         with patch.dict(images.os.environ, {"PUBLIC_ADDON_SOURCE": ""}):
             rows = images.matrix()["include"]
         self.assertEqual(len(rows), 21)
-        self.assertEqual({r["image"] for r in rows if r["pending"]}, {"zammad", "workspace-configurator"})
-        source = {"repository": "https://github.com/example/addon", "commit": "a" * 40}
+        self.assertFalse(any(r["pending"] for r in rows))
+        self.assertEqual([r["addonSource"] for r in rows if r["image"] == "zammad"], [source])
         with patch.dict(images.os.environ, {"PUBLIC_ADDON_SOURCE": json.dumps(source)}):
             rows = images.matrix()["include"]
         self.assertFalse(any(r["pending"] for r in rows))
         self.assertEqual([r["addonSource"] for r in rows if r["image"] == "zammad"], [source])
         for bad in [{**source, "repository": "https://user:password@github.com/example/addon"},
-                    {**source, "commit": "main"}, {**source, "extra": "value"}]:
+                    {**source, "commit": "main"}, {**source, "extra": "value"},
+                    {**source, "commit": "a" * 40}, {**source, "repository": "https://github.com/example/addon"}]:
             with self.assertRaises(ValueError):
                 images.public_addon_source(json.dumps(bad))
 

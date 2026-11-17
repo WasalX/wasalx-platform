@@ -15,8 +15,7 @@ import { validateBackupManifest } from "../scripts/dr/contracts.mjs";
 
 const tenantId = "10000000-0000-4000-8000-000000000001";
 const compact = tenantId.replaceAll("-", "");
-const packageVersion = "0.5.83";
-const packageSha256 = "00069cb9565f2a9002d5df73cc29532f3adde2fce28f4f09400370f9c9d11153";
+const { packageVersion, packageSha256 } = JSON.parse(await readFile(new URL("../zammad-addon.json", import.meta.url)));
 
 const credential = "credential-value-long-enough";
 const ageRecipient = `age1${"q".repeat(58)}`;

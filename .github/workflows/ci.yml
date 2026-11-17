@@ -60,24 +60,7 @@ jobs:
             sudo apt-get update
             sudo apt-get install -y ruby ruby-minitest
           fi
-          # Never authenticate a dependency fetch from a fork PR.
-          addon=https://github.com/WasalX/wasalx-zammad-addon.git
-          revision=33d9fd2aa2fcfebe2be057c08416f2200d790ee5
-          if timeout 30s env GIT_TERMINAL_PROMPT=0 git -c credential.helper= ls-remote --exit-code "$addon" HEAD >/dev/null 2>&1; then
-            git init --quiet .git/hosted-addon
-            GIT_TERMINAL_PROMPT=0 git -C .git/hosted-addon -c credential.helper= fetch --depth=1 "$addon" "$revision"
-            git -C .git/hosted-addon checkout --detach FETCH_HEAD
-            test "$(git -C .git/hosted-addon rev-parse HEAD)" = "$revision"
-            cp -Rn .git/hosted-addon/zammad-package .
-            mkdir -p build/zammad tests/fixtures
-            cp -Rn .git/hosted-addon/build/zammad/. build/zammad/
-            cp -Rn .git/hosted-addon/tests/fixtures/. tests/fixtures/
-            cp -n .git/hosted-addon/tests/*.rb tests/
-            node scripts/build-zammad-package.mjs
-            echo "Add-on test inputs: $addon at $revision" >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "Add-on source unavailable; only generated, named input-dependent tests may skip."
-          fi
+          GIT_TERMINAL_PROMPT=0 pnpm run zammad:package
           pnpm run build:services
       - name: Check CI runner
         if: matrix.mode == 'collection'

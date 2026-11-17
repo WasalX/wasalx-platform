@@ -25,7 +25,7 @@ COPY scripts/build-zammad-package.mjs ./scripts/build-zammad-package.mjs
 COPY zammad-package ./zammad-package
 RUN node scripts/build-zammad-package.mjs \
     && printf '%s  %s\n' \
-      '00069cb9565f2a9002d5df73cc29532f3adde2fce28f4f09400370f9c9d11153' \
+      'fd0f7e71bec0e18527c2d928999e0aad0c1ed32e5259200fb02004d69f33903b' \
       'build/zammad/wasalx-0.5.83.zpm' | sha256sum --check --strict
 
 
@@ -41,7 +41,7 @@ RUN node -e "const assert = require('node:assert/strict'); assert.equal(process.
 LABEL org.opencontainers.image.title="WasalX workspace configurator" \
       org.opencontainers.image.version="0.1.0" \
       io.wasalx.zammad-package.version="0.5.83" \
-      io.wasalx.zammad-package.sha256="00069cb9565f2a9002d5df73cc29532f3adde2fce28f4f09400370f9c9d11153"
+      io.wasalx.zammad-package.sha256="fd0f7e71bec0e18527c2d928999e0aad0c1ed32e5259200fb02004d69f33903b"
 
 ENV NODE_ENV=production
 ENV HOME=/tmp
