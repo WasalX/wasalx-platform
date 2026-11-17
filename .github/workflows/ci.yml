@@ -18,7 +18,6 @@ defaults:
     shell: bash
 
 env:
-  COREPACK_HOME: ${{ github.workspace }}/.git/hosted-corepack
   PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
 
 jobs:
@@ -73,11 +72,19 @@ jobs:
         with:
           fail-on-severity: high
 
-  prepare:
-    outputs:
-      artifact_attempt: ${{ steps.assemble.outputs.attempt }}
+  checks:
+    name: ${{ matrix.name }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {name: Lint, mode: lint}
+          - {name: Typecheck, mode: typecheck}
+          - {name: Collection, mode: collection}
+          - {name: Unit 1/2, mode: unit, shard: 1}
+          - {name: Unit 2/2, mode: unit, shard: 2}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -102,74 +109,26 @@ jobs:
           path: ${{ env.PNPM_STORE_PATH }}
           key: pnpm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', 'package.json', 'patches/**') }}
           restore-keys: pnpm-${{ runner.os }}-${{ runner.arch }}-
-      - run: pnpm install --frozen-lockfile --fetch-retries=2 --config.enable-global-virtual-store=false
+      - run: pnpm install --frozen-lockfile --fetch-retries=2
       - uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.pnpm-cache.outputs.cache-hit != 'true'
+        if: matrix.mode == 'lint' && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.pnpm-cache.outputs.cache-hit != 'true'
         with:
           path: ${{ env.PNPM_STORE_PATH }}
           key: ${{ steps.pnpm-cache.outputs.cache-primary-key }}
-      - name: Build shared prerequisites
-        id: assemble
+      - name: Install Ruby test prerequisites
+        if: matrix.mode == 'unit' || matrix.mode == 'collection'
+        run: |
+          if ! ruby -rminitest -e 'puts RUBY_VERSION'; then
+            sudo apt-get -o Acquire::Retries=2 update
+            sudo apt-get -o Acquire::Retries=2 install -y ruby ruby-minitest
+          fi
+      - name: Build check prerequisites
+        if: matrix.mode == 'unit' || matrix.mode == 'collection' || matrix.mode == 'typecheck'
         env:
           GIT_TERMINAL_PROMPT: '0'
         run: |
           pnpm run zammad:package
           pnpm run build:services
-          find packages services -type d \( -name node_modules -o -name dist \) -prune -print0 > "$RUNNER_TEMP/prepared-paths"
-          tar -cf - --null -T "$RUNNER_TEMP/prepared-paths" node_modules .git/hosted-corepack |
-            zstd -T2 -o "$RUNNER_TEMP/prepared.tar.zst"
-          tar -cf - zammad-package build/zammad build/addon-licenses tests/fixtures tests/*.rb |
-            zstd -T2 -o "$RUNNER_TEMP/addon.tar.zst"
-          echo "attempt=$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: check-inputs-${{ github.run_attempt }}
-          path: |
-            ${{ runner.temp }}/prepared.tar.zst
-            ${{ runner.temp }}/addon.tar.zst
-          compression-level: 0
-          retention-days: 1
-          if-no-files-found: error
-
-  checks:
-    name: ${{ matrix.name }}
-    needs: prepare
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - {name: Lint, mode: lint}
-          - {name: Typecheck, mode: typecheck}
-          - {name: Collection, mode: collection}
-          - {name: Unit 1/2, mode: unit, shard: 1}
-          - {name: Unit 2/2, mode: unit, shard: 2}
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
-        with:
-          node-version: '24.13.1'
-          package-manager-cache: false
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: check-inputs-${{ needs.prepare.outputs.artifact_attempt }}
-          path: ${{ runner.temp }}/check-inputs
-      - name: Restore shared prerequisites
-        env:
-          WITH_ADDON: ${{ matrix.mode == 'unit' || matrix.mode == 'collection' }}
-        run: |
-          tar --zstd -xf "$RUNNER_TEMP/check-inputs/prepared.tar.zst"
-          corepack enable
-          if [ "$WITH_ADDON" = true ]; then
-            tar --zstd -xf "$RUNNER_TEMP/check-inputs/addon.tar.zst"
-            if ! ruby -rminitest -e 'puts RUBY_VERSION'; then
-              sudo apt-get -o Acquire::Retries=2 update
-              sudo apt-get -o Acquire::Retries=2 install -y ruby ruby-minitest
-            fi
-          fi
       - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
         id: eslint-cache
         if: matrix.mode == 'lint'
@@ -260,7 +219,7 @@ jobs:
 
   ci-gate:
     if: always()
-    needs: [changes, dependency-review, prepare, checks, images, publish]
+    needs: [changes, dependency-review, checks, images, publish]
     runs-on: ubuntu-slim
     timeout-minutes: 2
     permissions: {}
@@ -270,7 +229,6 @@ jobs:
           EVENT: ${{ github.event_name }}
           CHANGES: ${{ needs.changes.result }}
           CHECKS: ${{ needs.checks.result }}
-          PREPARE: ${{ needs.prepare.result }}
           REVIEW_NEEDED: ${{ needs.changes.outputs.dependency_review }}
           REVIEW: ${{ needs.dependency-review.result }}
           IMAGES_NEEDED: ${{ needs.changes.outputs.images }}
@@ -278,7 +236,7 @@ jobs:
           PUBLISH: ${{ needs.publish.result }}
           MANIFEST: ${{ needs.publish.outputs.complete }}
         run: |
-          test "$CHANGES" = success && test "$PREPARE" = success && test "$CHECKS" = success || exit 1
+          test "$CHANGES" = success && test "$CHECKS" = success || exit 1
           case "$EVENT:$REVIEW_NEEDED:$REVIEW" in
             pull_request:true:success|merge_group:false:skipped|push:false:skipped) ;;
             *) exit 1 ;;

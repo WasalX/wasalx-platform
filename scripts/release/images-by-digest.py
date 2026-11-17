@@ -341,7 +341,7 @@ def cache_options(image, mode):
     if image not in CACHED_IMAGES:
         return []
     cache_ref = "type=registry,ref=ghcr.io/wasalx/buildcache:" + image
-    return ["--cache-from", cache_ref] if mode == "read" else ["--cache-to", cache_ref + ",mode=max"]
+    return ["--cache-from", cache_ref] if mode == "read" else ["--cache-to", cache_ref + ",mode=max,ignore-error=true"]
 
 
 def build(image, output, cache="off"):

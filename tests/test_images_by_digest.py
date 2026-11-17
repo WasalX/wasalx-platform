@@ -238,7 +238,7 @@ class ImagePublicationTests(unittest.TestCase):
         main = {"GITHUB_EVENT_NAME": "push", "GITHUB_REF": "refs/heads/main", "GITHUB_REPOSITORY": images.REPOSITORY}
         ref = "type=registry,ref=ghcr.io/wasalx/buildcache:production-prometheus"
         with mock.patch.dict(os.environ, main, clear=True):
-            self.assertEqual(images.cache_options("production-prometheus", "write"), ["--cache-to", ref + ",mode=max"])
+            self.assertEqual(images.cache_options("production-prometheus", "write"), ["--cache-to", ref + ",mode=max,ignore-error=true"])
             self.assertEqual(images.cache_options("portal", "off"), [])
             self.assertEqual(images.cache_options("postgres", "write"), [])
             with self.assertRaises(ValueError):
@@ -280,6 +280,7 @@ class ImagePublicationTests(unittest.TestCase):
                 self.assertNotIn("secrets.GITHUB_TOKEN", body)
         self.assertIn("github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'WasalX/wasalx-platform'", bodies["publish"])
         self.assertIn("name: stg", bodies["publish"])
+        self.assertRegex(bodies["publish"], r"uses: actions/attest-build-provenance@[a-f0-9]{40}[^\n]*\n        continue-on-error: true\n")
         self.assertNotIn("url:", text)
         allowed = {"actions/checkout", "actions/setup-node", "actions/upload-artifact", "actions/download-artifact",
                    "docker/setup-buildx-action", "docker/login-action", "sigstore/cosign-installer",
