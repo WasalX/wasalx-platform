@@ -506,7 +506,7 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
       puts JSON.generate(receipt: Package::Migration.exists?(name: 'wasalx', version: '202609020014'), package_version: package&.version, package_state: package&.state, attributes: attributes)
     `).split("\n").find((line) => line.startsWith("{")) ?? "");
     assert.equal(blockedState.receipt, false);
-    assert.equal(blockedState.package_version, "0.5.83");
+    assert.equal(blockedState.package_version, "0.5.84");
 
     assert.equal(blockedState.package_state, "installed");
     assert.deepEqual(blockedState.attributes, [

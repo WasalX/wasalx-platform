@@ -5,8 +5,8 @@ readonly ZAMMAD_VERSION="7.0.3"
 readonly ZAMMAD_REVISION="3c049340467b9e7b83a96facf427f2a8e119da54"
 readonly ZAMMAD_DOCKERFILE_SHA256="4a97ca1711dbde582ff4b426e189c1973d8473ca33163462942cc949c2435612"
 readonly ZAMMAD_REPOSITORY="https://github.com/zammad/zammad.git"
-readonly WASALX_PACKAGE_VERSION="0.5.83"
-readonly WASALX_PACKAGE_SHA256="00069cb9565f2a9002d5df73cc29532f3adde2fce28f4f09400370f9c9d11153"
+readonly WASALX_PACKAGE_VERSION="0.5.84"
+readonly WASALX_PACKAGE_SHA256="9673aefce89b6aa4d767eed01ae574d48397de28de5ff6f4c65d86ceee6ee761"
 
 
 workspace_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)

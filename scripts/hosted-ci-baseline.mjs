@@ -176,7 +176,7 @@ export default {
       "file": "tests/workspace-configurator.test.mjs",
       "name": "package verification is read-only and requires the exact immutable package",
       "entrypoint": "tests/workspace-configurator.test.mjs",
-      "input": "build/zammad/wasalx-0.5.83.zpm",
+      "input": "build/zammad/wasalx-0.5.84.zpm",
       "reason": "needs the add-on source"
     }
   ]
