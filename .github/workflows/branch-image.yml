@@ -30,6 +30,7 @@ jobs:
         run: |
           python3 -m unittest discover -s tests -p 'test_images_by_digest.py' -v
           node --test tests/fetch-zammad-addon.test.mjs
+          ruby tests/zammad-database-entrypoint.test.rb
       - id: matrix
         env:
           PUBLIC_ADDON_SOURCE: ${{ vars.PUBLIC_ADDON_SOURCE }}
