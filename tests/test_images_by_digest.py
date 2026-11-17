@@ -89,6 +89,15 @@ class ImagePublicationTests(unittest.TestCase):
             with self.subTest(name=name), self.assertRaises(ValueError):
                 inspect(name, data)
 
+    def test_public_key_content_requires_the_entire_reviewed_material_at_chunk_boundaries(self):
+        pem = b"-----BEGIN PRIVATE KEY-----\n" + (b"A" * 64 + b"\n") * 2 + b"-----END PRIVATE KEY-----"
+        digest = images.hashlib.sha256(pem).hexdigest()
+        data = b"x" * (1024 * 1024 - 10) + pem
+        images.inspect_content(io.BytesIO(data), {digest})
+        for bad in [pem, pem.replace(b"\nA", b"\nB", 1), b"ghp_" + b"a" * 40]:
+            with self.assertRaises(ValueError):
+                images.inspect_content(io.BytesIO(bad), set() if bad == pem else {digest})
+
     def test_manifest_requires_complete_verified_uniform_source_receipts(self):
         records = [{"image": r["image"], "commit": "a" * 40, "tree": "b" * 40,
                     "digest": "sha256:" + "1" * 64, "configDigest": "sha256:" + "2" * 64,

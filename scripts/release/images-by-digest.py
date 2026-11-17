@@ -19,6 +19,12 @@ SHA = re.compile(r"[0-9a-f]{40}")
 ADDON_IMAGES = {"zammad", "workspace-configurator"}
 CREDENTIAL = re.compile(rb"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----\r?\n"
                         rb"[A-Za-z0-9+/=]{40,128}\r?\n[A-Za-z0-9+/=]{40,128}|\bgh[pousr]_[A-Za-z0-9]{36,}\b")
+PEM = re.compile(rb"-----BEGIN ((?:RSA |EC |OPENSSH )?PRIVATE KEY)-----\r?\n"
+                 rb"(?:[A-Za-z0-9+/=]+\r?\n)+-----END \1-----")
+# Public built-in hello-world TLS key: cloudflared 2026.9.1, tlsconfig/hello_ca.go.
+CLOUDFLARED_SOURCE = "e75d9a314ae07ae42564c0d3115b9e33d8a7329d99771951ab7b67144461bd84"
+PUBLIC_KEYS = {"production-cloudflared": {"usr/local/bin/cloudflared": {
+    "17ac4c2ca3deb87202cd2c101d4da9d4f4c0ec3d51a0381729329102b28e61a4"}}}
 
 
 def require(condition, message):
@@ -125,7 +131,24 @@ def validate_metadata(config, base, labels, environment):
     require(not config.get("OnBuild"), "Deferred image instructions are forbidden")
 
 
-def inspect_layers(archive, layers, base_layers):
+def inspect_content(contents, public_keys=()):
+    previous = b""
+    while True:
+        chunk = contents.read(1024 * 1024)
+        data = previous + chunk
+        boundary = max(0, len(data) - 65536) if chunk else len(data)
+        for match in CREDENTIAL.finditer(data):
+            if match.start() >= boundary:
+                continue
+            pem = PEM.match(data, match.start())
+            require(pem is not None and hashlib.sha256(pem.group()).hexdigest() in public_keys,
+                    "Credential material in image layer")
+        previous = data[boundary:]
+        if not chunk:
+            return
+
+
+def inspect_layers(archive, layers, base_layers, public_keys=None):
     """Inherited layers are admitted by pinned base; inspect all added layer members/content."""
     count = 0
     for index, layer in enumerate(layers):
@@ -140,16 +163,17 @@ def inspect_layers(archive, layers, base_layers):
                                 for part in path.parts), "Unapproved image layer member")
                 if member.isfile():
                     with members.extractfile(member) as contents:
-                        previous = b""
-                        while chunk := contents.read(1024 * 1024):
-                            require(not CREDENTIAL.search(previous + chunk), "Credential material in image layer")
-                            previous = chunk[-512:]
+                        inspect_content(contents, (public_keys or {}).get(str(path), ()))
                 count += 1
     return count
 
 
 def inspect_image(reference, row, commit, tree, directory):
     text = (ROOT / row["dockerfile"]).read_text()
+    if row["image"] in PUBLIC_KEYS:
+        require("ADD --checksum=sha256:" + CLOUDFLARED_SOURCE in text and
+                "https://github.com/cloudflare/cloudflared/archive/refs/tags/2026.9.1.tar.gz" in text,
+                "Public key-content allowance requires the reviewed source archive")
     base_ref, labels, environment = metadata_contract(text, commit, tree)
     base = {"Config": {}, "RootFS": {"Layers": []}}
     if base_ref != "scratch":
@@ -178,7 +202,7 @@ def inspect_image(reference, row, commit, tree, directory):
                 with archive.extractfile(layer) as contents:
                     require("sha256:" + hashlib.file_digest(contents, "sha256").hexdigest() == expected,
                             "Image layer digest mismatch")
-            members = inspect_layers(archive, manifest["Layers"], len(base_diffids))
+            members = inspect_layers(archive, manifest["Layers"], len(base_diffids), PUBLIC_KEYS.get(row["image"]))
             return {"configDigest": sha256(raw_config), "layers": diffids, "inspectedMembers": members,
                     "historySha256": sha256(history.encode())}
     finally:
