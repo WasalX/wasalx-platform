@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import fsPromises from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
@@ -144,6 +144,22 @@ test("release-held stage requires digest-bound DEV preimages before any Compose 
   context.devPreimagesSha256 = sha256(bytes);
   assert.equal(await executeStage("release-held", context), 0);
   assert.equal(row("waha-gows").State.Running, true);
+});
+
+test("replacement refuses valid DEV preimages older than 60 seconds", async t => {
+  const { context, calls } = heldPrerequisiteFixture(t);
+  const root = await mkdtemp(join(tmpdir(), "wasalx-stale-preimage-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const record = await captureDevInstallPreimages(context);
+  t.mock.method(Date, "now", () => Date.parse(record.observedAt) + 60_001);
+  const bytes = JSON.stringify(record);
+  Object.assign(context, { plan: [], drained: true, repository: join(root, "source"), directory: join(root, "source"),
+    privateDirectory: join(root, "private"), devPreimagesFile: join(root, "preimages.json"), devPreimagesSha256: sha256(bytes) });
+  await mkdir(context.directory);
+  await writeFile(context.devPreimagesFile, bytes);
+  calls.length = 0;
+  await assert.rejects(executeStage("replace", context), /DEV mutation requires fresh action-time preimages/u);
+  assert.ok(calls.every(args => args[0] === "image" && args[1] === "inspect"));
 });
 
 test("held installation records historical restarts without requiring active health", async t => {

@@ -5,6 +5,7 @@ import os from "node:os";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { projectStack, devHeldServices, devPreservedServices, devContainerPreimage, devValueDigest, assertInstallHostname, devReviewAuthConfiguration } from "../scripts/release/installer-stack.mjs";
+import { run, stageFailureReason } from "../scripts/release/installer-stages.mjs";
 
 const repositoryRoot = fileURLToPath(new URL("../", import.meta.url));
 const sha = "a".repeat(40);
@@ -75,6 +76,34 @@ test("installer CLIs name refused host configuration before preflight or Docker"
     assert.ok(result.stderr.includes(`check ${variable}`));
     assert.equal(result.stdout, "");
   }
+});
+
+test("installer prints a sanitized reason for a failure before the stage loop", () => {
+  const path = fileURLToPath(new URL("./missing-installer-env", import.meta.url));
+  const args = ["scripts/release/installer-stages.mjs", "replace", "--env-file", path,
+    "--project-name", "wasalx-live", "--hosted-images", path];
+  const result = spawnSync(process.execPath, ["--", ...args], { cwd: repositoryRoot, encoding: "utf8", timeout: 10000, windowsHide: true });
+  assert.equal(result.error, undefined);
+  assert.equal(result.status, 1);
+  assert.equal(result.stderr, "remote full qualification failed\nremote full qualification reason: hosted inventory hash required\n");
+});
+
+test("installer subprocess failures retain a bounded stderr tail with sensitive values redacted", () => {
+  const token = "A1b2C3d4".repeat(6);
+  const environment = { ...process.env, INSTALLER_TEST_SECRET: "short.+ fixture secret" };
+  const stderr = `discarded start\n${"padding ".repeat(300)}\ninvalid Compose interpolation for APP_PORT\n` +
+    `APP_PASSWORD="quoted password" ${environment.INSTALLER_TEST_SECRET} Bearer small-token ${token}`;
+  const script = `process.stderr.write(${JSON.stringify(stderr)}); process.exitCode = 1;`;
+  assert.throws(() => run(process.execPath, ["-e", script], environment), error => {
+    const reason = stageFailureReason(error);
+    assert.ok(Buffer.byteLength(reason) <= Buffer.byteLength(`${process.execPath} failed: `) + 2048);
+    assert.match(reason, /invalid Compose interpolation for APP_PORT/u);
+    assert.match(reason, /APP_PASSWORD=\[redacted\]/u);
+    for (const value of ["discarded start", "quoted password", environment.INSTALLER_TEST_SECRET, "small-token", token]) {
+      assert.ok(!reason.includes(value));
+    }
+    return true;
+  });
 });
 
 function stackFixture() {

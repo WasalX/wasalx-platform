@@ -6,6 +6,7 @@ import { readFile, readlink, stat, statfs, writeFile } from "node:fs/promises";
 import { arch, homedir, platform } from "node:os";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { stripVTControlCharacters } from "node:util";
 import { activeServiceNames, assertDevInstallPreimages, devContainerPreimage, devColdResidents, devHeldServices, devHeldPrerequisites, devPreservedServices, devValueDigest, captureDevReviewAuth, assertDevReviewAuthRows, devReviewAuthEnvironment, devReviewAuthConfiguration, assertInstallHostname } from "./installer-stack.mjs";
 import { parseRailsJson } from "./simulation-rails-json.mjs";
 import { sha256, preserveReplacement, readBoundArtifacts, writeArtifactState,
@@ -380,10 +381,10 @@ export async function executeStage(action, context) {
     // Capture original mutable tags before the separately controlled preload.
     await readFile(preimagePath(context));
   }
-  const hosted = context.hostedImages && !["rollback", "rollback-safety"].includes(action)
+  const hosted = context.hostedImages && ["preflight", "verify-hosted", "admit-hosted"].includes(action)
     ? await verifyHostedImages(context, { verifyOnly: action === "verify-hosted" }) : null;
   if (action === "verify-hosted") return 0;
-  if (["replace", "rollback-safety"].includes(action)) await preparePrivateDirectory(context);
+  if (action === "rollback-safety" || (action === "replace" && !context.hostedImages)) await preparePrivateDirectory(context);
   if (action === "rollback") return rollbackReplacement(context);
   if (action === "rollback-safety") {
     const { manifest, snapshot } = await readBoundArtifacts(context);
@@ -490,17 +491,15 @@ export async function executeStage(action, context) {
     return 0;
   }
   // Missing/stale images fail before any stop, migration or start.
+  const admission = context.hostedImages ? (await readBoundArtifacts(context)).manifest : null;
   await verifyDependencies();
   const imageIds = [];
-  for (const image of plan) {
+  for (const [index, image] of plan.entries()) {
     const details = await inspectImage(image.reference);
-    if (hosted) assert.equal(details?.Id, hosted.images.find(({ id }) => id === image.id)?.imageId, "admitted hosted image changed");
+    // The admitted ID pins the verified config directly or through its manifest.
+    if (admission) assert.equal(details?.Id, admission.images[index].imageId, "admitted hosted image changed");
     else assert.ok(matchesCandidate(details, candidateSha, candidateTree, image.dockerfile, context.buildContextSha256), `${image.id} requires the build stage`);
     imageIds.push(details.Id);
-  }
-  if (hosted) {
-    const { manifest } = await readBoundArtifacts(context);
-    assert.deepEqual(manifest.images, hosted.images.map(image => ({ ...image, services: imageServices(model, image.dockerfile) })), "hosted admission changed");
   }
   if (action === "release-held") {
     assert.ok(context.devPreimagesFile && context.devPreimagesSha256, "held release requires bound DEV preimages");
@@ -509,6 +508,7 @@ export async function executeStage(action, context) {
     return releaseDevHeld(context, JSON.parse(bytes), context.service);
   }
   if (action === "replace") {
+    if (admission) await preparePrivateDirectory(context);
     assert.ok(drained, "replace requires --drained after test quiescence and in-flight review");
     if (model.services.migrate) {
       const index = plan.findIndex(({ id }) => id === "control-api");
@@ -601,6 +601,22 @@ export function createCandidatePlan(catalog, compose) {
   return plan;
 }
 
+function commandStderrTail(stderr, environment) {
+  if (!stderr) return "";
+  const values = Object.values(environment ?? process.env)
+    .filter(value => value && stderr.includes(value)).sort((left, right) => right.length - left.length)
+    .map(value => value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"));
+  const safe = values.length ? stderr.replace(new RegExp(values.join("|"), "gu"), "[redacted]") : stderr;
+  const detail = stripVTControlCharacters(safe)
+    .replace(/(\b(?:Bearer|Basic)\s+)\S+/giu, "$1[redacted]")
+    .replace(/(\b[a-z][a-z0-9+.-]*:\/\/)[^/\s@]+@/giu, "$1[redacted]@")
+    .replace(/(\b(?:password|passwd|token|secret|api[_-]?key)["']?[ \t]*:[ \t]*)[^\r\n]+/giu, "$1[redacted]")
+    .replace(/(\b[a-z_]\w*[ \t]*=[ \t]*)(?:"(?:\\.|[^"\\])*"|'[^']*'|\S+)/giu, "$1[redacted]")
+    .replace(/\b[\w+/-]{24,}={0,2}/gu, "[redacted]")
+    .replace(/[\s\p{Cc}]+/gu, " ").trim();
+  return Buffer.from(detail).subarray(-2048).toString("utf8").replace(/^\uFFFD+/u, "");
+}
+
 export function run(command, arguments_, environment, inherit = false, input) {
   if (inherit) {
     return new Promise((resolvePromise, rejectPromise) => {
@@ -615,7 +631,10 @@ export function run(command, arguments_, environment, inherit = false, input) {
     });
   }
   const result = spawnSync(command, arguments_, { cwd: repository, env: environment, encoding: "utf8", windowsHide: true });
-  assert.equal(result.status, 0, `${command} failed`);
+  if (result.status !== 0) {
+    const tail = commandStderrTail(result.stderr, environment);
+    assert.equal(result.status, 0, tail ? `${command} failed: ${tail}` : `${command} failed`);
+  }
   return result.stdout.trim();
 }
 
@@ -625,7 +644,8 @@ export function enterComposeStageLock(arguments_, environment, command = run) {
 
 export function stageFailureReason(error) {
   if (error?.name === "AssertionError") {
-    if (!error.generatedMessage) return error.message;
+    // Node can append the assertion's actual and expected values to the message.
+    if (!error.generatedMessage) return error.message.split(/\r?\n/u, 1)[0];
     const frame = String(error.stack ?? "").split(/\r?\n/u).find((line) => /^\s+at /u.test(line));
     const location = frame?.match(/scripts[\\/]release[\\/]([^/\\():]+):(\d+):\d+/u);
     return location ? `assertion failed at ${location[1]}:${location[2]}` : "assertion failed at unknown";
@@ -809,6 +829,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   } catch (error) {
     const variable = ["WASALX_INSTALL_EXPECTED_HOSTNAME", "WASALX_DEV_REVIEW_ORIGIN_SUFFIX"].find((name) => error.message?.includes(name));
     process.stderr.write(`remote full qualification failed${variable ? `: check ${variable}` : ""}\n`);
+    process.stderr.write(`remote full qualification reason: ${stageFailureReason(error)}\n`);
     process.exitCode = 1;
   }
 }
