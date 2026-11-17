@@ -1,11 +1,10 @@
 import "../tests/helpers/operator-input-fixtures.mjs";
 import assert from "node:assert/strict";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFile, execFileSync, spawnSync } from "node:child_process";
 import { appendFileSync, readFileSync } from "node:fs";
-import { matchesGlob, relative, resolve } from "node:path";
-import { run } from "node:test";
-import { tap } from "node:test/reporters";
+import { matchesGlob, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { promisify } from "node:util";
 import { unitFiles } from "./test-unit.mjs";
 
 const config = JSON.parse(readFileSync(new URL("./hosted-ci-config.json", import.meta.url)));
@@ -28,6 +27,19 @@ export function inventory(tracked) {
   return [...new Set([...unitFiles, ...discovered])].sort();
 }
 
+export async function collectFile(file, timeout = 45_000) {
+  const env = { ...process.env };
+  delete env.NODE_TEST_CONTEXT;
+  try {
+    await promisify(execFile)(process.execPath, ["--experimental-strip-types", "--import", "./tests/helpers/operator-input-fixtures.mjs",
+      "--test", "--test-reporter=tap", "--experimental-test-isolation=none", "--test-name-pattern=(?!)", file],
+    { env, timeout, killSignal: "SIGKILL", maxBuffer: 8 * 1024 * 1024, windowsHide: true });
+    return { file, failed: false };
+  } catch (error) {
+    return { file, failed: true, diagnostic: error.killed ? "Collection import timed out" : (error.stderr || error.stdout || error.message).slice(-8000) };
+  }
+}
+
 async function main() {
   const [mode, shard, total] = process.argv.slice(2);
   assert(["unit", "collection"].includes(mode), "Expected unit or collection");
@@ -47,11 +59,18 @@ async function main() {
   }
   // Import modules while skipping test bodies, matching the existing collection method.
   // Collection includes runtime-only files so new import errors remain visible.
+  // The test runner's test timeout does not bound a hanging module import.
   const failures = [];
-  const stream = run({ files, concurrency: 4, testNamePatterns: [/(?!) /u],
-    execArgv: ["--experimental-strip-types", "--import", "./tests/helpers/operator-input-fixtures.mjs"], timeout: 45_000 });
-  stream.on("test:fail", data => failures.push(relative(process.cwd(), resolve(data.file ?? data.name)).replaceAll("\\", "/")));
-  for await (const chunk of stream.compose(tap)) process.stdout.write(chunk);
+  for (let offset = 0; offset < files.length; offset += 4) {
+    const results = await Promise.all(files.slice(offset, offset + 4).map(file => collectFile(file)));
+    for (const result of results) {
+      console.log(`${result.failed ? "COLLECTION FAILURE" : "COLLECTED"}: ${result.file}`);
+      if (result.failed) {
+        failures.push(result.file);
+        console.error(result.diagnostic);
+      }
+    }
+  }
   const unexpected = unexpectedFailures(failures, known);
   const lines = ["Collection results", `Files: ${files.length}; unexpected errors: ${unexpected.length}`,
     ...known.map(file => `${failures.includes(file) ? "KNOWN FAILURE" : "NOW PASSES"}: ${file}`),
