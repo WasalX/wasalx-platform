@@ -8,6 +8,7 @@ from pathlib import Path, PurePosixPath
 import re
 import shlex
 import subprocess
+import sys
 import tarfile
 import tempfile
 import urllib.request
@@ -370,6 +371,44 @@ def verify_manifest(manifest, config_digest):
     require(manifest.get("config", {}).get("digest") == config_digest, "Published config digest mismatch")
 
 
+def loaded_config(stream, config_digest):
+    require(DIGEST.fullmatch(config_digest or ""), "Exact loaded config digest required")
+    config_names = {config_digest[7:] + ".json", "blobs/sha256/" + config_digest[7:]}
+    manifest, config, config_name = None, None, None
+    with tarfile.open(fileobj=stream, mode="r|") as archive:
+        for member in archive:
+            if member.name != "manifest.json" and member.name not in config_names:
+                continue
+            require(member.isfile() and member.size <= 4 * 1024 * 1024, "Invalid loaded config member")
+            raw = archive.extractfile(member).read()
+            if member.name == "manifest.json":
+                require(manifest is None, "Duplicate loaded manifest")
+                manifest = json.loads(raw)
+            else:
+                require(config is None, "Duplicate loaded config")
+                require(sha256(raw) == config_digest, "Loaded config bytes mismatch")
+                config, config_name = json.loads(raw), member.name
+    require(isinstance(manifest, list) and len(manifest) == 1 and config is not None,
+            "Expected one loaded image and its exact config bytes")
+    require(manifest[0].get("Config") == config_name, "Loaded manifest config mismatch")
+    return {"configDigest": config_digest, "config": config}
+
+
+def inspect_loaded_config(reference, config_digest):
+    # Stream the actual Engine export; .Id may identify a manifest on containerd stores.
+    with subprocess.Popen(["docker", "image", "save", reference], stdout=subprocess.PIPE,
+                          stderr=subprocess.DEVNULL) as child:
+        try:
+            result = loaded_config(child.stdout, config_digest)
+            while child.stdout.read(1024 * 1024):
+                pass
+            require(child.wait() == 0, "Loaded image export failed")
+            return result
+        except Exception:
+            child.kill()
+            raise
+
+
 def publish(receipt_path):
     require(os.environ.get("GITHUB_EVENT_NAME") == "push" and os.environ.get("GITHUB_REF") == "refs/heads/main",
             "Publication is main-push only")
@@ -449,12 +488,18 @@ def assemble(records):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=["matrix", "build", "pending", "publish", "assemble"])
+    parser.add_argument("command", choices=["matrix", "build", "pending", "publish", "assemble", "loaded-config"])
     parser.add_argument("--image")
+    parser.add_argument("--config-digest")
     parser.add_argument("--output", default="images-manifest.json")
     parser.add_argument("--records", default="records")
     args = parser.parse_args()
-    if args.command == "matrix":
+    if args.command == "loaded-config":
+        try:
+            print(json.dumps(inspect_loaded_config(args.image, args.config_digest)))
+        except Exception:
+            sys.exit("Loaded image config verification failed")
+    elif args.command == "matrix":
         print(json.dumps(matrix(), separators=(",", ":")))
     elif args.command == "build":
         build(args.image, args.output)

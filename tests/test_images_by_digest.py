@@ -16,6 +16,41 @@ spec.loader.exec_module(images)
 
 
 class ImagePublicationTests(unittest.TestCase):
+    def test_loaded_config_checks_exported_bytes_and_manifest_binding(self):
+        raw = b'{"os":"linux","architecture":"amd64","config":{"Labels":{}}}'
+        digest = images.sha256(raw)
+        name = "blobs/sha256/" + digest[7:]
+
+        def exported(config=raw, target=name, duplicate=False):
+            stream = io.BytesIO()
+            with tarfile.open(fileobj=stream, mode="w") as archive:
+                entries = [(name, config), ("manifest.json", json.dumps([{"Config": target}]).encode())]
+                if duplicate:
+                    entries.append((name, config))
+                for path, data in entries:
+                    member = tarfile.TarInfo(path)
+                    member.size = len(data)
+                    archive.addfile(member, io.BytesIO(data))
+            stream.seek(0)
+            return stream
+
+        self.assertEqual(images.loaded_config(exported(), digest), {"configDigest": digest, "config": json.loads(raw)})
+        for stream in [exported(config=raw + b" "), exported(target="wrong.json"), exported(duplicate=True)]:
+            with self.assertRaises(ValueError):
+                images.loaded_config(stream, digest)
+        trailing = exported().getvalue() + b"\0" * (128 * 1024)
+        with patch.object(images.subprocess, "Popen") as factory:
+            child = factory.return_value.__enter__.return_value
+            child.stdout = io.BytesIO(trailing)
+            child.wait.return_value = 0
+            self.assertEqual(images.inspect_loaded_config("fixture:local", digest)["configDigest"], digest)
+            self.assertEqual(child.stdout.tell(), len(trailing), "drain the export before waiting for Docker")
+            child.stdout = io.BytesIO(trailing)
+            child.wait.return_value = 1
+            with self.assertRaises(ValueError):
+                images.inspect_loaded_config("fixture:local", digest)
+            child.kill.assert_called_once()
+
     def test_unset_addon_source_keeps_all_images_but_marks_only_two_pending(self):
         with patch.dict(images.os.environ, {"PUBLIC_ADDON_SOURCE": ""}):
             rows = images.matrix()["include"]
