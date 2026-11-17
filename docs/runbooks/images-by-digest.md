@@ -1,13 +1,20 @@
 # Published product images
 
-`.github/workflows/branch-image.yml` builds the 21 canonical images from
-`scripts/release/product-images.json` on GitHub-hosted Linux AMD64 runners.
-The release artifact contract reads that same image list. PRs build and inspect
-without registry login, package writes or OIDC. A push to `main` builds, inspects,
-publishes, signs and attests with the job's `GITHUB_TOKEN` and keyless Sigstore.
-Only the environment-attached `publish` job has package-write and OIDC access.
-The `stg` environment has no URL; its owner must configure its branch policy for
-`main` before enabling publication. This workflow does not publish production.
+The `ci` workflow builds and inspects all 21 catalog images on merge-queue
+runs and image-affecting PRs, without registry login, package writes or OIDC.
+On a push to `main`, `ci` calls `release` in
+`.github/workflows/branch-image.yml` to build, inspect, publish, sign and
+attest the same catalog. The signing job stays in that file. Only the
+main-only publish lane has package-write, OIDC and attestation-write access.
+The `ci-gate` check includes the applicable image lane.
+
+The environment-attached publish jobs export one GHCR cache tag per heavy
+image, without importing layers. PR and merge-queue builds import those
+layers anonymously and run the same image inspection. The cache package
+must be public for anonymous cache hits. The first publish creates the
+package and seeds the cache. Check the anonymous access before claiming a
+warm-cache timing. GitHub build provenance supplements the existing
+Cosign signature and attestation.
 
 Each package is `ghcr.io/wasalx/<image>`, tagged with the full public commit SHA.
 The `main` discovery alias advances only after signature verification and
@@ -117,7 +124,7 @@ node scripts/release/installer-stages.mjs admit-hosted \
 
 Use the same three hosted flags for subsequent `replace`, `smoke`, `release-held`,
 `rollback-safety` and `rollback` stages. Hosted flags cannot select `build` or
-`qualify`. The receiver verifies both bundles offline using private byte snapshots,
+`qualify`. Admission verifies both bundles offline using private byte snapshots,
 raw manifest digest, signed commit/tree/config, complete unique catalog coverage,
 and the actual loaded configuration bytes streamed from `docker image save`.
 The Engine ID may equal the config digest or manifest digest; it is never used
@@ -127,11 +134,12 @@ or replacement actions. Source labels remain mandatory.
 `hosted-admission-<project>.json` is a distinct `compose-hosted-image-admission`
 receipt. Entries are `ADMITTED`, never `BUILT`. It binds the inventory and trust
 root hashes, publisher, source, catalog, Compose model/plan, loaded immutable IDs,
-verified output seals, and private preimage transaction/hash. Replacement rechecks
-admission and loaded bytes before its existing operational gates. Rollback uses
-the same private custody and original safety fences without requiring candidate
-images to remain verifiable. Keep the hosted inventory and trusted root present
-and byte-identical until rollback is no longer needed; rollback requires both files.
+verified output seals, and private preimage transaction/hash. Replacement, smoke
+and held release validate the bound receipt and compare the currently loaded
+image IDs from `docker image inspect` to the admitted IDs before proceeding.
+Rollback uses the same private custody and original safety fences without
+requiring candidate images to remain verifiable. Keep the hosted inventory and
+trusted root present and byte-identical until rollback is no longer needed.
 This stage does not qualify live provider behavior, operator acceptance or
 production release. Legacy release-bundle, assisted and
 historical evidence contracts are unchanged.
@@ -169,8 +177,9 @@ add-on tuple are recorded in the receipt and attestation. If a configured source
 is unavailable anonymously, those builds fail; this workflow supplies no credential
 and never publishes private source.
 Public dependency registries and the reviewed
-Dockerfiles remain build inputs. No private overlay, runner directory, registry
-override, secret/SSH mount or authenticated cache is supplied to the builder.
+Dockerfiles remain build inputs. The builder uses the public archive, pinned
+inputs and no secret or SSH mounts. Only the main publish lane authenticates
+to GHCR to export cache layers and publish images.
 Default BuildKit provenance is disabled; the inspected public predicate is
 attested explicitly instead.
 

@@ -206,15 +206,45 @@ test("classic config IDs are accepted but an unrelated Docker ID is refused", as
   await assert.rejects(verifyHostedImages(f.context), /loaded hosted image identity mismatch/u);
 });
 
-test("admitted hosted IDs reach replacement through the existing drained Compose path", async t => {
+test("admitted hosted IDs reach replacement, smoke and held release without repeating verification", async t => {
   const f = await fixture(t); await executeStage("admit-hosted", f.context);
-  const command = f.context.command, replacements = [];
+  const command = f.context.command, replacements = [], smokes = [];
   f.context.command = async (name, args, ...rest) => {
+    assert.notEqual(name, "cosign");
+    assert.notEqual(name, "python3", "loaded-config invokes docker image save");
+    assert.ok(name !== "docker" || !args.includes("save"));
     if (name === "docker" && args[0] === "compose" && args.includes("up")) { replacements.push(args); return 0; }
+    if (name === process.execPath) { smokes.push(args); return 0; }
     return command(name, args, ...rest);
   };
   assert.equal(await executeStage("replace", { ...f.context, drained: true }), 0);
   assert.deepEqual(replacements, [[...f.context.composeArguments, "up", "--no-build", "--pull", "never", "--wait"]]);
+  assert.equal(await executeStage("smoke", f.context), 0);
+  assert.equal(smokes.length, 1);
+  await assert.rejects(executeStage("release-held", f.context), /held release requires bound DEV preimages/u);
+});
+
+test("hosted replacement refuses a missing receipt, a changed image ID and a different inventory", async t => {
+  const f = await fixture(t);
+  const context = { ...f.context, drained: true };
+  await assert.rejects(executeStage("replace", context), { code: "ENOENT" });
+  assert.deepEqual(f.calls, []);
+  await executeStage("admit-hosted", f.context);
+  f.calls.length = 0;
+  const image = context.plan.at(-1), details = f.details[image.reference], admittedId = details.Id;
+  details.Id = f.inventory.images[image.id].configDigest;
+  assert.notEqual(details.Id, admittedId);
+  for (const action of ["replace", "smoke", "release-held"]) {
+    await assert.rejects(executeStage(action, context), /admitted hosted image changed/u);
+  }
+  assert.ok(f.calls.every(({ name, args }) => name === "docker" && (args[0] === "info" || args[0] === "image" && args[1] === "inspect")));
+  details.Id = admittedId;
+  f.calls.length = 0;
+  await f.save(JSON.stringify(f.inventory) + "\n");
+  assert.notEqual(f.context.hostedImagesSha256, context.hostedImagesSha256);
+  await assert.rejects(executeStage("replace", { ...f.context, drained: true }), /hostedImagesSha256 binding changed/u);
+  assert.deepEqual(f.calls, []);
+  await assert.rejects(readFile(join(context.directory, `replacement-started-${context.project}.json`)), { code: "ENOENT" });
 });
 
 test("local build retains its label checks and original build receipt", async t => {

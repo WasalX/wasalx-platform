@@ -5,15 +5,25 @@ import { appendFileSync, readFileSync, rmSync } from "node:fs";
 import { matchesGlob, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
-import { unitFiles } from "./test-unit.mjs";
+import { unitFiles, unitFileTimings } from "./test-unit.mjs";
 import { addonSkips, lintRatchet, skipPattern } from "./hosted-ci-policy.mjs";
 
 const config = JSON.parse(readFileSync(new URL("./hosted-ci-config.json", import.meta.url)));
+const timings = JSON.parse(readFileSync(new URL("./hosted-ci-timings.json", import.meta.url)));
 
-export function shardFiles(files, shard, total) {
+const unitTimings = { ...timings.filesMs, ...unitFileTimings };
+
+export function shardFiles(files, shard, total, durations = unitTimings) {
   assert(Number.isSafeInteger(total) && total > 0, "Invalid shard count");
   assert(Number.isSafeInteger(shard) && shard >= 1 && shard <= total, "Invalid shard");
-  return [...new Set(files)].sort().filter((_, index) => index % total === shard - 1);
+  const weight = file => durations[file] ?? timings.defaultMs;
+  const shards = Array.from({ length: total }, () => ({ files: [], duration: 0 }));
+  for (const file of [...new Set(files)].sort((a, b) => weight(b) - weight(a) || a.localeCompare(b, "en"))) {
+    const next = shards.reduce((lightest, candidate) => candidate.duration < lightest.duration ? candidate : lightest);
+    next.files.push(file);
+    next.duration += weight(file);
+  }
+  return shards[shard - 1].files;
 }
 
 export function inventory(tracked) {
@@ -48,7 +58,8 @@ async function main() {
   if (mode === "lint") {
     const report = ".git/hosted-lint.json";
     rmSync(report, { force: true });
-    const result = spawnSync("pnpm", ["run", "lint", "--format", "json", "--output-file", report], { stdio: "inherit", windowsHide: true });
+    const result = spawnSync("pnpm", ["run", "lint", "--cache", "--cache-strategy", "content",
+      "--cache-location", ".git/hosted-eslint-cache", "--format", "json", "--output-file", report], { stdio: "inherit", windowsHide: true });
     if (result.error) throw result.error;
     assert(result.status === 0 || result.status === 1, "ESLint failed to execute");
     const current = lintRatchet(JSON.parse(readFileSync(report, "utf8")));
@@ -72,13 +83,17 @@ async function main() {
     const skipped = selected.map(file => ({ file, entries: addonSkips(file) })).filter(batch => batch.entries.length);
     const ordinary = selected.filter(file => !skipped.some(batch => batch.file === file));
     const batches = [{ files: ordinary, entries: [] }, ...skipped.map(batch => ({ files: [batch.file], entries: batch.entries }))];
+    const reporters = process.env.GITHUB_ACTIONS === "true" ? [
+      "--test-reporter=spec", "--test-reporter=./scripts/hosted-ci-timing-reporter.mjs",
+      "--test-reporter-destination=stdout", "--test-reporter-destination=stdout",
+    ] : [];
     for (const { files, entries } of batches) {
       if (!files.length) continue;
       const lines = entries.map(entry => `SKIP: ${entry.file} :: ${entry.name}: ${entry.reason} (missing ${entry.input}; entrypoint ${files[0]})`);
       console.log(lines.join("\n"));
       if (process.env.GITHUB_STEP_SUMMARY && lines.length) appendFileSync(process.env.GITHUB_STEP_SUMMARY, lines.join("  \n") + "\n");
       const pattern = entries.length ? [`--test-skip-pattern=${skipPattern(entries)}`] : [];
-      const result = spawnSync(process.execPath, ["--experimental-strip-types", "--import", "./tests/helpers/operator-input-fixtures.mjs", "--test", "--test-concurrency=2", ...pattern, ...files], { stdio: "inherit", windowsHide: true });
+      const result = spawnSync(process.execPath, ["--experimental-strip-types", "--import", "./tests/helpers/operator-input-fixtures.mjs", "--test", "--test-concurrency=4", ...reporters, ...pattern, ...files], { stdio: "inherit", windowsHide: true });
       if (result.error) throw result.error;
       if (result.status !== 0) process.exitCode = result.status ?? 1;
     }

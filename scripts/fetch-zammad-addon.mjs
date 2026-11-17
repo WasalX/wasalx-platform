@@ -22,13 +22,19 @@ async function main() {
   const pin=validatePin(original);
   if(source) assert.deepEqual(source,{repository:pin.repository,commit:pin.commit},"Public add-on source differs from the pin");
   const checkout=resolve(".zammad-addon");
-  function git(args) { const r=spawnSync("git",args,{encoding:"utf8",windowsHide:true,timeout:120000}); assert.equal(r.status,0,"Pinned add-on checkout failed"); return r.stdout.trim(); }
+  function git(args, attempts = 1) {
+    for (let attempt = 1; ; attempt += 1) {
+      const result = spawnSync("git", args, {encoding:"utf8", windowsHide:true, timeout:120000});
+      if (result.status === 0) return result.stdout.trim();
+      assert(attempt < attempts, "Pinned add-on checkout failed");
+    }
+  }
   let existing=false;
   try { await access(checkout); existing=true; } catch(error) { if(error.code!=="ENOENT") throw error; }
   if(!existing) {
     await mkdir(checkout);
     git(["init","--quiet",checkout]);
-    git(["-C",checkout,"-c","core.hooksPath=/dev/null","-c","credential.helper=","fetch","--depth=1","https://github.com/"+pin.repository+".git",pin.commit]);
+    git(["-C",checkout,"-c","core.hooksPath=/dev/null","-c","credential.helper=","fetch","--depth=1","https://github.com/"+pin.repository+".git",pin.commit], 3);
     assert.equal(git(["-C",checkout,"rev-parse","FETCH_HEAD"]),pin.commit);
     git(["-C",checkout,"-c","core.hooksPath=/dev/null","-c","core.autocrlf=false","checkout","--detach","FETCH_HEAD"]);
   }

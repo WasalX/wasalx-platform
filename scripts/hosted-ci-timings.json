@@ -1,0 +1,26 @@
+{
+  "source": "GitHub Actions runs 44160284456 and 44169590241. Timings matched by test title and shard also appear in the unit inventory.",
+  "defaultMs": 190,
+  "filesMs": {
+    "tests/admin-workspace-state.test.mjs": 666,
+    "tests/application-e2e-harness.test.mjs": 6310,
+    "tests/braces-image-patch.test.mjs": 1699,
+    "tests/connection-onboarding-portal.test.mjs": 1943,
+    "tests/dev-secret-sidecar.test.mjs": 4333,
+    "tests/fetch-zammad-addon.test.mjs": 1698,
+    "tests/group-configuration-portal.test.mjs": 1657,
+    "tests/hosted-ci.test.mjs": 2829,
+    "tests/infra-contract.test.ts": 821,
+    "tests/installer-hosted-images.test.mjs": 1684,
+    "tests/invitation-mailer-runtime.test.mjs": 563,
+    "tests/meta-privacy-outcome-driver.test.mjs": 748,
+    "tests/meta-webhook-http.test.mjs": 785,
+    "tests/migration-connection.test.mjs": 16218,
+    "tests/portal-auth-hardening.test.ts": 1088,
+    "tests/portal-operational-ux.test.mjs": 937,
+    "tests/portal-workspace.test.mjs": 2619,
+    "tests/promotion-source.test.mjs": 725,
+    "tests/simulation-email-effect-budget.test.mjs": 1331,
+    "tests/simulation-email-recipient-restore.test.mjs": 2471
+  }
+}

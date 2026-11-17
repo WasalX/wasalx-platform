@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 import urllib.request
 
 
@@ -20,6 +21,11 @@ SOURCE = "https://github.com/" + REPOSITORY
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 SHA = re.compile(r"[0-9a-f]{40}")
 ADDON_IMAGES = {"zammad", "workspace-configurator"}
+CACHED_IMAGES = {
+    "production-prometheus", "zammad", "production-otel", "control-api", "connector-worker", "portal",
+    "tenant-provisioner", "tenant-workspace-controller", "workspace-provider", "identity-policy-activator",
+    "invitation-mailer",
+}
 CREDENTIAL = re.compile(rb"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----\r?\n"
                         rb"[A-Za-z0-9+/=]{40,128}\r?\n[A-Za-z0-9+/=]{40,128}|\bgh[pousr]_[A-Za-z0-9]{36,}\b")
 PEM = re.compile(rb"-----BEGIN ((?:RSA |EC |OPENSSH )?PRIVATE KEY)-----\r?\n"
@@ -278,7 +284,7 @@ def inspect_image(reference, row, commit, tree, directory, licenses=None):
     base_ref, labels, environment = metadata_contract(text, commit, tree)
     base = {"Config": {}, "RootFS": {"Layers": []}}
     if base_ref != "scratch":
-        run("docker", "pull", "--platform", "linux/amd64", base_ref)
+        pull(base_ref)
         base = json.loads(run("docker", "image", "inspect", base_ref))[0]
     inspected = json.loads(run("docker", "image", "inspect", reference))[0]
     validate_metadata(inspected["Config"], base["Config"], labels, environment)
@@ -313,8 +319,34 @@ def inspect_image(reference, row, commit, tree, directory, licenses=None):
         exported.unlink(missing_ok=True)
 
 
-def build(image, output):
+def pull(reference):
+    for attempt in range(3):
+        try:
+            run("docker", "pull", "--platform", "linux/amd64", reference)
+            return
+        except subprocess.CalledProcessError:
+            if attempt == 2:
+                raise
+            time.sleep(attempt + 1)
+
+
+def cache_options(image, mode):
+    if mode == "off":
+        return []
+    event = os.environ.get("GITHUB_EVENT_NAME")
+    publishing = (event == "push" and os.environ.get("GITHUB_REF") == "refs/heads/main"
+                  and os.environ.get("GITHUB_REPOSITORY") == REPOSITORY)
+    require(mode == "read" and event in {"pull_request", "merge_group"} or mode == "write" and publishing,
+            "Cache imports are checks-only and cache exports are main-publish only")
+    if image not in CACHED_IMAGES:
+        return []
+    cache_ref = "type=registry,ref=ghcr.io/wasalx/buildcache:" + image
+    return ["--cache-from", cache_ref] if mode == "read" else ["--cache-to", cache_ref + ",mode=max,ignore-error=true"]
+
+
+def build(image, output, cache="off"):
     row = next(r for r in catalog() if r["image"] == image)
+    cache_args = cache_options(image, cache)
     commit, tree = coordinates()
     epoch = run("git", "log", "-1", "--format=%ct", commit, cwd=ROOT)
     reference = "ghcr.io/wasalx/" + image + ":" + commit
@@ -345,10 +377,10 @@ def build(image, output):
                     sha256((context / "build/addon-licenses" / name).read_bytes())
                     for name in ["LICENSE", "COPYING", "THIRD-PARTY-NOTICES"]} if addon else {}
         dockerfile_digest = sha256((context / row["dockerfile"]).read_bytes())
-        # No host context, cache imports, secret/SSH mounts, registry overrides or private build arguments.
+        # Publication exports a cache but never imports one. No host context or secret/SSH mounts.
         subprocess.run(["docker", "buildx", "build", "--platform", "linux/amd64",
                         "--output", "type=docker,rewrite-timestamp=true",
-                        "--provenance=false", "--sbom=false", "--file", str(context / row["dockerfile"]),
+                        "--provenance=false", "--sbom=false", *cache_args, "--file", str(context / row["dockerfile"]),
                         "--tag", reference, "--build-arg", "WASALX_CANDIDATE_SHA=" + commit,
                         "--build-arg", "SOURCE_DATE_EPOCH=" + epoch,
                         "--build-arg", "COMMIT_SHA=" + commit, "--build-arg", "WASALX_CANDIDATE_TREE=" + tree,
@@ -455,7 +487,7 @@ def publish(receipt_path):
     common = ["--certificate-identity", identity, "--certificate-oidc-issuer", "https://token.actions.githubusercontent.com"]
     run("cosign", "verify", *common, reference)
     run("cosign", "verify-attestation", *common, "--type", "slsaprovenance", reference)
-    run("docker", "pull", "--platform", "linux/amd64", reference)
+    pull(reference)
     row = next(r for r in catalog() if r["image"] == receipt["image"])
     with tempfile.TemporaryDirectory() as directory:
         final = inspect_image(reference, row, commit, tree, directory, receipt["inspection"]["addonLicenses"])
@@ -495,6 +527,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=["matrix", "build", "pending", "publish", "assemble", "loaded-config"])
     parser.add_argument("--image")
+    parser.add_argument("--cache", choices=["off", "read", "write"], default="off")
     parser.add_argument("--config-digest")
     parser.add_argument("--output", default="images-manifest.json")
     parser.add_argument("--records", default="records")
@@ -507,7 +540,7 @@ if __name__ == "__main__":
     elif args.command == "matrix":
         print(json.dumps(matrix(), separators=(",", ":")))
     elif args.command == "build":
-        build(args.image, args.output)
+        build(args.image, args.output, args.cache)
     elif args.command == "publish":
         publish(args.output)
     elif args.command == "pending":

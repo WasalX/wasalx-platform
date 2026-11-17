@@ -19,6 +19,13 @@ test("shards cover each file once regardless of inventory order or duplicates", 
   assert.throws(() => shardFiles(files, 1, 0));
 });
 
+test("measured sharding spreads slow files and packs the remaining work", () => {
+  const durations = { a: 10, b: 9, c: 8, d: 7, e: 6, f: 5 };
+  const files = Object.keys(durations).reverse();
+  const shards = [1, 2, 3].map(shard => shardFiles(files, shard, 3, durations));
+  assert.deepEqual(shards, [["a", "f"], ["b", "e"], ["c", "d"]]);
+});
+
 test("collection covers new hosted files and leaves unit and runtime imports to their own gates", () => {
   const files = inventory(["tests/new.test.ts", "tests/new.test.ts", "tests/fixture.mjs"]);
   assert.equal(files.filter(file => file === "tests/new.test.ts").length, 1);
