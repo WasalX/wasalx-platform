@@ -3,10 +3,10 @@ import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFile, readlink, stat, statfs, writeFile } from "node:fs/promises";
-import { arch, homedir, hostname, platform } from "node:os";
+import { arch, homedir, platform } from "node:os";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { activeServiceNames, assertDevInstallPreimages, devContainerPreimage, devColdResidents, devHeldServices, devHeldPrerequisites, devPreservedServices, devValueDigest, captureDevReviewAuth, assertDevReviewAuthRows, devReviewAuthEnvironment, devReviewAuthConfiguration } from "./installer-stack.mjs";
+import { activeServiceNames, assertDevInstallPreimages, devContainerPreimage, devColdResidents, devHeldServices, devHeldPrerequisites, devPreservedServices, devValueDigest, captureDevReviewAuth, assertDevReviewAuthRows, devReviewAuthEnvironment, devReviewAuthConfiguration, assertInstallHostname } from "./installer-stack.mjs";
 import { parseRailsJson } from "./simulation-rails-json.mjs";
 import { sha256, preserveReplacement, readBoundArtifacts, writeArtifactState,
   assertRetainedPreimage, composeProfiles, dockerfileOf, imageServices, inspectOwned, preparePrivateDirectory, fenceReplacementEffects, rollbackReplacement } from "./installer-artifacts.mjs";
@@ -669,9 +669,17 @@ async function main() {
     throw new Error("invalid arguments");
   }
 
+  assertInstallHostname();
+  let devRecord;
+  if (devPreimagesFile) {
+    const bytes = await readFile(devPreimagesFile);
+    assert.equal(createHash("sha256").update(bytes).digest("hex"), devPreimagesSha256, "DEV preimage file changed");
+    devRecord = JSON.parse(bytes.toString("utf8"));
+    devReviewAuthEnvironment(devRecord?.devReviewAuth);
+  }
   const preflightExit = await run(process.execPath, [preflight, "--env-file", envFile], process.env, true);
   if (preflightExit !== 0) return preflightExit;
-  assert.deepEqual([hostname(), platform(), arch()], ["example-test-vm", "linux", "x64"], "qualification must run in the WasalX VM");
+  assert.deepEqual([platform(), arch()], ["linux", "x64"], "qualification must run in the WasalX VM");
   assert.equal(process.env.DOCKER_HOST ?? "", "", "DOCKER_HOST is not allowed during qualification");
   assert.equal(process.env.DOCKER_CONTEXT ?? "", "", "DOCKER_CONTEXT is not allowed during qualification");
   assert.equal(run("docker", ["context", "show"], process.env), "default", "qualification requires the default Docker context");
@@ -695,11 +703,7 @@ async function main() {
   const buildContext = await verifyBuildContext(candidateSha);
   const buildContextSha256 = sha256(buildContext);
 
-  let devRecord;
   if (devPreimagesFile) {
-    const bytes = await readFile(devPreimagesFile);
-    assert.equal(createHash("sha256").update(bytes).digest("hex"), devPreimagesSha256, "DEV preimage file changed");
-    devRecord = JSON.parse(bytes.toString("utf8"));
     assert.equal(devRecord.candidateSha, candidateSha); assert.equal(devRecord.candidateTree, candidateTree);
     assert.equal(devRecord.project, project);
     assert.equal(devRecord.machineIdSha256, createHash("sha256").update(await readFile("/etc/machine-id")).digest("hex"));
@@ -749,8 +753,9 @@ async function main() {
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
     process.exitCode = await main();
-  } catch {
-    process.stderr.write("remote full qualification failed\n");
+  } catch (error) {
+    const variable = ["WASALX_INSTALL_EXPECTED_HOSTNAME", "WASALX_DEV_REVIEW_ORIGIN_SUFFIX"].find((name) => error.message?.includes(name));
+    process.stderr.write(`remote full qualification failed${variable ? `: check ${variable}` : ""}\n`);
     process.exitCode = 1;
   }
 }
