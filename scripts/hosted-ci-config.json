@@ -1,0 +1,17 @@
+{
+  "excludedPatterns": [
+    "tests/zammad-sidebar-component/**",
+    "tests/zammad-sidebar-component-harness.test.mjs",
+    "tests/visual/**",
+    "tests/*e2e.test.mjs",
+    "tests/*postgres*.mjs",
+    "tests/qualification-*",
+    "tests/zammad-image-browser-compat.test.mjs",
+    "tests/rendered-html.test.mjs",
+    "tests/portal-security-headers.test.mjs",
+    "scripts/contracts/*-live.mjs",
+    "scripts/release/**",
+    "scripts/run-application-e2e.mjs",
+    "scripts/run-selected-simulation.mjs"
+  ]
+}

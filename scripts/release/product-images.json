@@ -1,0 +1,86 @@
+[
+  {
+    "image": "portal",
+    "dockerfile": "Dockerfile.portal"
+  },
+  {
+    "image": "control-api",
+    "dockerfile": "Dockerfile.control-api"
+  },
+  {
+    "image": "connector-worker",
+    "dockerfile": "Dockerfile.connector-worker"
+  },
+  {
+    "image": "secret-sidecar",
+    "dockerfile": "Dockerfile.secret-sidecar"
+  },
+  {
+    "image": "invitation-mailer",
+    "dockerfile": "Dockerfile.invitation-mailer"
+  },
+  {
+    "image": "identity-policy-activator",
+    "dockerfile": "Dockerfile.identity-policy-activator"
+  },
+  {
+    "image": "tenant-provisioner",
+    "dockerfile": "Dockerfile.tenant-provisioner"
+  },
+  {
+    "image": "tenant-workspace-controller",
+    "dockerfile": "Dockerfile.tenant-workspace-controller"
+  },
+  {
+    "image": "workspace-provider",
+    "dockerfile": "Dockerfile.workspace-provider"
+  },
+  {
+    "image": "workspace-configurator",
+    "dockerfile": "Dockerfile.workspace-configurator"
+  },
+  {
+    "image": "foundation-postgres",
+    "dockerfile": "Dockerfile.foundation-postgres"
+  },
+  {
+    "image": "foundation-keycloak",
+    "dockerfile": "Dockerfile.foundation-keycloak"
+  },
+  {
+    "image": "production-ingress",
+    "dockerfile": "Dockerfile.production-ingress"
+  },
+  {
+    "image": "production-cloudflared",
+    "dockerfile": "Dockerfile.production-cloudflared"
+  },
+  {
+    "image": "production-prometheus",
+    "dockerfile": "Dockerfile.production-prometheus"
+  },
+  {
+    "image": "production-alertmanager",
+    "dockerfile": "Dockerfile.production-alertmanager"
+  },
+  {
+    "image": "production-otel",
+    "dockerfile": "Dockerfile.production-otel"
+  },
+  {
+    "image": "zammad-nginx",
+    "dockerfile": "Dockerfile.zammad-nginx"
+  },
+  {
+    "image": "zammad-redis",
+    "dockerfile": "Dockerfile.zammad-redis"
+  },
+  {
+    "image": "zammad-memcached",
+    "dockerfile": "Dockerfile.zammad-memcached"
+  },
+  {
+    "image": "zammad",
+    "dockerfile": "infra/docker/Dockerfile.zammad"
+  }
+]
