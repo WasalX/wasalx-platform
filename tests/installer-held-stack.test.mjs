@@ -91,17 +91,26 @@ test("installer prints a sanitized reason for a failure before the stage loop", 
 test("installer subprocess failures retain a bounded stderr tail with sensitive values redacted", () => {
   const token = "A1b2C3d4".repeat(6);
   const environment = { ...process.env, INSTALLER_TEST_SECRET: "short.+ fixture secret" };
-  const stderr = `discarded start\n${"padding ".repeat(300)}\ninvalid Compose interpolation for APP_PORT\n` +
-    `APP_PASSWORD="quoted password" ${environment.INSTALLER_TEST_SECRET} Bearer small-token ${token}`;
+  const stderr = [
+    "discarded start", "padding ".repeat(300), "invalid Compose interpolation for APP_PORT",
+    `APP_PASSWORD="quoted password" ${environment.INSTALLER_TEST_SECRET} Bearer small-token ${token}`,
+    "POSTGRES_PASSWORD: hunter2pass",
+    "META_APP_SECRET: abcd1234",
+    '{"client_secret":"abc123def","DB_TOKEN": "tok999"}',
+    '{"oauth_private_key_path":"fixture-pem","login_credential":"fixture-code","db_pwd_hint":"fixture-hint"}',
+    'private-key-v2="fixture-assign"',
+  ].join("\n");
   const script = `process.stderr.write(${JSON.stringify(stderr)}); process.exitCode = 1;`;
   assert.throws(() => run(process.execPath, ["-e", script], environment), error => {
     const reason = stageFailureReason(error);
     assert.ok(Buffer.byteLength(reason) <= Buffer.byteLength(`${process.execPath} failed: `) + 2048);
     assert.match(reason, /invalid Compose interpolation for APP_PORT/u);
     assert.match(reason, /APP_PASSWORD=\[redacted\]/u);
-    for (const value of ["discarded start", "quoted password", environment.INSTALLER_TEST_SECRET, "small-token", token]) {
-      assert.ok(!reason.includes(value));
+    for (const value of ["discarded start", "quoted password", environment.INSTALLER_TEST_SECRET, "small-token", token,
+      "hunter2pass", "abcd1234", "abc123def", "tok999", "fixture-pem", "fixture-code", "fixture-hint", "fixture-assign"]) {
+      assert.ok(!reason.includes(value), "stderr retained an unredacted fixture value");
     }
+    assert.ok(reason.includes('"client_secret":[redacted],"DB_TOKEN": [redacted]'));
     return true;
   });
 });

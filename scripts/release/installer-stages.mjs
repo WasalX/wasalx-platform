@@ -610,8 +610,8 @@ function commandStderrTail(stderr, environment) {
   const detail = stripVTControlCharacters(safe)
     .replace(/(\b(?:Bearer|Basic)\s+)\S+/giu, "$1[redacted]")
     .replace(/(\b[a-z][a-z0-9+.-]*:\/\/)[^/\s@]+@/giu, "$1[redacted]@")
-    .replace(/(\b(?:password|passwd|token|secret|api[_-]?key)["']?[ \t]*:[ \t]*)[^\r\n]+/giu, "$1[redacted]")
-    .replace(/(\b[a-z_]\w*[ \t]*=[ \t]*)(?:"(?:\\.|[^"\\])*"|'[^']*'|\S+)/giu, "$1[redacted]")
+    .replace(/((?<![\w.-])(?=[\w.-]*(?:password|passwd|pwd|token|secret|api[_-]?key|private[_-]?key|credential))[\w.-]+["']?[ \t]*:[ \t]*)(?:"(?:\\.|[^"\\])*"(?=[ \t]*[,}])|[^\r\n]+)/giu, "$1[redacted]")
+    .replace(/((?<![\w.-])[\w.-]+[ \t]*=[ \t]*)(?:"(?:\\.|[^"\\])*"|'[^']*'|\S+)/giu, "$1[redacted]")
     .replace(/\b[\w+/-]{24,}={0,2}/gu, "[redacted]")
     .replace(/[\s\p{Cc}]+/gu, " ").trim();
   return Buffer.from(detail).subarray(-2048).toString("utf8").replace(/^\uFFFD+/u, "");
