@@ -30,7 +30,7 @@ COPY scripts/release/patch-keycloak-jackson.py /tmp/patch-keycloak-jackson.py
 RUN echo '1f1935812026b0a5acbdb3717c9685b257f811b133a9bec455f0b2f0110321dc  /tmp/keycloak-admin-cli-26.7.3.jar' | sha256sum --check \
     && python /tmp/patch-keycloak-jackson.py /tmp/keycloak-admin-cli-26.7.3.jar /tmp/jackson-databind-2.21.7.jar /tmp/jackson-core-2.21.7.jar
 
-FROM cgr.dev/chainguard/wolfi-base:latest@sha256:3754b6da0e1ccdab0fe46abfdd7bbbba994b593c28149f6659fa6597f2261aeb
+FROM cgr.dev/chainguard/wolfi-base:latest@sha256:e9b8c3739e5fb5fc778843a2ce74f8620588c9ddc9c44918cead527abcb0b628
 RUN apk add --no-cache 'libcrypto3=3.6.5-r1' 'libssl3=3.6.5-r1' \
       'bash=5.3-r13' \
       'openjdk-21-jre=21.0.12.1-r2' \

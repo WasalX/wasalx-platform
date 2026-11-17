@@ -30,7 +30,7 @@ RUN node scripts/build-zammad-package.mjs \
 
 
 # Reuse the hardened runtime and unaffected zlib pin used by the other services.
-FROM cgr.dev/chainguard/wolfi-base:latest@sha256:3754b6da0e1ccdab0fe46abfdd7bbbba994b593c28149f6659fa6597f2261aeb AS runtime
+FROM cgr.dev/chainguard/wolfi-base:latest@sha256:e9b8c3739e5fb5fc778843a2ce74f8620588c9ddc9c44918cead527abcb0b628 AS runtime
 RUN apk add --no-cache 'libcrypto3=3.6.5-r1' 'libssl3=3.6.5-r1' \
       'libstdc++=16.2.0-r1' \
       'postgresql-18-client=18.6-r2' \

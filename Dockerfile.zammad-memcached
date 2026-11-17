@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.7
-FROM cgr.dev/chainguard/wolfi-base:latest@sha256:3754b6da0e1ccdab0fe46abfdd7bbbba994b593c28149f6659fa6597f2261aeb
+FROM cgr.dev/chainguard/wolfi-base:latest@sha256:e9b8c3739e5fb5fc778843a2ce74f8620588c9ddc9c44918cead527abcb0b628
 RUN apk add --no-cache 'libcrypto3=3.6.5-r1' 'libssl3=3.6.5-r1' \
       'memcached=1.6.45-r3' \
       'zlib=1.3.2.1_rc20260601-r0'
