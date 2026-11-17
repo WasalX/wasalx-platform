@@ -112,3 +112,12 @@ built-in hello-world TLS service, only in `usr/local/bin/cloudflared` for the
 against `tlsconfig/hello_ca.go` in the Dockerfile's checksum-pinned public
 2026.9.1 source archive. Other keys, changed content or a changed archive pin
 fail closed. No runtime deployment credential is exempted.
+
+Zammad copies `/usr/local` and `/opt/zammad` from its approved public upstream
+image. For those copied paths, the inspector resolves only the pinned
+`ZAMMAD_BASE_IMAGE`, anonymously streams its OCI layers, verifies the manifest
+and every compressed layer digest, and records full PEM hashes at their source
+paths. Only identical full content at that same copied path is admitted. An
+unmatched key, unrelated path, different base pin, invalid manifest or altered
+layer fails closed. The receipt seals the resulting public-content map; key
+bytes and anonymous registry tokens are never written or logged.

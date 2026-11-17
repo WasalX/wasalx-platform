@@ -1,6 +1,7 @@
 import copy
 import importlib.util
 import io
+import gzip
 import json
 from pathlib import Path
 import re
@@ -97,6 +98,35 @@ class ImagePublicationTests(unittest.TestCase):
         for bad in [pem, pem.replace(b"\nA", b"\nB", 1), b"ghp_" + b"a" * 40]:
             with self.assertRaises(ValueError):
                 images.inspect_content(io.BytesIO(bad), set() if bad == pem else {digest})
+
+    def test_copied_zammad_keys_require_verified_manifest_and_layer_bytes(self):
+        pem = b"-----BEGIN PRIVATE KEY-----\n" + (b"A" * 64 + b"\n") * 2 + b"-----END PRIVATE KEY-----"
+        layer = io.BytesIO()
+        with tarfile.open(fileobj=layer, mode="w") as archive:
+            for name in ["opt/zammad/fixture/key.pem", "unrelated/key.pem"]:
+                entry = tarfile.TarInfo(name)
+                entry.size = len(pem)
+                archive.addfile(entry, io.BytesIO(pem))
+        blob = gzip.compress(layer.getvalue(), mtime=0)
+        for case in ["valid", "manifest-mismatch", "layer-mismatch"]:
+            descriptor = images.sha256(blob) if case != "layer-mismatch" else "sha256:" + "0" * 64
+            manifest = json.dumps({"layers": [{"mediaType": "application/vnd.oci.image.layer.v1.tar+gzip", "digest": descriptor}]}).encode()
+            reference = "ghcr.io/zammad/zammad@" + images.sha256(manifest)
+            def response(request, **kwargs):
+                url = request if isinstance(request, str) else request.full_url
+                if "/token?" in url:
+                    return io.BytesIO(b'{"token":"public-fixture"}')
+                if "/manifests/" in url:
+                    return io.BytesIO(manifest + (b" " if case == "manifest-mismatch" else b""))
+                return io.BytesIO(blob)
+            with self.subTest(case=case), patch.object(images, "ZAMMAD_PUBLIC_BASE", reference), \
+                    patch.object(images, "_zammad_public_keys", None), patch.object(images.urllib.request, "urlopen", side_effect=response):
+                if case == "valid":
+                    self.assertEqual(images.zammad_public_keys(), {"opt/zammad/fixture/key.pem": {images.hashlib.sha256(pem).hexdigest()}})
+                else:
+                    with self.assertRaises(ValueError):
+                        images.zammad_public_keys()
+                    self.assertIsNone(images._zammad_public_keys)
 
     def test_manifest_requires_complete_verified_uniform_source_receipts(self):
         records = [{"image": r["image"], "commit": "a" * 40, "tree": "b" * 40,
