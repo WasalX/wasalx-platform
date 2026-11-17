@@ -1,6 +1,7 @@
 {
   "excludedPatterns": [
     "tests/zammad-sidebar-component/**",
+    "tests/zammad-sidebar-component-harness.test.mjs",
     "tests/visual/**",
     "tests/*e2e.test.mjs",
     "tests/*postgres*.mjs",

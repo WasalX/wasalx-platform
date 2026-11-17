@@ -35,7 +35,8 @@ async function main() {
   const files = inventory(tracked);
   assert(files.length > 0 && files.every(file => file.startsWith("tests/") && !file.includes("..")));
   if (mode === "unit") {
-    const runnable = files.filter(file => !config.excludedPatterns.some(pattern => matchesGlob(file, pattern)));
+    const runnable = [...unitFiles, "tests/hosted-ci.test.mjs"]
+      .filter(file => !config.excludedPatterns.some(pattern => matchesGlob(file, pattern)));
     const selected = shardFiles(runnable, Number(shard), Number(total));
     assert(selected.length > 0, "Empty unit shard");
     console.log(`Unit shard ${shard}/${total}: ${selected.length} of ${runnable.length} files`);
