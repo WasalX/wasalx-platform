@@ -18,7 +18,7 @@ const repository = resolve(fileURLToPath(new URL("../../", import.meta.url)));
 const preflight = fileURLToPath(new URL("./preflight-full-env.mjs", import.meta.url));
 const verifier = fileURLToPath(new URL("./installer-stack.mjs", import.meta.url));
 const shaPattern = /^[0-9a-f]{40}$/u;
-const stages = ["preflight", "build", "admit-hosted", "replace", "smoke", "qualify", "rollback", "rollback-safety", "release-held"];
+const stages = ["preflight", "build", "verify-hosted", "admit-hosted", "replace", "smoke", "qualify", "rollback", "rollback-safety", "release-held"];
 const migrationVerifierScript = `const fs=require('node:fs'),crypto=require('node:crypto');
     console.log(JSON.stringify(fs.readdirSync('/app/migrations').filter(n=>/^\\d{4}_[a-z0-9_]+\\.sql$/.test(n)).sort().map(name=>{
       const b=fs.readFileSync('/app/migrations/'+name);
@@ -374,14 +374,15 @@ export async function executeStage(action, context) {
     model, directory, drained = false, retryReviewed = false, command = run } = context;
   const execute = (...args) => command(...args);
   context = { ...context, command };
-  assert.ok(action !== "admit-hosted" || context.hostedImages, "explicit hosted inventory required");
+  assert.ok(!["verify-hosted", "admit-hosted"].includes(action) || context.hostedImages, "explicit hosted inventory required");
   assert.ok(!context.hostedImages || !["build", "qualify"].includes(action), "hosted admission cannot use the local build stage");
   if (action === "admit-hosted") {
     // Capture original mutable tags before the separately controlled preload.
     await readFile(preimagePath(context));
   }
   const hosted = context.hostedImages && !["rollback", "rollback-safety"].includes(action)
-    ? await verifyHostedImages(context) : null;
+    ? await verifyHostedImages(context, { verifyOnly: action === "verify-hosted" }) : null;
+  if (action === "verify-hosted") return 0;
   if (["replace", "rollback-safety"].includes(action)) await preparePrivateDirectory(context);
   if (action === "rollback") return rollbackReplacement(context);
   if (action === "rollback-safety") {
@@ -689,7 +690,7 @@ async function main() {
   }
   assert.equal(Boolean(hostedImages), Boolean(hostedImagesSha256), "hosted inventory hash required");
   assert.equal(Boolean(hostedImages), Boolean(hostedTrustedRoot), "separate trusted Sigstore root required");
-  assert.ok(action !== "admit-hosted" || hostedImages, "hosted admission inventory required");
+  assert.ok(!["verify-hosted", "admit-hosted"].includes(action) || hostedImages, "hosted admission inventory required");
   assert.ok(!hostedImages || !["build", "qualify"].includes(action), "hosted admission requires separate stages");
   assert.equal(Boolean(rollbackSafetyFile), Boolean(rollbackSafetySha256), "rollback safety digest binding is required");
   assert.equal(Boolean(devReviewPortalOrigin), Boolean(devReviewIdentityOrigin), "Both approved DEV review origins are required");
@@ -716,6 +717,17 @@ async function main() {
     assert.equal(createHash("sha256").update(bytes).digest("hex"), devPreimagesSha256, "DEV preimage file changed");
     devRecord = JSON.parse(bytes.toString("utf8"));
     devReviewAuthEnvironment(devRecord?.devReviewAuth);
+  }
+  if (action === "verify-hosted") {
+    const candidateSha = run("git", ["rev-parse", "HEAD"], process.env);
+    const candidateTree = run("git", ["rev-parse", "HEAD^{tree}"], process.env);
+    assert.match(candidateSha, shaPattern); assert.match(candidateTree, shaPattern);
+    assert.equal(run("git", ["status", "--porcelain=v1", "--untracked-files=all"], process.env), "", "candidate checkout is dirty");
+    const catalog = JSON.parse(await readFile(resolve(repository, "release/installer-images.json"), "utf8"));
+    await executeStage(action, { candidateSha, candidateTree, catalog, plan: catalog.images,
+      hostedImages, hostedImagesSha256, hostedTrustedRoot, environment: process.env });
+    process.stdout.write("hosted inputs verified; no images loaded or tagged\n");
+    return 0;
   }
   const preflightExit = await run(process.execPath, [preflight, "--env-file", envFile], process.env, true);
   if (preflightExit !== 0) return preflightExit;

@@ -144,6 +144,30 @@ for (const [reason, mutate] of Object.entries(refusals)) test(`hosted ${reason} 
   }
 });
 
+test("verify-only checks the complete catalog without Docker, preimages or an admission receipt", async t => {
+  const f = await fixture(t); await rm(preimagePath(f.context));
+  f.context.plan = catalog.images;
+  assert.equal(await executeStage("verify-hosted", f.context), 0);
+  assert.equal(f.calls.filter(({ name }) => name === "cosign").length, 1 + 2 * catalog.images.length);
+  assert.ok(f.calls.every(({ name }) => name === "cosign"));
+  await assert.rejects(readFile(artifactPath(f.context)), { code: "ENOENT" });
+});
+
+test("failed verify-only gate never reaches a caller's load/tag operations", async t => {
+  for (const [reason, mutate] of Object.entries(refusals).filter(([reason]) => reason !== "loaded config mismatch")) {
+    const f = await fixture(t); await mutate(f); await f.save();
+    const before = structuredClone(f.details);
+    const preload = async () => {
+      await executeStage("verify-hosted", f.context);
+      await f.context.command("docker", ["load", "--input", "candidate.tar"]);
+      await f.context.command("docker", ["image", "tag", "candidate", "wasalx/portal:local"]);
+    };
+    await assert.rejects(preload(), undefined, reason);
+    assert.ok(f.calls.every(({ name }) => name === "cosign"), reason);
+    assert.deepEqual(f.details, before, reason);
+  }
+});
+
 test("duplicate JSON catalog keys reject even when the duplicate values match", async t => {
   const f = await fixture(t), text = JSON.stringify(f.inventory);
   const row = JSON.stringify(f.inventory.images.zammad);
