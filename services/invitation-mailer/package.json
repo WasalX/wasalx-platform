@@ -10,7 +10,7 @@
   },
   "dependencies": {
     "@wasalx/observability": "workspace:*",
-    "nodemailer": "10.0.9",
+    "nodemailer": "10.1.4",
     "pg": "^8.16.3"
   },
   "devDependencies": {
