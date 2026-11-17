@@ -1,10 +1,10 @@
 import "./helpers/operator-input-fixtures.mjs";
 process.env.WASALX_RELEASE_EVIDENCE_SCRIPT = "fixture-release-evidence.mjs";
 import assert from "node:assert/strict";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, dirname, join, resolve } from "node:path";
-import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { delimiter, join, resolve } from "node:path";
+import { spawn, spawnSync } from "node:child_process";
 import test from "node:test";
 import { ALLOWED_GATES, PLAYWRIGHT_IMAGE, applicationCpuLimit, ciRuntime, containerName, cpuSnapshot, dockerArguments, rootlessDataRoot, validateInvocation } from "../scripts/release/ci-browser-runtime.mjs";
 import { managedEnvironment } from "./helpers/quality-workflow-fixture.mjs";

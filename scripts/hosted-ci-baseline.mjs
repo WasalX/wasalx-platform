@@ -5,7 +5,7 @@ export default {
   "sourceHead": "8e07a88bfecd2163a79a8b73f1d2b3c52e033172",
   "logSha256": "06fdc672dfe1f14ae2a416c0eb2a420ec701dc7d3332b9a50393097f520e7017",
   "lint": {
-    "count": 222,
+    "count": 193,
     "files": {
       "app/MarketingIcon.tsx": {
         "@typescript-eslint/no-unused-vars": 1
@@ -69,15 +69,6 @@ export default {
       },
       "scripts/release/synthetic-first-group-driver.mjs": {
         "@typescript-eslint/no-unused-vars": 3
-      },
-      "tests/ci-browser-runtime.test.mjs": {
-        "@typescript-eslint/no-unused-vars": 5
-      },
-      "tests/ci-only-admission.test.mjs": {
-        "@typescript-eslint/no-unused-vars": 11
-      },
-      "tests/ci-phase-admission.test.mjs": {
-        "@typescript-eslint/no-unused-vars": 13
       },
       "tests/design-system-governance.test.mjs": {
         "@typescript-eslint/no-unused-vars": 4
