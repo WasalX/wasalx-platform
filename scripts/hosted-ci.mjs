@@ -1,14 +1,14 @@
 import "../tests/helpers/operator-input-fixtures.mjs";
 import assert from "node:assert/strict";
 import { execFile, execFileSync, spawnSync } from "node:child_process";
-import { appendFileSync, readFileSync } from "node:fs";
+import { appendFileSync, readFileSync, rmSync } from "node:fs";
 import { matchesGlob, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { unitFiles } from "./test-unit.mjs";
+import { addonSkips, lintRatchet, skipPattern } from "./hosted-ci-policy.mjs";
 
 const config = JSON.parse(readFileSync(new URL("./hosted-ci-config.json", import.meta.url)));
-const known = JSON.parse(readFileSync(new URL("./hosted-ci-known-failures.json", import.meta.url)));
 
 export function shardFiles(files, shard, total) {
   assert(Number.isSafeInteger(total) && total > 0, "Invalid shard count");
@@ -16,15 +16,17 @@ export function shardFiles(files, shard, total) {
   return [...new Set(files)].sort().filter((_, index) => index % total === shard - 1);
 }
 
-export function unexpectedFailures(failures, allowed) {
-  return failures.filter(file => !allowed.includes(file));
-}
-
 export function inventory(tracked) {
   // Keep the existing declared inventory and collect additional Node test files.
   const discovered = tracked.filter(file => /\.test\.(?:mjs|cjs|js|ts)$/u.test(file)
     && !file.startsWith("tests/zammad-sidebar-component/"));
   return [...new Set([...unitFiles, ...discovered])].sort();
+}
+
+export function collectionFiles(tracked) {
+  // Unit shards already prove their imports; collect the additional hosted scope.
+  return inventory(tracked).filter(file => !unitFiles.includes(file)
+    && !config.excludedPatterns.some(pattern => matchesGlob(file, pattern)));
 }
 
 export async function collectFile(file, timeout = 45_000) {
@@ -42,9 +44,24 @@ export async function collectFile(file, timeout = 45_000) {
 
 async function main() {
   const [mode, shard, total] = process.argv.slice(2);
-  assert(["unit", "collection"].includes(mode), "Expected unit or collection");
+  assert(["lint", "unit", "collection"].includes(mode), "Expected lint, unit or collection");
+  if (mode === "lint") {
+    const report = ".git/hosted-lint.json";
+    rmSync(report, { force: true });
+    const result = spawnSync("pnpm", ["run", "lint", "--format", "json", "--output-file", report], { stdio: "inherit", windowsHide: true });
+    if (result.error) throw result.error;
+    assert(result.status === 0 || result.status === 1, "ESLint failed to execute");
+    const current = lintRatchet(JSON.parse(readFileSync(report, "utf8")));
+    assert.equal(result.status, current.count ? 1 : 0, "Lint exit status disagrees with its report");
+    const lines = [`Lint errors: ${current.count}; recorded: ${current.recorded}`, ...current.regressions];
+    if (current.decreased) lines.push("Lint improved: lower the recorded numbers in scripts/hosted-ci-baseline.mjs to the current file/rule counts.");
+    console.log(lines.join("\n"));
+    if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, lines.join("  \n") + "\n");
+    process.exitCode = current.regressions.length ? 1 : 0;
+    return;
+  }
   const tracked = execFileSync("git", ["ls-files", "-z", "tests"], { encoding: "utf8" }).split("\0").filter(Boolean);
-  const files = inventory(tracked);
+  const files = mode === "collection" ? collectionFiles(tracked) : inventory(tracked);
   assert(files.length > 0 && files.every(file => file.startsWith("tests/") && !file.includes("..")));
   if (mode === "unit") {
     const runnable = [...unitFiles, "tests/hosted-ci.test.mjs"]
@@ -52,13 +69,22 @@ async function main() {
     const selected = shardFiles(runnable, Number(shard), Number(total));
     assert(selected.length > 0, "Empty unit shard");
     console.log(`Unit shard ${shard}/${total}: ${selected.length} of ${runnable.length} files`);
-    const result = spawnSync(process.execPath, ["--experimental-strip-types", "--import", "./tests/helpers/operator-input-fixtures.mjs", "--test", "--test-concurrency=2", ...selected], { stdio: "inherit", windowsHide: true });
-    if (result.error) throw result.error;
-    process.exitCode = result.status ?? 1;
+    const skipped = selected.map(file => ({ file, entries: addonSkips(file) })).filter(batch => batch.entries.length);
+    const ordinary = selected.filter(file => !skipped.some(batch => batch.file === file));
+    const batches = [{ files: ordinary, entries: [] }, ...skipped.map(batch => ({ files: [batch.file], entries: batch.entries }))];
+    for (const { files, entries } of batches) {
+      if (!files.length) continue;
+      const lines = entries.map(entry => `SKIP: ${entry.file} :: ${entry.name}: ${entry.reason} (missing ${entry.input}; entrypoint ${files[0]})`);
+      console.log(lines.join("\n"));
+      if (process.env.GITHUB_STEP_SUMMARY && lines.length) appendFileSync(process.env.GITHUB_STEP_SUMMARY, lines.join("  \n") + "\n");
+      const pattern = entries.length ? [`--test-skip-pattern=${skipPattern(entries)}`] : [];
+      const result = spawnSync(process.execPath, ["--experimental-strip-types", "--import", "./tests/helpers/operator-input-fixtures.mjs", "--test", "--test-concurrency=2", ...pattern, ...files], { stdio: "inherit", windowsHide: true });
+      if (result.error) throw result.error;
+      if (result.status !== 0) process.exitCode = result.status ?? 1;
+    }
     return;
   }
   // Import modules while skipping test bodies, matching the existing collection method.
-  // Collection includes runtime-only files so new import errors remain visible.
   // The test runner's test timeout does not bound a hanging module import.
   const failures = [];
   for (let offset = 0; offset < files.length; offset += 4) {
@@ -71,13 +97,11 @@ async function main() {
       }
     }
   }
-  const unexpected = unexpectedFailures(failures, known);
-  const lines = ["Collection results", `Files: ${files.length}; unexpected errors: ${unexpected.length}`,
-    ...known.map(file => `${failures.includes(file) ? "KNOWN FAILURE" : "NOW PASSES"}: ${file}`),
-    ...unexpected.map(file => `UNEXPECTED FAILURE: ${file}`)];
+  const lines = ["Collection results (unit imports are checked by the unit shards)", `Additional files: ${files.length}; errors: ${failures.length}`,
+    ...failures.map(file => `UNEXPECTED FAILURE: ${file}`)];
   console.log(lines.join("\n"));
   if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, lines.join("  \n") + "\n");
-  process.exitCode = unexpected.length ? 1 : 0;
+  process.exitCode = failures.length ? 1 : 0;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) await main();

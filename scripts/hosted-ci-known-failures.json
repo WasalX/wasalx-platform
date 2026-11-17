@@ -1,6 +1,0 @@
-[
-  "tests/dev-secret-sidecar.test.mjs",
-  "tests/portal-security-headers.test.mjs",
-  "tests/rendered-html.test.mjs",
-  "tests/zammad-image-browser-compat.test.mjs"
-]
