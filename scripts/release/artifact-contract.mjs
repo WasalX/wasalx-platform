@@ -16,29 +16,7 @@ const tagPattern = /^v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:
 const imageNamePattern = /^[a-z0-9]+(?:[._-][a-z0-9]+)*(?:\/[a-z0-9]+(?:[._-][a-z0-9]+)*)+$/u;
 const buildkitBuildType = "https://github.com/moby/buildkit/blob/master/docs/attestations/slsa-definitions.md";
 const releasePlatforms = ["linux/amd64"];
-const expectedImageIds = [
-  "portal",
-  "control-api",
-  "connector-worker",
-  "secret-sidecar",
-  "invitation-mailer",
-  "identity-policy-activator",
-  "tenant-provisioner",
-  "tenant-workspace-controller",
-  "workspace-provider",
-  "workspace-configurator",
-  "foundation-postgres",
-  "foundation-keycloak",
-  "production-ingress",
-  "production-cloudflared",
-  "production-prometheus",
-  "production-alertmanager",
-  "production-otel",
-  "zammad-nginx",
-  "zammad-redis",
-  "zammad-memcached",
-  "zammad",
-];
+const expectedImageIds = JSON.parse(await readFile(new URL("./product-images.json", import.meta.url), "utf8")).map(image => image.image);
 const expectedDependencyIds = ["nginx", "redis", "memcached"];
 const approvedPortalVulnerabilities = [
   new Set(["GHSA-w3rx-r6r6-pgpr", "CVE-2025-71330"]),

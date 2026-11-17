@@ -1,0 +1,466 @@
+"""Public-source image builds and inspected, signed digest receipts (linux/amd64)."""
+import argparse
+import hashlib
+import json
+import io
+import os
+from pathlib import Path, PurePosixPath
+import re
+import shlex
+import subprocess
+import tarfile
+import tempfile
+import urllib.request
+
+
+ROOT = Path(__file__).resolve().parents[2]
+REPOSITORY = "WasalX/wasalx-platform"
+SOURCE = "https://github.com/" + REPOSITORY
+DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
+SHA = re.compile(r"[0-9a-f]{40}")
+ADDON_IMAGES = {"zammad", "workspace-configurator"}
+CREDENTIAL = re.compile(rb"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----\r?\n"
+                        rb"[A-Za-z0-9+/=]{40,128}\r?\n[A-Za-z0-9+/=]{40,128}|\bgh[pousr]_[A-Za-z0-9]{36,}\b")
+PEM = re.compile(rb"-----BEGIN ((?:RSA |EC |OPENSSH )?PRIVATE KEY)-----\r?\n"
+                 rb"(?:[A-Za-z0-9+/=]+\r?\n)+-----END \1-----")
+# Public built-in hello-world TLS key: cloudflared 2026.9.1, tlsconfig/hello_ca.go.
+CLOUDFLARED_SOURCE = "e75d9a314ae07ae42564c0d3115b9e33d8a7329d99771951ab7b67144461bd84"
+PUBLIC_KEYS = {"production-cloudflared": {"usr/local/bin/cloudflared": {
+    "17ac4c2ca3deb87202cd2c101d4da9d4f4c0ec3d51a0381729329102b28e61a4"}}}
+ZAMMAD_PUBLIC_BASE = "ghcr.io/zammad/zammad@sha256:390705d0eefd8a473293c1f9130cb2f40a2484bd629dd3b33aa0e700ee86d13b"
+_zammad_public_contract = None
+
+
+class HashingReader:
+    def __init__(self, stream):
+        self.stream = stream
+        self.digest = hashlib.sha256()
+
+    def read(self, size=-1):
+        raw = self.stream.read(size)
+        self.digest.update(raw)
+        return raw
+
+
+def restricted_path(path):
+    return any(part in {".git", ".ssh", ".aws", ".kube", ".env"} or
+               (part.startswith(".env.") and part != ".env.example") for part in PurePosixPath(path).parts)
+
+
+def require(condition, message):
+    if not condition:
+        raise ValueError(message)
+
+
+def run(*args, cwd=None):
+    return subprocess.check_output(args, cwd=cwd, text=True).strip()
+
+
+def write(path, value):
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    Path(path).write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
+
+
+def sha256(raw):
+    return "sha256:" + hashlib.sha256(raw).hexdigest()
+
+
+def catalog():
+    rows = json.loads((ROOT / "scripts/release/product-images.json").read_text())
+    require(len(rows) == 21 and len({r["image"] for r in rows}) == 21, "Invalid image catalog")
+    for row in rows:
+        require(re.fullmatch(r"[a-z]+(?:-[a-z]+)*", row["image"]), "Invalid image name")
+        require(row["dockerfile"] == ("infra/docker/Dockerfile.zammad" if row["image"] == "zammad"
+                                    else "Dockerfile." + row["image"]), "Invalid Dockerfile")
+        require((ROOT / row["dockerfile"]).is_file(), "Missing Dockerfile")
+    return rows
+
+
+def public_addon_source(raw=None):
+    raw = os.environ.get("PUBLIC_ADDON_SOURCE", "") if raw is None else raw
+    source = json.loads(raw) if raw else None
+    if source is None:
+        return None
+    require(isinstance(source, dict) and set(source) == {"repository", "commit"}, "Invalid public add-on source fields")
+    require(isinstance(source["repository"], str) and
+            re.fullmatch(r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", source["repository"]),
+            "Public add-on source requires a GitHub HTTPS repository URL")
+    require(isinstance(source["commit"], str) and SHA.fullmatch(source["commit"]), "Public add-on source requires a full commit")
+    return {**source, "repository": source["repository"].removesuffix(".git")}
+
+
+def matrix():
+    source = public_addon_source()
+    return {"include": [{**row, "pending": row["image"] in ADDON_IMAGES and source is None,
+                          "addonSource": source if row["image"] in ADDON_IMAGES else None} for row in catalog()]}
+
+
+def coordinates():
+    commit = run("git", "rev-parse", "HEAD", cwd=ROOT)
+    tree = run("git", "rev-parse", "HEAD^{tree}", cwd=ROOT)
+    require(SHA.fullmatch(commit) and SHA.fullmatch(tree), "Invalid source identity")
+    require(run("git", "status", "--porcelain", "--untracked-files=no", cwd=ROOT) == "", "Dirty source")
+    require(os.environ.get("GITHUB_REPOSITORY") == REPOSITORY, "Wrong public repository")
+    return commit, tree
+
+
+def instructions(text):
+    return re.sub(r"\\\n", " ", text).splitlines()
+
+
+def expand(text, values):
+    def replace(match):
+        key = match[1] or match[2]
+        require(key in values, "Unknown metadata substitution")
+        return values[key]
+    return re.sub(r"\$\{(\w+)\}|\$(\w+)", replace, text)
+
+
+def metadata_contract(text, commit, tree):
+    """Only literal public Dockerfile metadata and pinned base metadata may ship."""
+    values = {"WASALX_CANDIDATE_SHA": commit, "COMMIT_SHA": commit, "WASALX_CANDIDATE_TREE": tree}
+    labels, environment, base = {}, {}, None
+    lines = instructions(text)
+    final_stage = max(index for index, line in enumerate(lines) if line.startswith("FROM "))
+    for index, line in enumerate(lines):
+        if line.startswith("ARG "):
+            key, _, value = line[4:].partition("=")
+            if key not in values and value:
+                values[key] = value
+        elif line.startswith("FROM "):
+            base = expand(shlex.split(line)[1], values)
+            labels, environment = {}, {}
+        elif index > final_stage and line.startswith(("LABEL ", "ENV ")):
+            target = labels if line.startswith("LABEL ") else environment
+            for item in shlex.split(line.split(" ", 1)[1]):
+                key, separator, value = item.partition("=")
+                require(separator, "Unsupported metadata syntax")
+                target[key] = expand(value, {**values, **environment})
+    require(base == "scratch" or re.fullmatch(r"[a-z0-9./:_-]+@sha256:[0-9a-f]{64}", base or ""),
+            "Final base must be pinned")
+    labels.update({"org.opencontainers.image.source": SOURCE, "org.opencontainers.image.revision": commit,
+                   "io.wasalx.source.tree": tree})
+    return base, labels, environment
+
+
+def validate_metadata(config, base, labels, environment):
+    require(config.get("Labels", {}) == {**(base.get("Labels") or {}), **labels}, "Unapproved image labels")
+    expected_env = dict(item.split("=", 1) for item in base.get("Env") or [])
+    expected_env.update(environment)
+    require(dict(item.split("=", 1) for item in config.get("Env") or []) == expected_env, "Unapproved image environment")
+    require(not config.get("OnBuild"), "Deferred image instructions are forbidden")
+
+
+def inspect_content(contents, public_keys=()):
+    previous = b""
+    while True:
+        chunk = contents.read(1024 * 1024)
+        data = previous + chunk
+        boundary = max(0, len(data) - 65536) if chunk else len(data)
+        for match in CREDENTIAL.finditer(data):
+            if match.start() >= boundary:
+                continue
+            pem = PEM.match(data, match.start())
+            require(pem is not None and hashlib.sha256(pem.group()).hexdigest() in public_keys,
+                    "Credential material in image layer")
+        previous = data[boundary:]
+        if not chunk:
+            return
+
+
+def zammad_public_contract():
+    """Bind copied public key content to verified public OCI bytes, without extracting files."""
+    global _zammad_public_contract
+    if _zammad_public_contract is not None:
+        return _zammad_public_contract
+    prefix = "https://ghcr.io/v2/zammad/zammad/"
+    with urllib.request.urlopen("https://ghcr.io/token?service=ghcr.io&scope=repository:zammad/zammad:pull", timeout=30) as response:
+        token = json.load(response)["token"]
+    headers = {"Authorization": "Bearer " + token, "Accept": ", ".join([
+        "application/vnd.oci.image.index.v1+json", "application/vnd.docker.distribution.manifest.list.v2+json",
+        "application/vnd.oci.image.manifest.v1+json", "application/vnd.docker.distribution.manifest.v2+json"])}
+
+    def manifest(digest):
+        with urllib.request.urlopen(urllib.request.Request(prefix + "manifests/" + digest, headers=headers), timeout=30) as response:
+            raw = response.read()
+        require(sha256(raw) == digest, "Public base manifest digest mismatch")
+        return json.loads(raw)
+
+    data = manifest(ZAMMAD_PUBLIC_BASE.split("@", 1)[1])
+    if "manifests" in data:
+        platforms = [m for m in data["manifests"] if m.get("platform", {}).get("os") == "linux" and
+                     m.get("platform", {}).get("architecture") == "amd64"]
+        require(len(platforms) == 1, "Unique public base platform required")
+        data = manifest(platforms[0]["digest"])
+    keys, members = {}, {}
+    for layer in data["layers"]:
+        require(layer["mediaType"] in {"application/vnd.oci.image.layer.v1.tar+gzip",
+                                      "application/vnd.docker.image.rootfs.diff.tar.gzip",
+                                      "application/vnd.oci.image.layer.v1.tar"}, "Unsupported public base layer")
+        with urllib.request.urlopen(urllib.request.Request(prefix + "blobs/" + layer["digest"], headers=headers), timeout=30) as response:
+            reader = HashingReader(response)
+            with tarfile.open(fileobj=reader, mode="r|*") as archive:
+                for member in archive:
+                    path = str(PurePosixPath(member.name)).lstrip("/")
+                    if not path.startswith(("usr/local/", "opt/zammad/")):
+                        continue
+                    if not member.isfile():
+                        if restricted_path(path):
+                            require(member.isdir() or member.issym() or member.islnk(), "Unsupported public copied member")
+                            members[path] = {"type": "directory" if member.isdir() else "symlink" if member.issym() else "hardlink", "target": member.linkname}
+                        continue
+                    previous = b""
+                    with archive.extractfile(member) as contents:
+                        content = HashingReader(contents)
+                        while chunk := content.read(1024 * 1024):
+                            value = previous + chunk
+                            for match in PEM.finditer(value):
+                                keys.setdefault(path, set()).add(hashlib.sha256(match.group()).hexdigest())
+                            previous = value[-65536:]
+                        if restricted_path(path):
+                            members[path] = {"type": "file", "sha256": "sha256:" + content.digest.hexdigest()}
+            while reader.read(1024 * 1024):
+                pass
+            require("sha256:" + reader.digest.hexdigest() == layer["digest"], "Public base layer digest mismatch")
+    _zammad_public_contract = {"keys": keys, "members": members}
+    return _zammad_public_contract
+
+
+def inspect_layers(archive, layers, base_layers, public_keys=None, licenses=None, public_members=None):
+    """Inherited layers are admitted by pinned base; inspect all added layer members/content."""
+    count = 0
+    seen_licenses = {}
+    for index, layer in enumerate(layers):
+        if index < base_layers:
+            continue
+        with archive.extractfile(layer) as raw, tarfile.open(fileobj=raw, mode="r|*") as members:
+            for member in members:
+                path = PurePosixPath(member.name)
+                require(not path.is_absolute() and ".." not in path.parts, "Unsafe image layer path")
+                known = (public_members or {}).get(str(path)) if restricted_path(path) else None
+                if restricted_path(path):
+                    kind = "file" if member.isfile() else "directory" if member.isdir() else "symlink" if member.issym() else "hardlink" if member.islnk() else "unsupported"
+                    require(known and known["type"] == kind, "Unapproved image layer member")
+                    if not member.isfile():
+                        require(known["target"] == member.linkname, "Public copied link mismatch")
+                if member.isfile():
+                    with members.extractfile(member) as contents:
+                        checked = HashingReader(contents)
+                        if str(path) in (licenses or {}):
+                            require(member.size <= 1024 * 1024, "Unexpected licence file size")
+                            raw = checked.read()
+                            seen_licenses[str(path)] = sha256(raw)
+                            inspect_content(io.BytesIO(raw))
+                        else:
+                            inspect_content(checked, (public_keys or {}).get(str(path), ()))
+                        if known:
+                            require("sha256:" + checked.digest.hexdigest() == known["sha256"], "Public copied file mismatch")
+                count += 1
+    require(seen_licenses == (licenses or {}), "Add-on licence content mismatch")
+    return count
+
+
+def inspect_image(reference, row, commit, tree, directory, licenses=None):
+    text = (ROOT / row["dockerfile"]).read_text()
+    if row["image"] in PUBLIC_KEYS:
+        require("ADD --checksum=sha256:" + CLOUDFLARED_SOURCE in text and
+                "https://github.com/cloudflare/cloudflared/archive/refs/tags/2026.9.1.tar.gz" in text,
+                "Public key-content allowance requires the reviewed source archive")
+    public_keys = PUBLIC_KEYS.get(row["image"], {})
+    public_members = {}
+    if row["image"] == "zammad":
+        require("ARG ZAMMAD_BASE_IMAGE=" + ZAMMAD_PUBLIC_BASE in text, "Reviewed Zammad public base required")
+        contract = zammad_public_contract()
+        public_keys, public_members = contract["keys"], contract["members"]
+    base_ref, labels, environment = metadata_contract(text, commit, tree)
+    base = {"Config": {}, "RootFS": {"Layers": []}}
+    if base_ref != "scratch":
+        run("docker", "pull", "--platform", "linux/amd64", base_ref)
+        base = json.loads(run("docker", "image", "inspect", base_ref))[0]
+    inspected = json.loads(run("docker", "image", "inspect", reference))[0]
+    validate_metadata(inspected["Config"], base["Config"], labels, environment)
+    history = run("docker", "history", "--no-trunc", "--format", "{{json .CreatedBy}}", reference)
+    require(not CREDENTIAL.search(history.encode()),
+            "Credential material in image history")
+    exported = Path(directory) / "image.tar"
+    subprocess.run(["docker", "save", "--output", str(exported), reference], check=True)
+    try:
+        with tarfile.open(exported) as archive:
+            manifests = json.load(archive.extractfile("manifest.json"))
+            require(len(manifests) == 1, "Expected one platform image")
+            manifest = manifests[0]
+            raw_config = archive.extractfile(manifest["Config"]).read()
+            config = json.loads(raw_config)
+            validate_metadata(config["config"], base["Config"], labels, environment)
+            base_diffids = base["RootFS"]["Layers"]
+            diffids = config["rootfs"]["diff_ids"]
+            require(diffids[:len(base_diffids)] == base_diffids, "Image base layers changed")
+            require(len(manifest["Layers"]) == len(diffids), "Image layer inventory mismatch")
+            for layer, expected in zip(manifest["Layers"], diffids):
+                with archive.extractfile(layer) as contents:
+                    require("sha256:" + hashlib.file_digest(contents, "sha256").hexdigest() == expected,
+                            "Image layer digest mismatch")
+            members = inspect_layers(archive, manifest["Layers"], len(base_diffids), public_keys, licenses, public_members)
+            return {"configDigest": sha256(raw_config), "layers": diffids, "inspectedMembers": members,
+                    "addonLicenses": licenses or {},
+                    "publicContentContractSha256": sha256(json.dumps({"keys": {p: sorted(v) for p, v in public_keys.items()},
+                        "members": public_members}, sort_keys=True).encode()),
+                    "historySha256": sha256(history.encode())}
+    finally:
+        exported.unlink(missing_ok=True)
+
+
+def build(image, output):
+    row = next(r for r in catalog() if r["image"] == image)
+    commit, tree = coordinates()
+    reference = "ghcr.io/wasalx/" + image + ":" + commit
+    addon = public_addon_source() if image in ADDON_IMAGES else None
+    require(image not in ADDON_IMAGES or addon is not None, "pending add-on source")
+    with tempfile.TemporaryDirectory() as directory:
+        context = Path(directory) / "source"
+        context.mkdir()
+        archive_path = Path(directory) / "source.tar"
+        subprocess.run(["git", "archive", "--format=tar", "--output=" + str(archive_path), commit], cwd=ROOT, check=True)
+        archive_digest = sha256(archive_path.read_bytes())
+        with tarfile.open(archive_path) as archive:
+            archive.extractall(context, filter="data")
+        if addon:
+            subprocess.run(["node", "scripts/fetch-zammad-addon.mjs"], cwd=context, check=True)
+        if image == "zammad":
+            pin = json.loads((context / "zammad-addon.json").read_text())
+            dockerfile = context / row["dockerfile"]
+            original = "https://github.com/" + pin["repository"] + ".git#" + pin["commit"]
+            text = dockerfile.read_text()
+            require(text.count(original) == 1, "Zammad source pin differs from source contract")
+            dockerfile.write_text(text.replace(original, addon["repository"] + ".git#" + addon["commit"]))
+        if addon:
+            dockerfile = context / row["dockerfile"]
+            dockerfile.write_text(dockerfile.read_text() +
+                "\nCOPY --chown=0:0 build/addon-licenses/ /usr/share/licenses/wasalx-zammad-addon/\n")
+        licenses = {"usr/share/licenses/wasalx-zammad-addon/" + name:
+                    sha256((context / "build/addon-licenses" / name).read_bytes())
+                    for name in ["LICENSE", "COPYING", "THIRD-PARTY-NOTICES"]} if addon else {}
+        dockerfile_digest = sha256((context / row["dockerfile"]).read_bytes())
+        # No host context, cache imports, secret/SSH mounts, registry overrides or private build arguments.
+        subprocess.run(["docker", "buildx", "build", "--platform", "linux/amd64", "--load",
+                        "--provenance=false", "--sbom=false", "--file", str(context / row["dockerfile"]),
+                        "--tag", reference, "--build-arg", "WASALX_CANDIDATE_SHA=" + commit,
+                        "--build-arg", "COMMIT_SHA=" + commit, "--build-arg", "WASALX_CANDIDATE_TREE=" + tree,
+                        "--label", "org.opencontainers.image.source=" + SOURCE,
+                        "--label", "org.opencontainers.image.revision=" + commit,
+                        "--label", "io.wasalx.source.tree=" + tree, str(context)], check=True)
+        inspection = inspect_image(reference, row, commit, tree, directory, licenses)
+    write(output, {"image": image, "reference": reference, "commit": commit, "tree": tree, "status": "built",
+                   "platform": "linux/amd64", "sourceArchiveDigest": archive_digest, "addonSource": addon,
+                   "dockerfileDigest": dockerfile_digest, "inspection": inspection})
+
+
+def pending(image, output):
+    require(image in ADDON_IMAGES and public_addon_source() is None, "Only unset add-on source may be skipped")
+    commit, tree = coordinates()
+    write(output, {"image": image, "commit": commit, "tree": tree, "platform": "linux/amd64",
+                   "status": "pending add-on source"})
+    print(image + ": pending add-on source (skipped)")
+
+
+def verify_manifest(manifest, config_digest):
+    require(manifest.get("mediaType") in {"application/vnd.oci.image.manifest.v1+json",
+                                         "application/vnd.docker.distribution.manifest.v2+json"},
+            "Expected single-platform manifest, not index")
+    require(manifest.get("config", {}).get("digest") == config_digest, "Published config digest mismatch")
+
+
+def publish(receipt_path):
+    require(os.environ.get("GITHUB_EVENT_NAME") == "push" and os.environ.get("GITHUB_REF") == "refs/heads/main",
+            "Publication is main-push only")
+    commit, tree = coordinates()
+    receipt = json.loads(Path(receipt_path).read_text())
+    require((receipt["commit"], receipt["tree"]) == (commit, tree), "Stale inspection receipt")
+    repository = "ghcr.io/wasalx/" + receipt["image"]
+    require(receipt["reference"] == repository + ":" + commit, "Wrong publication reference")
+    result = run("docker", "push", receipt["reference"])
+    matches = re.findall(r"digest: (sha256:[0-9a-f]{64})", result)
+    require(len(set(matches)) == 1, "Missing unique published digest")
+    digest = matches[0]
+    reference = repository + "@" + digest
+    raw = run("docker", "buildx", "imagetools", "inspect", "--raw", reference)
+    # The digest is checked over registry bytes by the client; never hash whitespace-normalized JSON.
+    verify_manifest(json.loads(raw), receipt["inspection"]["configDigest"])
+    receipt.update({"digest": digest, "configDigest": receipt["inspection"]["configDigest"],
+                    "pullReference": reference, "workflow": SOURCE + "/.github/workflows/branch-image.yml@refs/heads/main",
+                    "workflowSha": os.environ["GITHUB_WORKFLOW_SHA"], "runId": os.environ["GITHUB_RUN_ID"],
+                    "runAttempt": os.environ["GITHUB_RUN_ATTEMPT"]})
+    write(receipt_path, receipt)
+    predicate = {"builder": {"id": receipt["workflow"]},
+                 "buildType": SOURCE + "/image-build/v1",
+                 "invocation": {"configSource": {"uri": "git+" + SOURCE,
+                    "digest": {"sha1": commit}, "entryPoint": ".github/workflows/branch-image.yml"},
+                    "parameters": {"image": receipt["image"], "tree": tree, "configDigest": receipt["configDigest"],
+                                   "sourceArchiveDigest": receipt["sourceArchiveDigest"],
+                                   "addonSource": receipt["addonSource"], "dockerfileDigest": receipt["dockerfileDigest"],
+                                   "inspectionSha256": sha256(json.dumps(receipt["inspection"], sort_keys=True).encode()),
+                                   "workflowSha": receipt["workflowSha"]}},
+                 "metadata": {"buildInvocationId": SOURCE + "/actions/runs/" + receipt["runId"] +
+                              "/attempts/" + receipt["runAttempt"]},
+                 "materials": [{"uri": "git+" + SOURCE, "digest": {"sha1": commit, "gitTree": tree}}]}
+    predicate_path = str(receipt_path) + ".predicate.json"
+    write(predicate_path, predicate)
+    run("cosign", "sign", "--yes", reference)
+    run("cosign", "attest", "--yes", "--type", "slsaprovenance", "--predicate", predicate_path, reference)
+    identity = receipt["workflow"]
+    common = ["--certificate-identity", identity, "--certificate-oidc-issuer", "https://token.actions.githubusercontent.com"]
+    run("cosign", "verify", *common, reference)
+    run("cosign", "verify-attestation", *common, "--type", "slsaprovenance", reference)
+    run("docker", "pull", "--platform", "linux/amd64", reference)
+    row = next(r for r in catalog() if r["image"] == receipt["image"])
+    with tempfile.TemporaryDirectory() as directory:
+        final = inspect_image(reference, row, commit, tree, directory, receipt["inspection"]["addonLicenses"])
+    require(final == receipt["inspection"], "Published image differs from inspected image")
+    # Advance the discovery alias only after signature and exact-digest reinspection.
+    run("docker", "tag", reference, repository + ":main")
+    alias_result = run("docker", "push", repository + ":main")
+    require("digest: " + digest in alias_result, "Discovery alias digest mismatch")
+    receipt["verified"] = True
+    receipt["status"] = "published"
+    write(receipt_path, receipt)
+
+
+def assemble(records):
+    require(len(records) == 21 and {r["image"] for r in records} == {r["image"] for r in catalog()},
+            "Complete unique image receipts required")
+    require(len({(r["commit"], r["tree"]) for r in records}) == 1, "Mixed source identities")
+    published, pending_images = {}, {}
+    for row in records:
+        require(SHA.fullmatch(row["commit"]) and SHA.fullmatch(row["tree"]), "Invalid receipt source identity")
+        if row.get("status") == "pending add-on source":
+            require(row["image"] in ADDON_IMAGES and not any(key in row for key in ["digest", "configDigest", "verified"]),
+                    "Only add-on-dependent images may be pending without digest claims")
+            pending_images[row["image"]] = row
+            continue
+        require(row.get("verified") is True and DIGEST.fullmatch(row.get("digest", "")) and
+                DIGEST.fullmatch(row.get("configDigest", "")), "Verified digest pair required")
+        require(row["pullReference"] == "ghcr.io/wasalx/" + row["image"] + "@" + row["digest"], "Wrong digest reference")
+        published[row["image"]] = row
+    return {"schemaVersion": 1, "repository": REPOSITORY, "platform": "linux/amd64",
+            "commit": records[0]["commit"], "tree": records[0]["tree"],
+            "publicationComplete": not pending_images, "images": dict(sorted(published.items())),
+            "pending": dict(sorted(pending_images.items()))}
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("command", choices=["matrix", "build", "pending", "publish", "assemble"])
+    parser.add_argument("--image")
+    parser.add_argument("--output", default="images-manifest.json")
+    parser.add_argument("--records", default="records")
+    args = parser.parse_args()
+    if args.command == "matrix":
+        print(json.dumps(matrix(), separators=(",", ":")))
+    elif args.command == "build":
+        build(args.image, args.output)
+    elif args.command == "publish":
+        publish(args.output)
+    elif args.command == "pending":
+        pending(args.image, args.output)
+    else:
+        write(args.output, assemble([json.loads(p.read_text()) for p in Path(args.records).glob("*.json")]))
