@@ -24,6 +24,19 @@ must have zero restarts.
 Run from an exact clean candidate on the approved qualification host, with
 the private environment and digest-bound preimage produced by held installation:
 
+Set `WASALX_INSTALL_EXPECTED_HOSTNAME` in the operator process environment to
+the approved guest hostname before every installer stage or full stack
+verification. The hostname must match exactly; missing, empty or mismatched
+values refuse before installer actions. There is no default.
+
+When admitting DEV review origins with `--dev-review-origin` and
+`--dev-review-identity-origin`, also set `WASALX_DEV_REVIEW_ORIGIN_SUFFIX` to the
+approved hostname suffix. Keep it set for subsequent stages and full stack
+verification using that DEV preimage. Both canonical HTTPS origins must match
+that literal suffix and share the same hostname, with distinct origins.
+Missing or empty suffix configuration refuses review-origin admission.
+Supply both values privately; never commit operator hostnames or domains.
+
 ```sh
 node scripts/release/installer-stages.mjs release-held \
   --env-file /absolute/private/full.env \

@@ -1,11 +1,81 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { syncBuiltinESMExports } from "node:module";
+import os from "node:os";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { projectStack, devHeldServices, devPreservedServices, devContainerPreimage, devValueDigest } from "../scripts/release/installer-stack.mjs";
+import { projectStack, devHeldServices, devPreservedServices, devContainerPreimage, devValueDigest, assertInstallHostname, devReviewAuthConfiguration } from "../scripts/release/installer-stack.mjs";
 
 const repositoryRoot = fileURLToPath(new URL("../", import.meta.url));
 const sha = "a".repeat(40);
 const tree = "b".repeat(40);
+
+function operatorEnvironment(t, name) {
+  const previous = process.env[name];
+  t.after(() => {
+    if (previous === undefined) delete process.env[name];
+    else process.env[name] = previous;
+  });
+}
+
+test("installer hostname requires explicit configuration and exact equality", t => {
+  operatorEnvironment(t, "WASALX_INSTALL_EXPECTED_HOSTNAME");
+  t.mock.method(os, "hostname", () => "synthetic-install-vm");
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+  delete process.env.WASALX_INSTALL_EXPECTED_HOSTNAME;
+  assert.throws(assertInstallHostname, /WASALX_INSTALL_EXPECTED_HOSTNAME is required/);
+  for (const value of ["", "   "]) {
+    process.env.WASALX_INSTALL_EXPECTED_HOSTNAME = value;
+    assert.throws(assertInstallHostname, /WASALX_INSTALL_EXPECTED_HOSTNAME is required/);
+  }
+  for (const value of ["wrong-vm", "install-vm", "synthetic-install-vm.extra"]) {
+    process.env.WASALX_INSTALL_EXPECTED_HOSTNAME = value;
+    assert.throws(assertInstallHostname, /does not match WASALX_INSTALL_EXPECTED_HOSTNAME/);
+  }
+  process.env.WASALX_INSTALL_EXPECTED_HOSTNAME = "synthetic-install-vm";
+  assert.doesNotThrow(assertInstallHostname);
+});
+
+test("DEV review origins require an explicit matching literal suffix", t => {
+  operatorEnvironment(t, "WASALX_DEV_REVIEW_ORIGIN_SUFFIX");
+  const origins = { portalOrigin: "https://guest.review.example.test", identityOrigin: "https://guest.review.example.test:8443" };
+  delete process.env.WASALX_DEV_REVIEW_ORIGIN_SUFFIX;
+  assert.throws(() => devReviewAuthConfiguration(origins), /WASALX_DEV_REVIEW_ORIGIN_SUFFIX is required/);
+  for (const value of ["", "   "]) {
+    process.env.WASALX_DEV_REVIEW_ORIGIN_SUFFIX = value;
+    assert.throws(() => devReviewAuthConfiguration(origins), /WASALX_DEV_REVIEW_ORIGIN_SUFFIX is required/);
+  }
+  process.env.WASALX_DEV_REVIEW_ORIGIN_SUFFIX = ".review.example.test";
+  assert.equal(devReviewAuthConfiguration(origins).portalOrigin, origins.portalOrigin);
+  for (const host of ["guest.other.example.test", "guest.review.example.test.extra"]) {
+    assert.throws(() => devReviewAuthConfiguration({ portalOrigin: `https://${host}`, identityOrigin: `https://${host}:8443` }), /matching WASALX_DEV_REVIEW_ORIGIN_SUFFIX/);
+  }
+  assert.throws(() => devReviewAuthConfiguration({ ...origins, portalOrigin: origins.portalOrigin.replace("https:", "http:") }));
+  assert.throws(() => devReviewAuthConfiguration({ ...origins, identityOrigin: "https://other.review.example.test:8443" }), /another host/);
+});
+
+test("installer CLIs name refused host configuration before preflight or Docker", () => {
+  const envFile = fileURLToPath(new URL("./missing-installer-env", import.meta.url));
+  const stageArgs = ["scripts/release/installer-stages.mjs", "preflight", "--env-file", envFile, "--project-name", "wasalx-live"];
+  const stackArgs = ["scripts/release/installer-stack.mjs", "wasalx-live", "--full"];
+  for (const [args, variable, value] of [
+    [stageArgs, "WASALX_INSTALL_EXPECTED_HOSTNAME", undefined],
+    [stackArgs, "WASALX_INSTALL_EXPECTED_HOSTNAME", undefined],
+    [stageArgs, "WASALX_INSTALL_EXPECTED_HOSTNAME", `${os.hostname()}-wrong`],
+    [stackArgs, "WASALX_INSTALL_EXPECTED_HOSTNAME", `${os.hostname()}-wrong`],
+    [[...stageArgs, "--dev-review-origin", "https://guest.review.example.test", "--dev-review-identity-origin", "https://guest.review.example.test:8443"], "WASALX_DEV_REVIEW_ORIGIN_SUFFIX", undefined],
+  ]) {
+    const env = { ...process.env, WASALX_CANDIDATE_SHA: sha, WASALX_CANDIDATE_TREE: tree, WASALX_INSTALL_EXPECTED_HOSTNAME: os.hostname() };
+    if (value === undefined) delete env[variable];
+    else env[variable] = value;
+    const result = spawnSync(process.execPath, ["--", ...args], { cwd: repositoryRoot, env, encoding: "utf8", timeout: 10000, windowsHide: true });
+    assert.equal(result.error, undefined);
+    assert.equal(result.status, 1);
+    assert.ok(result.stderr.includes(`check ${variable}`));
+    assert.equal(result.stdout, "");
+  }
+});
 
 function stackFixture() {
   const candidateReference = "wasalx/portal:test";

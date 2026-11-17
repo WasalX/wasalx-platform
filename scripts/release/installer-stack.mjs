@@ -132,15 +132,23 @@ const devReviewPortalFields = Object.freeze([
 ]);
 const devReviewApiFields = Object.freeze(["PORTAL_PUBLIC_ORIGIN", "OIDC_ISSUER", "PLATFORM_OPERATOR_OIDC_ISSUER"]);
 
+export function assertInstallHostname() {
+  const expected = process.env.WASALX_INSTALL_EXPECTED_HOSTNAME;
+  assert.ok(typeof expected === "string" && expected.trim(), "WASALX_INSTALL_EXPECTED_HOSTNAME is required");
+  assert.ok(hostname() === expected, "installation hostname does not match WASALX_INSTALL_EXPECTED_HOSTNAME");
+}
+
 // Explicit, nonsecret DEV origin admission. No arbitrary Env, URL path or proxy trust.
 export function devReviewAuthConfiguration(origins) {
+  const suffix = process.env.WASALX_DEV_REVIEW_ORIGIN_SUFFIX;
+  assert.ok(typeof suffix === "string" && suffix.trim(), "WASALX_DEV_REVIEW_ORIGIN_SUFFIX is required");
   assert.ok(origins && typeof origins === "object" && !Array.isArray(origins), "DEV review origins are required");
   assert.deepEqual(Object.keys(origins).sort(), ["identityOrigin", "portalOrigin"], "Unexpected DEV review origin field");
   const urls = [origins.portalOrigin, origins.identityOrigin].map((value) => {
     assert.equal(typeof value, "string", "DEV review origin must be a string");
     const url = new URL(value);
     assert.ok(url.protocol === "https:" && url.origin === value && !url.username && !url.password &&
-      url.pathname === "/" && !url.search && !url.hash && url.hostname.endsWith("runner.example.test"), "DEV review requires a canonical tailnet HTTPS origin");
+      url.pathname === "/" && !url.search && !url.hash && url.hostname.endsWith(suffix), "DEV review requires a canonical HTTPS origin matching WASALX_DEV_REVIEW_ORIGIN_SUFFIX");
     return url;
   });
   assert.equal(urls[0].hostname, urls[1].hostname, "DEV review identity belongs to another host");
@@ -496,6 +504,7 @@ export async function verifyStack({ repositoryRoot: verificationRoot = root } = 
   const composeFiles = parsed.composeFiles.length ? parsed.composeFiles : ["compose.yaml", "compose.smoke.yaml"];
   const profiles = parsed.profiles;
   const fullMode = parsed.full;
+  if (fullMode) assertInstallHostname();
   assert.ok(!parsed.devPreimagesFile || (fullMode && project === "wasalx-live" && JSON.stringify(profiles) === JSON.stringify(["full", "runtime-workers"])), "DEV preservation requires the exact existing DEV full profile");
   assert.equal(Boolean(parsed.devPreimagesFile), Boolean(parsed.devPreimagesSha256), "DEV preimage digest binding is required");
   const evidenceName = parsed.devPreimagesFile ? "dev-held-stack" : fullMode ? "remote-full-stack" : "exact-stack";
@@ -584,7 +593,7 @@ export async function verifyStack({ repositoryRoot: verificationRoot = root } = 
   const machineId = (await readFile("/etc/machine-id", "utf8")).trim();
   assert.match(machineId, /^[0-9a-f]{32}$/u, "runtime machine identity is invalid");
   if (fullMode) {
-    assert.equal(hostname(), "example-test-vm", "remote full verification must run inside the WasalX VM");
+    assertInstallHostname();
     assert.equal(platform(), "linux", "remote full verification requires Linux");
     assert.equal(arch(), "x64", "remote full verification requires x64");
   }
@@ -622,9 +631,10 @@ export async function verifyStack({ repositoryRoot: verificationRoot = root } = 
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  verifyStack().catch(() => {
+  verifyStack().catch((error) => {
     // Parser and subprocess errors can contain private captured input.
-    process.stderr.write("exact stack verification failed\n");
+    const variable = ["WASALX_INSTALL_EXPECTED_HOSTNAME", "WASALX_DEV_REVIEW_ORIGIN_SUFFIX"].find((name) => error.message?.includes(name));
+    process.stderr.write(`exact stack verification failed${variable ? `: check ${variable}` : ""}\n`);
     process.exitCode = 1;
   });
 }
