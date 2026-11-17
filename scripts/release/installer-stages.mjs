@@ -9,15 +9,16 @@ import { fileURLToPath } from "node:url";
 import { activeServiceNames, assertDevInstallPreimages, devContainerPreimage, devColdResidents, devHeldServices, devHeldPrerequisites, devPreservedServices, devValueDigest, captureDevReviewAuth, assertDevReviewAuthRows, devReviewAuthEnvironment, devReviewAuthConfiguration, assertInstallHostname } from "./installer-stack.mjs";
 import { parseRailsJson } from "./simulation-rails-json.mjs";
 import { sha256, preserveReplacement, readBoundArtifacts, writeArtifactState,
-  assertRetainedPreimage, composeProfiles, dockerfileOf, imageServices, inspectOwned, preparePrivateDirectory, fenceReplacementEffects, rollbackReplacement } from "./installer-artifacts.mjs";
+  assertRetainedPreimage, composeProfiles, dockerfileOf, imageServices, inspectOwned, preparePrivateDirectory, preimagePath, fenceReplacementEffects, rollbackReplacement } from "./installer-artifacts.mjs";
 import { produceRollbackSafety, readOptionalState, recordReplacementAfter } from "./installer-rollback-state.mjs";
 import { enterComposeStageLock as enterStageLock, composeStageLockConflict } from "./compose-stage-lock.mjs";
+import { hostedPublisher, hostedIssuer, verifyHostedImages } from "./installer-hosted-images.mjs";
 
 const repository = resolve(fileURLToPath(new URL("../../", import.meta.url)));
 const preflight = fileURLToPath(new URL("./preflight-full-env.mjs", import.meta.url));
 const verifier = fileURLToPath(new URL("./installer-stack.mjs", import.meta.url));
 const shaPattern = /^[0-9a-f]{40}$/u;
-const stages = ["preflight", "build", "replace", "smoke", "qualify", "rollback", "rollback-safety", "release-held"];
+const stages = ["preflight", "build", "admit-hosted", "replace", "smoke", "qualify", "rollback", "rollback-safety", "release-held"];
 const migrationVerifierScript = `const fs=require('node:fs'),crypto=require('node:crypto');
     console.log(JSON.stringify(fs.readdirSync('/app/migrations').filter(n=>/^\\d{4}_[a-z0-9_]+\\.sql$/.test(n)).sort().map(name=>{
       const b=fs.readFileSync('/app/migrations/'+name);
@@ -373,6 +374,14 @@ export async function executeStage(action, context) {
     model, directory, drained = false, retryReviewed = false, command = run } = context;
   const execute = (...args) => command(...args);
   context = { ...context, command };
+  assert.ok(action !== "admit-hosted" || context.hostedImages, "explicit hosted inventory required");
+  assert.ok(!context.hostedImages || !["build", "qualify"].includes(action), "hosted admission cannot use the local build stage");
+  if (action === "admit-hosted") {
+    // Capture original mutable tags before the separately controlled preload.
+    await readFile(preimagePath(context));
+  }
+  const hosted = context.hostedImages && !["rollback", "rollback-safety"].includes(action)
+    ? await verifyHostedImages(context) : null;
   if (["replace", "rollback-safety"].includes(action)) await preparePrivateDirectory(context);
   if (action === "rollback") return rollbackReplacement(context);
   if (action === "rollback-safety") {
@@ -467,13 +476,30 @@ export async function executeStage(action, context) {
     } finally { await writeArtifactState(context, manifest); }
     return 0;
   }
+  if (action === "admit-hosted") {
+    await verifyDependencies();
+    const preserved = await preserveReplacement(context);
+    await writeArtifactState(context, { schemaVersion: 1, kind: "compose-hosted-image-admission",
+      candidateSha, candidateTree, project, catalogSha256: context.catalogSha256,
+      hostedImagesSha256: context.hostedImagesSha256, trustedRootSha256: hosted.trustedRootSha256,
+      publisher: hostedPublisher, issuer: hostedIssuer,
+      modelSha256: devValueDigest(model), model, plan, state: "PASS",
+      preimage: { sha256: preserved.sha256, transactionId: preserved.snapshot.transactionId },
+      images: hosted.images.map(image => ({ ...image, services: imageServices(model, image.dockerfile) })) });
+    return 0;
+  }
   // Missing/stale images fail before any stop, migration or start.
   await verifyDependencies();
   const imageIds = [];
   for (const image of plan) {
     const details = await inspectImage(image.reference);
-    assert.ok(matchesCandidate(details, candidateSha, candidateTree, image.dockerfile, context.buildContextSha256), `${image.id} requires the build stage`);
+    if (hosted) assert.equal(details?.Id, hosted.images.find(({ id }) => id === image.id)?.imageId, "admitted hosted image changed");
+    else assert.ok(matchesCandidate(details, candidateSha, candidateTree, image.dockerfile, context.buildContextSha256), `${image.id} requires the build stage`);
     imageIds.push(details.Id);
+  }
+  if (hosted) {
+    const { manifest } = await readBoundArtifacts(context);
+    assert.deepEqual(manifest.images, hosted.images.map(image => ({ ...image, services: imageServices(model, image.dockerfile) })), "hosted admission changed");
   }
   if (action === "release-held") {
     assert.ok(context.devPreimagesFile && context.devPreimagesSha256, "held release requires bound DEV preimages");
@@ -622,8 +648,18 @@ async function main() {
   let devReviewPortalOrigin; let devReviewIdentityOrigin;
   let service;
   let rollbackSafetyFile; let rollbackSafetySha256;
+  let hostedImages; let hostedImagesSha256; let hostedTrustedRoot;
   for (let i = 0; i < extra.length; i += 1) {
-    if (extra[i] === "--service") {
+    if (["--hosted-images", "--hosted-images-sha256", "--hosted-trusted-root"].includes(extra[i])) {
+      const flag = extra[i], value = extra[++i];
+      if (flag === "--hosted-images-sha256") {
+        assert.equal(hostedImagesSha256, undefined); assert.match(value ?? "", /^[0-9a-f]{64}$/u); hostedImagesSha256 = value;
+      } else {
+        assert.ok(isAbsolute(value ?? ""));
+        if (flag === "--hosted-images") { assert.equal(hostedImages, undefined); hostedImages = value; }
+        else { assert.equal(hostedTrustedRoot, undefined); hostedTrustedRoot = value; }
+      }
+    } else if (extra[i] === "--service") {
       assert.equal(action, "release-held"); assert.equal(service, undefined);
       service = extra[++i]; assert.match(service ?? "", /^[a-z0-9][a-z0-9_.-]*$/u);
     }
@@ -651,6 +687,10 @@ async function main() {
       else { assert.equal(captureDevPreimagesFile, undefined); captureDevPreimagesFile = value; }
     } else rest.push(extra[i]);
   }
+  assert.equal(Boolean(hostedImages), Boolean(hostedImagesSha256), "hosted inventory hash required");
+  assert.equal(Boolean(hostedImages), Boolean(hostedTrustedRoot), "separate trusted Sigstore root required");
+  assert.ok(action !== "admit-hosted" || hostedImages, "hosted admission inventory required");
+  assert.ok(!hostedImages || !["build", "qualify"].includes(action), "hosted admission requires separate stages");
   assert.equal(Boolean(rollbackSafetyFile), Boolean(rollbackSafetySha256), "rollback safety digest binding is required");
   assert.equal(Boolean(devReviewPortalOrigin), Boolean(devReviewIdentityOrigin), "Both approved DEV review origins are required");
   assert.ok(!devReviewPortalOrigin || (action === "preflight" && project === "wasalx-live"), "DEV review origin admission requires DEV preflight");
@@ -700,8 +740,8 @@ async function main() {
   assert.match(candidateSha, shaPattern);
   assert.match(candidateTree, shaPattern);
   assert.equal(run("git", ["status", "--porcelain=v1", "--untracked-files=all"], process.env), "", "candidate checkout is dirty");
-  const buildContext = await verifyBuildContext(candidateSha);
-  const buildContextSha256 = sha256(buildContext);
+  const buildContext = hostedImages ? undefined : await verifyBuildContext(candidateSha);
+  const buildContextSha256 = hostedImages ? undefined : sha256(buildContext);
 
   if (devPreimagesFile) {
     assert.equal(devRecord.candidateSha, candidateSha); assert.equal(devRecord.candidateTree, candidateTree);
@@ -734,7 +774,8 @@ async function main() {
   for (const stage of selected) {
     try {
       const exit = await executeStage(stage, { plan, candidateSha, candidateTree, environment, composeArguments,
-        buildContext, buildContextSha256, catalogSha256: sha256(catalogBytes), rollbackSafetyFile, rollbackSafetySha256,
+        buildContext, buildContextSha256, catalog, catalogSha256: sha256(catalogBytes), rollbackSafetyFile, rollbackSafetySha256,
+        hostedImages, hostedImagesSha256, hostedTrustedRoot,
         project, envFile, repository, capturePreimage: rest.includes("--capture-preimage"),
         privateDirectory: resolve(homedir(), `.local/state/wasalx-compose/${candidateSha}/${project}`),
         nativePackage: catalog.tenantProvisioning.package, model: safeCompose, directory: resolve(repository, `output/release-evidence/${candidateSha}`),

@@ -62,6 +62,62 @@ the predicate's public commit/tree, config digest, workflow SHA and inspection
 seal against admission policy. Origin verification alone does not prove source
 honesty or release approval. Sigstore verification failure means no admission.
 
+## Installer hosted-image admission
+
+The optional `admit-hosted` stage admits already loaded images. It never pulls,
+loads, builds, replaces or starts a service. Keep the existing local
+`preflight -> build -> replace -> smoke` path for local builds.
+
+Before preloading, run the existing `preflight --capture-preimage` for the exact
+candidate/project **without hosted flags**. Retain its private replacement
+preimage and rollback tags. Admission requires that existing preimage; capturing
+it after overwriting mutable image references loses the original tag custody.
+The external preload/transfer procedure remains separately controlled.
+
+On the trusted networked host, use cosign v3.1.4 to verify each exact inventory
+`pullReference` with the identity and issuer above. Beside `images-manifest.json`,
+retain one directory per image ID with the raw registry `manifest.json` and the
+publisher's OCI-referrer Sigstore v0.3 bundle blobs as `signature.sigstore.json`
+and `provenance.sigstore.json`. Their predicate types are respectively
+`https://sigstore.dev/cosign/sign/v1` and `https://slsa.dev/provenance/v0.2`.
+Use the registry's supported referrer index, including its OCI fallback index
+when applicable; `cosign save` v3.1.4 alone does not retain these referrers in its
+final index. Transfer the original bytes through the existing custody path.
+Provision the receiver's
+Sigstore trusted root independently through trusted Sigstore TUF setup; never take
+trust roots from an untrusted image/evidence bundle. No receiver egress exception
+is needed.
+
+After the controlled preload has populated the existing Compose candidate
+references, run:
+
+```sh
+node scripts/release/installer-stages.mjs admit-hosted \
+  --env-file /absolute/install.env --project-name <project> \
+  --hosted-images /absolute/evidence/images-manifest.json \
+  --hosted-images-sha256 <inventory-file-sha256> \
+  --hosted-trusted-root /absolute/trusted/trusted_root.json
+```
+
+Use the same three hosted flags for subsequent `replace`, `smoke`, `release-held`,
+`rollback-safety` and `rollback` stages. Hosted flags cannot select `build` or
+`qualify`. The receiver verifies both bundles offline using private byte snapshots,
+raw manifest digest, signed commit/tree/config, complete unique catalog coverage,
+and the actual loaded configuration bytes streamed from `docker image save`.
+The Engine ID may equal the config digest or manifest digest; it is never used
+alone to establish config equality. All images must pass before admission writes
+or replacement actions. Source labels remain mandatory.
+
+`hosted-admission-<project>.json` is a distinct `compose-hosted-image-admission`
+receipt. Entries are `ADMITTED`, never `BUILT`. It binds the inventory and trust
+root hashes, publisher, source, catalog, Compose model/plan, loaded immutable IDs,
+verified output seals, and private preimage transaction/hash. Replacement rechecks
+admission and loaded bytes before its existing operational gates. Rollback uses
+the same private custody and original safety fences without requiring candidate
+images to remain verifiable. This stage does not qualify live provider behavior,
+operator acceptance or production release. Legacy release-bundle, assisted and
+historical evidence contracts are unchanged.
+
 ## Public build inputs and inspection
 
 The single repository variable **`PUBLIC_ADDON_SOURCE`** enables the two dependent

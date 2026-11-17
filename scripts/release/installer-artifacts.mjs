@@ -5,13 +5,14 @@ import { tmpdir } from "node:os";
 import { isAbsolute, relative, resolve } from "node:path";
 import { devContainerPreimage, devValueDigest } from "./installer-stack.mjs";
 import { assertRollbackInventory, observeRollbackState, produceRollbackSafety, readOptionalState, rollbackStatePath } from "./installer-rollback-state.mjs";
+import { hostedPublisher, hostedIssuer, readHostedInventory } from "./installer-hosted-images.mjs";
 
 export const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 async function fileDigest(path) {
   try { return sha256(await readFile(path)); }
   catch (error) { if (error.code !== "ENOENT") throw error; return null; }
 }
-export const artifactPath = (context) => resolve(context.directory, `candidate-artifacts-${context.project}.json`);
+export const artifactPath = (context) => resolve(context.directory, `${context.hostedImages ? "hosted-admission" : "candidate-artifacts"}-${context.project}.json`);
 export const preimagePath = (context) => resolve(context.privateDirectory, `replacement-before-${context.project}.json`);
 export const composeProfiles = ["full", "runtime-workers"];
 export const rollbackTag = (project, id) => `wasalx/rollback-${project}:${id.startsWith("image-") ? id : id.slice(0, 12)}`;
@@ -268,19 +269,32 @@ async function assertSnapshotHeader(context, snapshot) {
 
 export async function readBoundArtifacts(context, { allowPartial = false } = {}) {
   const manifest = JSON.parse(await readFile(artifactPath(context), "utf8"));
-  assert.equal(manifest.kind, "compose-candidate-artifacts"); assert.equal(manifest.schemaVersion, 1);
+  const hosted = context.hostedImages ? await readHostedInventory(context) : null;
+  assert.equal(manifest.kind, hosted ? "compose-hosted-image-admission" : "compose-candidate-artifacts"); assert.equal(manifest.schemaVersion, 1);
   assert.ok((allowPartial ? ["PASS", "BUILDING", "FAILED"] : ["PASS"]).includes(manifest.state), "candidate artifact build is incomplete");
-  for (const key of ["candidateSha", "candidateTree", "project", "buildContextSha256", "catalogSha256"]) {
+  for (const key of ["candidateSha", "candidateTree", "project", hosted ? "hostedImagesSha256" : "buildContextSha256", "catalogSha256"]) {
     assert.ok(context[key], `${key} binding unavailable`); assert.equal(manifest[key], context[key], `${key} binding changed`);
   }
   assert.equal(manifest.modelSha256, devValueDigest(context.model), "Compose candidate model changed");
   assert.deepEqual(manifest.plan, context.plan, "candidate plan changed");
-  assert.equal(manifest.buildContextAlgorithm, "sha256-git-archive-tar-v1");
+  if (hosted) {
+    assert.equal(manifest.state, "PASS");
+    assert.equal(manifest.publisher, hostedPublisher); assert.equal(manifest.issuer, hostedIssuer);
+    assert.equal(manifest.trustedRootSha256, sha256(await readFile(context.hostedTrustedRoot)), "hosted trust root changed");
+    assert.equal(manifest.buildContextAlgorithm, undefined, "hosted admission is not a local build receipt");
+  } else assert.equal(manifest.buildContextAlgorithm, "sha256-git-archive-tar-v1");
   assert.deepEqual(manifest.images.map(({ id, dockerfile, reference }) => ({ id, dockerfile, reference })), context.plan,
     "candidate artifact map changed");
   for (const image of manifest.images) {
     assert.deepEqual(image.services, imageServices(context.model, image.dockerfile), "candidate service/image binding changed");
-    assert.ok((allowPartial ? ["PENDING", "BUILT", "REUSED", "FAILED"] : ["BUILT", "REUSED"]).includes(image.state), "candidate image build is incomplete");
+    if (hosted) {
+      const row = hosted.images[image.id];
+      assert.equal(image.state, "ADMITTED", "hosted image admission is incomplete");
+      assert.equal(image.sourceReference, row.pullReference); assert.equal(image.manifestDigest, row.digest);
+      assert.equal(image.configDigest, row.configDigest);
+      assert.ok([row.digest, row.configDigest].includes(image.imageId), "hosted immutable image mismatch");
+      for (const key of ["signatureSha256", "attestationSha256"]) assert.match(image[key] ?? "", /^[0-9a-f]{64}$/u);
+    } else assert.ok((allowPartial ? ["PENDING", "BUILT", "REUSED", "FAILED"] : ["BUILT", "REUSED"]).includes(image.state), "candidate image build is incomplete");
     if (image.imageId !== null) assert.match(image.imageId, /^sha256:[0-9a-f]{64}$/u);
     else assert.ok(allowPartial, "candidate immutable image missing");
   }
