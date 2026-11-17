@@ -54,7 +54,12 @@ export function devContainerPreimage(container) {
     exitCode: container.State?.ExitCode, startedAt: container.State?.StartedAt, restartCount: container.RestartCount,
   };
 }
-export function assertDevInstallPreimages(value, { candidateSha, candidateTree, project, machineIdSha256, activeServices }) {
+export function devHeldPrerequisites(model, activeServices) {
+  return Object.fromEntries(activeServices.map((name) => [name, activeServices.filter((dependent) =>
+    model.services[dependent].depends_on?.[name]?.condition === "service_completed_successfully")])
+    .filter(([, dependents]) => dependents.length && dependents.every((name) => devHeldServices.includes(name))));
+}
+export function assertDevInstallPreimages(value, { candidateSha, candidateTree, project, machineIdSha256, activeServices, model }) {
   assert.equal(value?.kind, "dev-held-install-preimages");
   assert.equal(value.schemaVersion, 1);
   assert.equal(value.candidateSha, candidateSha); assert.equal(value.candidateTree, candidateTree);
@@ -64,7 +69,9 @@ export function assertDevInstallPreimages(value, { candidateSha, candidateTree, 
   assert.ok(value.admissionMode === undefined || value.admissionMode === "cold-held", "Unknown DEV admission mode");
   const cold = value.admissionMode === "cold-held";
   if (cold) assert.ok(devColdResidents.every((name) => activeServices.includes(name)), "Cold DEV resident inventory incomplete");
-  const held = cold ? activeServices.filter((name) => !devColdResidents.includes(name)) : devHeldServices;
+  const heldPrerequisites = devHeldPrerequisites(model, activeServices);
+  assert.deepEqual(value.heldPrerequisites ?? {}, heldPrerequisites, "DEV held prerequisites changed");
+  const held = cold ? activeServices.filter((name) => !devColdResidents.includes(name)) : [...devHeldServices, ...Object.keys(heldPrerequisites)];
   assert.deepEqual(value.heldServices, [...held].sort());
   assert.deepEqual(value.preservedServices, cold ? [...activeServices].sort() : [...devPreservedServices].sort());
   assert.deepEqual(value.services.map(({ service }) => service).sort(), [...activeServices].sort(), "DEV preimage inventory changed");
@@ -78,7 +85,7 @@ export function assertDevInstallPreimages(value, { candidateSha, candidateTree, 
         assert.equal(row.state, "running"); assert.ok(row.pid > 0);
       } else {
         assert.equal(row.running, false); assert.equal(row.pid, 0);
-        assert.ok(["created", "exited"].includes(row.state) && [0, 143].includes(row.exitCode), `${row.service} stopped lifecycle requires review`);
+        assert.ok(["created", "exited"].includes(row.state) && (row.service in heldPrerequisites || [0, 143].includes(row.exitCode)), `${row.service} stopped lifecycle requires review`);
       }
     }
   }
@@ -88,9 +95,9 @@ export function assertDevInstallPreimages(value, { candidateSha, candidateTree, 
     assert.equal(row.pid, 0);
     assert.ok(["created", "exited"].includes(row.state), `${name} intentional hold was started`);
     assert.equal(row.paused, false); assert.equal(row.dead, false); assert.equal(row.restarting, false);
-    if (cold) assert.ok([0, 143].includes(row.exitCode), `${name} stopped exit requires review`);
+    if (cold && !(name in heldPrerequisites)) assert.ok([0, 143].includes(row.exitCode), `${name} stopped exit requires review`);
   }
-  for (const name of devPreservedServices.filter((name) => !devHeldServices.includes(name) && name !== "zammad-backup")) {
+  for (const name of devPreservedServices.filter((name) => !devHeldServices.includes(name) && !(name in heldPrerequisites) && name !== "zammad-backup")) {
     const row = value.services.find(({ service }) => service === name);
     assert.equal(row.state, "exited"); assert.equal(row.exitCode, 0);
   }
@@ -280,10 +287,10 @@ export function projectStack({ compose, containers, imageInspections, catalog, c
     .map(([dependency]) => dependency)))]
     .filter((name) => activeServices.includes(name)).sort();
   if (devPreimages) assertDevInstallPreimages(devPreimages, {
-    candidateSha, candidateTree, project: devPreimages.project, machineIdSha256: devPreimages.machineIdSha256, activeServices,
+    candidateSha, candidateTree, project: devPreimages.project, machineIdSha256: devPreimages.machineIdSha256, activeServices, model: compose,
   });
   assertDevReviewAuthRows(devPreimages?.devReviewAuth, containers);
-  const held = new Set(devPreimages ? devHeldServices : []);
+  const held = new Set(devPreimages ? [...devHeldServices, ...Object.keys(devPreimages.heldPrerequisites ?? {})] : []);
   const preserved = new Set(devPreimages ? devPreservedServices : []);
   const imageByReference = new Map(imageInspections.map((image) => [image.reference, image.details]));
   assert.equal(imageByReference.size, imageInspections.length, "Docker image inspection references must be unique");
@@ -338,12 +345,11 @@ export function projectStack({ compose, containers, imageInspections, catalog, c
       assert.equal(healthcheckRequired, true, `${container.service} runtime healthcheck is disabled`);
     }
     if (held.has(container.service)) {
-      assert.equal(oneShot, false, "one-shot service cannot be a worker hold");
       assert.equal(container.State.Running, false); assert.equal(container.State.Pid, 0);
       assert.ok(["created", "exited"].includes(container.State.Status), `${container.service} hold was started`);
       assert.equal(container.State.Restarting ?? false, false);
       assert.equal(container.State.Paused, false); assert.equal(container.State.Dead, false);
-      if (!preservedOld) {
+      if (!preservedOld && !oneShot) {
         const before = devPreimages.services.find(({ service }) => service === container.service);
         assert.equal(container.HostConfig.ReadonlyRootfs, true);
         assert.deepEqual(devContainerPreimage(container).mounts, before.mounts, "readonly worker mounts changed");
@@ -412,7 +418,7 @@ export function projectStack({ compose, containers, imageInspections, catalog, c
     "candidate images must have unique immutable image ids");
 
   return {
-    ...(devPreimages ? { heldServices: [...held].sort(), preservedServices: [...preserved].sort(), fullLiveAcceptance: false } : {}),
+    ...(devPreimages ? { heldServices: [...held].sort(), heldPrerequisites: devPreimages.heldPrerequisites ?? {}, preservedServices: [...preserved].sort(), fullLiveAcceptance: false } : {}),
     oneShotServices,
     services: serviceInventory,
     images: [...inventory.values()].map((entry) => ({
@@ -557,7 +563,7 @@ export async function verifyStack({ repositoryRoot: verificationRoot = root } = 
     details: JSON.parse(run("docker", ["image", "inspect", reference]))[0],
   }));
   const catalog = JSON.parse(await readFile(resolve(root, "release/installer-images.json"), "utf8"));
-  if (devPreimages) assertDevInstallPreimages(devPreimages, { candidateSha, candidateTree, project, activeServices,
+  if (devPreimages) assertDevInstallPreimages(devPreimages, { candidateSha, candidateTree, project, activeServices, model: compose,
     machineIdSha256: createHash("sha256").update(await readFile("/etc/machine-id")).digest("hex") });
   const projection = projectStack({ compose, containers, imageInspections, catalog, candidateImages, candidateSha, candidateTree, activeServices, fullCatalog: fullMode, devPreimages, repositoryRoot: root });
   if (fullMode) {

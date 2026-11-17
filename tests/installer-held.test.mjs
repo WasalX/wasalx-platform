@@ -1,0 +1,146 @@
+import assert from "node:assert/strict";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import fsPromises from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import test from "node:test";
+import { captureDevInstallPreimages, releaseDevHeld, executeStage } from "../scripts/release/installer-stages.mjs";
+import { devHeldServices, devHeldPrerequisites, devPreservedServices, devColdResidents, assertDevInstallPreimages } from "../scripts/release/installer-stack.mjs";
+import { sha256 } from "../scripts/release/installer-artifacts.mjs";
+
+const sha = "a".repeat(40);
+const tree = "b".repeat(40);
+const imageId = `sha256:${"d".repeat(64)}`;
+
+function heldPrerequisiteFixture(t) {
+  const originalReadFile = fsPromises.readFile;
+  t.mock.method(fsPromises, "readFile", (path, ...args) => path === "/etc/machine-id"
+    ? Promise.resolve(Buffer.from("synthetic-machine")) : originalReadFile(path, ...args));
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+  const oneShots = devPreservedServices.filter(name => !devHeldServices.includes(name) && name !== "zammad-backup");
+  const names = [...new Set([...devHeldServices, ...devPreservedServices, ...devColdResidents, "control-api", "portal"])];
+  const model = { services: Object.fromEntries(names.map(name => [name, { image: `synthetic@${imageId}` }])) };
+  model.services.portal.depends_on = Object.fromEntries(oneShots.filter(name => name !== "public-webhook-preflight")
+    .map(name => [name, { condition: "service_completed_successfully" }]));
+  model.services["waha-gows"].depends_on = { "public-webhook-preflight": { condition: "service_completed_successfully" } };
+  const rows = names.map((name, index) => {
+    const running = !oneShots.includes(name) && !devHeldServices.includes(name) && name !== "control-api";
+    return { Id: String(index + 1).padStart(64, "0"), Image: imageId, RestartCount: 0,
+      Config: { Image: "retained", Labels: { "com.docker.compose.project": "wasalx-live", "com.docker.compose.service": name } },
+      HostConfig: { ReadonlyRootfs: true }, Mounts: [], State: { Status: running ? "running" : "exited", Running: running,
+        Pid: running ? 100 : 0, ExitCode: name === "public-webhook-preflight" ? 1 : 0,
+        Paused: false, Dead: false, Restarting: false, OOMKilled: false, Error: "", StartedAt: null } };
+  });
+  const calls = [], row = name => rows.find(item => item.Config.Labels["com.docker.compose.service"] === name);
+  const context = { candidateSha: sha, candidateTree: tree, project: "wasalx-live", model,
+    environment: { SYNTHETIC: "same-environment" }, composeArguments: ["compose", "--project-name", "wasalx-live"],
+    command: async (name, args, environment) => {
+      assert.equal(name, "docker"); assert.equal(environment, context.environment);
+      calls.push(args);
+      if (args[0] === "ps") return rows.map(item => item.Id).join(" ");
+      if (args[0] === "inspect") return JSON.stringify(rows);
+      if (args[0] === "image") return JSON.stringify([{ Id: imageId }]);
+      if (args[0] === "exec") return "";
+      assert.deepEqual(args.slice(0, 3), context.composeArguments);
+      assert.ok(args.includes("--no-deps") && args.includes("--no-build") && args.includes("never"));
+      const current = row(args.at(-1));
+      if (args.includes("--exit-code-from")) {
+        current.State.ExitCode = context.prerequisiteExit ?? 0;
+        return current.State.ExitCode;
+      }
+      current.State = { ...current.State, Running: true, Status: "running", Pid: 200, Health: { Status: context.health ?? "healthy" } };
+      return 0;
+    } };
+  return { context, rows, row, calls };
+}
+
+test("DEV all-held prerequisite admits its failed preimage and records the dependent", async t => {
+  const { context, row, calls } = heldPrerequisiteFixture(t);
+  const record = await captureDevInstallPreimages(context);
+  assert.deepEqual(record.heldPrerequisites, { "public-webhook-preflight": ["waha-gows"] });
+  assert.ok(record.heldServices.includes("public-webhook-preflight"));
+  assert.equal(row("public-webhook-preflight").State.ExitCode, 1);
+  assert.ok(calls.every(args => !args.includes("up")));
+  const changed = structuredClone(record); changed.heldPrerequisites = {};
+  assert.throws(() => assertDevInstallPreimages(changed, { ...context, activeServices: Object.keys(context.model.services).sort(),
+    machineIdSha256: record.machineIdSha256 }), /held prerequisites changed/);
+});
+
+test("DEV cold hold admits only the classified failed prerequisite without executing it", async t => {
+  const { context, rows, calls } = heldPrerequisiteFixture(t);
+  for (const row of rows) row.State = { ...row.State, Status: "exited", Running: false, Pid: 0 };
+  const record = await captureDevInstallPreimages(context);
+  assert.equal(record.admissionMode, "cold-held");
+  assert.deepEqual(record.heldPrerequisites, { "public-webhook-preflight": ["waha-gows"] });
+  assert.ok(calls.every(args => !args.includes("up") && !args.includes("exec")));
+});
+
+test("DEV mixed success-dependents retain the exit-zero requirement", async t => {
+  const { context, row } = heldPrerequisiteFixture(t);
+  context.model.services.portal.depends_on["public-webhook-preflight"] = { condition: "service_completed_successfully" };
+  await assert.rejects(captureDevInstallPreimages(context), /public-webhook-preflight existing one-shot failed/);
+  row("public-webhook-preflight").State.ExitCode = 0;
+  const record = await captureDevInstallPreimages(context);
+  assert.deepEqual(record.heldPrerequisites, {});
+  assert.ok(!record.heldServices.includes("public-webhook-preflight"));
+});
+
+test("DEV no-dependent one-shots retain their existing preserved exit-zero treatment", async t => {
+  const { context, row, rows } = heldPrerequisiteFixture(t);
+  delete context.model.services["waha-gows"].depends_on;
+  assert.deepEqual(devHeldPrerequisites(context.model, Object.keys(context.model.services)), {});
+  for (const item of rows) item.State = { ...item.State, Status: "exited", Running: false, Pid: 0 };
+  await assert.rejects(captureDevInstallPreimages(context), /public-webhook-preflight stopped lifecycle requires review/);
+  row("public-webhook-preflight").State.ExitCode = 143;
+  await assert.rejects(captureDevInstallPreimages(context));
+  row("public-webhook-preflight").State.ExitCode = 0;
+  const record = await captureDevInstallPreimages(context);
+  assert.equal(record.admissionMode, "cold-held");
+  assert.deepEqual(record.heldPrerequisites, {});
+});
+
+for (const exitCode of [0, 1]) test(`DEV held release reruns prerequisite once: exit ${exitCode}`, async t => {
+  const { context, row, calls } = heldPrerequisiteFixture(t);
+  const record = await captureDevInstallPreimages(context);
+  context.prerequisiteExit = exitCode;
+  row("waha-gows").Config.Healthcheck = { Test: ["CMD", "true"] };
+  if (exitCode) await assert.rejects(releaseDevHeld(context, record, "waha-gows"), /public-webhook-preflight phase failed/);
+  else assert.equal(await releaseDevHeld(context, record, "waha-gows"), 0);
+  const up = calls.filter(args => args.includes("up"));
+  assert.equal(up.filter(args => args.at(-1) === "public-webhook-preflight").length, 1);
+  assert.ok(up[0].includes("--abort-on-container-exit") && up[0].includes("--exit-code-from"));
+  assert.equal(row("waha-gows").State.Running, exitCode === 0);
+  assert.equal(up.length, exitCode ? 1 : 2);
+  if (!exitCode) assert.ok(up[1].includes("--detach") && up[1].includes("--wait"));
+});
+
+test("DEV held release refuses unrecorded services, altered prerequisites, cold mode and unhealthy startup", async t => {
+  const { context, row, calls } = heldPrerequisiteFixture(t);
+  const record = await captureDevInstallPreimages(context);
+  await assert.rejects(releaseDevHeld(context, record, "portal"), /not a recorded held sender/);
+  await assert.rejects(releaseDevHeld(context, { ...record, heldPrerequisites: {} }, "waha-gows"), /held prerequisites changed/);
+  await assert.rejects(releaseDevHeld(context, { ...record, admissionMode: "cold-held" }, "waha-gows"), /cold held release/);
+  assert.ok(calls.every(args => !args.includes("up")));
+  row("waha-gows").Config.Healthcheck = { Test: ["CMD", "true"] };
+  context.health = "unhealthy";
+  await assert.rejects(releaseDevHeld(context, record, "waha-gows"));
+});
+
+test("release-held stage requires digest-bound DEV preimages before any Compose execution", async t => {
+  const { context, row, calls } = heldPrerequisiteFixture(t);
+  context.plan = []; context.service = "waha-gows";
+  const record = await captureDevInstallPreimages(context);
+  await assert.rejects(executeStage("release-held", context), /requires bound DEV preimages/);
+  const root = await mkdtemp(join(tmpdir(), "wasalx-held-release-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  context.devPreimagesFile = join(root, "preimages.json");
+  const bytes = Buffer.from(JSON.stringify(record)); await writeFile(context.devPreimagesFile, bytes);
+  context.devPreimagesSha256 = "0".repeat(64);
+  await assert.rejects(executeStage("release-held", context), /DEV preimage file changed/);
+  assert.ok(calls.every(args => !args.includes("up")));
+  context.devPreimagesSha256 = sha256(bytes);
+  assert.equal(await executeStage("release-held", context), 0);
+  assert.equal(row("waha-gows").State.Running, true);
+});

@@ -1,0 +1,219 @@
+{
+  "composeVersion": "5.1.1",
+  "environment": "Existing installer-preimage.test.mjs contractEnvironment synthetic values only; no daemon needed",
+  "composeFiles": [
+    "compose.yaml",
+    "compose.full.yaml"
+  ],
+  "devHeldServices": [
+    "connector-worker",
+    "identity-policy-activator",
+    "invitation-mailer",
+    "waha-gows",
+    "zammad-scheduler"
+  ],
+  "renders": [
+    {
+      "profiles": [
+        "full"
+      ],
+      "activeServices": [
+        "alertmanager",
+        "clamav",
+        "connector-worker",
+        "control-api",
+        "full-qualification-seed",
+        "grafana",
+        "identity-policy-activator",
+        "jaeger",
+        "keycloak",
+        "keycloak-bootstrap",
+        "keycloak-postgresql",
+        "migrate",
+        "minio",
+        "minio-bootstrap",
+        "otel-collector",
+        "portal",
+        "postgres",
+        "prometheus",
+        "public-webhook-preflight",
+        "redis",
+        "runtime-role-bootstrap",
+        "secret-sidecar",
+        "waha-gows",
+        "zammad-activation",
+        "zammad-backup",
+        "zammad-elasticsearch",
+        "zammad-init",
+        "zammad-memcached",
+        "zammad-nginx",
+        "zammad-package",
+        "zammad-postgresql",
+        "zammad-railsserver",
+        "zammad-redis",
+        "zammad-runtime-bootstrap",
+        "zammad-scheduler",
+        "zammad-websocket"
+      ],
+      "successDependents": {
+        "full-qualification-seed": [
+          "connector-worker",
+          "control-api",
+          "identity-policy-activator",
+          "zammad-activation"
+        ],
+        "migrate": [
+          "connector-worker",
+          "control-api",
+          "full-qualification-seed",
+          "identity-policy-activator",
+          "runtime-role-bootstrap"
+        ],
+        "minio-bootstrap": [
+          "connector-worker",
+          "control-api",
+          "waha-gows"
+        ],
+        "runtime-role-bootstrap": [
+          "connector-worker",
+          "control-api",
+          "identity-policy-activator"
+        ],
+        "zammad-activation": [
+          "connector-worker",
+          "control-api"
+        ],
+        "keycloak-bootstrap": [
+          "control-api",
+          "portal"
+        ],
+        "public-webhook-preflight": [
+          "waha-gows"
+        ],
+        "zammad-package": [
+          "zammad-activation",
+          "zammad-backup",
+          "zammad-runtime-bootstrap"
+        ],
+        "zammad-runtime-bootstrap": [
+          "zammad-activation",
+          "zammad-railsserver",
+          "zammad-scheduler",
+          "zammad-websocket"
+        ],
+        "zammad-init": [
+          "zammad-package"
+        ]
+      },
+      "heldPrerequisites": {
+        "public-webhook-preflight": [
+          "waha-gows"
+        ]
+      }
+    },
+    {
+      "profiles": [
+        "full",
+        "runtime-workers"
+      ],
+      "activeServices": [
+        "alertmanager",
+        "clamav",
+        "connector-worker",
+        "control-api",
+        "full-qualification-seed",
+        "grafana",
+        "identity-policy-activator",
+        "invitation-mailer",
+        "jaeger",
+        "keycloak",
+        "keycloak-bootstrap",
+        "keycloak-postgresql",
+        "migrate",
+        "minio",
+        "minio-bootstrap",
+        "otel-collector",
+        "portal",
+        "postgres",
+        "prometheus",
+        "public-webhook-preflight",
+        "redis",
+        "runtime-role-bootstrap",
+        "secret-sidecar",
+        "waha-gows",
+        "zammad-activation",
+        "zammad-backup",
+        "zammad-elasticsearch",
+        "zammad-init",
+        "zammad-memcached",
+        "zammad-nginx",
+        "zammad-package",
+        "zammad-postgresql",
+        "zammad-railsserver",
+        "zammad-redis",
+        "zammad-runtime-bootstrap",
+        "zammad-scheduler",
+        "zammad-websocket"
+      ],
+      "successDependents": {
+        "full-qualification-seed": [
+          "connector-worker",
+          "control-api",
+          "identity-policy-activator",
+          "invitation-mailer",
+          "zammad-activation"
+        ],
+        "migrate": [
+          "connector-worker",
+          "control-api",
+          "full-qualification-seed",
+          "identity-policy-activator",
+          "invitation-mailer",
+          "runtime-role-bootstrap"
+        ],
+        "minio-bootstrap": [
+          "connector-worker",
+          "control-api",
+          "waha-gows"
+        ],
+        "runtime-role-bootstrap": [
+          "connector-worker",
+          "control-api",
+          "identity-policy-activator",
+          "invitation-mailer"
+        ],
+        "zammad-activation": [
+          "connector-worker",
+          "control-api"
+        ],
+        "keycloak-bootstrap": [
+          "control-api",
+          "portal"
+        ],
+        "public-webhook-preflight": [
+          "waha-gows"
+        ],
+        "zammad-package": [
+          "zammad-activation",
+          "zammad-backup",
+          "zammad-runtime-bootstrap"
+        ],
+        "zammad-runtime-bootstrap": [
+          "zammad-activation",
+          "zammad-railsserver",
+          "zammad-scheduler",
+          "zammad-websocket"
+        ],
+        "zammad-init": [
+          "zammad-package"
+        ]
+      },
+      "heldPrerequisites": {
+        "public-webhook-preflight": [
+          "waha-gows"
+        ]
+      }
+    }
+  ],
+  "scope": "Synthetic dependency classification example only; no runtime, image, or candidate qualification."
+}
