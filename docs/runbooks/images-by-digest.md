@@ -117,7 +117,7 @@ node scripts/release/installer-stages.mjs admit-hosted \
 
 Use the same three hosted flags for subsequent `replace`, `smoke`, `release-held`,
 `rollback-safety` and `rollback` stages. Hosted flags cannot select `build` or
-`qualify`. The receiver verifies both bundles offline using private byte snapshots,
+`qualify`. Admission verifies both bundles offline using private byte snapshots,
 raw manifest digest, signed commit/tree/config, complete unique catalog coverage,
 and the actual loaded configuration bytes streamed from `docker image save`.
 The Engine ID may equal the config digest or manifest digest; it is never used
@@ -127,11 +127,12 @@ or replacement actions. Source labels remain mandatory.
 `hosted-admission-<project>.json` is a distinct `compose-hosted-image-admission`
 receipt. Entries are `ADMITTED`, never `BUILT`. It binds the inventory and trust
 root hashes, publisher, source, catalog, Compose model/plan, loaded immutable IDs,
-verified output seals, and private preimage transaction/hash. Replacement rechecks
-admission and loaded bytes before its existing operational gates. Rollback uses
-the same private custody and original safety fences without requiring candidate
-images to remain verifiable. Keep the hosted inventory and trusted root present
-and byte-identical until rollback is no longer needed; rollback requires both files.
+verified output seals, and private preimage transaction/hash. Replacement, smoke
+and held release validate the bound receipt and compare the currently loaded
+image IDs from `docker image inspect` to the admitted IDs before proceeding.
+Rollback uses the same private custody and original safety fences without
+requiring candidate images to remain verifiable. Keep the hosted inventory and
+trusted root present and byte-identical until rollback is no longer needed.
 This stage does not qualify live provider behavior, operator acceptance or
 production release. Legacy release-bundle, assisted and
 historical evidence contracts are unchanged.
