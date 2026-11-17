@@ -6,7 +6,7 @@ ARG NODE_IMAGE=node:24-trixie-slim@sha256:0711b541c1c33a8a530ac4f0d391baa9a15b3d
 FROM ${NODE_IMAGE} AS node-toolchain
 RUN npm install --global pnpm@10.33.3 && npm cache clean --force
 WORKDIR /src
-ADD https://github.com/WasalX/wasalx-zammad-addon-next.git#65b589f13cc13f4b0eda3c37df2719d17736d8a9 /src
+ADD https://github.com/WasalX/wasalx-zammad-addon.git#dca5972113758eb78c5c4b5df9d19bc74ad3c24a /src
 COPY scripts/build-zammad-package.mjs ./scripts/build-zammad-package.mjs
 RUN node scripts/build-zammad-package.mjs
 

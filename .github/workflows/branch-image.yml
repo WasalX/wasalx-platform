@@ -32,8 +32,6 @@ jobs:
           node --test tests/fetch-zammad-addon.test.mjs
           ruby tests/zammad-database-entrypoint.test.rb
       - id: matrix
-        env:
-          PUBLIC_ADDON_SOURCE: ${{ vars.PUBLIC_ADDON_SOURCE }}
         run: echo "matrix=$(python3 scripts/release/images-by-digest.py matrix)" >> "$GITHUB_OUTPUT"
 
   build:

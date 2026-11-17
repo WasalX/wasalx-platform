@@ -4,7 +4,7 @@ import {readFile, cp, mkdir, access, readdir} from "node:fs/promises";
 import {lstat} from "node:fs/promises";
 import {resolve} from "node:path";
 import {pathToFileURL} from "node:url";
-export function validatePin(pin, approvedRepository = "WasalX/wasalx-zammad-addon-next") {
+export function validatePin(pin, approvedRepository = "WasalX/wasalx-zammad-addon") {
   assert(/^[a-f0-9]{40}$/.test(pin.commit));
   assert.equal(pin.repository, approvedRepository);
   assert(/^[a-f0-9]{64}$/.test(pin.packageSha256));
@@ -19,7 +19,8 @@ export function validatePublicSource(source) {
 async function main() {
   const original=JSON.parse(await readFile(new URL("../zammad-addon.json",import.meta.url),"utf8"));
   const source=process.env.PUBLIC_ADDON_SOURCE ? validatePublicSource(JSON.parse(process.env.PUBLIC_ADDON_SOURCE)) : null;
-  const pin=source ? validatePin({...original,...source},source.repository) : validatePin(original);
+  const pin=validatePin(original);
+  if(source) assert.deepEqual(source,{repository:pin.repository,commit:pin.commit},"Public add-on source differs from the pin");
   const checkout=resolve(".zammad-addon");
   function git(args) { const r=spawnSync("git",args,{encoding:"utf8",windowsHide:true,timeout:120000}); assert.equal(r.status,0,"Pinned add-on checkout failed"); return r.stdout.trim(); }
   let existing=false;
@@ -27,15 +28,15 @@ async function main() {
   if(!existing) {
     await mkdir(checkout);
     git(["init","--quiet",checkout]);
-    git(["-C",checkout,"-c","core.hooksPath=/dev/null",...(source ? ["-c","credential.helper="] : []),"fetch","--depth=1","https://github.com/"+pin.repository+".git",pin.commit]);
+    git(["-C",checkout,"-c","core.hooksPath=/dev/null","-c","credential.helper=","fetch","--depth=1","https://github.com/"+pin.repository+".git",pin.commit]);
     assert.equal(git(["-C",checkout,"rev-parse","FETCH_HEAD"]),pin.commit);
-    git(["-C",checkout,"-c","core.hooksPath=/dev/null","checkout","--detach","FETCH_HEAD"]);
+    git(["-C",checkout,"-c","core.hooksPath=/dev/null","-c","core.autocrlf=false","checkout","--detach","FETCH_HEAD"]);
   }
   assert.equal(git(["-C",checkout,"rev-parse","HEAD"]),pin.commit);
   assert.equal(git(["-C",checkout,"status","--porcelain"]),"");
   const contracts=(await readdir(resolve(checkout,"tests"))).filter(name=>name.endsWith(".rb")).map(name=>"tests/"+name);
   const inputs=["zammad-package","build/zammad","tests/fixtures",...contracts].map(path=>[path,path]);
-  if(source) for(const name of ["LICENSE","COPYING","THIRD-PARTY-NOTICES"]) inputs.push([name,"build/addon-licenses/"+name]);
+  for(const name of ["LICENSE","COPYING","THIRD-PARTY-NOTICES"]) inputs.push([name,"build/addon-licenses/"+name]);
   for(const [from,to] of inputs) {
     await mkdir(resolve(to,".."),{recursive:true});
     await cp(resolve(checkout,from),to,{recursive:true,errorOnExist:false,force:false,filter:async(source,destination)=>{
