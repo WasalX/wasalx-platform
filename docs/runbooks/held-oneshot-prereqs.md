@@ -11,6 +11,12 @@ The preimage records `heldPrerequisites` and includes those prerequisites in
 Held installation and smoke preserve stopped prerequisites and their actual
 exit codes. A failed prerequisite is not successful execution evidence.
 
+Held containers may retain historical restart counts. Each count is recorded
+in `services[].restartCount`; non-held containers still require zero. Release
+refuses a sender or prerequisite whose current count differs from its record.
+Starting the same container must preserve that count; a newly created container
+must have zero restarts. Held-stack smoke uses the same identity distinction.
+
 ## Release a held sender
 
 Run from an exact clean candidate on the approved qualification host, with

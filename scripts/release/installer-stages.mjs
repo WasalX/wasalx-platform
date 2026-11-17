@@ -214,7 +214,7 @@ export async function captureDevInstallPreimages(context) {
         assert.equal(row.State.Status, "running", `${name} required DEV resident is not running`);
       }
     }
-    assert.equal(row.RestartCount, 0, "existing DEV restart history requires review before replacement");
+    if (!held.includes(name)) assert.equal(row.RestartCount, 0, "existing DEV restart history requires review before replacement");
     assert.equal(row.State.Paused, false); assert.equal(row.State.Dead, false); assert.equal(row.State.Restarting ?? false, false);
     const test = row.Config.Healthcheck?.Test;
     // Old portal readiness depends on the deliberately stopped API; installed candidate health stays mandatory.
@@ -272,6 +272,9 @@ async function devPhase(context, record, name, oneShot = false, released = []) {
   assert.ok(released.includes(name) || (!devPreservedServices.includes(name) && !devHeldServices.includes(name)), "preserved service must never execute");
   const rows = await devInspect(context);
   assertDevPreserved(record, rows, released);
+  const before = rows.find((row) => row.Config.Labels["com.docker.compose.service"] === name);
+  if (released.includes(name)) assert.equal(before?.RestartCount,
+    record.services.find(({ service }) => service === name)?.restartCount, `${name} held restart history changed`);
   for (const [dependency, condition] of Object.entries(context.model.services[name].depends_on ?? {})) {
     const row = rows.find((item) => item.Config.Labels["com.docker.compose.service"] === dependency);
     assert.ok(row, `${name} prerequisite missing: ${dependency}`);
@@ -293,7 +296,9 @@ async function devPhase(context, record, name, oneShot = false, released = []) {
   const flags = oneShot ? ["--abort-on-container-exit", "--exit-code-from", name] : ["--detach", "--wait"];
   assert.equal(await execute("docker", [...context.composeArguments, "up", "--no-deps", "--no-build", "--pull", "never", ...flags, name], context.environment, true), 0, `${name} phase failed; no replay`);
   const completed = (await devInspect(context)).find((row) => row.Config.Labels["com.docker.compose.service"] === name);
-  assert.ok(completed); assert.equal(completed.RestartCount, 0);
+  assert.ok(completed);
+  assert.equal(completed.RestartCount, released.includes(name) && completed.Id === before.Id ? before.RestartCount : 0,
+    `${name} restarted during its phase`);
   if (oneShot) { assert.equal(completed.State.Status, "exited"); assert.equal(completed.State.ExitCode, 0); }
   else {
     assert.equal(completed.State.Running, true); assert.equal(completed.State.Status, "running");
@@ -314,7 +319,9 @@ export async function releaseDevHeld(context, record, service) {
   assertDevReviewAuthRows(record.devReviewAuth, before);
   const held = before.find((row) => row.Config.Labels["com.docker.compose.service"] === service);
   assert.ok(held && !held.State.Running && held.State.Pid === 0 && ["created", "exited"].includes(held.State.Status), "held sender must remain stopped");
-  assert.ok(!held.State.Paused && !held.State.Dead && !held.State.Restarting && held.RestartCount === 0, "held sender lifecycle requires review");
+  assert.ok(!held.State.Paused && !held.State.Dead && !held.State.Restarting, "held sender lifecycle requires review");
+  assert.equal(held.RestartCount, record.services.find(({ service: name }) => name === service).restartCount,
+    `${service} held restart history changed`);
   for (const [prerequisite, dependents] of Object.entries(record.heldPrerequisites ?? {})) {
     if (dependents.includes(service)) await devPhase(context, record, prerequisite, true, record.heldServices);
   }
