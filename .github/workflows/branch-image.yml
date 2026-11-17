@@ -1,0 +1,167 @@
+name: Images
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: images-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  plan:
+    name: Image plan
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - name: Require GitHub-hosted execution
+        env:
+          HOSTED_KIND: ${{ runner.environment }}
+        run: test "$HOSTED_KIND" = github-hosted
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Check image publication contracts
+        run: python3 -m unittest discover -s tests -p 'test_images_by_digest.py' -v
+      - id: matrix
+        run: echo "matrix=$(python3 scripts/release/images-by-digest.py matrix)" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build ${{ matrix.image }}
+    if: github.event_name == 'pull_request'
+    needs: plan
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - name: Require GitHub-hosted execution
+        env:
+          HOSTED_KIND: ${{ runner.environment }}
+        run: test "$HOSTED_KIND" = github-hosted
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22.23.4
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+        with:
+          version: v0.30.1
+      - name: Build and inspect without publication
+        env:
+          IMAGE: ${{ matrix.image }}
+        run: python3 scripts/release/images-by-digest.py build --image "$IMAGE" --output "records/$IMAGE.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: image-build-${{ matrix.image }}
+          path: records/${{ matrix.image }}.json
+          if-no-files-found: error
+
+  publish:
+    name: Publish ${{ matrix.image }}
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'WasalX/wasalx-platform'
+    needs: plan
+    runs-on: ubuntu-24.04
+    environment:
+      name: stg
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - name: Require GitHub-hosted execution
+        env:
+          HOSTED_KIND: ${{ runner.environment }}
+        run: test "$HOSTED_KIND" = github-hosted
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22.23.4
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+        with:
+          version: v0.30.1
+      - name: Build and inspect before registry login
+        env:
+          IMAGE: ${{ matrix.image }}
+        run: python3 scripts/release/images-by-digest.py build --image "$IMAGE" --output "records/$IMAGE.json"
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6
+        with:
+          cosign-release: v3.0.6
+      - name: Verify the pinned cosign binary
+        run: echo 'c956e5dfcac53d52bcf058360d579472f0c1d2d9b69f55209e256fe7783f4c74  '"$(command -v cosign)" | sha256sum --check --strict
+      - name: Publish, sign, attest and inspect the published digest
+        env:
+          IMAGE: ${{ matrix.image }}
+        run: python3 scripts/release/images-by-digest.py publish --output "records/$IMAGE.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: image-published-${{ matrix.image }}
+          path: records/${{ matrix.image }}.json
+          if-no-files-found: error
+
+  manifest:
+    name: Image digest manifest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'WasalX/wasalx-platform'
+    needs: publish
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require GitHub-hosted execution
+        env:
+          HOSTED_KIND: ${{ runner.environment }}
+        run: test "$HOSTED_KIND" = github-hosted
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: image-published-*
+          path: records
+          merge-multiple: true
+      - name: Require all 21 signed digest pairs from one source tree
+        run: python3 scripts/release/images-by-digest.py assemble --records records --output images-manifest.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: images-manifest
+          path: images-manifest.json
+          if-no-files-found: error
+
+  result:
+    name: Images result
+    if: always()
+    needs: [plan, build, publish, manifest]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require GitHub-hosted execution
+        env:
+          HOSTED_KIND: ${{ runner.environment }}
+        run: test "$HOSTED_KIND" = github-hosted
+      - name: Require the complete applicable image lane
+        env:
+          EVENT: ${{ github.event_name }}
+          PLAN: ${{ needs.plan.result }}
+          BUILD: ${{ needs.build.result }}
+          PUBLISH: ${{ needs.publish.result }}
+          MANIFEST: ${{ needs.manifest.result }}
+        run: |
+          test "$PLAN" = success
+          if [ "$EVENT" = pull_request ]; then
+            test "$BUILD" = success && test "$PUBLISH" = skipped && test "$MANIFEST" = skipped
+          else
+            test "$BUILD" = skipped && test "$PUBLISH" = success && test "$MANIFEST" = success
+          fi
