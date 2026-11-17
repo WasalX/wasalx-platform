@@ -1,4 +1,4 @@
-/** Optional DEV live-test fence. An absent configuration preserves normal operation. */
+/** Undefined means the operator explicitly disabled the fence with the literal "*". */
 export type WahaTestRecipientAllowlist = ReadonlySet<string> | undefined;
 
 function recipientKey(value: unknown): string | undefined {
@@ -11,7 +11,8 @@ function recipientKey(value: unknown): string | undefined {
 }
 
 export function parseWahaTestRecipientAllowlist(raw: string | undefined): WahaTestRecipientAllowlist {
-  if (raw === undefined || raw.trim() === "") return undefined;
+  if (raw === "*") return undefined;
+  if (raw === undefined || raw.trim() === "") return new Set();
   if (raw.length > 8_192) throw new Error("WASALX_TEST_RECIPIENT_ALLOWLIST is invalid");
   let values: unknown;
   try { values = JSON.parse(raw); } catch { throw new Error("WASALX_TEST_RECIPIENT_ALLOWLIST must be a JSON array"); }
@@ -89,6 +90,7 @@ function contextualGowsReply(body: Record<string, unknown>, action: Record<strin
 /** Called only after provider signature, timestamp and session ownership validation. */
 export function wahaTestWebhookAllowed(allowlist: WahaTestRecipientAllowlist, body: Record<string, unknown>): boolean {
   if (allowlist === undefined) return true;
+  if (allowlist.size === 0) return false;
   // Lifecycle observations carry no chat. The normal ownership gates still apply.
   if (body.event === "session.status") return true;
   const payload = record(body.payload);

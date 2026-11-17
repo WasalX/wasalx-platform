@@ -219,6 +219,7 @@ test("inbox transaction refuses a BSUID link changed after signed status project
     if(sql.startsWith("SELECT id FROM public.delivery_outbox"))return rows([{id:input.deliveryId}]);
     if(sql.includes("meta_test_conversation_recipient_link"))return client(changed).query(sql,values);
     if(sql.startsWith("INSERT INTO event_inbox")){inserts++;return rows([{id:uuid(99)}]);}
+    if(sql.startsWith("UPDATE connections SET"))return rows([]);
     throw new Error("Unexpected transaction query: "+sql.slice(0,70));
   }};
   const database=Object.create(DatabaseService.prototype);
@@ -228,4 +229,12 @@ test("inbox transaction refuses a BSUID link changed after signed status project
     payloadSha256:"d".repeat(64),routeKey:phoneId,providerSessionKey:phoneId,providerEngine:"CLOUD_API",metaTestRecipientLink:before};
   await assert.rejects(database.acceptWebhookEvent({tenant_id:input.tenantId,connection_id:input.connectionId,provider:"META",hmac_secret_reference:"secret://synthetic/webhook"},event),{status:404});
   assert.equal(inserts,0,"Changed proof is rejected before persistence, not after receipt processing");
+  for(const raw of [undefined,"","[]"]){
+    if(raw===undefined)delete process.env.WASALX_TEST_RECIPIENT_ALLOWLIST;else process.env.WASALX_TEST_RECIPIENT_ALLOWLIST=raw;
+    await assert.rejects(database.acceptWebhookEvent({tenant_id:input.tenantId,connection_id:input.connectionId,provider:"META",hmac_secret_reference:"secret://synthetic/webhook"},event),{status:404});
+    assert.equal(inserts,0);
+  }
+  process.env.WASALX_TEST_RECIPIENT_ALLOWLIST="*";
+  assert.equal((await database.acceptWebhookEvent({tenant_id:input.tenantId,connection_id:input.connectionId,provider:"META",hmac_secret_reference:"secret://synthetic/webhook"},event)).duplicate,false);
+  assert.equal(inserts,1);
 });

@@ -22,15 +22,22 @@ function gowsQuote(chat=group){
   }};
 }
 
-test("optional WAHA test recipient scope fails closed and uses exact recipient identities",()=>{
-  assert.equal(parseWahaTestRecipientAllowlist(undefined),undefined);
-  assert.equal(parseWahaTestRecipientAllowlist(""),undefined);
-  assert.equal(wahaTestRecipientAllowed(undefined,otherGroup),true);
+test("WAHA recipient scope denies by default and only an explicit opt-out disables it",()=>{
+  for(const raw of [undefined,""," ","[]"]){
+    const denied=parseWahaTestRecipientAllowlist(raw);
+    assert.equal(denied.size,0);
+    assert.equal(wahaTestRecipientAllowed(denied,phone),false);
+    assert.equal(wahaTestRecipientAllowed(denied,otherGroup),false);
+    assert.equal(wahaTestWebhookAllowed(denied,{event:"message",payload:{from:phone,to:"me",id:`false_${phone}_TEST`}}),false);
+    assert.equal(wahaTestWebhookAllowed(denied,{event:"session.status",payload:{status:"WORKING"}}),false);
+  }
+  assert.equal(parseWahaTestRecipientAllowlist("*"),undefined);
+  assert.equal(wahaTestRecipientAllowed(parseWahaTestRecipientAllowlist("*"),otherGroup),true);
   const allowed=parseWahaTestRecipientAllowlist(raw);
   for(const recipient of [group,phone,bot,"12025550106@s.whatsapp.net"]) assert.equal(wahaTestRecipientAllowed(allowed,recipient),true);
   for(const recipient of [otherGroup,"12025550162@c.us","12025550106@lid",group+" ","status@broadcast"]) assert.equal(wahaTestRecipientAllowed(allowed,recipient),false);
   assert.equal(wahaTestRecipientAllowed(parseWahaTestRecipientAllowlist("[]"),phone),false);
-  for(const invalid of ["*",'"all"',"{}",'["*@g.us"]','["Example Workshop"]',"[null]",'["https://example.com"]',"x".repeat(8193)]) assert.throws(()=>parseWahaTestRecipientAllowlist(invalid));
+  for(const invalid of ['"*"'," * ",'"all"',"{}",'["*@g.us"]','["Example Workshop"]',"[null]",'["https://example.com"]',"x".repeat(8193)]) assert.throws(()=>parseWahaTestRecipientAllowlist(invalid));
 });
 
 test("GOWS bare inbound quotes require consistent signed chat and stanza context",async()=>{
@@ -199,7 +206,16 @@ test("final WAHA send boundary refuses excluded targets and cross-chat replies/r
   ]) await assert.rejects(adapter.send(rejected),error=>error.code==="WAHA_TEST_RECIPIENT_NOT_ALLOWED"&&error.outcomeKnown===true);
   assert.equal(calls.length,acceptedCalls);assert.equal(warnings.length,7);
   assert(warnings.every(args=>args.length===1&&args[0]==="WAHA test recipient scope refused outbound send"));
-  delete process.env.WASALX_TEST_RECIPIENT_ALLOWLIST;
+  for(const raw of [undefined,""," ","[]","not-json"]){
+    if(raw===undefined)delete process.env.WASALX_TEST_RECIPIENT_ALLOWLIST;else process.env.WASALX_TEST_RECIPIENT_ALLOWLIST=raw;
+    if(raw==="not-json")assert.throws(()=>new WahaAdapter({baseUrl:"http://fixture.invalid",apiKey:"synthetic-key",sessionFor:()=>"synthetic-session"}));
+    else {
+      const denied=new WahaAdapter({baseUrl:"http://fixture.invalid",apiKey:"synthetic-key",sessionFor:()=>"synthetic-session"});
+      await assert.rejects(denied.send(input),{code:"WAHA_TEST_RECIPIENT_NOT_ALLOWED"});
+    }
+    assert.equal(calls.length,acceptedCalls);
+  }
+  process.env.WASALX_TEST_RECIPIENT_ALLOWLIST="*";
   const normal=new WahaAdapter({baseUrl:"http://fixture.invalid",apiKey:"synthetic-key",sessionFor:()=>"synthetic-session"});
   assert.equal((await normal.send({...input,groupId:otherGroup})).state,"SENT");
 });
@@ -225,7 +241,8 @@ test("signed WAHA ingress drops excluded chats before persistence and wake, pres
   const token="s".repeat(32),secret="synthetic-hmac-key",connection="synthetic-connection",session="synthetic-session";
   const route={tenant_id:"synthetic-tenant",connection_id:connection,provider:"WAHA",hmac_secret_reference:"secret://synthetic/hmac"};
   const persisted=[],wakes=[];
-  const controller=new WebhookIngressController({resolveWahaWebhookRoute:async()=>route,acceptWebhookEvent:async(actual,input)=>{assert.equal(actual,route);persisted.push(input);return{id:"synthetic",duplicate:false}}},{resolveHmac:async()=>secret},{wakeInbound:async tenant=>wakes.push(tenant)});
+  const database={resolveWahaWebhookRoute:async()=>route,acceptWebhookEvent:async(actual,input)=>{assert.equal(actual,route);persisted.push(input);return{id:"synthetic",duplicate:false}}};
+  let controller=new WebhookIngressController(database,{resolveHmac:async()=>secret},{wakeInbound:async tenant=>wakes.push(tenant)});
   const invoke=(chat,badSignature=false,metadataConnection=connection,payload,omitEngine=false)=>{
     const timestamp=Date.now();const body={id:"event-synthetic",event:"message",timestamp,session,engine:"GOWS",metadata:{connectionId:metadataConnection},payload:payload??{from:chat,to:"me",id:`false_${chat}_TEST`,body:"synthetic"}};
     if(omitEngine)delete body.engine;
@@ -249,5 +266,13 @@ test("signed WAHA ingress drops excluded chats before persistence and wake, pres
     await assert.rejects(invoke(group,true,connection,gowsQuote().payload,omitEngine),error=>error.getStatus()===401);
     await assert.rejects(invoke(group,false,"foreign-connection",gowsQuote().payload,omitEngine),error=>error.getStatus()===400);
     assert.equal(persisted.length,before+1);assert.equal(wakes.length,before+1);
+  }
+  const accepted=persisted.length;
+  for(const raw of [undefined,"","[]","not-json"]){
+    if(raw===undefined)delete process.env.WASALX_TEST_RECIPIENT_ALLOWLIST;else process.env.WASALX_TEST_RECIPIENT_ALLOWLIST=raw;
+    const create=()=>new WebhookIngressController(database,{resolveHmac:async()=>secret},{wakeInbound:async tenant=>wakes.push(tenant)});
+    if(raw==="not-json")assert.throws(create);
+    else {controller=create();assert.deepEqual(await invoke(phone),{accepted:false,dropped:true})}
+    assert.equal(persisted.length,accepted);assert.equal(wakes.length,accepted);
   }
 });

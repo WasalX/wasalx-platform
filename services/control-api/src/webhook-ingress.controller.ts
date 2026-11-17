@@ -61,6 +61,7 @@ export class WebhookIngressController{
     const raw=rawBody(request,META_WEBHOOK_MAX_BYTES);const secret=await this.resolveSecret({tenant_id:"",connection_id:"",provider:"META",hmac_secret_reference:reference});
     const verification=await verifyProviderHmac({rawBody:raw,secret,provided:header(request,"x-hub-signature-256")??"",algorithm:"sha256"});if(!verification.valid)throw new UnauthorizedException("Invalid webhook signature");
     if(!isRecord(body))throw new BadRequestException("Meta webhook structure is invalid");
+    if(this.testRecipients?.size===0)return{accepted:true,count:0,duplicates:0,unrouted:0};
     // Finish the full template safety scan, retaining its failure until the
     // independently attributable routing negatives have also been admitted.
     let templateSafety={accepted:0,duplicates:0,unrouted:0};

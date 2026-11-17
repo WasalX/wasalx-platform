@@ -63,7 +63,7 @@ export class DatabaseService implements OnModuleDestroy {
     const lifecycleEvent=(route.provider==="WAHA"&&input.eventType==="session.status")||(route.provider==="META"&&input.eventType==="message.status");
     if(!lifecycleEvent&&!identitySafety&&(connection.state!=="WORKING"||session.rows[0]?.state!=="WORKING"))throw new NotFoundException("Webhook route was not found");
     const currentSession=session.rows[0]!;
-    if(route.provider==="META"&&input.eventType==="message.status"&&process.env.WASALX_TEST_RECIPIENT_ALLOWLIST?.trim()){
+    if(route.provider==="META"&&input.eventType==="message.status"&&parseWahaTestRecipientAllowlist(process.env.WASALX_TEST_RECIPIENT_ALLOWLIST)!==undefined){
       const payload=input.payload as {entry?:Array<{changes?:Array<{value?:{statuses?:Array<Record<string,unknown>>}}>}>};
       const status=payload.entry?.[0]?.changes?.[0]?.value?.statuses?.[0];
       if(status&&Object.hasOwn(status,"recipient_user_id")){

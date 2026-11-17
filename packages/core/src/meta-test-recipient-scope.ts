@@ -33,6 +33,7 @@ export function metaTestBsuidRecipient(body: unknown): string | undefined {
  * Split before ordinary parsing so an excluded malformed neighbor cannot erase a hold. */
 export function metaTestWebhookUnits(scope: WahaTestRecipientAllowlist, value: Record<string, unknown>, now = Date.now(), linkedStatusAllowed?: (status: Record<string, unknown>) => boolean): { values: Record<string, unknown>[]; dropped: number } {
   if (scope === undefined) return { values: [value], dropped: 0 };
+  if (scope.size === 0) return { values: [], dropped: (Array.isArray(value.messages) ? value.messages.length : 0) + (Array.isArray(value.statuses) ? value.statuses.length : 0) };
   const metadata = record(value.metadata);
   const displayPhone = normalizeMetaDisplayPhoneNumber(metadata?.display_phone_number);
   const groupEnvelope = Object.hasOwn(value, "group_id") || (metadata !== undefined && Object.hasOwn(metadata, "group_id"));
