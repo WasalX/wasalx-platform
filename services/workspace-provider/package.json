@@ -10,11 +10,11 @@
     "migrate": "node dist/migrate.js"
   },
   "dependencies": {
-    "pg": "^8.16.3"
+    "pg": "^8.23.1"
   },
   "devDependencies": {
     "@types/node": "22.19.19",
-    "@types/pg": "^8.15.5",
+    "@types/pg": "^8.23.1",
     "typescript": "5.9.3"
   }
 }
