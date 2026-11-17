@@ -20,8 +20,9 @@ test("TEST PHONE policy validates exact sender tuples and retains the existing r
   assert.deepEqual(parseMetaTestPhonePolicy(environment({META_APP_ID:"999"})).senders,[]);
   for(const raw of ["not-json","{}",JSON.stringify([{...sender,connectionId:"invalid"}]),JSON.stringify([{...sender,extra:true}]),JSON.stringify([{...sender,appId:123}])])
     assert.throws(()=>parseMetaTestPhonePolicy(environment({WASALX_META_TEST_PHONE_SENDERS:raw})),/invalid/);
-  for(const scope of [undefined,"[]",'["123456@g.us"]'])
+  for(const scope of [undefined,"","[]","*",'["123456@g.us"]'])
     assert.throws(()=>parseMetaTestPhonePolicy(environment({WASALX_TEST_RECIPIENT_ALLOWLIST:scope})),/test-recipient fence/);
+  assert.throws(()=>parseMetaTestPhonePolicy(environment({WASALX_TEST_RECIPIENT_ALLOWLIST:"not-json"})),/JSON array/);
 });
 
 test("policy and tenant context share one transaction-local query; disabled and foreign tenants clear inherited defaults",async()=>{

@@ -20,8 +20,17 @@ const value=(messages)=>({messaging_product:"whatsapp",metadata:{phone_number_id
 const status=(recipient_id=phone)=>({id:"wamid.receipt",recipient_id,status:"delivered",timestamp:now()});
 const adapter=(config={})=>new MetaGroupsAdapter({accessToken:"synthetic-private-token",graphVersion:"v24.0",baseUrl:"https://graph.test",phoneNumberIdFor:()=>phoneId,...config});
 
-test("Meta test scope is exact PHONE-only, off by default and explicitly empty denies all",()=>{
-  for(const raw of [undefined,""," "]){
+test("Meta recipient scope denies by default and only an explicit opt-out disables it",()=>{
+  for(const raw of [undefined,""," ","[]"]){
+    const denied=parseWahaTestRecipientAllowlist(raw);
+    assert.equal(metaTestSendAllowed(denied,{recipient_type:"individual",to:phone}),false);
+    assert.equal(metaTestSendAllowed(denied,{recipient_type:"individual",to:foreign}),false);
+    const original={...value([message(),message(foreign)]),statuses:[status(),status(foreign)]};
+    assert.equal(metaTestWebhookUnits(denied,original).values.length,0);
+    assert.equal(metaTestWebhookUnits(denied,value([{type:"system"}])).values.length,0);
+    assert.equal(metaTestWebhookUnits(denied,original,Date.now(),()=>true).values.length,0);
+  }
+  for(const raw of ["*"]){
     const absent=parseWahaTestRecipientAllowlist(raw);
     assert.equal(metaTestSendAllowed(absent,{recipient_type:"group",to:foreign}),true);
     const original=value([message(foreign)]),before=JSON.stringify(original);
@@ -136,7 +145,13 @@ test("Meta final send/upload boundary guards every content kind before checkpoin
   let checkpointCalls=0;const changedBeforeCheckpoint={recipient_type:"individual",to:phone};
   const changed=adapter({beforeRequest:async()=>{changedBeforeCheckpoint.to=foreign},beforeMessageSend:async()=>{checkpointCalls++}});
   await assert.rejects(changed.request(`/${phoneId}/messages`,{method:"POST",body:changedBeforeCheckpoint},"mutation",true),{code:"META_TEST_RECIPIENT_NOT_ALLOWED"});assert.equal(checkpointCalls,0);assert.equal(requests.length,count);
-  delete process.env.WASALX_TEST_RECIPIENT_ALLOWLIST;
+  for(const raw of [undefined,""," ","[]","not-json"]){
+    if(raw===undefined)delete process.env.WASALX_TEST_RECIPIENT_ALLOWLIST;else process.env.WASALX_TEST_RECIPIENT_ALLOWLIST=raw;
+    if(raw==="not-json")assert.throws(()=>adapter());
+    else await assert.rejects(adapter().send(input),{code:"META_TEST_RECIPIENT_NOT_ALLOWED"});
+    assert.equal(requests.length,count);
+  }
+  process.env.WASALX_TEST_RECIPIENT_ALLOWLIST="*";
   await adapter().send({...input,groupId:foreign});assert.equal(JSON.parse(requests.at(-1).body).to,foreign);
 });
 
@@ -187,7 +202,15 @@ test("signed Meta ingress drops foreign units while retaining all attributable s
   await inject(envelope([history,contacts,echoes]));assert.equal(imports.length,3);
   for(const input of imports){assert.equal(input.sourceSha256,input.unit.sourceSha256);assert.equal(JSON.stringify(input.unit).includes(foreign),false);assert.equal(JSON.stringify(input.unit).includes("Foreign"),false);assert(input.unit.messages.length||input.unit.contacts.length)}
   imports.length=0;
-  // Environment is snapshotted at construction, so use an explicit deny-all controller.
+  // Environment is snapshotted at construction; absent and empty scopes deny too.
+  for(const raw of [undefined,"","[]","not-json"]){
+    if(raw===undefined)delete process.env.WASALX_TEST_RECIPIENT_ALLOWLIST;else process.env.WASALX_TEST_RECIPIENT_ALLOWLIST=raw;
+    const create=()=>new WebhookIngressController(database,{resolveHmac:async()=>secret},{wakeInbound:async()=>{}},{},{});
+    if(raw==="not-json"){assert.throws(create);continue}
+    const denied=create(),body=envelope([ordinary,history,contacts,echoes,{field:"account_update",value:{event:"ACCOUNT_OFFBOARDED"}}]),bytes=Buffer.from(JSON.stringify(body));
+    const result=await denied.meta({rawBody:bytes,headers:{"x-hub-signature-256":"sha256="+createHmac("sha256",secret).update(bytes).digest("hex")}},body);
+    assert.equal(result.count,0);assert.equal(events.length+imports.length+lifecycle.length+templates.length,0);
+  }
   process.env.WASALX_TEST_RECIPIENT_ALLOWLIST="[]";
   const emptyController=new WebhookIngressController(database,{resolveHmac:async()=>secret},{wakeInbound:async()=>{}},{},{});
   process.env.WASALX_TEST_RECIPIENT_ALLOWLIST=JSON.stringify([phone]);

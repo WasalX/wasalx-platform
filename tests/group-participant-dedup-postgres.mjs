@@ -62,7 +62,7 @@ export async function verifyGroupParticipantDedup(client,tenantId) {
       ],"new and repeated scoped metadata never converts zero or a positive declaration into a known count");
       assert.deepEqual((await client.query("SELECT to_jsonb(group_record) AS record FROM whatsapp_groups group_record WHERE tenant_id=$1 AND id=$2",[tenantId,otherGroupId])).rows,beforeForeign);
       assert.deepEqual((await client.query("SELECT to_jsonb(participant) AS record FROM group_workspace_participants participant WHERE tenant_id=$1 ORDER BY whatsapp_group_id,external_participant_id",[tenantId])).rows,beforeParticipants);
-      delete process.env.WASALX_TEST_RECIPIENT_ALLOWLIST;
+      process.env.WASALX_TEST_RECIPIENT_ALLOWLIST="*";
       for(const count of [7,0]){
         await synchronizeGroups(client,{tenantId,connectionId,provider:"WAHA"},[{id:"120363000000097@g.us",name:"Normal snapshot",participants:count}]);
         assert.deepEqual((await client.query("SELECT participant_count,participant_count_known FROM whatsapp_groups WHERE tenant_id=$1 AND id=$2",[tenantId,groupId])).rows,[{participant_count:count,participant_count_known:true}]);

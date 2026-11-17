@@ -21,6 +21,8 @@ must have zero restarts.
 
 ## Release a held sender
 
+Set `WASALX_TEST_RECIPIENT_ALLOWLIST` to `[]` or the owner's test numbers as a JSON array; missing or empty refuses all recipients in every environment, malformed values refuse startup, and only the explicit literal `*` disables the fence for unrestricted production.
+
 Run from an exact clean candidate on the approved qualification host, with
 the private environment and digest-bound preimage produced by held installation:
 
