@@ -6,7 +6,7 @@ import { readFile, readlink, stat, statfs, writeFile } from "node:fs/promises";
 import { arch, homedir, hostname, platform } from "node:os";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { activeServiceNames, assertDevInstallPreimages, devContainerPreimage, devColdResidents, devHeldServices, devPreservedServices, devValueDigest, captureDevReviewAuth, assertDevReviewAuthRows, devReviewAuthEnvironment, devReviewAuthConfiguration } from "./installer-stack.mjs";
+import { activeServiceNames, assertDevInstallPreimages, devContainerPreimage, devColdResidents, devHeldServices, devHeldPrerequisites, devPreservedServices, devValueDigest, captureDevReviewAuth, assertDevReviewAuthRows, devReviewAuthEnvironment, devReviewAuthConfiguration } from "./installer-stack.mjs";
 import { parseRailsJson } from "./simulation-rails-json.mjs";
 import { sha256, preserveReplacement, readBoundArtifacts, writeArtifactState,
   assertRetainedPreimage, composeProfiles, dockerfileOf, imageServices, inspectOwned, preparePrivateDirectory, fenceReplacementEffects, rollbackReplacement } from "./installer-artifacts.mjs";
@@ -17,7 +17,7 @@ const repository = resolve(fileURLToPath(new URL("../../", import.meta.url)));
 const preflight = fileURLToPath(new URL("./preflight-full-env.mjs", import.meta.url));
 const verifier = fileURLToPath(new URL("./installer-stack.mjs", import.meta.url));
 const shaPattern = /^[0-9a-f]{40}$/u;
-const stages = ["preflight", "build", "replace", "smoke", "qualify", "rollback", "rollback-safety"];
+const stages = ["preflight", "build", "replace", "smoke", "qualify", "rollback", "rollback-safety", "release-held"];
 const migrationVerifierScript = `const fs=require('node:fs'),crypto=require('node:crypto');
     console.log(JSON.stringify(fs.readdirSync('/app/migrations').filter(n=>/^\\d{4}_[a-z0-9_]+\\.sql$/.test(n)).sort().map(name=>{
       const b=fs.readFileSync('/app/migrations/'+name);
@@ -189,21 +189,22 @@ export async function captureDevInstallPreimages(context) {
   const rows = await devInspect(context);
   const api = rows.find((row) => row.Config.Labels["com.docker.compose.service"] === "control-api");
   const active = activeServiceNames(context.model, composeProfiles);
+  const heldPrerequisites = devHeldPrerequisites(context.model, active);
   // Same completed-dependency classification used by existing projectStack.
   const oneShots = new Set(active.flatMap((name) => Object.entries(context.model.services[name].depends_on ?? {})
     .filter(([, dependency]) => dependency?.condition === "service_completed_successfully")
     .map(([dependency]) => dependency)).filter((name) => active.includes(name)));
   const cold = rows.some((row) => !["control-api", ...devColdResidents, ...devHeldServices].includes(row.Config.Labels["com.docker.compose.service"])
     && !oneShots.has(row.Config.Labels["com.docker.compose.service"]) && !row.State.Running);
-  const held = cold ? active.filter((name) => !devColdResidents.includes(name)) : devHeldServices;
+  const held = cold ? active.filter((name) => !devColdResidents.includes(name)) : [...devHeldServices, ...Object.keys(heldPrerequisites)];
   for (const row of rows) {
     const name = row.Config.Labels["com.docker.compose.service"];
     if (cold && !devColdResidents.includes(name)) assert.equal(row.State.Running, false, `${name} cold hold was started`);
     // API is temporarily quiesced for migration; its exited/PID0 preimage is mandatory below.
     if (cold && !row.State.Running) {
-      assert.ok(["created", "exited"].includes(row.State.Status) && row.State.Pid === 0 && [0, 143].includes(row.State.ExitCode)
+      assert.ok(["created", "exited"].includes(row.State.Status) && row.State.Pid === 0 && (name in heldPrerequisites || [0, 143].includes(row.State.ExitCode))
         && !row.State.OOMKilled && !row.State.Error, `${name} stopped lifecycle requires review`);
-      if (oneShots.has(name)) assert.equal(row.State.ExitCode, 0, `${name} existing one-shot failed`);
+      if (oneShots.has(name) && !(name in heldPrerequisites)) assert.equal(row.State.ExitCode, 0, `${name} existing one-shot failed`);
     } else if (name !== "control-api" && !held.includes(name)) {
       if (oneShots.has(name)) {
         assert.equal(row.State.Status, "exited", `${name} existing one-shot did not complete`);
@@ -226,7 +227,7 @@ export async function captureDevInstallPreimages(context) {
     candidateTree: context.candidateTree, project: context.project, observedAt: new Date().toISOString(),
     machineIdSha256: createHash("sha256").update(await readFile("/etc/machine-id")).digest("hex"),
     ...(cold ? { admissionMode: "cold-held" } : {}),
-    heldServices: [...held].sort(), preservedServices: cold ? [...active].sort() : [...devPreservedServices].sort(),
+    heldServices: [...held].sort(), heldPrerequisites, preservedServices: cold ? [...active].sort() : [...devPreservedServices].sort(),
     services: rows.map(devContainerPreimage).sort((a,b) => a.service.localeCompare(b.service)),
     nativeSync: cold && !rows.find((row) => row.Config.Labels["com.docker.compose.service"] === "postgres")?.State.Running
       ? { state: "UNKNOWN", reason: "postgres stopped" } : await readDevNativeSync(context),
@@ -236,8 +237,8 @@ export async function captureDevInstallPreimages(context) {
     activeServices: activeServiceNames(context.model, composeProfiles) });
   return record;
 }
-export function assertDevPreserved(record, rows) {
-  for (const name of devPreservedServices) {
+export function assertDevPreserved(record, rows, released = []) {
+  for (const name of devPreservedServices.filter((name) => !released.includes(name))) {
     const row = rows.find((item) => item.Config.Labels["com.docker.compose.service"] === name);
     assert.ok(row, `${name} preserved container is missing`);
     assert.deepEqual(devContainerPreimage(row), record.services.find(({ service }) => service === name), `${name} preserved preimage changed`);
@@ -266,6 +267,64 @@ export async function verifyDevNativePackage(context) {
   assert.equal(proof.retained_receipt_reconciliation_required, proof.receipt_phase !== null);
   return proof;
 }
+async function devPhase(context, record, name, oneShot = false, released = []) {
+  const execute = context.command ?? run;
+  assert.ok(released.includes(name) || (!devPreservedServices.includes(name) && !devHeldServices.includes(name)), "preserved service must never execute");
+  const rows = await devInspect(context);
+  assertDevPreserved(record, rows, released);
+  for (const [dependency, condition] of Object.entries(context.model.services[name].depends_on ?? {})) {
+    const row = rows.find((item) => item.Config.Labels["com.docker.compose.service"] === dependency);
+    assert.ok(row, `${name} prerequisite missing: ${dependency}`);
+    if (condition.condition === "service_completed_successfully") {
+      assert.equal(row.State.Status, "exited", `${dependency} prerequisite not completed`); assert.equal(row.State.ExitCode, 0);
+    } else {
+      assert.equal(row.State.Running, true, `${dependency} prerequisite not running`);
+      if (condition.condition === "service_healthy") assert.equal(row.State.Health?.Status, "healthy", `${dependency} prerequisite unhealthy`);
+    }
+  }
+  if (name === "control-api") {
+    const activation = await devReadOnlyQuery(context, `SELECT count(*) FROM zammad_instances WHERE
+      id='00000000-0000-4000-8000-000000000003' AND tenant_id='00000000-0000-4000-8000-000000000001'
+      AND base_url='http://zammad-nginx:8080' AND version='7.1.3-0000'
+      AND service_secret_reference='secret://tenants/00000000-0000-4000-8000-000000000001/zammad/service' AND state='WORKING'`);
+    assert.equal(activation, "1", "retained activation row requires reviewed reconciliation");
+    assertDevNativeSync(record.nativeSync, await readDevNativeSync(context));
+  }
+  const flags = oneShot ? ["--abort-on-container-exit", "--exit-code-from", name] : ["--detach", "--wait"];
+  assert.equal(await execute("docker", [...context.composeArguments, "up", "--no-deps", "--no-build", "--pull", "never", ...flags, name], context.environment, true), 0, `${name} phase failed; no replay`);
+  const completed = (await devInspect(context)).find((row) => row.Config.Labels["com.docker.compose.service"] === name);
+  assert.ok(completed); assert.equal(completed.RestartCount, 0);
+  if (oneShot) { assert.equal(completed.State.Status, "exited"); assert.equal(completed.State.ExitCode, 0); }
+  else {
+    assert.equal(completed.State.Running, true); assert.equal(completed.State.Status, "running");
+    const test = completed.Config.Healthcheck?.Test;
+    if (context.model.services[name].healthcheck && context.model.services[name].healthcheck.disable !== true)
+      assert.ok(Array.isArray(test) && test.length && test[0] !== "NONE", `${name} runtime healthcheck is disabled`);
+    if (Array.isArray(test) && test.length && test[0] !== "NONE") assert.equal(completed.State.Health?.Status, "healthy");
+  }
+}
+
+export async function releaseDevHeld(context, record, service) {
+  assert.equal(context.project, "wasalx-live", "held release requires DEV");
+  assert.notEqual(record.admissionMode, "cold-held", "cold held release requires separate review");
+  assertDevInstallPreimages(record, { ...context, activeServices: activeServiceNames(context.model, composeProfiles),
+    machineIdSha256: createHash("sha256").update(await readFile("/etc/machine-id")).digest("hex") });
+  assert.ok(record.heldServices.includes(service) && devHeldServices.includes(service), "service is not a recorded held sender");
+  const before = await devInspect(context);
+  assertDevReviewAuthRows(record.devReviewAuth, before);
+  const held = before.find((row) => row.Config.Labels["com.docker.compose.service"] === service);
+  assert.ok(held && !held.State.Running && held.State.Pid === 0 && ["created", "exited"].includes(held.State.Status), "held sender must remain stopped");
+  assert.ok(!held.State.Paused && !held.State.Dead && !held.State.Restarting && held.RestartCount === 0, "held sender lifecycle requires review");
+  for (const [prerequisite, dependents] of Object.entries(record.heldPrerequisites ?? {})) {
+    if (dependents.includes(service)) await devPhase(context, record, prerequisite, true, record.heldServices);
+  }
+  await devPhase(context, record, service, false, record.heldServices);
+  const after = await devInspect(context);
+  assertDevPreserved(record, after, record.heldServices);
+  assertDevReviewAuthRows(record.devReviewAuth, after);
+  return 0;
+}
+
 export async function replaceDevHeld(context, record) {
   assert.notEqual(record.admissionMode, "cold-held", "Cold admission requires the chain-preserving Python held installer");
   const execute = context.command ?? run;
@@ -275,34 +334,7 @@ export async function replaceDevHeld(context, record) {
     devContainerPreimage(before.find((row) => row.Config.Labels["com.docker.compose.service"] === name)),
     record.services.find(({ service }) => service === name), "DEV ingress hold changed");
   assertDevPreserved(record, before);
-  const phase = async (name, oneShot = false) => {
-    assert.ok(!devPreservedServices.includes(name) && !devHeldServices.includes(name), "preserved service must never execute");
-    const rows = await devInspect(context);
-    assertDevPreserved(record, rows);
-    for (const [dependency, condition] of Object.entries(context.model.services[name].depends_on ?? {})) {
-      const row = rows.find((item) => item.Config.Labels["com.docker.compose.service"] === dependency);
-      assert.ok(row, `${name} prerequisite missing: ${dependency}`);
-      if (condition.condition === "service_completed_successfully") {
-        assert.equal(row.State.Status, "exited", `${dependency} prerequisite not completed`); assert.equal(row.State.ExitCode, 0);
-      } else {
-        assert.equal(row.State.Running, true, `${dependency} prerequisite not running`);
-        if (condition.condition === "service_healthy") assert.equal(row.State.Health?.Status, "healthy", `${dependency} prerequisite unhealthy`);
-      }
-    }
-    if (name === "control-api") {
-      const activation = await devReadOnlyQuery(context, `SELECT count(*) FROM zammad_instances WHERE
-        id='00000000-0000-4000-8000-000000000003' AND tenant_id='00000000-0000-4000-8000-000000000001'
-        AND base_url='http://zammad-nginx:8080' AND version='7.1.3-0000'
-        AND service_secret_reference='secret://tenants/00000000-0000-4000-8000-000000000001/zammad/service' AND state='WORKING'`);
-      assert.equal(activation, "1", "retained activation row requires reviewed reconciliation");
-      assertDevNativeSync(record.nativeSync, await readDevNativeSync(context));
-    }
-    const flags = oneShot ? ["--abort-on-container-exit", "--exit-code-from", name] : ["--detach", "--wait"];
-    assert.equal(await execute("docker", [...context.composeArguments, "up", "--no-deps", "--no-build", "--pull", "never", ...flags, name], context.environment, true), 0, `${name} phase failed; no replay`);
-    const completed = (await devInspect(context)).find((row) => row.Config.Labels["com.docker.compose.service"] === name);
-    assert.ok(completed); assert.equal(completed.RestartCount, 0);
-    if (oneShot) { assert.equal(completed.State.Status, "exited"); assert.equal(completed.State.ExitCode, 0); }
-  };
+  const phase = (name, oneShot = false) => devPhase(context, record, name, oneShot);
   // Fixed small layers, never implicit dependencies or legacy/seed bootstrap.
   await phase("migrate", true);
   const migrationImage = context.plan.find(({ id }) => id === "control-api");
@@ -436,6 +468,12 @@ export async function executeStage(action, context) {
     const details = await inspectImage(image.reference);
     assert.ok(matchesCandidate(details, candidateSha, candidateTree, image.dockerfile, context.buildContextSha256), `${image.id} requires the build stage`);
     imageIds.push(details.Id);
+  }
+  if (action === "release-held") {
+    assert.ok(context.devPreimagesFile && context.devPreimagesSha256, "held release requires bound DEV preimages");
+    const bytes = await readFile(context.devPreimagesFile);
+    assert.equal(sha256(bytes), context.devPreimagesSha256, "DEV preimage file changed");
+    return releaseDevHeld(context, JSON.parse(bytes), context.service);
   }
   if (action === "replace") {
     assert.ok(drained, "replace requires --drained after test quiescence and in-flight review");
@@ -576,9 +614,14 @@ async function main() {
   const [action, envFlag, envFile, projectFlag, project, ...extra] = process.argv.slice(2);
   const rest = []; let devPreimagesFile; let captureDevPreimagesFile; let devPreimagesSha256;
   let devReviewPortalOrigin; let devReviewIdentityOrigin;
+  let service;
   let rollbackSafetyFile; let rollbackSafetySha256;
   for (let i = 0; i < extra.length; i += 1) {
-    if (extra[i] === "--stage-lock-fd") { assert.match(extra[++i] ?? "", /^\d+$/u); }
+    if (extra[i] === "--service") {
+      assert.equal(action, "release-held"); assert.equal(service, undefined);
+      service = extra[++i]; assert.match(service ?? "", /^[a-z0-9][a-z0-9_.-]*$/u);
+    }
+    else if (extra[i] === "--stage-lock-fd") { assert.match(extra[++i] ?? "", /^\d+$/u); }
     else if (extra[i] === "--capture-preimage") { assert.equal(action, "preflight"); rest.push(extra[i]); }
     else if (["--rollback-safety", "--rollback-safety-sha256"].includes(extra[i])) {
       const flag = extra[i], value = extra[++i];
@@ -609,8 +652,9 @@ async function main() {
   if (devReviewAuthOrigins) devReviewAuthConfiguration(devReviewAuthOrigins);
   assert.equal(Boolean(devPreimagesFile), Boolean(devPreimagesSha256), "DEV preimage digest binding is required");
   assert.ok(!captureDevPreimagesFile || (action === "preflight" && !devPreimagesFile));
-  assert.ok(!devPreimagesFile || ["replace", "smoke"].includes(action));
+  assert.ok(!devPreimagesFile || ["replace", "smoke", "release-held"].includes(action));
   assert.ok(!(devPreimagesFile || captureDevPreimagesFile) || project === "wasalx-live");
+  assert.ok(action !== "release-held" || (service && devPreimagesFile && project === "wasalx-live"), "held release requires --service and DEV preimages");
   if (!stages.includes(action) || envFlag !== "--env-file" || !isAbsolute(envFile ?? "") ||
       projectFlag !== "--project-name" || !/^[a-z0-9][a-z0-9_.-]{0,62}$/u.test(project ?? "") ||
       new Set(rest).size !== rest.length || rest.some((flag) => !["--drained", "--retry-reviewed", "--capture-preimage"].includes(flag)) ||
@@ -684,7 +728,7 @@ async function main() {
         project, envFile, repository, capturePreimage: rest.includes("--capture-preimage"),
         privateDirectory: resolve(homedir(), `.local/state/wasalx-compose/${candidateSha}/${project}`),
         nativePackage: catalog.tenantProvisioning.package, model: safeCompose, directory: resolve(repository, `output/release-evidence/${candidateSha}`),
-        devPreimagesFile, devPreimagesSha256, captureDevPreimagesFile, devReviewAuthOrigins, drained: rest.includes("--drained"), retryReviewed: rest.includes("--retry-reviewed") });
+        devPreimagesFile, devPreimagesSha256, captureDevPreimagesFile, devReviewAuthOrigins, service, drained: rest.includes("--drained"), retryReviewed: rest.includes("--retry-reviewed") });
       if (exit !== 0) { process.stderr.write(`remote full stage ${stage} failed; inspect before retry\n`); return exit; }
       process.stdout.write(`remote full stage ${stage} passed (operator authentication/live acceptance separate)\n`);
     } catch (error) {
