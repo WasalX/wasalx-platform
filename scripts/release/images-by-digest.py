@@ -28,7 +28,23 @@ CLOUDFLARED_SOURCE = "e75d9a314ae07ae42564c0d3115b9e33d8a7329d99771951ab7b671444
 PUBLIC_KEYS = {"production-cloudflared": {"usr/local/bin/cloudflared": {
     "17ac4c2ca3deb87202cd2c101d4da9d4f4c0ec3d51a0381729329102b28e61a4"}}}
 ZAMMAD_PUBLIC_BASE = "ghcr.io/zammad/zammad@sha256:390705d0eefd8a473293c1f9130cb2f40a2484bd629dd3b33aa0e700ee86d13b"
-_zammad_public_keys = None
+_zammad_public_contract = None
+
+
+class HashingReader:
+    def __init__(self, stream):
+        self.stream = stream
+        self.digest = hashlib.sha256()
+
+    def read(self, size=-1):
+        raw = self.stream.read(size)
+        self.digest.update(raw)
+        return raw
+
+
+def restricted_path(path):
+    return any(part in {".git", ".ssh", ".aws", ".kube", ".env"} or
+               (part.startswith(".env.") and part != ".env.example") for part in PurePosixPath(path).parts)
 
 
 def require(condition, message):
@@ -152,11 +168,11 @@ def inspect_content(contents, public_keys=()):
             return
 
 
-def zammad_public_keys():
+def zammad_public_contract():
     """Bind copied public key content to verified public OCI bytes, without extracting files."""
-    global _zammad_public_keys
-    if _zammad_public_keys is not None:
-        return _zammad_public_keys
+    global _zammad_public_contract
+    if _zammad_public_contract is not None:
+        return _zammad_public_contract
     prefix = "https://ghcr.io/v2/zammad/zammad/"
     with urllib.request.urlopen("https://ghcr.io/token?service=ghcr.io&scope=repository:zammad/zammad:pull", timeout=30) as response:
         token = json.load(response)["token"]
@@ -176,41 +192,41 @@ def zammad_public_keys():
                      m.get("platform", {}).get("architecture") == "amd64"]
         require(len(platforms) == 1, "Unique public base platform required")
         data = manifest(platforms[0]["digest"])
-    keys = {}
+    keys, members = {}, {}
     for layer in data["layers"]:
         require(layer["mediaType"] in {"application/vnd.oci.image.layer.v1.tar+gzip",
                                       "application/vnd.docker.image.rootfs.diff.tar.gzip",
                                       "application/vnd.oci.image.layer.v1.tar"}, "Unsupported public base layer")
         with urllib.request.urlopen(urllib.request.Request(prefix + "blobs/" + layer["digest"], headers=headers), timeout=30) as response:
-            class Reader:
-                def __init__(self):
-                    self.digest = hashlib.sha256()
-
-                def read(self, size=-1):
-                    raw = response.read(size)
-                    self.digest.update(raw)
-                    return raw
-            reader = Reader()
+            reader = HashingReader(response)
             with tarfile.open(fileobj=reader, mode="r|*") as archive:
                 for member in archive:
                     path = str(PurePosixPath(member.name)).lstrip("/")
-                    if not member.isfile() or not path.startswith(("usr/local/", "opt/zammad/")):
+                    if not path.startswith(("usr/local/", "opt/zammad/")):
+                        continue
+                    if not member.isfile():
+                        if restricted_path(path):
+                            require(member.isdir() or member.issym() or member.islnk(), "Unsupported public copied member")
+                            members[path] = {"type": "directory" if member.isdir() else "symlink" if member.issym() else "hardlink", "target": member.linkname}
                         continue
                     previous = b""
                     with archive.extractfile(member) as contents:
-                        while chunk := contents.read(1024 * 1024):
+                        content = HashingReader(contents)
+                        while chunk := content.read(1024 * 1024):
                             value = previous + chunk
                             for match in PEM.finditer(value):
                                 keys.setdefault(path, set()).add(hashlib.sha256(match.group()).hexdigest())
                             previous = value[-65536:]
+                        if restricted_path(path):
+                            members[path] = {"type": "file", "sha256": "sha256:" + content.digest.hexdigest()}
             while reader.read(1024 * 1024):
                 pass
             require("sha256:" + reader.digest.hexdigest() == layer["digest"], "Public base layer digest mismatch")
-    _zammad_public_keys = keys
-    return keys
+    _zammad_public_contract = {"keys": keys, "members": members}
+    return _zammad_public_contract
 
 
-def inspect_layers(archive, layers, base_layers, public_keys=None, licenses=None):
+def inspect_layers(archive, layers, base_layers, public_keys=None, licenses=None, public_members=None):
     """Inherited layers are admitted by pinned base; inspect all added layer members/content."""
     count = 0
     seen_licenses = {}
@@ -221,18 +237,24 @@ def inspect_layers(archive, layers, base_layers, public_keys=None, licenses=None
             for member in members:
                 path = PurePosixPath(member.name)
                 require(not path.is_absolute() and ".." not in path.parts, "Unsafe image layer path")
-                require(not any(part in {".git", ".ssh", ".aws", ".kube"} or
-                                part == ".env" or (part.startswith(".env.") and part != ".env.example")
-                                for part in path.parts), "Unapproved image layer member")
+                known = (public_members or {}).get(str(path)) if restricted_path(path) else None
+                if restricted_path(path):
+                    kind = "file" if member.isfile() else "directory" if member.isdir() else "symlink" if member.issym() else "hardlink" if member.islnk() else "unsupported"
+                    require(known and known["type"] == kind, "Unapproved image layer member")
+                    if not member.isfile():
+                        require(known["target"] == member.linkname, "Public copied link mismatch")
                 if member.isfile():
                     with members.extractfile(member) as contents:
+                        checked = HashingReader(contents)
                         if str(path) in (licenses or {}):
                             require(member.size <= 1024 * 1024, "Unexpected licence file size")
-                            raw = contents.read()
+                            raw = checked.read()
                             seen_licenses[str(path)] = sha256(raw)
                             inspect_content(io.BytesIO(raw))
                         else:
-                            inspect_content(contents, (public_keys or {}).get(str(path), ()))
+                            inspect_content(checked, (public_keys or {}).get(str(path), ()))
+                        if known:
+                            require("sha256:" + checked.digest.hexdigest() == known["sha256"], "Public copied file mismatch")
                 count += 1
     require(seen_licenses == (licenses or {}), "Add-on licence content mismatch")
     return count
@@ -245,9 +267,11 @@ def inspect_image(reference, row, commit, tree, directory, licenses=None):
                 "https://github.com/cloudflare/cloudflared/archive/refs/tags/2026.9.1.tar.gz" in text,
                 "Public key-content allowance requires the reviewed source archive")
     public_keys = PUBLIC_KEYS.get(row["image"], {})
+    public_members = {}
     if row["image"] == "zammad":
         require("ARG ZAMMAD_BASE_IMAGE=" + ZAMMAD_PUBLIC_BASE in text, "Reviewed Zammad public base required")
-        public_keys = zammad_public_keys()
+        contract = zammad_public_contract()
+        public_keys, public_members = contract["keys"], contract["members"]
     base_ref, labels, environment = metadata_contract(text, commit, tree)
     base = {"Config": {}, "RootFS": {"Layers": []}}
     if base_ref != "scratch":
@@ -276,10 +300,11 @@ def inspect_image(reference, row, commit, tree, directory, licenses=None):
                 with archive.extractfile(layer) as contents:
                     require("sha256:" + hashlib.file_digest(contents, "sha256").hexdigest() == expected,
                             "Image layer digest mismatch")
-            members = inspect_layers(archive, manifest["Layers"], len(base_diffids), public_keys, licenses)
+            members = inspect_layers(archive, manifest["Layers"], len(base_diffids), public_keys, licenses, public_members)
             return {"configDigest": sha256(raw_config), "layers": diffids, "inspectedMembers": members,
                     "addonLicenses": licenses or {},
-                    "publicKeyContractSha256": sha256(json.dumps({p: sorted(v) for p, v in public_keys.items()}, sort_keys=True).encode()),
+                    "publicContentContractSha256": sha256(json.dumps({"keys": {p: sorted(v) for p, v in public_keys.items()},
+                        "members": public_members}, sort_keys=True).encode()),
                     "historySha256": sha256(history.encode())}
     finally:
         exported.unlink(missing_ok=True)

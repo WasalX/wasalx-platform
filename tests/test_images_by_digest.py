@@ -69,7 +69,7 @@ class ImagePublicationTests(unittest.TestCase):
                 images.verify_manifest(bad, digest)
 
     def test_layer_inspection_rejects_credentials_and_unsafe_members(self):
-        def inspect(name, content, licenses=None):
+        def inspect(name, content, licenses=None, public_members=None):
             inner = io.BytesIO()
             with tarfile.open(fileobj=inner, mode="w") as archive:
                 member = tarfile.TarInfo(name)
@@ -82,9 +82,13 @@ class ImagePublicationTests(unittest.TestCase):
                 archive.addfile(member, io.BytesIO(inner.getvalue()))
             outer.seek(0)
             with tarfile.open(fileobj=outer) as archive:
-                return images.inspect_layers(archive, ["layer.tar"], 0, licenses=licenses)
+                return images.inspect_layers(archive, ["layer.tar"], 0, licenses=licenses, public_members=public_members)
         self.assertEqual(inspect("app/public.txt", b"public"), 1)
         self.assertEqual(inspect("app/binary", b"-----BEGIN PRIVATE KEY-----"), 1)
+        public = {"app/.env": {"type": "file", "sha256": images.sha256(b"public fixture")}}
+        self.assertEqual(inspect("app/.env", b"public fixture", public_members=public), 1)
+        with self.assertRaises(ValueError):
+            inspect("app/.env", b"changed", public_members=public)
         license_path = "usr/share/licenses/wasalx-zammad-addon/LICENSE"
         expected = {license_path: images.sha256(b"public licence")}
         self.assertEqual(inspect(license_path, b"public licence", expected), 1)
@@ -109,7 +113,7 @@ class ImagePublicationTests(unittest.TestCase):
         pem = b"-----BEGIN PRIVATE KEY-----\n" + (b"A" * 64 + b"\n") * 2 + b"-----END PRIVATE KEY-----"
         layer = io.BytesIO()
         with tarfile.open(fileobj=layer, mode="w") as archive:
-            for name in ["opt/zammad/fixture/key.pem", "unrelated/key.pem"]:
+            for name in ["opt/zammad/fixture/key.pem", "unrelated/key.pem", "opt/zammad/.env"]:
                 entry = tarfile.TarInfo(name)
                 entry.size = len(pem)
                 archive.addfile(entry, io.BytesIO(pem))
@@ -126,13 +130,13 @@ class ImagePublicationTests(unittest.TestCase):
                     return io.BytesIO(manifest + (b" " if case == "manifest-mismatch" else b""))
                 return io.BytesIO(blob)
             with self.subTest(case=case), patch.object(images, "ZAMMAD_PUBLIC_BASE", reference), \
-                    patch.object(images, "_zammad_public_keys", None), patch.object(images.urllib.request, "urlopen", side_effect=response):
+                    patch.object(images, "_zammad_public_contract", None), patch.object(images.urllib.request, "urlopen", side_effect=response):
                 if case == "valid":
-                    self.assertEqual(images.zammad_public_keys(), {"opt/zammad/fixture/key.pem": {images.hashlib.sha256(pem).hexdigest()}})
+                    self.assertEqual(images.zammad_public_contract(), {"keys": {"opt/zammad/fixture/key.pem": {images.hashlib.sha256(pem).hexdigest()}, "opt/zammad/.env": {images.hashlib.sha256(pem).hexdigest()}}, "members": {"opt/zammad/.env": {"type": "file", "sha256": images.sha256(pem)}}})
                 else:
                     with self.assertRaises(ValueError):
-                        images.zammad_public_keys()
-                    self.assertIsNone(images._zammad_public_keys)
+                        images.zammad_public_contract()
+                    self.assertIsNone(images._zammad_public_contract)
 
     def test_manifest_requires_complete_verified_uniform_source_receipts(self):
         records = [{"image": r["image"], "commit": "a" * 40, "tree": "b" * 40,

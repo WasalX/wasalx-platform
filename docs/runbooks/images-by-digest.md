@@ -123,7 +123,9 @@ Zammad copies `/usr/local` and `/opt/zammad` from its approved public upstream
 image. For those copied paths, the inspector resolves only the pinned
 `ZAMMAD_BASE_IMAGE`, anonymously streams its OCI layers, verifies the manifest
 and every compressed layer digest, and records full PEM hashes at their source
-paths. Only identical full content at that same copied path is admitted. An
+paths. Restricted fixture files additionally require identical whole-file hashes;
+directories and links require the same kind and target. Only unchanged public
+members at the same copied path are admitted. An
 unmatched key, unrelated path, different base pin, invalid manifest or altered
 layer fails closed. The receipt seals the resulting public-content map; key
 bytes and anonymous registry tokens are never written or logged.
