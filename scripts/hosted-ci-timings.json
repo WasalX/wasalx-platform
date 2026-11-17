@@ -1,0 +1,26 @@
+{
+  "source": "GitHub Actions run 44160284456, successful hosted unit test timings matched by test title and original shard.",
+  "defaultMs": 190,
+  "filesMs": {
+    "tests/admin-workspace-state.test.mjs": 641,
+    "tests/application-e2e-harness.test.mjs": 3530,
+    "tests/braces-image-patch.test.mjs": 830,
+    "tests/connection-onboarding-portal.test.mjs": 720,
+    "tests/dev-secret-sidecar.test.mjs": 1689,
+    "tests/fetch-zammad-addon.test.mjs": 573,
+    "tests/group-configuration-portal.test.mjs": 749,
+    "tests/hosted-ci.test.mjs": 2810,
+    "tests/infra-contract.test.ts": 821,
+    "tests/installer-hosted-images.test.mjs": 1684,
+    "tests/invitation-mailer-runtime.test.mjs": 563,
+    "tests/meta-privacy-outcome-driver.test.mjs": 738,
+    "tests/meta-webhook-http.test.mjs": 689,
+    "tests/migration-connection.test.mjs": 16215,
+    "tests/portal-auth-hardening.test.ts": 644,
+    "tests/portal-operational-ux.test.mjs": 904,
+    "tests/portal-workspace.test.mjs": 1658,
+    "tests/promotion-source.test.mjs": 507,
+    "tests/simulation-email-effect-budget.test.mjs": 1331,
+    "tests/simulation-email-recipient-restore.test.mjs": 1927
+  }
+}

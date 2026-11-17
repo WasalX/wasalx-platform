@@ -1,3 +1,6 @@
+from unittest import mock
+import subprocess
+import os
 import copy
 import importlib.util
 import io
@@ -229,13 +232,42 @@ class ImagePublicationTests(unittest.TestCase):
             with self.subTest(key=key), self.assertRaises(ValueError):
                 images.assemble(bad)
 
+    def test_registry_cache_roles_are_disjoint(self):
+        self.assertEqual(len(images.CACHED_IMAGES), 11)
+        self.assertLessEqual(images.CACHED_IMAGES, {row["image"] for row in images.catalog()})
+        main = {"GITHUB_EVENT_NAME": "push", "GITHUB_REF": "refs/heads/main", "GITHUB_REPOSITORY": images.REPOSITORY}
+        ref = "type=registry,ref=ghcr.io/wasalx/buildcache:production-prometheus"
+        with mock.patch.dict(os.environ, main, clear=True):
+            self.assertEqual(images.cache_options("production-prometheus", "write"), ["--cache-to", ref + ",mode=max"])
+            self.assertEqual(images.cache_options("portal", "off"), [])
+            self.assertEqual(images.cache_options("postgres", "write"), [])
+            with self.assertRaises(ValueError):
+                images.cache_options("portal", "read")
+        for event in ["pull_request", "merge_group"]:
+            with mock.patch.dict(os.environ, {"GITHUB_EVENT_NAME": event}, clear=True):
+                self.assertEqual(images.cache_options("production-prometheus", "read"), ["--cache-from", ref])
+                with self.assertRaises(ValueError):
+                    images.cache_options("portal", "write")
+
+    def test_docker_pull_retries_only_the_pull(self):
+        failure = subprocess.CalledProcessError(1, "docker pull")
+        with mock.patch.object(images, "run", side_effect=[failure, failure, ""]) as run:
+            with mock.patch.object(images.time, "sleep"):
+                images.pull("base")
+            self.assertEqual(run.call_args_list, [mock.call("docker", "pull", "--platform", "linux/amd64", "base")] * 3)
+        with mock.patch.object(images, "run", side_effect=failure) as run:
+            with mock.patch.object(images.time, "sleep"), self.assertRaises(subprocess.CalledProcessError):
+                images.pull("base")
+            self.assertEqual(run.call_count, 3)
+
     def test_workflow_restricts_writes_and_oidc_to_main_publish(self):
         text = (ROOT / ".github/workflows/branch-image.yml").read_text()
-        self.assertEqual(text.count("driver-opts: image=moby/buildkit:v0.26.3"), 2)
+        self.assertEqual(text.count("driver-opts: image=moby/buildkit:v0.26.3"), 1)
         self.assertNotIn("pull_request_target", text)
         self.assertEqual(text.count("packages: write"), 1)
         self.assertEqual(text.count("id-token: write"), 1)
-        jobs = re.split(r"\n  (\w+):\n", text.split("jobs:\n", 1)[1])
+        self.assertEqual(text.count("attestations: write"), 1)
+        jobs = re.split(r"(?m)^  (\w+):\n", text.split("jobs:\n", 1)[1])
         bodies = dict(zip(jobs[1::2], jobs[2::2]))
         for name, body in bodies.items():
             self.assertIn("runs-on: ubuntu-24.04", body)
@@ -244,12 +276,14 @@ class ImagePublicationTests(unittest.TestCase):
             if name != "publish":
                 self.assertNotIn("packages: write", body)
                 self.assertNotIn("id-token: write", body)
+                self.assertNotIn("attestations: write", body)
                 self.assertNotIn("secrets.GITHUB_TOKEN", body)
         self.assertIn("github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'WasalX/wasalx-platform'", bodies["publish"])
         self.assertIn("name: stg", bodies["publish"])
         self.assertNotIn("url:", text)
         allowed = {"actions/checkout", "actions/setup-node", "actions/upload-artifact", "actions/download-artifact",
-                   "docker/setup-buildx-action", "docker/login-action", "sigstore/cosign-installer"}
+                   "docker/setup-buildx-action", "docker/login-action", "sigstore/cosign-installer",
+                   "actions/attest-build-provenance"}
         for action in re.findall(r"uses: (\S+)", text):
             name, sha = action.split("@")
             self.assertIn(name, allowed)

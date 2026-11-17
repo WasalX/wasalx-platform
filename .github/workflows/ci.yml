@@ -1,7 +1,8 @@
-name: Hosted CI
+name: ci
 
 on:
   pull_request:
+  merge_group:
   push:
     branches: [main]
 
@@ -9,32 +10,74 @@ permissions:
   contents: read
 
 concurrency:
-  group: hosted-ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  COREPACK_HOME: ${{ github.workspace }}/.git/hosted-corepack
+  PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
 
 jobs:
-  checks:
-    name: ${{ matrix.name }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - {name: Lint, mode: lint}
-          - {name: Typecheck, mode: typecheck}
-          - {name: Collection, mode: collection}
-          - {name: Unit 1/6, mode: unit, shard: 1}
-          - {name: Unit 2/6, mode: unit, shard: 2}
-          - {name: Unit 3/6, mode: unit, shard: 3}
-          - {name: Unit 4/6, mode: unit, shard: 4}
-          - {name: Unit 5/6, mode: unit, shard: 5}
-          - {name: Unit 6/6, mode: unit, shard: 6}
-    env:
-      CI: 'true'
-      # Hosted checks use synthetic fixtures; live contracts and operator journeys
-      # are excluded by scripts/hosted-ci-config.json. No secrets are supplied.
-      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+  changes:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      images: ${{ steps.changes.outputs.images }}
+      dependency_review: ${{ steps.changes.outputs.dependency_review }}
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: ${{ github.event_name == 'pull_request' && 2 || 1 }}
+          persist-credentials: false
+      - id: changes
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          images=true
+          dependency_review=false
+          if [ "$EVENT" = pull_request ]; then
+            dependency_review=true
+            if bash scripts/hosted-image-changes.sh; then
+              images=false
+            else
+              status=$?
+              test "$status" = 1
+            fi
+          fi
+          echo "images=$images" >> "$GITHUB_OUTPUT"
+          echo "dependency_review=$dependency_review" >> "$GITHUB_OUTPUT"
+      - name: Check image publication contracts
+        if: steps.changes.outputs.images == 'true'
+        run: |
+          python3 -B -m unittest discover -s tests -p 'test_images_by_digest.py' -v
+          node --test tests/fetch-zammad-addon.test.mjs
+          ruby tests/zammad-database-entrypoint.test.rb
+      - id: matrix
+        if: steps.changes.outputs.images == 'true'
+        run: |
+          matrix=$(python3 scripts/release/images-by-digest.py matrix)
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
+  dependency-review:
+    needs: changes
+    if: needs.changes.outputs.dependency_review == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: high
+
+  prepare:
+    outputs:
+      artifact_attempt: ${{ steps.assemble.outputs.attempt }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -42,35 +85,111 @@ jobs:
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '24.13.1'
+          package-manager-cache: false
       - name: Enable pinned pnpm
         run: |
           corepack enable
-          corepack install
-          echo "PNPM_STORE_PATH=$(pnpm store path --silent)" >> "$GITHUB_ENV"
-      - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+          for attempt in 1 2 3; do
+            if corepack install; then break; fi
+            test "$attempt" != 3
+            sleep "$attempt"
+          done
+          store=$(pnpm store path --silent)
+          echo "PNPM_STORE_PATH=$store" >> "$GITHUB_ENV"
+      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+        id: pnpm-cache
         with:
           path: ${{ env.PNPM_STORE_PATH }}
           key: pnpm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', 'package.json', 'patches/**') }}
           restore-keys: pnpm-${{ runner.os }}-${{ runner.arch }}-
-      - run: pnpm install --frozen-lockfile
-      - name: Prepare unit and collection prerequisites
-        if: matrix.mode == 'unit' || matrix.mode == 'collection'
+      - run: pnpm install --frozen-lockfile --fetch-retries=2 --config.enable-global-virtual-store=false
+      - uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.pnpm-cache.outputs.cache-hit != 'true'
+        with:
+          path: ${{ env.PNPM_STORE_PATH }}
+          key: ${{ steps.pnpm-cache.outputs.cache-primary-key }}
+      - name: Build shared prerequisites
+        id: assemble
+        env:
+          GIT_TERMINAL_PROMPT: '0'
         run: |
-          if ! ruby -rminitest -e 'puts RUBY_VERSION'; then
-            sudo apt-get update
-            sudo apt-get install -y ruby ruby-minitest
-          fi
-          GIT_TERMINAL_PROMPT=0 pnpm run zammad:package
+          pnpm run zammad:package
           pnpm run build:services
-      - name: Check CI runner
-        if: matrix.mode == 'collection'
-        run: node --test tests/hosted-ci.test.mjs
+          find packages services -type d \( -name node_modules -o -name dist \) -prune -print0 > "$RUNNER_TEMP/prepared-paths"
+          tar -cf - --null -T "$RUNNER_TEMP/prepared-paths" node_modules .git/hosted-corepack |
+            zstd -T2 -o "$RUNNER_TEMP/prepared.tar.zst"
+          tar -cf - zammad-package build/zammad build/addon-licenses tests/fixtures tests/*.rb |
+            zstd -T2 -o "$RUNNER_TEMP/addon.tar.zst"
+          echo "attempt=$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: check-inputs-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/prepared.tar.zst
+            ${{ runner.temp }}/addon.tar.zst
+          compression-level: 0
+          retention-days: 1
+          if-no-files-found: error
+
+  checks:
+    name: ${{ matrix.name }}
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {name: Lint, mode: lint}
+          - {name: Typecheck, mode: typecheck}
+          - {name: Collection, mode: collection}
+          - {name: Unit 1/4, mode: unit, shard: 1}
+          - {name: Unit 2/4, mode: unit, shard: 2}
+          - {name: Unit 3/4, mode: unit, shard: 3}
+          - {name: Unit 4/4, mode: unit, shard: 4}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24.13.1'
+          package-manager-cache: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: check-inputs-${{ needs.prepare.outputs.artifact_attempt }}
+          path: ${{ runner.temp }}/check-inputs
+      - name: Restore shared prerequisites
+        env:
+          WITH_ADDON: ${{ matrix.mode == 'unit' || matrix.mode == 'collection' }}
+        run: |
+          tar --zstd -xf "$RUNNER_TEMP/check-inputs/prepared.tar.zst"
+          corepack enable
+          if [ "$WITH_ADDON" = true ]; then
+            tar --zstd -xf "$RUNNER_TEMP/check-inputs/addon.tar.zst"
+            if ! ruby -rminitest -e 'puts RUBY_VERSION'; then
+              sudo apt-get -o Acquire::Retries=2 update
+              sudo apt-get -o Acquire::Retries=2 install -y ruby ruby-minitest
+            fi
+          fi
+      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+        id: eslint-cache
+        if: matrix.mode == 'lint'
+        with:
+          path: .git/hosted-eslint-cache
+          key: eslint-${{ runner.os }}-${{ hashFiles('eslint.config.*', 'pnpm-lock.yaml') }}-${{ github.sha }}
+          restore-keys: eslint-${{ runner.os }}-${{ hashFiles('eslint.config.*', 'pnpm-lock.yaml') }}-
       - name: Lint
         if: matrix.mode == 'lint'
         run: node scripts/hosted-ci.mjs lint
+      - uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
+        if: matrix.mode == 'lint' && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.eslint-cache.outputs.cache-hit != 'true'
+        with:
+          path: .git/hosted-eslint-cache
+          key: ${{ steps.eslint-cache.outputs.cache-primary-key }}
       - name: Typecheck
         if: matrix.mode == 'typecheck'
-        run: pnpm run typecheck
+        run: pnpm exec tsc --noEmit
       - name: Collect tests
         if: matrix.mode == 'collection'
         run: node scripts/hosted-ci.mjs collection
@@ -78,16 +197,108 @@ jobs:
         if: matrix.mode == 'unit'
         env:
           SHARD: ${{ matrix.shard }}
-        run: node scripts/hosted-ci.mjs unit "$SHARD" 6
+        run: node scripts/hosted-ci.mjs unit "$SHARD" 4
 
-  result:
-    name: CI result
-    if: always()
-    needs: [checks]
-    runs-on: ubuntu-latest
-    timeout-minutes: 1
+  images:
+    needs: changes
+    if: needs.changes.outputs.images == 'true' && github.event_name != 'push'
+    name: Build ${{ matrix.image }}${{ matrix.pending && ' (pending add-on source)' || '' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.changes.outputs.matrix) }}
     steps:
-      - name: Require every check and shard
+      - name: Require GitHub-hosted execution
         env:
-          RESULT: ${{ needs.checks.result }}
-        run: test "$RESULT" = success
+          HOSTED_KIND: ${{ runner.environment }}
+        run: test "$HOSTED_KIND" = github-hosted
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - if: ${{ !matrix.pending }}
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22.23.4
+      - if: ${{ !matrix.pending }}
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+        with:
+          version: v0.30.1
+          driver-opts: image=moby/buildkit:v0.26.3
+          cache-binary: false
+      - name: Build and inspect without publication
+        if: ${{ !matrix.pending }}
+        env:
+          IMAGE: ${{ matrix.image }}
+          PUBLIC_ADDON_SOURCE: ${{ toJSON(matrix.addonSource) }}
+        run: python3 scripts/release/images-by-digest.py build --cache read --image "$IMAGE" --output "records/$IMAGE.json"
+      - name: Record pending add-on source
+        if: matrix.pending
+        env:
+          IMAGE: ${{ matrix.image }}
+          PUBLIC_ADDON_SOURCE: ${{ toJSON(matrix.addonSource) }}
+        run: python3 scripts/release/images-by-digest.py pending --image "$IMAGE" --output "records/$IMAGE.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          overwrite: true
+          name: image-build-${{ matrix.image }}
+          path: records/${{ matrix.image }}.json
+          if-no-files-found: error
+
+  publish:
+    needs: changes
+    if: needs.changes.outputs.images == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'WasalX/wasalx-platform'
+    concurrency:
+      group: release-main
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/branch-image.yml
+    with:
+      matrix: ${{ needs.changes.outputs.matrix }}
+
+  ci-gate:
+    if: always()
+    needs: [changes, dependency-review, prepare, checks, images, publish]
+    runs-on: ubuntu-slim
+    timeout-minutes: 2
+    permissions: {}
+    steps:
+      - name: Require checks and the applicable image lane
+        env:
+          EVENT: ${{ github.event_name }}
+          CHANGES: ${{ needs.changes.result }}
+          CHECKS: ${{ needs.checks.result }}
+          PREPARE: ${{ needs.prepare.result }}
+          REVIEW_NEEDED: ${{ needs.changes.outputs.dependency_review }}
+          REVIEW: ${{ needs.dependency-review.result }}
+          IMAGES_NEEDED: ${{ needs.changes.outputs.images }}
+          IMAGES: ${{ needs.images.result }}
+          PUBLISH: ${{ needs.publish.result }}
+          MANIFEST: ${{ needs.publish.outputs.complete }}
+        run: |
+          test "$CHANGES" = success && test "$PREPARE" = success && test "$CHECKS" = success || exit 1
+          case "$EVENT:$REVIEW_NEEDED:$REVIEW" in
+            pull_request:true:success|merge_group:false:skipped|push:false:skipped) ;;
+            *) exit 1 ;;
+          esac
+          case "$EVENT:$IMAGES_NEEDED:$IMAGES:$PUBLISH:$MANIFEST" in
+            pull_request:false:skipped:skipped:|pull_request:true:success:skipped:|merge_group:true:success:skipped:|push:true:skipped:success:true) ;;
+            *) exit 1 ;;
+          esac
+
+  legacy-status:
+    # The current main ruleset still requires this context during the cutover.
+    name: CI result
+    if: always() && github.event_name == 'pull_request'
+    needs: ci-gate
+    runs-on: ubuntu-slim
+    timeout-minutes: 2
+    permissions: {}
+    steps:
+      - env:
+          GATE: ${{ needs.ci-gate.result }}
+        run: test "$GATE" = success

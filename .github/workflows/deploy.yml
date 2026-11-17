@@ -1,0 +1,13 @@
+name: deploy
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  status:
+    runs-on: ubuntu-slim
+    timeout-minutes: 2
+    steps:
+      - run: echo 'Deployment is not configured. No environment was contacted.'
