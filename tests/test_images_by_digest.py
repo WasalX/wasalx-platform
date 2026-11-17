@@ -69,7 +69,7 @@ class ImagePublicationTests(unittest.TestCase):
                 images.verify_manifest(bad, digest)
 
     def test_layer_inspection_rejects_credentials_and_unsafe_members(self):
-        def inspect(name, content):
+        def inspect(name, content, licenses=None):
             inner = io.BytesIO()
             with tarfile.open(fileobj=inner, mode="w") as archive:
                 member = tarfile.TarInfo(name)
@@ -82,9 +82,15 @@ class ImagePublicationTests(unittest.TestCase):
                 archive.addfile(member, io.BytesIO(inner.getvalue()))
             outer.seek(0)
             with tarfile.open(fileobj=outer) as archive:
-                return images.inspect_layers(archive, ["layer.tar"], 0)
+                return images.inspect_layers(archive, ["layer.tar"], 0, licenses=licenses)
         self.assertEqual(inspect("app/public.txt", b"public"), 1)
         self.assertEqual(inspect("app/binary", b"-----BEGIN PRIVATE KEY-----"), 1)
+        license_path = "usr/share/licenses/wasalx-zammad-addon/LICENSE"
+        expected = {license_path: images.sha256(b"public licence")}
+        self.assertEqual(inspect(license_path, b"public licence", expected), 1)
+        for name, raw in [(license_path, b"changed"), ("app/unrelated", b"public licence")]:
+            with self.assertRaises(ValueError):
+                inspect(name, raw, expected)
         for name, data in [("../escape", b"x"), ("app/.env", b"x"), ("root/.ssh/key", b"x"),
                            ("app/key", b"-----BEGIN PRIVATE KEY-----\n" + (b"A" * 64 + b"\n") * 2)]:
             with self.subTest(name=name), self.assertRaises(ValueError):

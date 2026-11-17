@@ -25,6 +25,7 @@ test("fetch stages pinned Ruby contracts and fixtures without copying another No
   await mkdir(checkout);await mkdir(join(root,"scripts"));
   for(const dir of ["zammad-package","build/zammad","tests/fixtures"])await mkdir(join(checkout,dir),{recursive:true});
   for(const file of ["zammad-package/product.rb","build/zammad/package.zpm","tests/contract.rb","tests/fixtures/mail.txt","tests/other.test.ts"])await writeFile(join(checkout,file),"synthetic product fixture\n");
+  for(const file of ["LICENSE","COPYING","THIRD-PARTY-NOTICES"])await writeFile(join(checkout,file),"synthetic licence fixture\n");
   git("init","--quiet","--initial-branch=main");git("add",".");
   const stamp=execFileSync(process.platform==="win32"?"C:/Program Files/Git/usr/bin/date.exe":"/usr/bin/date",["-u","+%Y-%m-%dT%H:%M:%SZ"],{encoding:"utf8",windowsHide:true}).trim();
   execFileSync("git",["-C",checkout,"-c","user.name=Fixture","-c","user.email=fixture@example.invalid","-c","commit.gpgsign=false","-c","core.hooksPath=/dev/null","commit","--quiet","-m","fixture"],{env:{...process.env,GIT_AUTHOR_DATE:stamp,GIT_COMMITTER_DATE:stamp},windowsHide:true,timeout:10000});
@@ -33,6 +34,7 @@ test("fetch stages pinned Ruby contracts and fixtures without copying another No
   const run=(source="")=>spawnSync(process.execPath,[entry],{cwd:root,encoding:"utf8",windowsHide:true,timeout:10000,env:{...process.env,PUBLIC_ADDON_SOURCE:source}});
   const result=run();assert.equal(result.status,0,result.stderr);
   const publicResult=run(JSON.stringify({repository:"https://github.com/example/addon",commit:git("rev-parse","HEAD").trim()}));assert.equal(publicResult.status,0,publicResult.stderr);
+  for(const name of ["LICENSE","COPYING","THIRD-PARTY-NOTICES"])assert.equal(await readFile(join(root,"build/addon-licenses",name),"utf8"),"synthetic licence fixture\n");
   assert.equal(await readFile(join(root,"tests/contract.rb"),"utf8"),"synthetic product fixture\n");await access(join(root,"tests/fixtures/mail.txt"));
   await assert.rejects(access(join(root,"tests/other.test.ts")),{code:"ENOENT"});
   assert.equal(run().status,0);await writeFile(join(root,"tests/contract.rb"),"changed\n");assert.notEqual(run().status,0);assert.equal(await readFile(join(root,"tests/contract.rb"),"utf8"),"changed\n");

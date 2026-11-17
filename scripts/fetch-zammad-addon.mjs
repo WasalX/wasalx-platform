@@ -34,9 +34,11 @@ async function main() {
   assert.equal(git(["-C",checkout,"rev-parse","HEAD"]),pin.commit);
   assert.equal(git(["-C",checkout,"status","--porcelain"]),"");
   const contracts=(await readdir(resolve(checkout,"tests"))).filter(name=>name.endsWith(".rb")).map(name=>"tests/"+name);
-  for(const path of ["zammad-package","build/zammad","tests/fixtures",...contracts]) {
-    await mkdir(resolve(path,".."),{recursive:true});
-    await cp(resolve(checkout,path),path,{recursive:true,errorOnExist:false,force:false,filter:async(source,destination)=>{
+  const inputs=["zammad-package","build/zammad","tests/fixtures",...contracts].map(path=>[path,path]);
+  if(source) for(const name of ["LICENSE","COPYING","THIRD-PARTY-NOTICES"]) inputs.push([name,"build/addon-licenses/"+name]);
+  for(const [from,to] of inputs) {
+    await mkdir(resolve(to,".."),{recursive:true});
+    await cp(resolve(checkout,from),to,{recursive:true,errorOnExist:false,force:false,filter:async(source,destination)=>{
       let present; try { present=await lstat(destination); } catch(error) { if(error.code!=="ENOENT") throw error; return true; }
       assert(!present.isSymbolicLink(),"Add-on destination must not be a symlink");
       if(present.isDirectory()) return true;

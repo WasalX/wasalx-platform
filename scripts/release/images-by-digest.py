@@ -2,6 +2,7 @@
 import argparse
 import hashlib
 import json
+import io
 import os
 from pathlib import Path, PurePosixPath
 import re
@@ -209,9 +210,10 @@ def zammad_public_keys():
     return keys
 
 
-def inspect_layers(archive, layers, base_layers, public_keys=None):
+def inspect_layers(archive, layers, base_layers, public_keys=None, licenses=None):
     """Inherited layers are admitted by pinned base; inspect all added layer members/content."""
     count = 0
+    seen_licenses = {}
     for index, layer in enumerate(layers):
         if index < base_layers:
             continue
@@ -224,12 +226,19 @@ def inspect_layers(archive, layers, base_layers, public_keys=None):
                                 for part in path.parts), "Unapproved image layer member")
                 if member.isfile():
                     with members.extractfile(member) as contents:
-                        inspect_content(contents, (public_keys or {}).get(str(path), ()))
+                        if str(path) in (licenses or {}):
+                            require(member.size <= 1024 * 1024, "Unexpected licence file size")
+                            raw = contents.read()
+                            seen_licenses[str(path)] = sha256(raw)
+                            inspect_content(io.BytesIO(raw))
+                        else:
+                            inspect_content(contents, (public_keys or {}).get(str(path), ()))
                 count += 1
+    require(seen_licenses == (licenses or {}), "Add-on licence content mismatch")
     return count
 
 
-def inspect_image(reference, row, commit, tree, directory):
+def inspect_image(reference, row, commit, tree, directory, licenses=None):
     text = (ROOT / row["dockerfile"]).read_text()
     if row["image"] in PUBLIC_KEYS:
         require("ADD --checksum=sha256:" + CLOUDFLARED_SOURCE in text and
@@ -267,8 +276,9 @@ def inspect_image(reference, row, commit, tree, directory):
                 with archive.extractfile(layer) as contents:
                     require("sha256:" + hashlib.file_digest(contents, "sha256").hexdigest() == expected,
                             "Image layer digest mismatch")
-            members = inspect_layers(archive, manifest["Layers"], len(base_diffids), public_keys)
+            members = inspect_layers(archive, manifest["Layers"], len(base_diffids), public_keys, licenses)
             return {"configDigest": sha256(raw_config), "layers": diffids, "inspectedMembers": members,
+                    "addonLicenses": licenses or {},
                     "publicKeyContractSha256": sha256(json.dumps({p: sorted(v) for p, v in public_keys.items()}, sort_keys=True).encode()),
                     "historySha256": sha256(history.encode())}
     finally:
@@ -298,6 +308,13 @@ def build(image, output):
             text = dockerfile.read_text()
             require(text.count(original) == 1, "Zammad source pin differs from source contract")
             dockerfile.write_text(text.replace(original, addon["repository"] + ".git#" + addon["commit"]))
+        if addon:
+            dockerfile = context / row["dockerfile"]
+            dockerfile.write_text(dockerfile.read_text() +
+                "\nCOPY --chown=0:0 build/addon-licenses/ /usr/share/licenses/wasalx-zammad-addon/\n")
+        licenses = {"usr/share/licenses/wasalx-zammad-addon/" + name:
+                    sha256((context / "build/addon-licenses" / name).read_bytes())
+                    for name in ["LICENSE", "COPYING", "THIRD-PARTY-NOTICES"]} if addon else {}
         dockerfile_digest = sha256((context / row["dockerfile"]).read_bytes())
         # No host context, cache imports, secret/SSH mounts, registry overrides or private build arguments.
         subprocess.run(["docker", "buildx", "build", "--platform", "linux/amd64", "--load",
@@ -307,7 +324,7 @@ def build(image, output):
                         "--label", "org.opencontainers.image.source=" + SOURCE,
                         "--label", "org.opencontainers.image.revision=" + commit,
                         "--label", "io.wasalx.source.tree=" + tree, str(context)], check=True)
-        inspection = inspect_image(reference, row, commit, tree, directory)
+        inspection = inspect_image(reference, row, commit, tree, directory, licenses)
     write(output, {"image": image, "reference": reference, "commit": commit, "tree": tree, "status": "built",
                    "platform": "linux/amd64", "sourceArchiveDigest": archive_digest, "addonSource": addon,
                    "dockerfileDigest": dockerfile_digest, "inspection": inspection})
@@ -372,7 +389,7 @@ def publish(receipt_path):
     run("docker", "pull", "--platform", "linux/amd64", reference)
     row = next(r for r in catalog() if r["image"] == receipt["image"])
     with tempfile.TemporaryDirectory() as directory:
-        final = inspect_image(reference, row, commit, tree, directory)
+        final = inspect_image(reference, row, commit, tree, directory, receipt["inspection"]["addonLicenses"])
     require(final == receipt["inspection"], "Published image differs from inspected image")
     # Advance the discovery alias only after signature and exact-digest reinspection.
     run("docker", "tag", reference, repository + ":main")

@@ -77,7 +77,13 @@ a different dependency during that run. The supplied revision must provide
 `zammad-package`, `build/zammad`, Ruby contracts under `tests/`, and `tests/fixtures`,
 matching the existing package version/hash in `zammad-addon.json`. No secret,
 deploy key or token is supplied to reach the add-on. The owner controls this
-variable; this PR changes no repository or organization setting.
+variable; the workflow does not modify repository or organization settings.
+
+The two dependent images carry `LICENSE`, `COPYING` and `THIRD-PARTY-NOTICES`
+from that exact source under `/usr/share/licenses/wasalx-zammad-addon/`. The
+package version/hash is unchanged; the additional public licence files are
+copied separately in the sealed effective Dockerfile.
+The inspector checks all three exported file hashes before and after publication.
 
 Build contexts come only from an exact public Git archive. The configurator and
 Zammad require anonymous access to the source selected above, using
