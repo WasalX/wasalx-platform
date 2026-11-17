@@ -46,6 +46,7 @@ function heldPrerequisiteFixture(t) {
       assert.deepEqual(args.slice(0, 3), context.composeArguments);
       assert.ok(args.includes("--no-deps") && args.includes("--no-build") && args.includes("never"));
       const current = row(args.at(-1));
+      current.RestartCount = 0;
       if (args.includes("--exit-code-from")) {
         current.State.ExitCode = context.prerequisiteExit ?? 0;
         return current.State.ExitCode;
@@ -143,4 +144,132 @@ test("release-held stage requires digest-bound DEV preimages before any Compose 
   context.devPreimagesSha256 = sha256(bytes);
   assert.equal(await executeStage("release-held", context), 0);
   assert.equal(row("waha-gows").State.Running, true);
+});
+
+test("held installation records historical restarts without requiring active health", async t => {
+  const { context, row } = heldPrerequisiteFixture(t);
+  row("waha-gows").RestartCount = 1;
+  row("waha-gows").Config.Healthcheck = { Test: ["CMD", "true"] };
+  row("waha-gows").State.Health = { Status: "unhealthy" };
+  const record = await captureDevInstallPreimages(context);
+  assert.equal(record.services.find(({ service }) => service === "waha-gows").restartCount, 1);
+  assert.equal(row("waha-gows").State.Running, false);
+});
+
+test("non-held installation still refuses historical restarts", async t => {
+  const { context, row } = heldPrerequisiteFixture(t);
+  row("portal").RestartCount = 1;
+  await assert.rejects(captureDevInstallPreimages(context), /existing DEV restart history requires review/);
+});
+
+test("held release resets a sender's recorded historical restarts on start", async t => {
+  const { context, row } = heldPrerequisiteFixture(t);
+  row("waha-gows").RestartCount = 1;
+  const record = await captureDevInstallPreimages(context);
+  assert.equal(await releaseDevHeld(context, record, "waha-gows"), 0);
+  assert.equal(row("waha-gows").State.Running, true);
+  assert.equal(row("waha-gows").RestartCount, 0);
+});
+
+test("release-held accepts recorded count 1 when Docker reports 0 after start", async t => {
+  const { context, row } = heldPrerequisiteFixture(t);
+  context.plan = []; context.service = "waha-gows";
+  row("waha-gows").RestartCount = 1;
+  const record = await captureDevInstallPreimages(context);
+  assert.equal(record.services.find(({ service }) => service === "waha-gows").restartCount, 1);
+  const containerId = row("waha-gows").Id;
+  const root = await mkdtemp(join(tmpdir(), "wasalx-held-release-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  context.devPreimagesFile = join(root, "preimages.json");
+  const bytes = Buffer.from(JSON.stringify(record)); await writeFile(context.devPreimagesFile, bytes);
+  context.devPreimagesSha256 = sha256(bytes);
+  assert.equal(await executeStage("release-held", context), 0);
+  assert.equal(row("waha-gows").Id, containerId);
+  assert.equal(row("waha-gows").State.Running, true);
+  assert.equal(row("waha-gows").RestartCount, 0);
+});
+
+test("held release refuses changed sender restart history before prerequisites execute", async t => {
+  const { context, row, calls } = heldPrerequisiteFixture(t);
+  row("waha-gows").RestartCount = 1;
+  const record = await captureDevInstallPreimages(context);
+  row("waha-gows").RestartCount = 2;
+  await assert.rejects(releaseDevHeld(context, record, "waha-gows"), /waha-gows held restart history changed/);
+  assert.ok(calls.every(args => !args.includes("up")));
+  assert.equal(row("waha-gows").State.Running, false);
+});
+
+test("held release also binds prerequisite restart history", async t => {
+  const { context, row, calls } = heldPrerequisiteFixture(t);
+  row("public-webhook-preflight").RestartCount = 1;
+  const record = await captureDevInstallPreimages(context);
+  row("public-webhook-preflight").RestartCount = 2;
+  await assert.rejects(releaseDevHeld(context, record, "waha-gows"), /public-webhook-preflight held restart history changed/);
+  assert.ok(calls.every(args => !args.includes("up")));
+});
+
+test("held release resets a prerequisite's recorded restart count on start", async t => {
+  const { context, row } = heldPrerequisiteFixture(t);
+  row("public-webhook-preflight").RestartCount = 1;
+  const record = await captureDevInstallPreimages(context);
+  assert.equal(await releaseDevHeld(context, record, "waha-gows"), 0);
+  assert.equal(row("public-webhook-preflight").RestartCount, 0);
+});
+
+for (const restartCount of [0, 1, 2]) test(`held startup ${restartCount ? `refuses ${restartCount} restarts on the same container` : "requires zero restarts on a new container"}`, async t => {
+  const { context, row } = heldPrerequisiteFixture(t);
+  row("waha-gows").RestartCount = 1;
+  const record = await captureDevInstallPreimages(context);
+  const command = context.command;
+  context.command = async (...args) => {
+    const result = await command(...args);
+    if (args[1].includes("up") && args[1].at(-1) === "waha-gows") {
+      if (!restartCount) row("waha-gows").Id = "e".repeat(64);
+      row("waha-gows").RestartCount = restartCount;
+    }
+    return result;
+  };
+  if (!restartCount) assert.equal(await releaseDevHeld(context, record, "waha-gows"), 0);
+  else await assert.rejects(releaseDevHeld(context, record, "waha-gows"), /restarted during its phase/);
+});
+
+test("held restart records require a non-negative integer and keep non-held records strict", async t => {
+  const { context, row, calls } = heldPrerequisiteFixture(t);
+  const record = await captureDevInstallPreimages(context);
+  for (const restartCount of [undefined, -1, 1.5, "1"]) {
+    const changed = structuredClone(record);
+    changed.services.find(({ service }) => service === "waha-gows").restartCount = restartCount;
+    await assert.rejects(releaseDevHeld(context, changed, "waha-gows"), /held restart history unavailable/);
+  }
+  const changed = structuredClone(record);
+  changed.services.find(({ service }) => service === "portal").restartCount = 1;
+  await assert.rejects(releaseDevHeld(context, changed, "waha-gows"), /non-held restart history requires review/);
+  assert.ok(calls.every(args => !args.includes("up")));
+  assert.equal(row("waha-gows").State.Running, false);
+});
+
+test("historical held restarts retain stopped-state and unsafe-lifecycle refusals", async t => {
+  const { context, row } = heldPrerequisiteFixture(t);
+  const held = row("waha-gows"); held.RestartCount = 1;
+  const state = structuredClone(held.State);
+  for (const change of [{ Running: true, Status: "running", Pid: 100 }, { Paused: true }, { Dead: true }, { Restarting: true }]) {
+    held.State = { ...state, ...change };
+    await assert.rejects(captureDevInstallPreimages(context));
+  }
+  held.State = state;
+  const record = await captureDevInstallPreimages(context);
+  assert.equal(record.services.find(({ service }) => service === "waha-gows").restartCount, 1);
+});
+
+test("non-held health remains mandatory while cold holds retain restart history", async t => {
+  const { context, row, rows } = heldPrerequisiteFixture(t);
+  row("zammad-backup").Config.Healthcheck = { Test: ["CMD", "true"] };
+  row("zammad-backup").State.Health = { Status: "unhealthy" };
+  await assert.rejects(captureDevInstallPreimages(context), /existing DEV prerequisite is unhealthy/);
+  for (const item of rows) item.State = { ...item.State, Status: "exited", Running: false, Pid: 0 };
+  row("waha-gows").RestartCount = 1;
+  const record = await captureDevInstallPreimages(context);
+  assert.equal(record.admissionMode, "cold-held");
+  assert.equal(record.services.find(({ service }) => service === "waha-gows").restartCount, 1);
+  await assert.rejects(releaseDevHeld(context, record, "waha-gows"), /cold held release requires separate review/);
 });

@@ -93,3 +93,26 @@ test("DEV stack smoke preserves a failed held prerequisite and still refuses a n
   fixture.compose.services.app.depends_on["public-webhook-preflight"] = { condition: "service_completed_successfully" };
   assert.throws(() => projectStack(fixture), /held prerequisites changed/);
 });
+
+test("held-stack smoke accepts recorded historical restarts and refuses subsequent changes", () => {
+  const fixture = devHeldStackFixture();
+  const held = fixture.containers.find(row => row.service === "connector-worker");
+  held.RestartCount = 1;
+  fixture.devPreimages.services.find(row => row.service === held.service).restartCount = 1;
+  assert.equal(projectStack(fixture).services.find(row => row.service === held.service).restartCount, 1);
+  held.RestartCount = 2;
+  assert.throws(() => projectStack(fixture), /restart history changed/);
+});
+
+test("held-stack smoke requires zero restarts for new held containers and non-held containers", () => {
+  const fixture = devHeldStackFixture();
+  const held = fixture.containers.find(row => row.service === "connector-worker");
+  fixture.devPreimages.services.find(row => row.service === held.service).restartCount = 1;
+  held.Id = "e".repeat(64);
+  assert.doesNotThrow(() => projectStack(fixture));
+  held.RestartCount = 1;
+  assert.throws(() => projectStack(fixture), /restart history changed/);
+  held.RestartCount = 0;
+  fixture.containers.find(row => row.service === "app").RestartCount = 1;
+  assert.throws(() => projectStack(fixture), /restart history changed/);
+});

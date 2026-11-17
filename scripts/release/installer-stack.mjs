@@ -78,6 +78,7 @@ export function assertDevInstallPreimages(value, { candidateSha, candidateTree, 
   for (const row of value.services) {
     assert.match(row.id, /^[0-9a-f]{64}$/u); assert.match(row.image, digestPattern);
     assert.match(row.configSha256, /^[0-9a-f]{64}$/u); assert.match(row.hostConfigSha256, /^[0-9a-f]{64}$/u);
+    if (!held.includes(row.service)) assert.equal(row.restartCount, 0, `${row.service} non-held restart history requires review`);
     if (cold) {
       assert.equal(row.paused, false); assert.equal(row.dead, false); assert.equal(row.restarting, false);
       if (row.running) {
@@ -91,6 +92,7 @@ export function assertDevInstallPreimages(value, { candidateSha, candidateTree, 
   }
   for (const name of held) {
     const row = value.services.find(({ service }) => service === name);
+    assert.ok(Number.isSafeInteger(row.restartCount) && row.restartCount >= 0, `${name} held restart history unavailable`);
     assert.equal(row.running, false, `${name} intentional hold was not stopped`);
     assert.equal(row.pid, 0);
     assert.ok(["created", "exited"].includes(row.state), `${name} intentional hold was started`);
@@ -330,7 +332,9 @@ export function projectStack({ compose, containers, imageInspections, catalog, c
     if (preservedOld) assert.deepEqual(devContainerPreimage(container),
       devPreimages.services.find(({ service }) => service === container.service), `${container.service} preserved state changed`);
     else assert.ok(configuredImageMatches, `${container.service} is running another configured image`);
-    assert.equal(container.RestartCount, 0, `${container.service} restarted`);
+    const before = devPreimages?.services.find(({ service }) => service === container.service);
+    assert.equal(container.RestartCount, held.has(container.service) && container.Id === before?.id ? before.restartCount : 0,
+      `${container.service} restart history changed`);
     const oneShot = oneShotServices.includes(container.service);
     const configuredRestartPolicy = definition.restart ?? "no";
     const restartPolicy = container.HostConfig?.RestartPolicy?.Name || "no";
