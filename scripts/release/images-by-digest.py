@@ -16,6 +16,9 @@ REPOSITORY = "WasalX/wasalx-platform"
 SOURCE = "https://github.com/" + REPOSITORY
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 SHA = re.compile(r"[0-9a-f]{40}")
+ADDON_IMAGES = {"zammad", "workspace-configurator"}
+CREDENTIAL = re.compile(rb"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----\r?\n"
+                        rb"[A-Za-z0-9+/=]{40,128}\r?\n[A-Za-z0-9+/=]{40,128}|\bgh[pousr]_[A-Za-z0-9]{36,}\b")
 
 
 def require(condition, message):
@@ -45,6 +48,25 @@ def catalog():
                                     else "Dockerfile." + row["image"]), "Invalid Dockerfile")
         require((ROOT / row["dockerfile"]).is_file(), "Missing Dockerfile")
     return rows
+
+
+def public_addon_source(raw=None):
+    raw = os.environ.get("PUBLIC_ADDON_SOURCE", "") if raw is None else raw
+    source = json.loads(raw) if raw else None
+    if source is None:
+        return None
+    require(isinstance(source, dict) and set(source) == {"repository", "commit"}, "Invalid public add-on source fields")
+    require(isinstance(source["repository"], str) and
+            re.fullmatch(r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", source["repository"]),
+            "Public add-on source requires a GitHub HTTPS repository URL")
+    require(isinstance(source["commit"], str) and SHA.fullmatch(source["commit"]), "Public add-on source requires a full commit")
+    return {**source, "repository": source["repository"].removesuffix(".git")}
+
+
+def matrix():
+    source = public_addon_source()
+    return {"include": [{**row, "pending": row["image"] in ADDON_IMAGES and source is None,
+                          "addonSource": source if row["image"] in ADDON_IMAGES else None} for row in catalog()]}
 
 
 def coordinates():
@@ -106,7 +128,6 @@ def validate_metadata(config, base, labels, environment):
 def inspect_layers(archive, layers, base_layers):
     """Inherited layers are admitted by pinned base; inspect all added layer members/content."""
     count = 0
-    forbidden = re.compile(rb"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|\bgh[pousr]_[A-Za-z0-9]{36,}\b")
     for index, layer in enumerate(layers):
         if index < base_layers:
             continue
@@ -121,8 +142,8 @@ def inspect_layers(archive, layers, base_layers):
                     with members.extractfile(member) as contents:
                         previous = b""
                         while chunk := contents.read(1024 * 1024):
-                            require(not forbidden.search(previous + chunk), "Credential material in image layer")
-                            previous = chunk[-256:]
+                            require(not CREDENTIAL.search(previous + chunk), "Credential material in image layer")
+                            previous = chunk[-512:]
                 count += 1
     return count
 
@@ -137,7 +158,7 @@ def inspect_image(reference, row, commit, tree, directory):
     inspected = json.loads(run("docker", "image", "inspect", reference))[0]
     validate_metadata(inspected["Config"], base["Config"], labels, environment)
     history = run("docker", "history", "--no-trunc", "--format", "{{json .CreatedBy}}", reference)
-    require(not re.search(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|\bgh[pousr]_[A-Za-z0-9]{36,}\b", history),
+    require(not CREDENTIAL.search(history.encode()),
             "Credential material in image history")
     exported = Path(directory) / "image.tar"
     subprocess.run(["docker", "save", "--output", str(exported), reference], check=True)
@@ -168,6 +189,8 @@ def build(image, output):
     row = next(r for r in catalog() if r["image"] == image)
     commit, tree = coordinates()
     reference = "ghcr.io/wasalx/" + image + ":" + commit
+    addon = public_addon_source() if image in ADDON_IMAGES else None
+    require(image not in ADDON_IMAGES or addon is not None, "pending add-on source")
     with tempfile.TemporaryDirectory() as directory:
         context = Path(directory) / "source"
         context.mkdir()
@@ -176,8 +199,16 @@ def build(image, output):
         archive_digest = sha256(archive_path.read_bytes())
         with tarfile.open(archive_path) as archive:
             archive.extractall(context, filter="data")
-        if image == "workspace-configurator":
+        if addon:
             subprocess.run(["node", "scripts/fetch-zammad-addon.mjs"], cwd=context, check=True)
+        if image == "zammad":
+            pin = json.loads((context / "zammad-addon.json").read_text())
+            dockerfile = context / row["dockerfile"]
+            original = "https://github.com/" + pin["repository"] + ".git#" + pin["commit"]
+            text = dockerfile.read_text()
+            require(text.count(original) == 1, "Zammad source pin differs from source contract")
+            dockerfile.write_text(text.replace(original, addon["repository"] + ".git#" + addon["commit"]))
+        dockerfile_digest = sha256((context / row["dockerfile"]).read_bytes())
         # No host context, cache imports, secret/SSH mounts, registry overrides or private build arguments.
         subprocess.run(["docker", "buildx", "build", "--platform", "linux/amd64", "--load",
                         "--provenance=false", "--sbom=false", "--file", str(context / row["dockerfile"]),
@@ -187,8 +218,17 @@ def build(image, output):
                         "--label", "org.opencontainers.image.revision=" + commit,
                         "--label", "io.wasalx.source.tree=" + tree, str(context)], check=True)
         inspection = inspect_image(reference, row, commit, tree, directory)
-    write(output, {"image": image, "reference": reference, "commit": commit, "tree": tree,
-                   "platform": "linux/amd64", "sourceArchiveDigest": archive_digest, "inspection": inspection})
+    write(output, {"image": image, "reference": reference, "commit": commit, "tree": tree, "status": "built",
+                   "platform": "linux/amd64", "sourceArchiveDigest": archive_digest, "addonSource": addon,
+                   "dockerfileDigest": dockerfile_digest, "inspection": inspection})
+
+
+def pending(image, output):
+    require(image in ADDON_IMAGES and public_addon_source() is None, "Only unset add-on source may be skipped")
+    commit, tree = coordinates()
+    write(output, {"image": image, "commit": commit, "tree": tree, "platform": "linux/amd64",
+                   "status": "pending add-on source"})
+    print(image + ": pending add-on source (skipped)")
 
 
 def verify_manifest(manifest, config_digest):
@@ -225,6 +265,7 @@ def publish(receipt_path):
                     "digest": {"sha1": commit}, "entryPoint": ".github/workflows/branch-image.yml"},
                     "parameters": {"image": receipt["image"], "tree": tree, "configDigest": receipt["configDigest"],
                                    "sourceArchiveDigest": receipt["sourceArchiveDigest"],
+                                   "addonSource": receipt["addonSource"], "dockerfileDigest": receipt["dockerfileDigest"],
                                    "inspectionSha256": sha256(json.dumps(receipt["inspection"], sort_keys=True).encode()),
                                    "workflowSha": receipt["workflowSha"]}},
                  "metadata": {"buildInvocationId": SOURCE + "/actions/runs/" + receipt["runId"] +
@@ -248,6 +289,7 @@ def publish(receipt_path):
     alias_result = run("docker", "push", repository + ":main")
     require("digest: " + digest in alias_result, "Discovery alias digest mismatch")
     receipt["verified"] = True
+    receipt["status"] = "published"
     write(receipt_path, receipt)
 
 
@@ -255,28 +297,38 @@ def assemble(records):
     require(len(records) == 21 and {r["image"] for r in records} == {r["image"] for r in catalog()},
             "Complete unique image receipts required")
     require(len({(r["commit"], r["tree"]) for r in records}) == 1, "Mixed source identities")
+    published, pending_images = {}, {}
     for row in records:
         require(SHA.fullmatch(row["commit"]) and SHA.fullmatch(row["tree"]), "Invalid receipt source identity")
+        if row.get("status") == "pending add-on source":
+            require(row["image"] in ADDON_IMAGES and not any(key in row for key in ["digest", "configDigest", "verified"]),
+                    "Only add-on-dependent images may be pending without digest claims")
+            pending_images[row["image"]] = row
+            continue
         require(row.get("verified") is True and DIGEST.fullmatch(row.get("digest", "")) and
                 DIGEST.fullmatch(row.get("configDigest", "")), "Verified digest pair required")
         require(row["pullReference"] == "ghcr.io/wasalx/" + row["image"] + "@" + row["digest"], "Wrong digest reference")
+        published[row["image"]] = row
     return {"schemaVersion": 1, "repository": REPOSITORY, "platform": "linux/amd64",
             "commit": records[0]["commit"], "tree": records[0]["tree"],
-            "images": {r["image"]: r for r in sorted(records, key=lambda r: r["image"])}}
+            "publicationComplete": not pending_images, "images": dict(sorted(published.items())),
+            "pending": dict(sorted(pending_images.items()))}
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=["matrix", "build", "publish", "assemble"])
+    parser.add_argument("command", choices=["matrix", "build", "pending", "publish", "assemble"])
     parser.add_argument("--image")
     parser.add_argument("--output", default="images-manifest.json")
     parser.add_argument("--records", default="records")
     args = parser.parse_args()
     if args.command == "matrix":
-        print(json.dumps({"include": catalog()}, separators=(",", ":")))
+        print(json.dumps(matrix(), separators=(",", ":")))
     elif args.command == "build":
         build(args.image, args.output)
     elif args.command == "publish":
         publish(args.output)
+    elif args.command == "pending":
+        pending(args.image, args.output)
     else:
         write(args.output, assemble([json.loads(p.read_text()) for p in Path(args.records).glob("*.json")]))

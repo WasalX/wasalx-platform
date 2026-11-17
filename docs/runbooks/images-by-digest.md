@@ -12,8 +12,11 @@ The `stg` environment has no URL; its owner must configure its branch policy for
 Each package is `ghcr.io/wasalx/<image>`, tagged with the full public commit SHA.
 The `main` discovery alias advances only after signature verification and
 reinspection. Resolve an alias once, then use only `@sha256:<manifest digest>`.
-The `images-manifest` artifact is emitted only when all 21 verified receipts
-agree on the source commit and tree. Its `images` mapping contains, per image:
+The `images-manifest` artifact requires one receipt for every matrix row, all
+bound to the same commit and tree. While the add-on source is unset, 19 images
+are published and the two dependent images appear under `pending`, explicitly
+without digests; `publicationComplete` is false. Green CI does not claim those
+two images built. Its `images` mapping contains, per published image:
 
 - `digest`: the registry's single-platform manifest digest;
 - `configDigest`: the SHA256 of the exact exported image configuration bytes;
@@ -30,7 +33,7 @@ source tuple. Partial matrix publication cannot authorize an incomplete release.
 ## Public visibility and anonymous pulls
 
 Repository visibility does not set package visibility. After first publication,
-the package owner must open **WasalX organization → Packages → each of the 21
+the package owner must open **WasalX organization → Packages → each published
 container packages → Package settings → Danger Zone → Change visibility →
 Public**. Confirm this separately for every package. No organization setting is
 changed by this workflow. It creates no pull token and requires no registry
@@ -61,10 +64,31 @@ honesty or release approval. Sigstore verification failure means no admission.
 
 ## Public build inputs and inspection
 
-Build contexts come only from an exact public Git archive. The configurator adds
-the public add-on pinned by `zammad-addon.json`, using the existing fetch helper;
-its package builder verifies the expected package hash. Zammad fetches its pinned
-public add-on inside its Dockerfile. Public dependency registries and the reviewed
+The single repository variable **`PUBLIC_ADDON_SOURCE`** enables the two dependent
+images. It must be JSON with exactly `repository` (an anonymously readable public
+GitHub HTTPS repository URL) and `commit` (a full 40-character lowercase commit
+SHA). For example, its shape is
+`{"repository":"https://github.com/<owner>/<repository>","commit":"<full commit SHA>"}`.
+No source is approved by this workflow. Unset means **pending add-on source** for
+Zammad and workspace-configurator; all other images still build and publish.
+Malformed nonempty values fail the plan instead of silently skipping. The plan
+captures this source in the matrix so later variable changes cannot substitute
+a different dependency during that run. The supplied revision must provide
+`zammad-package`, `build/zammad`, Ruby contracts under `tests/`, and `tests/fixtures`,
+matching the existing package version/hash in `zammad-addon.json`. No secret,
+deploy key or token is supplied to reach the add-on. The owner controls this
+variable; this PR changes no repository or organization setting.
+
+Build contexts come only from an exact public Git archive. The configurator and
+Zammad require anonymous access to the source selected above, using
+the existing fetch helper for package/test inputs; the package builder verifies
+the expected package hash. Zammad also fetches its pinned add-on inside its
+Dockerfile after replacing its original add-on URL/commit with the approved
+public tuple in the archived build context. The effective Dockerfile digest and
+add-on tuple are recorded in the receipt and attestation. If a configured source
+is unavailable anonymously, those builds fail; this workflow supplies no credential
+and never publishes private source.
+Public dependency registries and the reviewed
 Dockerfiles remain build inputs. No private overlay, runner directory, registry
 override, secret/SSH mount or authenticated cache is supplied to the builder.
 Default BuildKit provenance is disabled; the inspected public predicate is

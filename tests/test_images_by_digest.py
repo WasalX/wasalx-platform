@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 import tarfile
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("images", ROOT / "scripts/release/images-by-digest.py")
@@ -14,6 +15,21 @@ spec.loader.exec_module(images)
 
 
 class ImagePublicationTests(unittest.TestCase):
+    def test_unset_addon_source_keeps_all_images_but_marks_only_two_pending(self):
+        with patch.dict(images.os.environ, {"PUBLIC_ADDON_SOURCE": ""}):
+            rows = images.matrix()["include"]
+        self.assertEqual(len(rows), 21)
+        self.assertEqual({r["image"] for r in rows if r["pending"]}, {"zammad", "workspace-configurator"})
+        source = {"repository": "https://github.com/example/addon", "commit": "a" * 40}
+        with patch.dict(images.os.environ, {"PUBLIC_ADDON_SOURCE": json.dumps(source)}):
+            rows = images.matrix()["include"]
+        self.assertFalse(any(r["pending"] for r in rows))
+        self.assertEqual([r["addonSource"] for r in rows if r["image"] == "zammad"], [source])
+        for bad in [{**source, "repository": "https://user:password@github.com/example/addon"},
+                    {**source, "commit": "main"}, {**source, "extra": "value"}]:
+            with self.assertRaises(ValueError):
+                images.public_addon_source(json.dumps(bad))
+
     def test_catalog_is_the_release_contract_and_covers_compose_builds(self):
         rows = images.catalog()
         contract = (ROOT / "scripts/release/artifact-contract.mjs").read_text()
@@ -67,8 +83,9 @@ class ImagePublicationTests(unittest.TestCase):
             with tarfile.open(fileobj=outer) as archive:
                 return images.inspect_layers(archive, ["layer.tar"], 0)
         self.assertEqual(inspect("app/public.txt", b"public"), 1)
+        self.assertEqual(inspect("app/binary", b"-----BEGIN PRIVATE KEY-----"), 1)
         for name, data in [("../escape", b"x"), ("app/.env", b"x"), ("root/.ssh/key", b"x"),
-                           ("app/key", b"-----BEGIN PRIVATE KEY-----")]:
+                           ("app/key", b"-----BEGIN PRIVATE KEY-----\n" + (b"A" * 64 + b"\n") * 2)]:
             with self.subTest(name=name), self.assertRaises(ValueError):
                 inspect(name, data)
 
@@ -78,6 +95,18 @@ class ImagePublicationTests(unittest.TestCase):
                     "verified": True, "pullReference": "ghcr.io/wasalx/" + r["image"] + "@sha256:" + "1" * 64}
                    for r in images.catalog()]
         self.assertEqual(len(images.assemble(records)["images"]), 21)
+        pending = copy.deepcopy(records)
+        for index, row in enumerate(pending):
+            if row["image"] in images.ADDON_IMAGES:
+                pending[index] = {k: row[k] for k in ["image", "commit", "tree"]}
+                pending[index]["status"] = "pending add-on source"
+        manifest = images.assemble(pending)
+        self.assertEqual(len(manifest["images"]), 19)
+        self.assertEqual(set(manifest["pending"]), images.ADDON_IMAGES)
+        self.assertFalse(manifest["publicationComplete"])
+        pending[0] = {"image": "portal", "commit": "a" * 40, "tree": "b" * 40, "status": "pending add-on source"}
+        with self.assertRaises(ValueError):
+            images.assemble(pending)
         for bad in [records[:-1], records[:-1] + [records[0]]]:
             with self.assertRaises(ValueError):
                 images.assemble(bad)

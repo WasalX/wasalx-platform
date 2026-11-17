@@ -27,12 +27,16 @@ jobs:
         with:
           persist-credentials: false
       - name: Check image publication contracts
-        run: python3 -m unittest discover -s tests -p 'test_images_by_digest.py' -v
+        run: |
+          python3 -m unittest discover -s tests -p 'test_images_by_digest.py' -v
+          node --test tests/fetch-zammad-addon.test.mjs
       - id: matrix
+        env:
+          PUBLIC_ADDON_SOURCE: ${{ vars.PUBLIC_ADDON_SOURCE }}
         run: echo "matrix=$(python3 scripts/release/images-by-digest.py matrix)" >> "$GITHUB_OUTPUT"
 
   build:
-    name: Build ${{ matrix.image }}
+    name: Build ${{ matrix.image }}${{ matrix.pending && ' (pending add-on source)' || '' }}
     if: github.event_name == 'pull_request'
     needs: plan
     runs-on: ubuntu-24.04
@@ -47,16 +51,26 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+      - if: ${{ !matrix.pending }}
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22.23.4
-      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+      - if: ${{ !matrix.pending }}
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
         with:
           version: v0.30.1
       - name: Build and inspect without publication
+        if: ${{ !matrix.pending }}
         env:
           IMAGE: ${{ matrix.image }}
+          PUBLIC_ADDON_SOURCE: ${{ toJSON(matrix.addonSource) }}
         run: python3 scripts/release/images-by-digest.py build --image "$IMAGE" --output "records/$IMAGE.json"
+      - name: Record pending add-on source
+        if: matrix.pending
+        env:
+          IMAGE: ${{ matrix.image }}
+          PUBLIC_ADDON_SOURCE: ${{ toJSON(matrix.addonSource) }}
+        run: python3 scripts/release/images-by-digest.py pending --image "$IMAGE" --output "records/$IMAGE.json"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: image-build-${{ matrix.image }}
@@ -64,7 +78,7 @@ jobs:
           if-no-files-found: error
 
   publish:
-    name: Publish ${{ matrix.image }}
+    name: Publish ${{ matrix.image }}${{ matrix.pending && ' (pending add-on source)' || '' }}
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'WasalX/wasalx-platform'
     needs: plan
     runs-on: ubuntu-24.04
@@ -85,30 +99,45 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+      - if: ${{ !matrix.pending }}
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22.23.4
-      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+      - if: ${{ !matrix.pending }}
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
         with:
           version: v0.30.1
       - name: Build and inspect before registry login
+        if: ${{ !matrix.pending }}
         env:
           IMAGE: ${{ matrix.image }}
+          PUBLIC_ADDON_SOURCE: ${{ toJSON(matrix.addonSource) }}
         run: python3 scripts/release/images-by-digest.py build --image "$IMAGE" --output "records/$IMAGE.json"
-      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
+      - if: ${{ !matrix.pending }}
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6
+      - if: ${{ !matrix.pending }}
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6
         with:
           cosign-release: v3.0.6
       - name: Verify the pinned cosign binary
+        if: ${{ !matrix.pending }}
         run: echo 'c956e5dfcac53d52bcf058360d579472f0c1d2d9b69f55209e256fe7783f4c74  '"$(command -v cosign)" | sha256sum --check --strict
       - name: Publish, sign, attest and inspect the published digest
+        if: ${{ !matrix.pending }}
         env:
           IMAGE: ${{ matrix.image }}
+          PUBLIC_ADDON_SOURCE: ${{ toJSON(matrix.addonSource) }}
         run: python3 scripts/release/images-by-digest.py publish --output "records/$IMAGE.json"
+      - name: Record pending add-on source
+        if: matrix.pending
+        env:
+          IMAGE: ${{ matrix.image }}
+          PUBLIC_ADDON_SOURCE: ${{ toJSON(matrix.addonSource) }}
+        run: python3 scripts/release/images-by-digest.py pending --image "$IMAGE" --output "records/$IMAGE.json"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: image-published-${{ matrix.image }}
@@ -133,7 +162,7 @@ jobs:
           pattern: image-published-*
           path: records
           merge-multiple: true
-      - name: Require all 21 signed digest pairs from one source tree
+      - name: Require complete published/pending receipts from one source tree
         run: python3 scripts/release/images-by-digest.py assemble --records records --output images-manifest.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
