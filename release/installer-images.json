@@ -1,0 +1,164 @@
+{
+  "schemaVersion": 2,
+  "smokeImageIds": [
+    "portal",
+    "control-api",
+    "connector-worker",
+    "secret-sidecar",
+    "invitation-mailer",
+    "identity-policy-activator",
+    "tenant-provisioner",
+    "tenant-workspace-controller",
+    "workspace-provider",
+    "workspace-configurator"
+  ],
+
+  "productionSecretSidecar": {
+    "dockerfile": "Dockerfile.production-secret-sidecar",
+    "helmPaths": ["productionSecretSidecar.image"]
+  },
+  "tenantProvisioning": {
+    "package": {
+      "version": "0.5.83",
+      "sha256": "f8436d66f29662aa774b232f8b82c7ca4d531d84bc1b8025a031141b9c8b41d0"
+
+    },
+    "configuratorImageId": "workspace-configurator",
+    "zammadImageIds": {
+      "7.1.3": "zammad"
+    },
+    "dependencyImageIds": {
+      "nginx": "zammad-nginx",
+      "redis": "zammad-redis",
+      "memcached": "zammad-memcached"
+    }
+  },
+  "images": [
+    {
+      "id": "portal",
+      "repository": "portal",
+      "dockerfile": "Dockerfile.portal",
+      "helmPaths": ["portal.image"]
+    },
+    {
+      "id": "control-api",
+      "repository": "control-api",
+      "dockerfile": "Dockerfile.control-api",
+      "helmPaths": ["api.image", "migration.image"]
+    },
+    {
+      "id": "connector-worker",
+      "repository": "connector-worker",
+      "dockerfile": "Dockerfile.connector-worker",
+      "helmPaths": ["worker.image"]
+    },
+    {
+      "id": "secret-sidecar",
+      "repository": "secret-sidecar",
+      "dockerfile": "Dockerfile.secret-sidecar",
+      "helmPaths": []
+    },
+    {
+      "id": "invitation-mailer",
+      "repository": "invitation-mailer",
+      "dockerfile": "Dockerfile.invitation-mailer",
+      "helmPaths": ["invitationMailer.image"]
+    },
+    {
+      "id": "identity-policy-activator",
+      "repository": "identity-policy-activator",
+      "dockerfile": "Dockerfile.identity-policy-activator",
+      "helmPaths": ["identityPolicyActivator.image"]
+    },
+    {
+      "id": "tenant-provisioner",
+      "repository": "tenant-provisioner",
+      "dockerfile": "Dockerfile.tenant-provisioner",
+      "helmPaths": ["provisioner.image"]
+    },
+    {
+      "id": "tenant-workspace-controller",
+      "repository": "tenant-workspace-controller",
+      "dockerfile": "Dockerfile.tenant-workspace-controller",
+      "helmPaths": ["provisioner.controller.image"]
+    },
+    {
+      "id": "workspace-provider",
+      "repository": "workspace-provider",
+      "dockerfile": "Dockerfile.workspace-provider",
+      "helmPaths": ["workspaceProvider.image"]
+    },
+    {
+      "id": "workspace-configurator",
+      "repository": "workspace-configurator",
+      "dockerfile": "Dockerfile.workspace-configurator",
+      "helmPaths": ["controlPlaneBackup.image"]
+    },
+    {
+      "id": "foundation-postgres",
+      "repository": "foundation-postgres",
+      "dockerfile": "Dockerfile.foundation-postgres",
+      "helmPaths": []
+    },
+    {
+      "id": "foundation-keycloak",
+      "repository": "foundation-keycloak",
+      "dockerfile": "Dockerfile.foundation-keycloak",
+      "helmPaths": []
+    },
+    {
+      "id": "production-ingress",
+      "repository": "production-ingress",
+      "dockerfile": "Dockerfile.production-ingress",
+      "helmPaths": []
+    },
+    {
+      "id": "production-cloudflared",
+      "repository": "production-cloudflared",
+      "dockerfile": "Dockerfile.production-cloudflared",
+      "helmPaths": []
+    },
+    {
+      "id": "production-prometheus",
+      "repository": "production-prometheus",
+      "dockerfile": "Dockerfile.production-prometheus",
+      "helmPaths": []
+    },
+    {
+      "id": "production-alertmanager",
+      "repository": "production-alertmanager",
+      "dockerfile": "Dockerfile.production-alertmanager",
+      "helmPaths": []
+    },
+    {
+      "id": "production-otel",
+      "repository": "production-otel",
+      "dockerfile": "Dockerfile.production-otel",
+      "helmPaths": []
+    },
+    {
+      "id": "zammad-nginx",
+      "repository": "zammad-nginx",
+      "dockerfile": "Dockerfile.zammad-nginx",
+      "helmPaths": []
+    },
+    {
+      "id": "zammad-redis",
+      "repository": "zammad-redis",
+      "dockerfile": "Dockerfile.zammad-redis",
+      "helmPaths": []
+    },
+    {
+      "id": "zammad-memcached",
+      "repository": "zammad-memcached",
+      "dockerfile": "Dockerfile.zammad-memcached",
+      "helmPaths": []
+    },
+    {
+      "id": "zammad",
+      "repository": "zammad",
+      "dockerfile": "infra/docker/Dockerfile.zammad",
+      "helmPaths": []
+    }
+  ]
+}
