@@ -23,5 +23,4 @@ work
 .DS_Store
 
 .zammad-addon
-zammad-package
 build/zammad

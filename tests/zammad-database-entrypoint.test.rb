@@ -11,7 +11,7 @@ Dir.mktmpdir('wasalx-entrypoint-') do |parent|
   raise unless Gem.win_platform? || (File.stat(path).mode & 0o7777) == 0o2770
 end
 
-url = "postgresql://fixture:placeholder@db.example.test:5432/example_db"
+url = 'postgresql://user%2Bname:p%40ss%2Bword@db.example:5433/tenant?pool=50&sslmode=verify-full&sslrootcert=%2Frun%2Fca.crt'
 fields = database_environment(url)
 raise unless fields.values_at('POSTGRESQL_HOST', 'POSTGRESQL_PORT', 'POSTGRESQL_DB', 'POSTGRESQL_USER', 'POSTGRESQL_PASS') ==
              ['db.example', '5433', 'tenant', 'user+name', 'p@ss+word']
@@ -22,7 +22,7 @@ without_pool = url.sub('pool=50&', '')
 scheduler = database_environment(without_pool, 'zammad-scheduler')
 raise unless URI.decode_www_form(URI.parse(scheduler.fetch('DATABASE_URL')).query).to_h ==
              { 'sslmode' => 'verify-full', 'sslrootcert' => '/run/ca.crt', 'pool' => '50' }
-raise unless scheduler['DATABASE_URL'].start_with?("postgresql://fixture:placeholder@db.example.test:5432/example_db")
+raise unless scheduler['DATABASE_URL'].start_with?('postgresql://user%2Bname:p%40ss%2Bword@db.example:5433/tenant?')
 raise unless database_environment(scheduler['DATABASE_URL'])['POSTGRESQL_OPTIONS'] == scheduler['POSTGRESQL_OPTIONS']
 raise unless database_environment(url.sub('pool=50', 'pool=23'), 'zammad-scheduler')['POSTGRESQL_OPTIONS'].include?('pool=23')
 %w[zammad-init zammad-railsserver zammad-websocket].each do |command|
