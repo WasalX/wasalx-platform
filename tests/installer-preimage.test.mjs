@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import fsPromises from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { join, relative, resolve } from "node:path";
 import test from "node:test";
 import { runInNewContext } from "node:vm";
 import { assertRetainedPreimage, composePreimage, composeServiceHash, resolveComposeServiceReferences, sha256, firstDifference } from "../scripts/release/installer-artifacts.mjs";
