@@ -83,13 +83,17 @@ async function main() {
     const skipped = selected.map(file => ({ file, entries: addonSkips(file) })).filter(batch => batch.entries.length);
     const ordinary = selected.filter(file => !skipped.some(batch => batch.file === file));
     const batches = [{ files: ordinary, entries: [] }, ...skipped.map(batch => ({ files: [batch.file], entries: batch.entries }))];
+    const reporters = process.env.GITHUB_ACTIONS === "true" ? [
+      "--test-reporter=spec", "--test-reporter=./scripts/hosted-ci-timing-reporter.mjs",
+      "--test-reporter-destination=stdout", "--test-reporter-destination=stdout",
+    ] : [];
     for (const { files, entries } of batches) {
       if (!files.length) continue;
       const lines = entries.map(entry => `SKIP: ${entry.file} :: ${entry.name}: ${entry.reason} (missing ${entry.input}; entrypoint ${files[0]})`);
       console.log(lines.join("\n"));
       if (process.env.GITHUB_STEP_SUMMARY && lines.length) appendFileSync(process.env.GITHUB_STEP_SUMMARY, lines.join("  \n") + "\n");
       const pattern = entries.length ? [`--test-skip-pattern=${skipPattern(entries)}`] : [];
-      const result = spawnSync(process.execPath, ["--experimental-strip-types", "--import", "./tests/helpers/operator-input-fixtures.mjs", "--test", "--test-concurrency=4", ...pattern, ...files], { stdio: "inherit", windowsHide: true });
+      const result = spawnSync(process.execPath, ["--experimental-strip-types", "--import", "./tests/helpers/operator-input-fixtures.mjs", "--test", "--test-concurrency=4", ...reporters, ...pattern, ...files], { stdio: "inherit", windowsHide: true });
       if (result.error) throw result.error;
       if (result.status !== 0) process.exitCode = result.status ?? 1;
     }

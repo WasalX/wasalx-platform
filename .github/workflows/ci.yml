@@ -143,10 +143,8 @@ jobs:
           - {name: Lint, mode: lint}
           - {name: Typecheck, mode: typecheck}
           - {name: Collection, mode: collection}
-          - {name: Unit 1/4, mode: unit, shard: 1}
-          - {name: Unit 2/4, mode: unit, shard: 2}
-          - {name: Unit 3/4, mode: unit, shard: 3}
-          - {name: Unit 4/4, mode: unit, shard: 4}
+          - {name: Unit 1/2, mode: unit, shard: 1}
+          - {name: Unit 2/2, mode: unit, shard: 2}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -197,7 +195,7 @@ jobs:
         if: matrix.mode == 'unit'
         env:
           SHARD: ${{ matrix.shard }}
-        run: node scripts/hosted-ci.mjs unit "$SHARD" 4
+        run: node scripts/hosted-ci.mjs unit "$SHARD" 2
 
   images:
     needs: changes
