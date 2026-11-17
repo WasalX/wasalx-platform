@@ -1,0 +1,94 @@
+name: Hosted CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hosted-ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {name: Lint, mode: lint}
+          - {name: Typecheck, mode: typecheck}
+          - {name: Collection, mode: collection}
+          - {name: Unit 1/6, mode: unit, shard: 1}
+          - {name: Unit 2/6, mode: unit, shard: 2}
+          - {name: Unit 3/6, mode: unit, shard: 3}
+          - {name: Unit 4/6, mode: unit, shard: 4}
+          - {name: Unit 5/6, mode: unit, shard: 5}
+          - {name: Unit 6/6, mode: unit, shard: 6}
+    env:
+      CI: 'true'
+      # Hosted checks use synthetic fixtures; live contracts and operator journeys
+      # are excluded by scripts/hosted-ci-config.json. No secrets are supplied.
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24.13.1'
+      - name: Enable pinned pnpm
+        run: |
+          corepack enable
+          corepack install
+          echo "PNPM_STORE_PATH=$(pnpm store path --silent)" >> "$GITHUB_ENV"
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ env.PNPM_STORE_PATH }}
+          key: pnpm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', 'package.json', 'patches/**') }}
+          restore-keys: pnpm-${{ runner.os }}-${{ runner.arch }}-
+      - run: pnpm install --frozen-lockfile
+      - name: Prepare unit and collection prerequisites
+        if: matrix.mode == 'unit' || matrix.mode == 'collection'
+        run: |
+          if ! ruby -rminitest -e 'puts RUBY_VERSION'; then
+            sudo apt-get update
+            sudo apt-get install -y ruby ruby-minitest
+          fi
+          # Add-on source assertions report unavailable pinned inputs as failures.
+          # Never authenticate a dependency fetch from a fork PR.
+          pnpm run build:services
+      - name: Check CI runner
+        if: matrix.mode == 'collection'
+        run: node --test tests/hosted-ci.test.mjs
+      - name: Lint
+        if: matrix.mode == 'lint'
+        run: pnpm run lint
+      - name: Typecheck
+        if: matrix.mode == 'typecheck'
+        run: pnpm run typecheck
+      - name: Collect tests
+        if: matrix.mode == 'collection'
+        run: node scripts/hosted-ci.mjs collection
+      - name: Run unit shard
+        if: matrix.mode == 'unit'
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: node scripts/hosted-ci.mjs unit "$SHARD" 6
+
+  result:
+    name: CI result
+    if: always()
+    needs: [checks]
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - name: Require every check and shard
+        env:
+          RESULT: ${{ needs.checks.result }}
+        run: test "$RESULT" = success
