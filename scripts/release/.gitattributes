@@ -1,0 +1,4 @@
+# Release execution bytes must equal their admitted Git blobs on Windows too.
+held-install*.py -text
+# Generated from the byte-exact accepted parent; CI checks the complete payload.
+held-install-guest.py.in -text -whitespace

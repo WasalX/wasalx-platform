@@ -1,0 +1,1103 @@
+name: wasalx
+
+# Production-like local dependency topology. Use only as an override:
+#   docker compose -f compose.yaml -f compose.full.yaml --profile full up --build
+# Add --profile runtime-workers only when live invitation delivery is configured.
+# The base file remains the fast fixture-backed developer stack.
+
+x-full-zammad-environment: &full-zammad-environment
+  MEMCACHE_SERVERS: zammad-memcached:11211
+  POSTGRESQL_DB: zammad_production
+  POSTGRESQL_HOST: zammad-postgresql
+  POSTGRESQL_USER: zammad
+  POSTGRESQL_PASS: ${WASALX_FULL_ZAMMAD_DB_PASSWORD:?Set WASALX_FULL_ZAMMAD_DB_PASSWORD}
+  POSTGRESQL_PORT: "5432"
+  POSTGRESQL_OPTIONS: "?pool=50"
+  REDIS_URL: redis://zammad-redis:6379
+  ELASTICSEARCH_ENABLED: "true"
+  ELASTICSEARCH_SCHEMA: http
+  ELASTICSEARCH_HOST: zammad-elasticsearch
+  ELASTICSEARCH_PORT: "9200"
+  ELASTICSEARCH_NAMESPACE: wasalx-qualification
+  ELASTICSEARCH_REINDEX: "true"
+  ZAMMAD_HTTP_TYPE: http
+  ZAMMAD_FQDN: 127.0.0.1:${ZAMMAD_PORT:-8081}
+  WASALX_PORTAL_URL: ${WASALX_DEV_REVIEW_PORTAL_PUBLIC_ORIGIN:-${PORTAL_PUBLIC_ORIGIN:-http://127.0.0.1:3000}}
+  NGINX_PORT: "8080"
+  NGINX_CLIENT_MAX_BODY_SIZE: 50M
+  BACKUP_DIR: /var/tmp/zammad
+  BACKUP_TIME: "03:00"
+  BACKUP_ON_START: "false"
+  HOLD_DAYS: "10"
+  TZ: Asia/Riyadh
+  # Empty disables mailbox configuration until an operator approves server access.
+  WASALX_MAIL_ALLOWED_HOSTS: ${WASALX_FULL_MAIL_ALLOWED_HOSTS:-}
+  WASALX_CONTROL_URL: http://control-api:3001
+  WASALX_TENANT_ID: 00000000-0000-4000-8000-000000000001
+  WASALX_ZAMMAD_INSTANCE_ID: 00000000-0000-4000-8000-000000000003
+  WASALX_SERVICE_JWT_SECRET: ${WASALX_FULL_ZAMMAD_SERVICE_JWT_SECRET:?Set WASALX_FULL_ZAMMAD_SERVICE_JWT_SECRET}
+
+x-full-zammad-service: &full-zammad-service
+  profiles: [full]
+  image: wasalx/zammad:7.1.3-wasalx-0.5.83
+
+  build:
+    context: .
+    dockerfile: infra/docker/Dockerfile.zammad
+    args:
+      ZAMMAD_BASE_IMAGE: ghcr.io/zammad/zammad:7.1.3-0000@sha256:97efa1b320ceec6082f28a6ab8a8457fdfecc248d83751577b84a66289749769
+      NODE_IMAGE: node:24-trixie-slim@sha256:0711b541c1c33a8a530ac4f0d391baa9a15b3d804695b1b24a47daa5fb60e74d
+      COMMIT_SHA: ${COMMIT_SHA:-unknown}
+      WASALX_CANDIDATE_TREE: ${WASALX_CANDIDATE_TREE:-unfrozen}
+      WASALX_PACKAGE_VERSION: "0.5.83"
+      WASALX_PACKAGE_SHA256: 00069cb9565f2a9002d5df73cc29532f3adde2fce28f4f09400370f9c9d11153
+
+  init: true
+  restart: unless-stopped
+  environment: *full-zammad-environment
+  volumes:
+    - zammad-backup:/var/tmp/zammad:ro
+    - zammad-storage:/opt/zammad/storage
+  networks: [tenant-zammad, tenant-egress]
+
+services:
+  # Applying this override without --profile full intentionally starts nothing.
+  postgres:
+    profiles: [full]
+    environment:
+      POSTGRES_DB: wasalx
+      POSTGRES_USER: wasalx
+      POSTGRES_PASSWORD: ${WASALX_ADMIN_PASSWORD:?Set WASALX_ADMIN_PASSWORD}
+      WASALX_APP_PASSWORD: ${WASALX_APP_PASSWORD:?Set WASALX_APP_PASSWORD}
+      WASALX_CONNECTOR_WORKER_DB_PASSWORD: ${WASALX_CONNECTOR_WORKER_DB_PASSWORD:?Set WASALX_CONNECTOR_WORKER_DB_PASSWORD}
+      WASALX_SECRET_CLEANUP_DB_PASSWORD: ${WASALX_SECRET_CLEANUP_DB_PASSWORD:?Set WASALX_SECRET_CLEANUP_DB_PASSWORD}
+      WASALX_PROVISIONING_DB_PASSWORD: ${WASALX_PROVISIONING_DB_PASSWORD:?Set WASALX_PROVISIONING_DB_PASSWORD}
+      WASALX_SUPPORT_DB_PASSWORD: ${WASALX_SUPPORT_DB_PASSWORD:?Set WASALX_SUPPORT_DB_PASSWORD}
+      WASALX_WAHA_REGISTRY_DB_PASSWORD: ${WASALX_WAHA_REGISTRY_DB_PASSWORD:?Set WASALX_WAHA_REGISTRY_DB_PASSWORD}
+      WASALX_WAHA_OPERATOR_DB_PASSWORD: ${WASALX_WAHA_OPERATOR_DB_PASSWORD:?Set WASALX_WAHA_OPERATOR_DB_PASSWORD}
+      WASALX_WAHA_ROLLOUT_GATE_DB_PASSWORD: ${WASALX_WAHA_ROLLOUT_GATE_DB_PASSWORD:?Set WASALX_WAHA_ROLLOUT_GATE_DB_PASSWORD}
+      WASALX_INVITATION_MAILER_DB_PASSWORD: ${WASALX_INVITATION_MAILER_DB_PASSWORD:?Set WASALX_INVITATION_MAILER_DB_PASSWORD}
+      WASALX_IDENTITY_POLICY_DB_PASSWORD: ${WASALX_IDENTITY_POLICY_DB_PASSWORD:?Set WASALX_IDENTITY_POLICY_DB_PASSWORD}
+      WASALX_METERING_INGEST_DB_PASSWORD: ${WASALX_METERING_INGEST_DB_PASSWORD:?Set WASALX_METERING_INGEST_DB_PASSWORD}
+      WASALX_PLATFORM_OPERATIONS_DB_PASSWORD: ${WASALX_PLATFORM_OPERATIONS_DB_PASSWORD:?Set WASALX_PLATFORM_OPERATIONS_DB_PASSWORD}
+
+  redis:
+    profiles: [full]
+
+  secret-sidecar:
+    profiles: [full]
+    environment:
+      NODE_ENV: development
+      DEV_SECRET_SIDECAR_READ_TOKEN: ${SECRET_SIDECAR_TOKEN:?Set SECRET_SIDECAR_TOKEN}
+      DEV_SECRET_SIDECAR_WRITE_TOKEN: ${SECRET_SIDECAR_WRITE_TOKEN:?Set SECRET_SIDECAR_WRITE_TOKEN}
+      DEV_SECRET_STORE_ENCRYPTION_KEY: ${DEV_SECRET_STORE_ENCRYPTION_KEY:?Set DEV_SECRET_STORE_ENCRYPTION_KEY}
+      DEV_SECRET_STORE_JSON: >-
+        {"secret://platform/meta-webhook":{"hmacKey":"${WASALX_FULL_META_APP_SECRET:?Set WASALX_FULL_META_APP_SECRET}"},"secret://platform/waha-admin":{"apiKey":"${WASALX_FULL_WAHA_API_KEY:?Set WASALX_FULL_WAHA_API_KEY}"},"secret://platform/invitation-token-private-key":{"keyVersion":"local-v1","privateKeyPem":${WASALX_FULL_INVITATION_PRIVATE_KEY_PEM_JSON:?Set WASALX_FULL_INVITATION_PRIVATE_KEY_PEM_JSON to a JSON-encoded PKCS8 PEM string}},"secret://platform/invitation-email-provider":{"apiKey":"${WASALX_FULL_INVITATION_EMAIL_PROVIDER_API_KEY:?Set WASALX_FULL_INVITATION_EMAIL_PROVIDER_API_KEY}"},"secret://tenants/00000000-0000-4000-8000-000000000001/zammad/service":{"token":"${WASALX_FULL_ZAMMAD_API_TOKEN:?Set WASALX_FULL_ZAMMAD_API_TOKEN}","jwt_secret":"${WASALX_FULL_ZAMMAD_SERVICE_JWT_SECRET:?Set WASALX_FULL_ZAMMAD_SERVICE_JWT_SECRET}","instance_id":"00000000-0000-4000-8000-000000000003"},"secret://tenants/00000000-0000-4000-8000-000000000001/zammad/privacy":{"token":"${WASALX_FULL_ZAMMAD_PRIVACY_TOKEN:?Set WASALX_FULL_ZAMMAD_PRIVACY_TOKEN}"}}
+
+  runtime-role-bootstrap:
+    profiles: [full]
+    environment:
+      PGPASSWORD: ${WASALX_ADMIN_PASSWORD:?Set WASALX_ADMIN_PASSWORD}
+      WASALX_APP_PASSWORD: ${WASALX_APP_PASSWORD:?Set WASALX_APP_PASSWORD}
+      WASALX_CONNECTOR_WORKER_DB_PASSWORD: ${WASALX_CONNECTOR_WORKER_DB_PASSWORD:?Set WASALX_CONNECTOR_WORKER_DB_PASSWORD}
+      WASALX_SECRET_CLEANUP_DB_PASSWORD: ${WASALX_SECRET_CLEANUP_DB_PASSWORD:?Set WASALX_SECRET_CLEANUP_DB_PASSWORD}
+      WASALX_PROVISIONING_DB_PASSWORD: ${WASALX_PROVISIONING_DB_PASSWORD:?Set WASALX_PROVISIONING_DB_PASSWORD}
+      WASALX_SUPPORT_DB_PASSWORD: ${WASALX_SUPPORT_DB_PASSWORD:?Set WASALX_SUPPORT_DB_PASSWORD}
+      WASALX_WAHA_REGISTRY_DB_PASSWORD: ${WASALX_WAHA_REGISTRY_DB_PASSWORD:?Set WASALX_WAHA_REGISTRY_DB_PASSWORD}
+      WASALX_WAHA_OPERATOR_DB_PASSWORD: ${WASALX_WAHA_OPERATOR_DB_PASSWORD:?Set WASALX_WAHA_OPERATOR_DB_PASSWORD}
+      WASALX_WAHA_ROLLOUT_GATE_DB_PASSWORD: ${WASALX_WAHA_ROLLOUT_GATE_DB_PASSWORD:?Set WASALX_WAHA_ROLLOUT_GATE_DB_PASSWORD}
+      WASALX_INVITATION_MAILER_DB_PASSWORD: ${WASALX_INVITATION_MAILER_DB_PASSWORD:?Set WASALX_INVITATION_MAILER_DB_PASSWORD}
+      WASALX_IDENTITY_POLICY_DB_PASSWORD: ${WASALX_IDENTITY_POLICY_DB_PASSWORD:?Set WASALX_IDENTITY_POLICY_DB_PASSWORD}
+      WASALX_METERING_INGEST_DB_PASSWORD: ${WASALX_METERING_INGEST_DB_PASSWORD:?Set WASALX_METERING_INGEST_DB_PASSWORD}
+      WASALX_PLATFORM_OPERATIONS_DB_PASSWORD: ${WASALX_PLATFORM_OPERATIONS_DB_PASSWORD:?Set WASALX_PLATFORM_OPERATIONS_DB_PASSWORD}
+
+  migrate:
+    profiles: [full]
+    environment:
+      DATABASE_ADMIN_URL: postgresql://wasalx:${WASALX_ADMIN_PASSWORD:?Set WASALX_ADMIN_PASSWORD}@postgres:5432/wasalx
+
+  full-qualification-seed:
+    profiles: [full]
+    image: postgres:17.10-alpine@sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGDATABASE: wasalx
+      PGUSER: wasalx
+      PGPASSWORD: ${WASALX_ADMIN_PASSWORD:?Set WASALX_ADMIN_PASSWORD}
+    command: [psql, --set=ON_ERROR_STOP=1, --file=/bootstrap/seed.sql]
+    volumes:
+      - ./infra/docker/full/postgres/seed.sql:/bootstrap/seed.sql:ro
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    networks: [core]
+    restart: "no"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+
+  public-webhook-preflight:
+    profiles: [full]
+    image: node:22-bookworm-slim@sha256:de170b39439eb0e5a3444ad7d60b015614a381e10fecae2e30ec9e735122f38d
+    command:
+      - node
+      - --input-type=module
+      - --eval
+      - >-
+        const url=new URL('/webhooks/waha/'+'0'.repeat(48),process.env.PUBLIC_WEBHOOK_BASE_URL);
+        for(let attempt=0;attempt<6;attempt+=1){try{const response=await fetch(url,{method:'POST',headers:{'content-type':'application/json'},body:'{}',redirect:'error',signal:AbortSignal.timeout(10000)});if(response.status===404)process.exit(0)}catch{}await new Promise(resolve=>setTimeout(resolve,5000))}
+        process.exit(1)
+    environment:
+      PUBLIC_WEBHOOK_BASE_URL: ${PUBLIC_WEBHOOK_BASE_URL:?Set the public HTTPS webhook origin}
+    depends_on:
+      control-api: { condition: service_healthy }
+    dns: [1.0.0.1, 8.8.8.8]
+    networks: [connector-egress]
+    restart: "no"
+    read_only: true
+    user: "1000:1000"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+
+  control-api:
+    profiles: [full]
+    environment:
+      NODE_ENV: development
+      PORT: "3001"
+      DATABASE_URL: postgresql://wasalx_runtime:${WASALX_APP_PASSWORD:?Set WASALX_APP_PASSWORD}@postgres:5432/wasalx
+      REDIS_URL: redis://redis:6379
+      WORKER_JOB_JWT_SECRET: ${WORKER_JOB_JWT_SECRET:?Set WORKER_JOB_JWT_SECRET}
+      SECRET_SIDECAR_URL: http://secret-sidecar:8082
+      SECRET_SIDECAR_TOKEN: ${SECRET_SIDECAR_TOKEN:?Set SECRET_SIDECAR_TOKEN}
+      SECRET_SIDECAR_WRITE_TOKEN: ${SECRET_SIDECAR_WRITE_TOKEN:?Set SECRET_SIDECAR_WRITE_TOKEN}
+      SECRET_CLEANUP_DATABASE_URL: postgresql://wasalx_secret_cleanup_runtime:${WASALX_SECRET_CLEANUP_DB_PASSWORD:?Set WASALX_SECRET_CLEANUP_DB_PASSWORD}@postgres:5432/wasalx
+      PROVISIONING_DATABASE_URL: postgresql://wasalx_provisioning_runtime:${WASALX_PROVISIONING_DB_PASSWORD:?Set WASALX_PROVISIONING_DB_PASSWORD}@postgres:5432/wasalx
+      SUPPORT_ACCESS_DATABASE_URL: postgresql://wasalx_support_runtime:${WASALX_SUPPORT_DB_PASSWORD:?Set WASALX_SUPPORT_DB_PASSWORD}@postgres:5432/wasalx
+      WAHA_OPERATOR_DATABASE_URL: postgresql://wasalx_waha_operator_runtime:${WASALX_WAHA_OPERATOR_DB_PASSWORD:?Set WASALX_WAHA_OPERATOR_DB_PASSWORD}@postgres:5432/wasalx
+      METERING_INGEST_DATABASE_URL: postgresql://wasalx_metering_ingest_runtime:${WASALX_METERING_INGEST_DB_PASSWORD:?Set WASALX_METERING_INGEST_DB_PASSWORD}@postgres:5432/wasalx
+      PLATFORM_OPERATIONS_DATABASE_URL: postgresql://wasalx_platform_operations_runtime:${WASALX_PLATFORM_OPERATIONS_DB_PASSWORD:?Set WASALX_PLATFORM_OPERATIONS_DB_PASSWORD}@postgres:5432/wasalx
+      METERING_SERVICE_JWT_SECRET: ${METERING_SERVICE_JWT_SECRET:?Set METERING_SERVICE_JWT_SECRET}
+      METERING_CATCHUP_PERIODS_PER_TICK: "4"
+      METERING_RECONCILE_INTERVAL_MS: "60000"
+      PROVISIONING_DRIVER_URL: ${WASALX_PROVISIONING_DRIVER_URL:-}
+      PROVISIONING_DRIVER_JWT_SECRET: ${WASALX_PROVISIONING_DRIVER_JWT_SECRET:-}
+      WASALX_ZAMMAD_PACKAGE_VERSION: ${WASALX_ZAMMAD_PACKAGE_VERSION:-0.5.83}
+      WASALX_ZAMMAD_PACKAGE_SHA256: ${WASALX_ZAMMAD_PACKAGE_SHA256:-00069cb9565f2a9002d5df73cc29532f3adde2fce28f4f09400370f9c9d11153}
+
+      ZAMMAD_CONFIGURATOR_IMAGE: ${WASALX_ZAMMAD_CONFIGURATOR_IMAGE:-}
+      ZAMMAD_NGINX_IMAGE: ${WASALX_ZAMMAD_NGINX_IMAGE:-}
+      ZAMMAD_REDIS_IMAGE: ${WASALX_ZAMMAD_REDIS_IMAGE:-}
+      ZAMMAD_MEMCACHED_IMAGE: ${WASALX_ZAMMAD_MEMCACHED_IMAGE:-}
+      ZAMMAD_IMAGE_BY_VERSION_JSON: ${WASALX_ZAMMAD_IMAGE_BY_VERSION_JSON:-unconfigured}
+      ALLOWED_ORIGINS: http://127.0.0.1:3000
+      OIDC_ISSUER: ${WASALX_DEV_REVIEW_OIDC_ISSUER:-http://127.0.0.1:8080/realms/wasalx}
+      OIDC_AUDIENCE: wasalx-control-api
+      OIDC_JWKS_URI: http://keycloak:8080/realms/wasalx/protocol/openid-connect/certs
+      PLATFORM_OPERATOR_OIDC_ISSUER: ${WASALX_DEV_REVIEW_PLATFORM_OPERATOR_OIDC_ISSUER:-http://127.0.0.1:8080/realms/wasalx-platform}
+      PLATFORM_OPERATOR_OIDC_AUDIENCE: wasalx-platform-api
+      PLATFORM_OPERATOR_OIDC_JWKS_URI: http://keycloak:8080/realms/wasalx-platform/protocol/openid-connect/certs
+      PLATFORM_OPERATOR_MAX_AUTH_AGE_SECONDS: "900"
+      ALLOW_INSECURE_PLATFORM_OPERATOR_OIDC: "true"
+      INVITATION_TOKEN_ENCRYPTION_PUBLIC_KEY: ${WASALX_INVITATION_TOKEN_PUBLIC_KEY:?Set WASALX_INVITATION_TOKEN_PUBLIC_KEY}
+      INVITATION_TOKEN_KEY_VERSION: ${WASALX_INVITATION_TOKEN_KEY_VERSION:-local-v1}
+      META_VERIFY_TOKEN: ${META_VERIFY_TOKEN:?Set META_VERIFY_TOKEN}
+      WASALX_TEST_RECIPIENT_ALLOWLIST: ${WASALX_TEST_RECIPIENT_ALLOWLIST:-}
+      WASALX_META_TEST_PHONE_SENDERS: ${WASALX_META_TEST_PHONE_SENDERS:-}
+      META_APP_SECRET_REFERENCE: secret://platform/meta-webhook
+      META_SIGNUP_ENABLED: ${META_SIGNUP_ENABLED:-false}
+      META_SIGNUP_CUSTOMER_CONFIG_ID: ${META_SIGNUP_CUSTOMER_CONFIG_ID:-}
+      META_COEXISTENCE_ENABLED: ${META_COEXISTENCE_ENABLED:-false}
+      META_SIGNUP_BUSINESS_APP_CONFIG_ID: ${META_SIGNUP_BUSINESS_APP_CONFIG_ID:-}
+      PORTAL_PUBLIC_ORIGIN: ${WASALX_DEV_REVIEW_PORTAL_PUBLIC_ORIGIN:-${PORTAL_PUBLIC_ORIGIN:-http://127.0.0.1:3000}}
+      META_APP_ID: ${META_APP_ID:-}
+      WAHA_ADMIN_BASE_URL: http://waha-gows:3000
+      WAHA_ADMIN_SECRET_REFERENCE: secret://platform/waha-admin
+      PUBLIC_WEBHOOK_BASE_URL: ${PUBLIC_WEBHOOK_BASE_URL:?Set the public HTTPS webhook origin}
+      ALLOW_INSECURE_WEBHOOK_URL: "false"
+      S3_ENDPOINT: http://minio:9000
+      S3_REGION: us-east-1
+      S3_BUCKET: wasalx-media
+      S3_ACCESS_KEY_ID: ${WASALX_FULL_MINIO_ROOT_USER:?Set WASALX_FULL_MINIO_ROOT_USER}
+      S3_SECRET_ACCESS_KEY: ${WASALX_FULL_MINIO_ROOT_PASSWORD:?Set WASALX_FULL_MINIO_ROOT_PASSWORD}
+      PRIVACY_EXPORT_S3_ENDPOINT: ${PRIVACY_EXPORT_S3_ENDPOINT:-http://minio:9000}
+      PRIVACY_EXPORT_S3_REGION: us-east-1
+      PRIVACY_EXPORT_S3_BUCKET: wasalx-media
+      # Qualification-only MinIO credentials. Production must inject a distinct
+      # read-only credential into the control API secret.
+      PRIVACY_EXPORT_S3_ACCESS_KEY_ID: ${WASALX_FULL_MINIO_ROOT_USER:?Set WASALX_FULL_MINIO_ROOT_USER}
+      PRIVACY_EXPORT_S3_SECRET_ACCESS_KEY: ${WASALX_FULL_MINIO_ROOT_PASSWORD:?Set WASALX_FULL_MINIO_ROOT_PASSWORD}
+      CLAMAV_HOST: clamav
+      CLAMAV_PORT: "3310"
+      OTEL_SERVICE_NAME: wasalx-control-api
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+      OTEL_METRIC_EXPORT_INTERVAL: "15000"
+      OTEL_TRACES_SAMPLER: parentbased_traceidratio
+      OTEL_TRACES_SAMPLER_ARG: "1"
+      WASALX_ENVIRONMENT: local-full
+    ports: !override []
+    depends_on:
+      full-qualification-seed: { condition: service_completed_successfully }
+      zammad-activation: { condition: service_completed_successfully }
+      keycloak-bootstrap: { condition: service_completed_successfully }
+      minio-bootstrap: { condition: service_completed_successfully }
+      clamav: { condition: service_healthy }
+      otel-collector: { condition: service_started }
+    networks: !override [edge, core, connectors, storage, tenant-zammad, observability]
+
+  connector-worker:
+    profiles: [full]
+    environment:
+      NODE_ENV: development
+      PORT: "8080"
+      DATABASE_URL: postgresql://wasalx_connector_worker_runtime:${WASALX_CONNECTOR_WORKER_DB_PASSWORD:?Set WASALX_CONNECTOR_WORKER_DB_PASSWORD}@postgres:5432/wasalx
+      REDIS_URL: redis://redis:6379
+      WORKER_JOB_JWT_SECRET: ${WORKER_JOB_JWT_SECRET:?Set WORKER_JOB_JWT_SECRET}
+      SECRET_SIDECAR_URL: http://secret-sidecar:8082
+      SECRET_SIDECAR_TOKEN: ${SECRET_SIDECAR_TOKEN:?Set SECRET_SIDECAR_TOKEN}
+      WAHA_BASE_URL: http://waha-gows:3000
+      WASALX_TEST_RECIPIENT_ALLOWLIST: ${WASALX_TEST_RECIPIENT_ALLOWLIST:-}
+      WASALX_META_TEST_PHONE_SENDERS: ${WASALX_META_TEST_PHONE_SENDERS:-}
+      WAHA_REGISTRY_DATABASE_URL: postgresql://wasalx_waha_registry_runtime:${WASALX_WAHA_REGISTRY_DB_PASSWORD:?Set WASALX_WAHA_REGISTRY_DB_PASSWORD}@postgres:5432/wasalx
+      WAHA_WORKERS_JSON: '${WASALX_FULL_WAHA_WORKERS_JSON:-[{"workerKey":"wasalx-local-gows","engine":"GOWS","baseUrl":"http://waha-gows:3000","secretReference":"secret://platform/waha-admin","capacity":100,"rolloutMode":"STABLE","heartbeatTtlSeconds":45}]}'
+      WAHA_ADMIN_SECRET_REFERENCE: secret://platform/waha-admin
+      WAHA_WORKER_PROBE_TIMEOUT_MS: ${WAHA_WORKER_PROBE_TIMEOUT_MS:-20000}
+      PUBLIC_WEBHOOK_BASE_URL: ${PUBLIC_WEBHOOK_BASE_URL:?Set the public HTTPS webhook origin}
+      ALLOW_INSECURE_WEBHOOK_URL: "false"
+      META_GRAPH_VERSION: v24.0
+      META_APP_ID: ${META_APP_ID:-}
+      META_SIGNUP_ENABLED: ${META_SIGNUP_ENABLED:-false}
+      META_SIGNUP_CUSTOMER_CONFIG_ID: ${META_SIGNUP_CUSTOMER_CONFIG_ID:-}
+      META_COEXISTENCE_ENABLED: ${META_COEXISTENCE_ENABLED:-false}
+      META_SIGNUP_BUSINESS_APP_CONFIG_ID: ${META_SIGNUP_BUSINESS_APP_CONFIG_ID:-}
+      META_APP_SECRET_REFERENCE: secret://platform/meta-webhook
+      PORTAL_PUBLIC_ORIGIN: ${WASALX_DEV_REVIEW_PORTAL_PUBLIC_ORIGIN:-${PORTAL_PUBLIC_ORIGIN:-http://127.0.0.1:3000}}
+      S3_ENDPOINT: http://minio:9000
+      S3_REGION: us-east-1
+      S3_BUCKET: wasalx-media
+      S3_ACCESS_KEY_ID: ${WASALX_FULL_MINIO_ROOT_USER:?Set WASALX_FULL_MINIO_ROOT_USER}
+      S3_SECRET_ACCESS_KEY: ${WASALX_FULL_MINIO_ROOT_PASSWORD:?Set WASALX_FULL_MINIO_ROOT_PASSWORD}
+      S3_SERVER_SIDE_ENCRYPTION: NONE
+      CLAMAV_HOST: clamav
+      CLAMAV_PORT: "3310"
+      OTEL_SERVICE_NAME: wasalx-connector-worker
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+      OTEL_METRIC_EXPORT_INTERVAL: "15000"
+      OTEL_TRACES_SAMPLER: parentbased_traceidratio
+      OTEL_TRACES_SAMPLER_ARG: "1"
+      WASALX_ENVIRONMENT: local-full
+    depends_on:
+      full-qualification-seed: { condition: service_completed_successfully }
+      zammad-activation: { condition: service_completed_successfully }
+      waha-gows: { condition: service_healthy }
+      minio-bootstrap: { condition: service_completed_successfully }
+      clamav: { condition: service_healthy }
+      otel-collector: { condition: service_started }
+    networks: !override [core, connectors, storage, tenant-zammad, observability, connector-egress]
+
+  invitation-mailer:
+    profiles: !override [runtime-workers]
+    environment:
+      NODE_ENV: development
+      PORT: "8085"
+      INVITATION_MAILER_DATABASE_URL: postgresql://wasalx_invitation_mailer_runtime:${WASALX_INVITATION_MAILER_DB_PASSWORD:?Set WASALX_INVITATION_MAILER_DB_PASSWORD}@postgres:5432/wasalx
+      SECRET_SIDECAR_URL: http://secret-sidecar:8082
+      SECRET_SIDECAR_TOKEN: ${SECRET_SIDECAR_TOKEN:?Set SECRET_SIDECAR_TOKEN}
+      INVITATION_TOKEN_PRIVATE_KEY_REFERENCES_JSON: '${WASALX_FULL_INVITATION_PRIVATE_KEY_REFERENCES_JSON:-{"local-v1":"secret://platform/invitation-token-private-key"}}'
+      INVITATION_EMAIL_PROVIDER_URL: ${WASALX_FULL_INVITATION_EMAIL_PROVIDER_URL:-}
+      INVITATION_EMAIL_PROVIDER_SECRET_REFERENCE: secret://platform/invitation-email-provider
+      INVITATION_EMAIL_FROM: ${WASALX_FULL_INVITATION_EMAIL_FROM:-}
+      INVITATION_EMAIL_TEMPLATE_ID: ${WASALX_FULL_INVITATION_EMAIL_TEMPLATE_ID:-}
+      PORTAL_PUBLIC_ORIGIN: ${WASALX_DEV_REVIEW_PORTAL_PUBLIC_ORIGIN:-${PORTAL_PUBLIC_ORIGIN:-http://127.0.0.1:3000}}
+      OTEL_SERVICE_NAME: wasalx-invitation-mailer
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+      WASALX_ENVIRONMENT: local-full
+    depends_on:
+      full-qualification-seed: { condition: service_completed_successfully }
+      secret-sidecar: { condition: service_healthy }
+      otel-collector: { condition: service_started }
+    networks: !override [core, observability, invitation-egress]
+
+  identity-policy-activator:
+    profiles: !override [full]
+    environment:
+      NODE_ENV: development
+      PORT: "8086"
+      IDENTITY_POLICY_DATABASE_URL: postgresql://wasalx_identity_policy_runtime:${WASALX_IDENTITY_POLICY_DB_PASSWORD:?Set WASALX_IDENTITY_POLICY_DB_PASSWORD}@postgres:5432/wasalx
+      IDENTITY_POLICY_ATTESTATION_ISSUER: http://127.0.0.1:8080/realms/wasalx
+      IDENTITY_POLICY_ATTESTATION_AUDIENCE: wasalx-identity-policy-activator
+      IDENTITY_POLICY_ATTESTATION_JWKS_URI: http://keycloak:8080/realms/wasalx/protocol/openid-connect/certs
+      OTEL_SERVICE_NAME: wasalx-identity-policy-activator
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+      WASALX_ENVIRONMENT: local-full
+    depends_on:
+      full-qualification-seed: { condition: service_completed_successfully }
+      keycloak: { condition: service_healthy }
+      otel-collector: { condition: service_started }
+    networks: !override [core, identity-runtime, observability]
+
+  portal:
+    profiles: [full]
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      PORTAL_DATA_BACKEND: control-plane
+      PORTAL_FIXTURE_ROLE: ""
+      PORTAL_SESSION_REDIS_URL: redis://redis:6379
+      PORTAL_SESSION_SECRET: ${WASALX_FULL_PORTAL_SESSION_SECRET:?Set WASALX_FULL_PORTAL_SESSION_SECRET}
+      PORTAL_PUBLIC_ORIGIN: ${WASALX_DEV_REVIEW_PORTAL_PUBLIC_ORIGIN:-${PORTAL_PUBLIC_ORIGIN:-http://127.0.0.1:3000}}
+      PORTAL_COOKIE_SECURE: ${WASALX_DEV_REVIEW_PORTAL_COOKIE_SECURE:-false}
+      VINEXT_TRUSTED_HOSTS: ${WASALX_DEV_REVIEW_VINEXT_TRUSTED_HOSTS:-}
+      CONTROL_API_URL: http://control-api:3001
+      CONNECTOR_WORKER_INTERNAL_URL: http://connector-worker:8080
+      OIDC_ISSUER: ${WASALX_DEV_REVIEW_OIDC_ISSUER:-http://127.0.0.1:8080/realms/wasalx}
+      OIDC_CLIENT_ID: wasalx-portal
+      OIDC_AUTHORIZATION_ENDPOINT: ${WASALX_DEV_REVIEW_OIDC_AUTHORIZATION_ENDPOINT:-http://127.0.0.1:8080/realms/wasalx/protocol/openid-connect/auth}
+      OIDC_TOKEN_ENDPOINT: http://keycloak:8080/realms/wasalx/protocol/openid-connect/token
+      OIDC_JWKS_URI: http://keycloak:8080/realms/wasalx/protocol/openid-connect/certs
+      OIDC_REDIRECT_URI: ${WASALX_DEV_REVIEW_OIDC_REDIRECT_URI:-http://127.0.0.1:3000/auth/callback}
+      OIDC_INVITATION_REDIRECT_URI: ${WASALX_DEV_REVIEW_OIDC_INVITATION_REDIRECT_URI:-http://127.0.0.1:3000/invitations/callback}
+      OIDC_PRIVILEGED_ACR_VALUES: ${OIDC_PRIVILEGED_ACR_VALUES:-urn:wasalx:loa:2}
+      OIDC_PRIVILEGED_MFA_AMR_VALUES: ${OIDC_PRIVILEGED_MFA_AMR_VALUES:-mfa}
+      PLATFORM_OPERATOR_OIDC_ISSUER: ${WASALX_DEV_REVIEW_PLATFORM_OPERATOR_OIDC_ISSUER:-http://127.0.0.1:8080/realms/wasalx-platform}
+      PLATFORM_OPERATOR_OIDC_CLIENT_ID: wasalx-platform-portal
+      PLATFORM_OPERATOR_OIDC_AUDIENCE: wasalx-platform-api
+      PLATFORM_OPERATOR_OIDC_AUTHORIZATION_ENDPOINT: ${WASALX_DEV_REVIEW_PLATFORM_OPERATOR_OIDC_AUTHORIZATION_ENDPOINT:-http://127.0.0.1:8080/realms/wasalx-platform/protocol/openid-connect/auth}
+      PLATFORM_OPERATOR_OIDC_TOKEN_ENDPOINT: http://keycloak:8080/realms/wasalx-platform/protocol/openid-connect/token
+      PLATFORM_OPERATOR_OIDC_JWKS_URI: http://keycloak:8080/realms/wasalx-platform/protocol/openid-connect/certs
+      PLATFORM_OPERATOR_OIDC_REDIRECT_URI: ${WASALX_DEV_REVIEW_PLATFORM_OPERATOR_OIDC_REDIRECT_URI:-http://127.0.0.1:3000/platform/auth/callback}
+      PLATFORM_OPERATOR_MAX_AUTH_AGE_SECONDS: "900"
+      ALLOW_INSECURE_PLATFORM_OPERATOR_OIDC: "true"
+      PLATFORM_PORTAL_SESSION_REDIS_URL: redis://redis:6379
+      PLATFORM_PORTAL_SESSION_SECRET: ${WASALX_FULL_PLATFORM_PORTAL_SESSION_SECRET:?Set WASALX_FULL_PLATFORM_PORTAL_SESSION_SECRET}
+      OTEL_SERVICE_NAME: wasalx-portal
+      OTEL_SDK_DISABLED: "false"
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+      OTEL_METRIC_EXPORT_INTERVAL: "15000"
+      OTEL_TRACES_SAMPLER: parentbased_traceidratio
+      OTEL_TRACES_SAMPLER_ARG: "1"
+      WASALX_ENVIRONMENT: local-full
+    ports: !override ["127.0.0.1:${PORTAL_PORT:-3000}:3000"]
+    depends_on:
+      control-api: { condition: service_healthy }
+      keycloak-bootstrap: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+    networks: !override [edge, core, observability]
+
+  keycloak-postgresql:
+    profiles: [full]
+    image: postgres:17.10-alpine@sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193
+    environment:
+      POSTGRES_DB: keycloak
+      POSTGRES_USER: keycloak
+      POSTGRES_PASSWORD: ${WASALX_FULL_KEYCLOAK_DB_PASSWORD:?Set WASALX_FULL_KEYCLOAK_DB_PASSWORD}
+    volumes: [keycloak-postgresql-data:/var/lib/postgresql/data]
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U keycloak -d keycloak"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    networks: [identity-db]
+    restart: unless-stopped
+
+  keycloak:
+    profiles: [full]
+    image: quay.io/keycloak/keycloak:26.7.1@sha256:f1f1f01e472c8a78df40d8f2a49a925274eda4d3d80d5f6edbb5c880ee3c01c6
+    command: [start, --import-realm]
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://db.example.test:5432/example_db
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: ${WASALX_FULL_KEYCLOAK_DB_PASSWORD:?Set WASALX_FULL_KEYCLOAK_DB_PASSWORD}
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${WASALX_FULL_KEYCLOAK_ADMIN_USER:-example-admin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${WASALX_FULL_KEYCLOAK_ADMIN_PASSWORD:?Set WASALX_FULL_KEYCLOAK_ADMIN_PASSWORD}
+      KC_HOSTNAME: http://127.0.0.1:8080
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
+      KC_HTTP_ENABLED: "true"
+      KC_HEALTH_ENABLED: "true"
+      KC_METRICS_ENABLED: "true"
+      KC_CACHE: local
+      WASALX_PORTAL_PUBLIC_ORIGIN: ${WASALX_DEV_REVIEW_PORTAL_PUBLIC_ORIGIN:-${PORTAL_PUBLIC_ORIGIN:-http://127.0.0.1:3000}}
+    volumes:
+      - ./infra/docker/full/keycloak/wasalx-realm.json:/opt/keycloak/data/import/wasalx-realm.json:ro
+      - ./infra/docker/full/keycloak/wasalx-platform-realm.json:/opt/keycloak/data/import/wasalx-platform-realm.json:ro
+      - ./infra/docker/full/keycloak/themes/wasalx:/opt/keycloak/themes/wasalx:ro
+      - ./app/fonts:/opt/keycloak/themes/wasalx/login/resources/fonts:ro
+      - ./public:/opt/keycloak/themes/wasalx/login/resources/shared:ro
+    ports: ["127.0.0.1:${IDENTITY_PORT:-8080}:8080"]
+    healthcheck:
+      test:
+        - CMD
+        - /bin/bash
+        - -ec
+        - >-
+          exec 3<>/dev/tcp/127.0.0.1/9000;
+          printf 'GET /health/ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3;
+          IFS= read -r status <&3;
+          [[ "$$status" == *" 200 "* ]]
+      interval: 10s
+      timeout: 5s
+      start_period: 5m
+      retries: 30
+    depends_on:
+      keycloak-postgresql: { condition: service_healthy }
+    networks: [edge, identity-db, identity-runtime]
+    restart: unless-stopped
+    init: true
+
+  keycloak-bootstrap:
+    profiles: [full]
+    image: node:22-bookworm-slim@sha256:de170b39439eb0e5a3444ad7d60b015614a381e10fecae2e30ec9e735122f38d
+    entrypoint: [node, /bootstrap/bootstrap-user.mjs]
+    environment:
+      KEYCLOAK_ADMIN: ${WASALX_FULL_KEYCLOAK_ADMIN_USER:-example-admin}
+      KEYCLOAK_ADMIN_PASSWORD: ${WASALX_FULL_KEYCLOAK_ADMIN_PASSWORD:?Set WASALX_FULL_KEYCLOAK_ADMIN_PASSWORD}
+      WASALX_QUALIFICATION_OWNER_PASSWORD: ${WASALX_FULL_QUALIFICATION_OWNER_PASSWORD:?Set WASALX_FULL_QUALIFICATION_OWNER_PASSWORD}
+      WASALX_QUALIFICATION_OWNER_EMAIL: ${WASALX_FULL_QUALIFICATION_OWNER_EMAIL:-}
+      WASALX_ISOLATION_OWNER_PASSWORD: ${WASALX_FULL_ISOLATION_OWNER_PASSWORD:?Set WASALX_FULL_ISOLATION_OWNER_PASSWORD}
+      WASALX_ISOLATION_OWNER_EMAIL: ${WASALX_FULL_ISOLATION_OWNER_EMAIL:-}
+      WASALX_PLATFORM_OPERATOR_PASSWORD: ${WASALX_FULL_PLATFORM_OPERATOR_PASSWORD:?Set WASALX_FULL_PLATFORM_OPERATOR_PASSWORD}
+      WASALX_KEYCLOAK_SMTP_HOST: ${WASALX_FULL_KEYCLOAK_SMTP_HOST:-}
+      WASALX_KEYCLOAK_SMTP_PORT: ${WASALX_FULL_KEYCLOAK_SMTP_PORT:-}
+      WASALX_KEYCLOAK_SMTP_FROM: ${WASALX_FULL_KEYCLOAK_SMTP_FROM:-}
+      WASALX_KEYCLOAK_SMTP_USER: ${WASALX_FULL_KEYCLOAK_SMTP_USER:-}
+      WASALX_KEYCLOAK_SMTP_PASSWORD: ${WASALX_FULL_KEYCLOAK_SMTP_PASSWORD:-}
+      HOME: /tmp/keycloak-bootstrap
+    volumes:
+      - ./infra/docker/full/keycloak/bootstrap-user.mjs:/bootstrap/bootstrap-user.mjs:ro
+    depends_on:
+      keycloak: { condition: service_healthy }
+    # Share the Keycloak network namespace so kcadm uses the canonical
+    # localhost issuer instead of obtaining a localhost-issued token through
+    # the internal Docker DNS hostname and receiving a cross-host 401.
+    network_mode: service:keycloak
+    restart: "no"
+    read_only: true
+    user: "1000:1000"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+
+  minio:
+    profiles: [full]
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
+    command: [server, /data, --console-address, ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${WASALX_FULL_MINIO_ROOT_USER:?Set WASALX_FULL_MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${WASALX_FULL_MINIO_ROOT_PASSWORD:?Set WASALX_FULL_MINIO_ROOT_PASSWORD}
+      # Local-only. Production metrics endpoints require a dedicated bearer
+      # credential and remain private to the monitoring plane.
+      MINIO_PROMETHEUS_AUTH_TYPE: public
+    volumes: [minio-data:/data]
+    healthcheck:
+      test: [CMD, curl, --fail, --silent, http://127.0.0.1:9000/minio/health/ready]
+      interval: 5s
+      timeout: 3s
+      start_period: 10s
+      retries: 30
+    networks: [storage, tenant-zammad]
+    restart: unless-stopped
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+
+  minio-bootstrap:
+    profiles: [full]
+    image: quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
+    environment:
+      MC_CONFIG_DIR: /tmp/.mc
+      MC_HOST_local: http://${WASALX_FULL_MINIO_ROOT_USER:?Set WASALX_FULL_MINIO_ROOT_USER}:${WASALX_FULL_MINIO_ROOT_PASSWORD:?Set WASALX_FULL_MINIO_ROOT_PASSWORD}@minio:9000
+    entrypoint: [/bin/sh]
+    command: [/bootstrap/bootstrap.sh]
+    volumes:
+      - ./infra/docker/full/minio/bootstrap.sh:/bootstrap/bootstrap.sh:ro
+      - ./infra/docker/full/minio/noncurrent-lifecycle.json:/bootstrap/noncurrent-lifecycle.json:ro
+    depends_on:
+      minio: { condition: service_healthy }
+    networks: [storage]
+    restart: "no"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+
+  clamav:
+    profiles: [full]
+    platform: linux/amd64
+    image: clamav/clamav:1.5.3@sha256:d06c1d6a451d616e1dd79b42f44c8c8c291bba9cf4e75ebc4d0e43c1c6dd87bb
+    environment:
+      CLAMAV_NO_CLAMD: "false"
+      CLAMAV_NO_FRESHCLAMD: "false"
+      # Must exceed WasalX's 50 MB video ceiling. ClamAV rejects an INSTREAM
+      # before scanning when StreamMaxLength is lower than the payload.
+      CLAMD_CONF_StreamMaxLength: "55M"
+      # Keep scanner concurrency aligned with the worker media semaphore and
+      # avoid the temporary second engine/database validation copies that can
+      # otherwise amplify memory during a signature refresh. Production
+      # scanners must be independently sized for their intended concurrency.
+      CLAMD_CONF_MaxThreads: "2"
+      CLAMD_CONF_MaxQueue: "4"
+      CLAMD_CONF_ConcurrentDatabaseReload: "no"
+      FRESHCLAM_CONF_TestDatabases: "no"
+      FRESHCLAM_CHECKS: "12"
+    command: [/wasalx/run-clamav.sh]
+    volumes:
+      - clamav-db:/var/lib/clamav
+      - ./infra/docker/full/clamav/run.sh:/wasalx/run-clamav.sh:ro
+    healthcheck:
+      test: [CMD-SHELL, "test \"$(printf 'PING\\n' | nc -w 2 127.0.0.1 3310)\" = PONG"]
+      interval: 30s
+      timeout: 5s
+      start_period: 7m
+      retries: 3
+    networks: [storage, security-egress]
+    restart: unless-stopped
+    cap_drop: [ALL]
+    # The upstream entrypoint repairs ownership on its persistent signature
+    # database before dropping privileges. Without these narrowly restored
+    # capabilities it restart-loops on a fresh named volume.
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
+    security_opt: [no-new-privileges:true]
+
+  waha-gows:
+    profiles: [full]
+    platform: linux/amd64
+    image: devlikeapro/waha:gows-2026.7.2@sha256:ee94669b8b007f8108d2e93dc8ce1af78743919823bc6748facab35d8cc2c26c
+    # Use public DNS; private split-horizon answers are blocked by the test firewall.
+    dns: [1.0.0.1, 8.8.8.8]
+    environment:
+      WHATSAPP_DEFAULT_ENGINE: GOWS
+      WAHA_WORKER_ID: wasalx-local-gows
+      WAHA_API_KEY: ${WASALX_FULL_WAHA_API_KEY:?Set WASALX_FULL_WAHA_API_KEY}
+      WAHA_API_KEY_EXCLUDE_PATH: health,ping
+      WAHA_DASHBOARD_USERNAME: ${WASALX_FULL_WAHA_DASHBOARD_USER:-wasalx-admin}
+      WAHA_DASHBOARD_PASSWORD: ${WASALX_FULL_WAHA_DASHBOARD_PASSWORD:?Set WASALX_FULL_WAHA_DASHBOARD_PASSWORD}
+      WHATSAPP_SWAGGER_USERNAME: ${WASALX_FULL_WAHA_SWAGGER_USER:-wasalx-admin}
+      WHATSAPP_SWAGGER_PASSWORD: ${WASALX_FULL_WAHA_SWAGGER_PASSWORD:?Set WASALX_FULL_WAHA_SWAGGER_PASSWORD}
+      WAHA_LOCAL_STORE_BASE_DIR: /app/.sessions
+      WAHA_WORKER_RESTART_SESSIONS: "true"
+      WAHA_PRINT_QR: "false"
+      WAHA_LOG_FORMAT: JSON
+      WAHA_LOG_LEVEL: warn
+      WAHA_HTTP_LOG_LEVEL: warn
+      WAHA_MEDIA_STORAGE: S3
+      WAHA_S3_REGION: us-east-1
+      WAHA_S3_BUCKET: waha-media
+      WAHA_S3_ACCESS_KEY_ID: ${WASALX_FULL_MINIO_ROOT_USER:?Set WASALX_FULL_MINIO_ROOT_USER}
+      WAHA_S3_SECRET_ACCESS_KEY: ${WASALX_FULL_MINIO_ROOT_PASSWORD:?Set WASALX_FULL_MINIO_ROOT_PASSWORD}
+      WAHA_S3_ENDPOINT: http://minio:9000
+      WAHA_S3_FORCE_PATH_STYLE: "true"
+      WAHA_S3_PROXY_FILES: "true"
+    volumes: [waha-gows-sessions:/app/.sessions]
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:3000/health',{headers:{'X-Api-Key':process.env.WAHA_API_KEY}}).then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      # GOWS can pause briefly while its linked-device runtime is busy. Keep
+      # the probe bounded, but align it with the worker's 20-second provider
+      # observation so a slow healthy session is not fenced as unavailable.
+      timeout: 20s
+      start_period: 30s
+      retries: 30
+    depends_on:
+      minio-bootstrap: { condition: service_completed_successfully }
+      public-webhook-preflight: { condition: service_completed_successfully }
+    networks: [connectors, storage, connector-egress]
+    restart: unless-stopped
+    init: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+
+  # Optional compatibility pool. Enable alongside full with --profile waha-noweb.
+  waha-noweb:
+    profiles: [waha-noweb]
+    platform: linux/amd64
+    image: devlikeapro/waha:noweb-2026.7.2@sha256:33ecd1b782b2708db2ff1d366f51608889a036e76332dceae3fbbe3f10f2d75e
+    environment:
+      WHATSAPP_DEFAULT_ENGINE: NOWEB
+      WAHA_WORKER_ID: wasalx-local-noweb
+      WAHA_API_KEY: ${WASALX_FULL_WAHA_API_KEY:?Set WASALX_FULL_WAHA_API_KEY}
+      WAHA_API_KEY_EXCLUDE_PATH: health,ping
+      WAHA_DASHBOARD_USERNAME: ${WASALX_FULL_WAHA_DASHBOARD_USER:-wasalx-admin}
+      WAHA_DASHBOARD_PASSWORD: ${WASALX_FULL_WAHA_DASHBOARD_PASSWORD:?Set WASALX_FULL_WAHA_DASHBOARD_PASSWORD}
+      WHATSAPP_SWAGGER_USERNAME: ${WASALX_FULL_WAHA_SWAGGER_USER:-wasalx-admin}
+      WHATSAPP_SWAGGER_PASSWORD: ${WASALX_FULL_WAHA_SWAGGER_PASSWORD:?Set WASALX_FULL_WAHA_SWAGGER_PASSWORD}
+      WAHA_LOCAL_STORE_BASE_DIR: /app/.sessions
+      WAHA_WORKER_RESTART_SESSIONS: "true"
+      WAHA_PRINT_QR: "false"
+      WAHA_LOG_FORMAT: JSON
+      WAHA_LOG_LEVEL: warn
+      WAHA_HTTP_LOG_LEVEL: warn
+      WAHA_MEDIA_STORAGE: S3
+      WAHA_S3_REGION: us-east-1
+      WAHA_S3_BUCKET: waha-media
+      WAHA_S3_ACCESS_KEY_ID: ${WASALX_FULL_MINIO_ROOT_USER:?Set WASALX_FULL_MINIO_ROOT_USER}
+      WAHA_S3_SECRET_ACCESS_KEY: ${WASALX_FULL_MINIO_ROOT_PASSWORD:?Set WASALX_FULL_MINIO_ROOT_PASSWORD}
+      WAHA_S3_ENDPOINT: http://minio:9000
+      WAHA_S3_FORCE_PATH_STYLE: "true"
+      WAHA_S3_PROXY_FILES: "true"
+    volumes: [waha-noweb-sessions:/app/.sessions]
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:3000/health',{headers:{'X-Api-Key':process.env.WAHA_API_KEY}}).then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 20s
+      start_period: 30s
+      retries: 30
+    depends_on:
+      minio-bootstrap: { condition: service_completed_successfully }
+    networks: [connectors, storage, connector-egress]
+    restart: unless-stopped
+    init: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+
+  zammad-postgresql:
+    profiles: [full]
+    image: postgres:17.10-alpine@sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193
+    environment:
+      POSTGRES_DB: zammad_production
+      POSTGRES_USER: zammad
+      POSTGRES_PASSWORD: ${WASALX_FULL_ZAMMAD_DB_PASSWORD:?Set WASALX_FULL_ZAMMAD_DB_PASSWORD}
+    volumes: [zammad-postgresql-data:/var/lib/postgresql/data]
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U zammad -d zammad_production"]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 10
+    networks: [tenant-zammad]
+    restart: unless-stopped
+
+  zammad-redis:
+    profiles: [full]
+    image: redis:8.10-alpine@sha256:978f0e01593e65eed801f2402944efcd936d43b5027e4908a7897baf88ed6241
+    command: [redis-server, --appendonly, "yes", --save, "60", "1"]
+    volumes: [zammad-redis-data:/data]
+    healthcheck:
+      test: [CMD, redis-cli, ping]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [tenant-zammad]
+    restart: unless-stopped
+
+  zammad-memcached:
+    profiles: [full]
+    image: memcached:1.6.45-alpine@sha256:c29847751abb41f4c268c84fb3087fee05d4edcbda44409ccb5086e26148e8a7
+    command: [memcached, -m, 256M]
+    healthcheck:
+      test: [CMD, nc, -z, 127.0.0.1, "11211"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [tenant-zammad]
+    restart: unless-stopped
+
+  zammad-elasticsearch:
+    profiles: [full]
+    image: elasticsearch:9.4.4@sha256:5b4517639f5c027e5abc0dbb29dc99e0662b2d060befe17d91c953b88020391d
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      xpack.ml.enabled: "false"
+      xpack.watcher.enabled: "false"
+      xpack.profiling.enabled: "false"
+      # The local full profile shares one Docker Desktop VM with ClamAV and
+      # WAHA. Zammad does not use Elasticsearch ML, Watcher, or Universal
+      # Profiling; disabling them and using a 384 MiB heap reduces pressure in
+      # the disposable local profile.
+      # Production search sizing and feature policy are managed separately.
+      ES_JAVA_OPTS: -Xms384m -Xmx384m
+    volumes: [zammad-elasticsearch-data:/usr/share/elasticsearch/data]
+    healthcheck:
+      test: [CMD-SHELL, "curl --fail --silent 'http://127.0.0.1:9200/_cluster/health?wait_for_status=yellow&timeout=5s' >/dev/null"]
+      interval: 10s
+      timeout: 10s
+      start_period: 60s
+      retries: 20
+    networks: [tenant-zammad]
+    restart: unless-stopped
+
+  zammad-init:
+    <<: *full-zammad-service
+    command: [zammad-init]
+    user: 0:0
+    restart: on-failure
+    depends_on:
+      zammad-postgresql: { condition: service_healthy }
+      zammad-redis: { condition: service_healthy }
+      zammad-memcached: { condition: service_healthy }
+      zammad-elasticsearch: { condition: service_healthy }
+
+  zammad-package:
+    <<: *full-zammad-service
+    command: [wasalx-package-install]
+    restart: "no"
+    depends_on:
+      zammad-init: { condition: service_completed_successfully }
+
+  zammad-runtime-bootstrap:
+    <<: *full-zammad-service
+    command: [bash, /usr/local/bin/wasalx-runtime-bootstrap]
+    environment:
+      <<: *full-zammad-environment
+      WASALX_ZAMMAD_BOOTSTRAP_EMAIL: fixture-0003@example.test
+      WASALX_ZAMMAD_BOOTSTRAP_NAME: Qualification Administrator
+      WASALX_SERVICE_IDENTITY_MODE: ${WASALX_SERVICE_IDENTITY_MODE:-}
+      WASALX_ZAMMAD_BOOTSTRAP_PASSWORD: ${WASALX_FULL_ZAMMAD_BOOTSTRAP_ADMIN_PASSWORD:?Set WASALX_FULL_ZAMMAD_BOOTSTRAP_ADMIN_PASSWORD}
+      WASALX_ZAMMAD_BOOTSTRAP_PREVIOUS_EMAIL: fixture-0004@example.test
+      WASALX_ZAMMAD_AGENT_EMAIL: fixture-0005@example.test
+      WASALX_ZAMMAD_AGENT_NAME: Qualification Agent
+      WASALX_ZAMMAD_AGENT_PASSWORD: ${WASALX_FULL_ZAMMAD_AGENT_PASSWORD:?Set WASALX_FULL_ZAMMAD_AGENT_PASSWORD}
+      ZAMMAD_SERVICE_TOKEN: ${WASALX_FULL_ZAMMAD_API_TOKEN:?Set WASALX_FULL_ZAMMAD_API_TOKEN}
+      ZAMMAD_PRIVACY_TOKEN: ${WASALX_FULL_ZAMMAD_PRIVACY_TOKEN:?Set WASALX_FULL_ZAMMAD_PRIVACY_TOKEN}
+    volumes:
+      - zammad-backup:/var/tmp/zammad:ro
+      - zammad-storage:/opt/zammad/storage
+      - ./infra/docker/full/zammad/bootstrap-runtime.sh:/usr/local/bin/wasalx-runtime-bootstrap:ro
+      - ./infra/docker/full/zammad/bootstrap-runtime.rb:/usr/local/lib/wasalx/bootstrap-runtime.rb:ro
+    restart: "no"
+    depends_on:
+      zammad-package: { condition: service_completed_successfully }
+
+  zammad-backup:
+    <<: *full-zammad-service
+    command: [zammad-backup]
+    user: 0:0
+    volumes:
+      - zammad-backup:/var/tmp/zammad
+      - zammad-storage:/opt/zammad/storage
+    depends_on:
+      zammad-package: { condition: service_completed_successfully }
+
+  zammad-railsserver:
+    <<: *full-zammad-service
+    command: [zammad-railsserver]
+    healthcheck:
+      test: [CMD, curl, --fail, --silent, http://127.0.0.1:3000]
+      interval: 30s
+      timeout: 5s
+      start_period: 120s
+      retries: 5
+    depends_on:
+      zammad-runtime-bootstrap: { condition: service_completed_successfully }
+
+  zammad-scheduler:
+    <<: *full-zammad-service
+    command: [zammad-scheduler]
+    depends_on:
+      zammad-runtime-bootstrap: { condition: service_completed_successfully }
+
+  zammad-websocket:
+    <<: *full-zammad-service
+    command: [zammad-websocket]
+    depends_on:
+      zammad-runtime-bootstrap: { condition: service_completed_successfully }
+
+  zammad-nginx:
+    <<: *full-zammad-service
+    command: [zammad-nginx]
+    init: false
+    ports: ["127.0.0.1:${ZAMMAD_PORT:-8081}:8080"]
+    volumes:
+      - zammad-backup:/var/tmp/zammad:ro
+      - zammad-storage:/opt/zammad/storage
+      - ./infra/docker/full/zammad/nginx-modern-entry.conf:/opt/zammad/contrib/nginx/zammad.conf:ro
+    healthcheck:
+      test: [CMD, curl, --fail, --silent, http://127.0.0.1:8080/api/v1/wasalx/health]
+      interval: 10s
+      timeout: 10s
+      start_period: 180s
+      retries: 12
+    depends_on:
+      zammad-railsserver: { condition: service_healthy }
+    networks: !override [edge, tenant-zammad]
+
+  # The local seed deliberately creates the instance as PROVISIONING. Promote
+  # it only after the exact package installer exited zero and nginx proves that
+  # the initialized Zammad runtime is serving. Production provisioning uses the
+  # fenced evidence path in migration 0034 instead of this local-only job.
+  zammad-activation:
+    profiles: [full]
+    image: postgres:17.10-alpine@sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGDATABASE: wasalx
+      PGUSER: wasalx
+      PGPASSWORD: ${WASALX_ADMIN_PASSWORD:?Set WASALX_ADMIN_PASSWORD}
+    command: [psql, --set=ON_ERROR_STOP=1, --file=/bootstrap/activate-zammad.sql]
+    volumes:
+      - ./infra/docker/full/postgres/activate-zammad.sql:/bootstrap/activate-zammad.sql:ro
+    depends_on:
+      full-qualification-seed: { condition: service_completed_successfully }
+      zammad-package: { condition: service_completed_successfully }
+      zammad-runtime-bootstrap: { condition: service_completed_successfully }
+      zammad-nginx: { condition: service_healthy }
+    networks: [core]
+    restart: "no"
+
+  otel-collector:
+    profiles: [full]
+    image: otel/opentelemetry-collector-contrib:0.158.0@sha256:c5918f78992ee73b0d6f0e599423ac5ec52dd5d9726733114d6eca53d5a32ed5
+    command: [--config=/etc/otelcol-contrib/config.yaml]
+    volumes:
+      - ./infra/docker/full/otel/collector.yaml:/etc/otelcol-contrib/config.yaml:ro
+    healthcheck:
+      test: [CMD, /otelcol-contrib, --version]
+      interval: 30s
+      # The distroless collector has no HTTP client for its health_check
+      # extension. Starting a second collector binary for this exec probe can
+      # be slow under Rosetta or during ClamAV/Elasticsearch cold starts, so
+      # keep the timeout above the observed contention window.
+      timeout: 30s
+      start_period: 90s
+      retries: 5
+    depends_on:
+      jaeger: { condition: service_started }
+      redis: { condition: service_healthy }
+      zammad-elasticsearch: { condition: service_healthy }
+    networks: [core, tenant-zammad, observability]
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+
+  jaeger:
+    profiles: [full]
+    image: jaegertracing/jaeger:2.20.0@sha256:46a886260e04002d8f45e213fc39063fa11a50446048fdaa64786fc0840cb9f8
+    environment:
+      JAEGER_LISTEN_HOST: 0.0.0.0
+    ports: ["127.0.0.1:${JAEGER_PORT:-16686}:16686"]
+    networks: [observability]
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+
+  alertmanager:
+    profiles: [full]
+    image: prom/alertmanager:v0.32.1@sha256:51a825c2a40acc3e338fdd00d622e01ec090f72be2b3ea46be0839cd47a4d286
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yaml
+      - --storage.path=/alertmanager
+      - --web.listen-address=0.0.0.0:9093
+    volumes:
+      - ./infra/docker/full/alertmanager/alertmanager.yaml:/etc/alertmanager/alertmanager.yaml:ro
+      - alertmanager-data:/alertmanager
+    ports: ["127.0.0.1:${ALERTMANAGER_PORT:-9093}:9093"]
+    networks: [observability]
+    restart: unless-stopped
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+
+  prometheus:
+    profiles: [full]
+    image: prom/prometheus:v3.13.1@sha256:3c42b892cf723fa54d2f262c37a0e1f80aa8c8ddb1da7b9b0df9455a35a7f893
+    command:
+      - --config.file=/etc/prometheus/prometheus.yaml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+      - --web.enable-lifecycle
+    volumes:
+      - ./infra/docker/full/prometheus/prometheus.yaml:/etc/prometheus/prometheus.yaml:ro
+      - ./infra/docker/full/prometheus/alerts.yaml:/etc/prometheus/rules/alerts.yaml:ro
+      - ./infra/docker/full/prometheus/recording-rules.yaml:/etc/prometheus/rules/recording-rules.yaml:ro
+      - prometheus-data:/prometheus
+    ports: ["127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"]
+    depends_on:
+      otel-collector: { condition: service_started }
+      alertmanager: { condition: service_started }
+      minio: { condition: service_healthy }
+    networks: [edge, storage, observability]
+    restart: unless-stopped
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+
+  grafana:
+    profiles: [full]
+    image: grafana/grafana:13.1.0@sha256:121a7a9ece6dc10b969f1f96eed64b4f07dfac0d0b8abc070f7cb83bbde86f63
+    environment:
+      GF_SECURITY_ADMIN_USER: ${WASALX_FULL_GRAFANA_ADMIN_USER:-wasalx-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${WASALX_FULL_GRAFANA_ADMIN_PASSWORD:?Set WASALX_FULL_GRAFANA_ADMIN_PASSWORD}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+    volumes:
+      - ./infra/docker/full/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infra/docker/full/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports: ["127.0.0.1:${GRAFANA_PORT:-3002}:3000"]
+    depends_on:
+      prometheus: { condition: service_started }
+      jaeger: { condition: service_started }
+    networks: [observability]
+    restart: unless-stopped
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+
+  # Optional real Kubernetes-backed driver. It is deliberately outside the
+  # `full` profile because the local dependency stack is not a Kubernetes
+  # workspace controller. Without an API URL, projected token mount, real
+  # reconciler, and package digest this container exits or remains unready.
+  workspace-configurator-image-contract:
+    profiles: [tenant-provisioning-artifacts]
+    build:
+      context: .
+      dockerfile: Dockerfile.workspace-configurator
+    image: wasalx/workspace-configurator:local
+    entrypoint: [/bin/sh, -ec]
+    command:
+      - >-
+        test "$$(id -u)" = 1000;
+        test "$$(id -g)" = 1000;
+        node --version;
+        pg_dump --version;
+        printf '%s  %s\n'
+        '00069cb9565f2a9002d5df73cc29532f3adde2fce28f4f09400370f9c9d11153'
+        '/app/artifacts/wasalx-0.5.83.zpm' | sha256sum --check --strict
+
+    user: "1000:1000"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+
+  tenant-provisioner:
+    profiles: [tenant-provisioning]
+    build:
+      context: .
+      dockerfile: Dockerfile.tenant-provisioner
+    image: wasalx/tenant-provisioner:local
+    environment:
+      NODE_ENV: development
+      PORT: "8090"
+      PROVISIONING_DRIVER_JWT_SECRET: ${WASALX_PROVISIONING_DRIVER_JWT_SECRET:-}
+      KUBERNETES_API_URL: ${WASALX_PROVISIONER_KUBERNETES_API_URL:-https://kubernetes.default.svc}
+      KUBERNETES_BEARER_TOKEN_FILE: /var/run/secrets/wasalx-kubernetes/token
+      NODE_EXTRA_CA_CERTS: /var/run/secrets/wasalx-kubernetes/ca.crt
+      PROVISIONING_WORKSPACE_NAMESPACE: ${WASALX_PROVISIONER_WORKSPACE_NAMESPACE:-wasalx-tenants}
+      PROVISIONING_RECONCILER_IDENTITY: ${WASALX_PROVISIONER_RECONCILER_IDENTITY:-wasalx-workspace-controller/v1}
+      PROVISIONING_WORKSPACE_BASE_DOMAIN: ${WASALX_PROVISIONER_BASE_DOMAIN:-support.localhost}
+      PROVISIONING_OIDC_ISSUER: ${WASALX_PROVISIONER_OIDC_ISSUER:-https://identity.local/realms/wasalx}
+      ALLOW_INSECURE_KUBERNETES_API: ${WASALX_PROVISIONER_ALLOW_INSECURE_KUBERNETES_API:-false}
+      OTEL_SERVICE_NAME: wasalx-tenant-provisioner
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+      OTEL_METRIC_EXPORT_INTERVAL: "15000"
+      OTEL_TRACES_SAMPLER: parentbased_traceidratio
+      OTEL_TRACES_SAMPLER_ARG: "1"
+      WASALX_ENVIRONMENT: local-full
+    volumes:
+      - type: bind
+        source: ${WASALX_PROVISIONER_TOKEN_FILE:-./infra/docker/full/provisioner/unconfigured-token}
+        target: /var/run/secrets/wasalx-kubernetes/token
+        read_only: true
+      - type: bind
+        source: ${WASALX_PROVISIONER_CA_FILE:-./infra/docker/full/provisioner/unconfigured-ca.crt}
+        target: /var/run/secrets/wasalx-kubernetes/ca.crt
+        read_only: true
+    networks: [core, observability, provisioning-egress]
+    restart: unless-stopped
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+
+  # Optional real controller. The placeholders make this fail closed until a
+  # private Kubernetes API, production provider gateway, and External Secrets
+  # store are supplied. Release images arrive only through the signed CR.
+  tenant-workspace-controller:
+    profiles: [tenant-provisioning]
+    build:
+      context: .
+      dockerfile: Dockerfile.tenant-workspace-controller
+    image: wasalx/tenant-workspace-controller:local
+    environment:
+      NODE_ENV: development
+      PORT: "8091"
+      KUBERNETES_API_URL: ${WASALX_PROVISIONER_KUBERNETES_API_URL:-https://kubernetes.default.svc}
+      KUBERNETES_BEARER_TOKEN_FILE: /var/run/secrets/wasalx-kubernetes/token
+      NODE_EXTRA_CA_CERTS: /var/run/secrets/wasalx-kubernetes/ca.crt
+      PROVISIONING_WORKSPACE_NAMESPACE: ${WASALX_PROVISIONER_WORKSPACE_NAMESPACE:-wasalx-tenants}
+      PROVISIONING_RECONCILER_IDENTITY: ${WASALX_PROVISIONER_RECONCILER_IDENTITY:-wasalx-workspace-controller/v1}
+      CONTROLLER_INSTANCE_ID: ${WASALX_CONTROLLER_INSTANCE_ID:-compose-controller-1}
+      CONTROLLER_LEASE_DURATION_SECONDS: ${WASALX_CONTROLLER_LEASE_DURATION_SECONDS:-120}
+      WORKSPACE_PROVIDER_URL: ${WASALX_WORKSPACE_PROVIDER_URL:-https://workspace-provider.platform.svc.cluster.local}
+      WASALX_CONTROL_URL: ${WASALX_WORKSPACE_CONTROL_URL:-http://control-api:3001}
+      ALLOW_INSECURE_WASALX_CONTROL_URL: "true"
+      WASALX_PORTAL_URL: ${WASALX_WORKSPACE_PORTAL_URL:-http://127.0.0.1:3000}
+      ALLOW_INSECURE_WASALX_PORTAL_URL: "true"
+      WORKSPACE_PROVIDER_TOKEN_FILE: /var/run/secrets/wasalx-provider/token
+      EXTERNAL_SECRET_STORE_NAME: ${WASALX_EXTERNAL_SECRET_STORE_NAME:-wasalx-tenant-secrets}
+      EXTERNAL_SECRET_STORE_KIND: ${WASALX_EXTERNAL_SECRET_STORE_KIND:-ClusterSecretStore}
+      PROVISIONING_WORKSPACE_BASE_DOMAIN: ${WASALX_PROVISIONER_BASE_DOMAIN:-support.localhost}
+      ZAMMAD_INGRESS_CLASS_NAME: ${WASALX_ZAMMAD_INGRESS_CLASS_NAME:-nginx}
+      ZAMMAD_INGRESS_NAMESPACE: ${WASALX_ZAMMAD_INGRESS_NAMESPACE:-ingress-nginx}
+      ZAMMAD_CLUSTER_ISSUER: ${WASALX_ZAMMAD_CLUSTER_ISSUER:-local-development}
+      ZAMMAD_STORAGE_CLASS_NAME: ${WASALX_ZAMMAD_STORAGE_CLASS_NAME:-standard}
+      ZAMMAD_ALLOWED_EGRESS_JSON: ${WASALX_ZAMMAD_ALLOWED_EGRESS_JSON:-[]}
+      OTEL_SERVICE_NAME: wasalx-tenant-workspace-controller
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+    volumes:
+      - type: bind
+        source: ${WASALX_PROVISIONER_TOKEN_FILE:-./infra/docker/full/provisioner/unconfigured-token}
+        target: /var/run/secrets/wasalx-kubernetes/token
+        read_only: true
+      - type: bind
+        source: ${WASALX_PROVISIONER_CA_FILE:-./infra/docker/full/provisioner/unconfigured-ca.crt}
+        target: /var/run/secrets/wasalx-kubernetes/ca.crt
+        read_only: true
+      - type: bind
+        source: ${WASALX_WORKSPACE_PROVIDER_TOKEN_FILE:-./infra/docker/full/provisioner/unconfigured-provider-token}
+        target: /var/run/secrets/wasalx-provider/token
+        read_only: true
+    networks: [observability, provisioning-egress]
+    restart: unless-stopped
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+
+networks:
+  edge: {}
+  core: { internal: true }
+  identity-db: { internal: true }
+  connectors: { internal: true }
+  storage: { internal: true }
+  tenant-zammad: { internal: true }
+  observability: { internal: true }
+  connector-egress: {}
+  invitation-egress: {}
+  security-egress: {}
+  tenant-egress: {}
+  provisioning-egress: {}
+  identity-runtime: { internal: true }
+
+volumes:
+  keycloak-postgresql-data: {}
+  minio-data: {}
+  clamav-db: {}
+  waha-gows-sessions: {}
+  waha-noweb-sessions: {}
+  zammad-postgresql-data: {}
+  zammad-redis-data: {}
+  zammad-elasticsearch-data: {}
+  zammad-storage: {}
+  zammad-backup: {}
+  prometheus-data: {}
+  alertmanager-data: {}
+  grafana-data: {}

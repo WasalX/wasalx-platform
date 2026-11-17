@@ -1,0 +1,23 @@
+managedWaha:
+  enabled: true
+  allowedEgressCidrs:
+    - cidr: 0.0.0.0/0
+      ports: [443]
+  gows:
+    enabled: true
+    image: registry.example/waha-gows@sha256:1111111111111111111111111111111111111111111111111111111111111111
+    replicas: 2
+    capacityPerReplica: 100
+    canaryOrdinals: [0]
+    canarySessionLimitPerReplica: 5
+    credentialSecretNames: [waha-gows-0-api-key, waha-gows-1-api-key]
+    secretReferences: [secret://platform/waha/gows-0, secret://platform/waha/gows-1]
+  noweb:
+    enabled: true
+    image: registry.example/waha-noweb@sha256:2222222222222222222222222222222222222222222222222222222222222222
+    replicas: 1
+    capacityPerReplica: 25
+    canaryOrdinals: []
+    canarySessionLimitPerReplica: 2
+    credentialSecretNames: [waha-noweb-0-api-key]
+    secretReferences: [secret://platform/waha/noweb-0]

@@ -1,0 +1,5 @@
+import { abortNotionRoutingOAuth, completeNotionRoutingOAuth } from "../../../../../../lib/data";
+import { authenticatePortalRequest } from "../../../../../../lib/request-auth";
+import { portalPublicOrigin } from "../../../../../../lib/portal-session";
+
+export async function GET(request:Request){const current=new URL(request.url);const destination=new URL("/app",portalPublicOrigin());destination.searchParams.set("view","connections");try{await authenticatePortalRequest(request,"bot:write");const code=current.searchParams.get("code");const state=current.searchParams.get("state");if(current.searchParams.get("error")){if(state)await abortNotionRoutingOAuth({state,reason:"DENIED"});throw new Error("authorization denied")}if(!state)throw new Error("authorization callback incomplete");if(!code){await abortNotionRoutingOAuth({state,reason:"FAILED"});throw new Error("authorization callback incomplete")}await completeNotionRoutingOAuth({code,state});destination.searchParams.set("routingIntegration","refresh")}catch{destination.searchParams.set("routingIntegration","failed")}return Response.redirect(destination,303)}

@@ -1,0 +1,6 @@
+import test from'node:test';import assert from'node:assert/strict';import{assertSafeFailure}from'../scripts/release/simulation-safe-retry-stage.mjs';import{validateUploadFault}from'../scripts/contracts/meta-simulation-server.mjs';
+const row={state:'FAILED_TERMINAL',manual_retry_allowed:true,attempts:1,lease_id:null,external_message_id:null},sha='a'.repeat(64),event={id:'one',sha256:sha,outcome:'FAILED_BEFORE_ALLOCATION',status:503};
+test('one safe preallocation failure binds consumed fault',()=>assertSafeFailure(row,[event],'one',sha));
+test('unknown or sent result never qualifies safe retry',()=>{assert.throws(()=>assertSafeFailure({...row,state:'OUTCOME_UNKNOWN'},[event],'one',sha));assert.throws(()=>assertSafeFailure({...row,external_message_id:'accepted'},[event],'one',sha))});
+test('wrong or repeated fault receipt rejected',()=>{assert.throws(()=>assertSafeFailure(row,[event,event],'one',sha));assert.throws(()=>assertSafeFailure(row,[{...event,sha256:'b'.repeat(64)}],'one',sha))});
+test('upload fault accepts only scoped identity and hash',()=>{validateUploadFault({id:'one',sha256:sha});assert.throws(()=>validateUploadFault({id:'../one',sha256:sha}));assert.throws(()=>validateUploadFault({id:'one',sha256:sha,mode:'other'}));});

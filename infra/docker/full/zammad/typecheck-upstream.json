@@ -1,0 +1,335 @@
+{
+  "revision": "8facd9250f4e1634124965eb0ba79a78a3fcdc19",
+  "baseFiles": [
+    {
+      "path": "package.json",
+      "sha256": "de4329f476e11a4816c48000817350f954b76b8ddb7ddd81ce076f703dc389b8"
+    },
+    {
+      "path": "pnpm-lock.yaml",
+      "sha256": "bd93216b09cdfc8f23fbfeef2acd2a1dce6e402cd5735bd885c208b159ea2823"
+    },
+    {
+      "path": "tsconfig.base.json",
+      "sha256": "bf9e9a684e8d46eca09fb053742d9ac34f9f1a9f0c1aaa0cdeb7e9075fd3b31d"
+    },
+    {
+      "path": "tsconfig.json",
+      "sha256": "c67eeaace965eda4afc9de2b112474b89fbc2ab5e689f182162760053f282f5a"
+    }
+  ],
+  "files": [
+    {
+      "path": "app/frontend/tests/graphql/builders/__tests__/mutation-calls.spec.ts",
+      "sha256": "6edda06702aff19fc2213c324b9b81ee51f39cab1b5b75c1f1504942296217cc"
+    },
+    {
+      "path": "app/frontend/tests/graphql/builders/__tests__/factory-generator.spec.ts",
+      "sha256": "d5d37a8563db2d646e32927296c4dea00b3d2b3b92660bf6aaf325236eb7ea8e"
+    },
+    {
+      "path": "app/frontend/tests/fixtures/graphqlSampleTypes.ts",
+      "sha256": "01fca1d9aa6fdef45f3da6c9bb2811103198c2683ceedb50c8259800bece90e2"
+    },
+    {
+      "path": "app/frontend/shared/entities/ticket-article/__tests__/mocks/ticket.ts",
+      "sha256": "d56584e7b1c9cf8aae1808c164ecf16840d9df4dc23914992e7c25e369dba534"
+    },
+    {
+      "path": "app/frontend/tests/graphql/builders/__tests__/query-calls.spec.ts",
+      "sha256": "bf4c907ca7b738ed7f92dec66a9ee7fd663f0dd8dde5ee883f41d3b7761a5684"
+    },
+    {
+      "path": "app/frontend/tests/graphql/builders/__tests__/queries.ts",
+      "sha256": "11763b0a4c0734ab5a130189ab32deeae56fa72e6dcd933a559d5b02a35cd16d"
+    },
+    {
+      "path": "app/frontend/tests/graphql/builders/__tests__/subscription-calls.spec.ts",
+      "sha256": "b73ccf8a1e5600ec1976decdb961001242f928c730d1fde4a7d073cb26cafda2"
+    },
+    {
+      "path": "app/frontend/tests/graphql/builders/README.md",
+      "sha256": "65a566dbe2e9c52e2338691d790e5703790db3f9926ce54ab554e1b07d966630"
+    },
+    {
+      "path": "app/frontend/tests/graphql/builders/utils.ts",
+      "sha256": "a4ca16944345d6d4060a5008e9e6163f667b408c8ea90f0c4047566897456708"
+    },
+    {
+      "path": "app/frontend/tests/graphql/factories/fixtures/ticket-article-customer-object-attributes.ts",
+      "sha256": "c22c599e20cf2840d25376c29d7f26ae020bda15076fd69c34409d7b5edbb1d1"
+    },
+    {
+      "path": "app/frontend/tests/graphql/builders/__tests__/utils.ts",
+      "sha256": "066c8da4af57938319fcf21e04eae140d179da228eb56a02cefe7fcb28548148"
+    },
+    {
+      "path": "app/frontend/tests/graphql/builders/mocks.ts",
+      "sha256": "fd08b82f91cccfc5a6b311c9e6e20c35baf7864379b074df594e86b6d3ef295b"
+    },
+    {
+      "path": "app/frontend/tests/graphql/builders/index.ts",
+      "sha256": "bc23ba52c6918e307f330563291aad9ee82b9e03fe0b1020039769bf7eee3226"
+    },
+    {
+      "path": "app/frontend/tests/graphql/factories/fixtures/ticket-article-object-attributes.ts",
+      "sha256": "7de28f8fdf99cf32a0b5c44ba7d3d508ffcabfcce6272746f8bdfe0e53715ecc"
+    },
+    {
+      "path": "app/frontend/tests/graphql/factories/fixtures/organization-object-attributes.ts",
+      "sha256": "cfec551bfd1fc24113647998a3570cd6ef6761a00f3f34f6cd5d51b246f7a8d8"
+    },
+    {
+      "path": "app/frontend/tests/graphql/builders/logger.ts",
+      "sha256": "990da5399d53514280cd23c8e109c333b52e774276cd080326f9fa21c075f0df"
+    },
+    {
+      "path": "app/frontend/tests/graphql/factories/types/AddressesField.ts",
+      "sha256": "01e18ed16f671d793e42a9248168a74f04ec07cf1d1ab48dc3af340941e3826d"
+    },
+    {
+      "path": "app/frontend/tests/graphql/factories/fixtures/ticket-customer-object-attributes.ts",
+      "sha256": "e7269bca35dfbafe774101473996efb198a9bcb381665ed00bc67de38ec680a1"
+    },
+    {
+      "path": "app/frontend/tests/graphql/factories/queries/userCurrentRecentCloseList.ts",
+      "sha256": "2acfc5e6c2460b29fe3b8efc1e92424b3e6317a27b503db51b28518cc30bc1f6"
+    },
+    {
+      "path": "app/frontend/tests/graphql/factories/types/Checklist.ts",
+      "sha256": "45aeb045f09dc4a87855c9e001c62f944e48b889f11962cb3bafa75d588d77dc"
+    },
+    {
+      "path": "app/frontend/tests/graphql/factories/fixtures/ticket-object-attributes.ts",
+      "sha256": "ce20663cdde1b0eecabad0f1d701fda892eaa101dc109b5c392d81b5d504f646"
+    },
+    {
+      "path": "app/frontend/tests/graphql/factories/types/ChecklistItem.ts",
+      "sha256": "0b222ef3b6ff3652b4b8a0ac300d26e90640af95f94928e04275de21e16b5a4b"
+    },
+    {
+      "path": "app/frontend/tests/graphql/factories/types/Avatar.ts",
+      "sha256": "c2ffa503ce9001e69c78a4a7f8e3a17fc43f95002d59c275d02bd876e1f64b9a"
+    },
+    {
+      "path": "app/frontend/tests/graphql/factories/fixtures/user-object-attributes.ts",
+      "sha256": "1fd369995fda0e0f7802fe74d1e2c81efcdccd037f9695589ae24e9b9d90f641"
+    },
+    {
+      "path": "app/frontend/tests/graphql/factories/types/KnowledgeBase.ts",
+      "sha256": "2eb0ea2d156789275fe3c1911d3b7c769a9363eb9780745d0cd7a3be4ab7e39c"
+    },
+    {
+      "path": "app/frontend/tests/graphql/factories/types/HistoryRecordEvent.ts",
+      "sha256": "6e2a83d1295a94695ef89f2384ee17db1a906f66c864d9049cf065ed08d93137"
+    },
+    {
+      "path": "app/frontend/tests/graphql/factories/types/FormUpdaterUser.ts",
+      "sha256": "597db06095a8395135c8176fffbf7b415e09485455cb7df89436c40e044322b7"
+    },
+    {
+      "path": "app/frontend/tests/graphql/factories/types/FormUpdaterOrganization.ts",
+      "sha256": "0bb9ea3b8ba49e08445419c27ce0ad64caafe13da89a08c95434661fe891972d"
+    },
+    {
+      "path": "app/frontend/tests/graphql/factories/types/KnowledgeBaseCategory.ts",
+      "sha256": "fe6bc5e1474a5d5195a8d1bcefb1cd6b6772200bfdd0a668ad66fc2043a61f27"
+    },
+    {
+      "path": "app/frontend/tests/graphql/factories/types/ObjectManagerFrontendAttributesPayload.ts",
+      "sha256": "4766f187627056bb89465dceb6913d760a1dd59509c4139159fe8d515fd03e08"
+    },
+    {
+      "path": "app/frontend/tests/graphql/factories/types/KnowledgeBaseAnswerTranslation.ts",
+      "sha256": "68cd52a5ac333b91fc0e2fbe6c910d5e9aa726d4ed8e5e41ed506da7727301c7"
+    },
+    {
+      "path": "app/frontend/tests/graphql/factories/types/Group.ts",
+      "sha256": "f698700884322f2f363cf1bd31295766c7930e85663a9d8cd0d7590cb2021e12"
+    },
+    {
+      "path": "app/frontend/tests/graphql/factories/types/Session.ts",
+      "sha256": "9ccd2b6ed121ff3e5a1cec6176377a90ed8312f5d5e5e0034698121f10083b38"
+    },
+    {
+      "path": "app/frontend/tests/graphql/factories/types/Ticket.ts",
+      "sha256": "573b5b9296b79e0e0f84893323264af1c85b48ad385d86bad1ef1c0569e3c6bb"
+    },
+    {
+      "path": "app/frontend/tests/graphql/factories/types/SearchResult.ts",
+      "sha256": "81b3ee736d71ab4e7efee07c5e60262956b90eb3e8658567572403717f3ec444"
+    },
+    {
+      "path": "app/frontend/tests/graphql/factories/types/Organization.ts",
+      "sha256": "28d9af466050f680d1188687521008b8efd68827ded0421439b7e7ce695fe1ef"
+    },
+    {
+      "path": "app/frontend/tests/graphql/factories/types/OnlineNotificationConnection.ts",
+      "sha256": "b025bb574e7af2762e768dc2ced0b6c9555b0318b16486c4e11fdfc5bbeb5fa3"
+    },
+    {
+      "path": "app/frontend/tests/graphql/factories/types/StoredFile.ts",
+      "sha256": "6afe9d03cb5eee8e73db593298ad34e38b8e53cdbd4e045e1af628e2ccb87b21"
+    },
+    {
+      "path": "app/frontend/tests/graphql/factories/types/TicketArticle.ts",
+      "sha256": "26480d8f9101ac55c7bdb0b4e36d769d3a63698798adbae17243f27256738e87"
+    },
+    {
+      "path": "app/frontend/tests/graphql/factories/types/PageInfo.ts",
+      "sha256": "2796cfb350872872174a2e4e457075dc9a4e793df58f5de8aa6be611a1457283"
+    },
+    {
+      "path": "app/frontend/tests/support/assertions/index.ts",
+      "sha256": "f5389df9026f7a75671b83e148dbe3cebee7d3773729491358928b3d6aea65ba"
+    },
+    {
+      "path": "app/frontend/tests/graphql/factories/types/UserTaskbarItem.ts",
+      "sha256": "b8f9d97f6eba458f1e77d0b129d8f5c276b63a5c9724dafae43c017eac8ba824"
+    },
+    {
+      "path": "app/frontend/tests/graphql/factories/types/TicketState.ts",
+      "sha256": "f746fe980384c457a2ace9f5cacd42753d76cc1777bdd0d916ec2082b2e8c5fa"
+    },
+    {
+      "path": "app/frontend/tests/graphql/factories/types/TicketPriority.ts",
+      "sha256": "558cae62725f99d70d1591e24f3d58f8046cef5813a0258357100037a042a116"
+    },
+    {
+      "path": "app/frontend/tests/support/assertions/toBeDescribedBy.ts",
+      "sha256": "babb0e603115572cb74b5b29ac624a570c989fbf3869f87af53a079566ed56ce"
+    },
+    {
+      "path": "app/frontend/tests/support/assertions/toHaveClasses.ts",
+      "sha256": "393e21b95b24e59d455b69d00c75bf5f18f2f0488000fd0b65bb10b5b375e12b"
+    },
+    {
+      "path": "app/frontend/tests/graphql/factories/types/User.ts",
+      "sha256": "bf81b8fa7c3f787d57ef9a448219d06751a750339c7a7f0c5e8c16723b2b6920"
+    },
+    {
+      "path": "app/frontend/tests/support/assertions/toBeAvatarElement.ts",
+      "sha256": "4390998a08a88bcebac330b6b012bd3784093766d7ea814eca2916f72f7f21ca"
+    },
+    {
+      "path": "app/frontend/tests/support/components/app.ts",
+      "sha256": "6dba1dcdab7460435e560fd90f7a6192dd96dc33c8b9ce9176c2854ad3892b63"
+    },
+    {
+      "path": "app/frontend/tests/support/components/iconQueries.ts",
+      "sha256": "f8de6c8b1e7bfc158aafc46dec20003b3e309a38d036209e7ae495ba6b1d8706"
+    },
+    {
+      "path": "app/frontend/tests/support/components/LayoutTestMobileView.vue",
+      "sha256": "74520364905ea42c3975b97646ea7fb7e85b7df176f1cadf9c8998ff41983d09"
+    },
+    {
+      "path": "app/frontend/tests/support/assertions/toHaveImagePreview.ts",
+      "sha256": "7322315ec57f1b368bdc0e4b53401018f4c1958c92f54159675143373cc69f42"
+    },
+    {
+      "path": "app/frontend/tests/support/assertions/toHaveCurrentUrl.ts",
+      "sha256": "61193b979d72d361bd6615b9ff35508c9bde3909b890b43a99d976fcf227c99a"
+    },
+    {
+      "path": "app/frontend/tests/support/components/checkSimpleTableContent.ts",
+      "sha256": "6955d2fbd57452ca3886a0f06b38d4895fc4d557f50da116b0bd4821066379b0"
+    },
+    {
+      "path": "app/frontend/tests/support/components/LayoutTestDesktopView.vue",
+      "sha256": "654011a74767971c07e25000c97bbb3b0eb4e0acc13fe3a9a52c769790faae86"
+    },
+    {
+      "path": "app/frontend/tests/support/components/index.ts",
+      "sha256": "fd76f7f90645cdefa75acca5a1359b3f8dce9f06a57b2f652835c443c4b159f5"
+    },
+    {
+      "path": "app/frontend/tests/support/components/types.ts",
+      "sha256": "67972a534e7a563a6b955451e9076f56a384810f068cefe002f3390b1f38d1f8"
+    },
+    {
+      "path": "app/frontend/tests/support/components/initializeStore.ts",
+      "sha256": "5bb91bb4405924539606fdf79ed316e45cea40bed11c6815aa8d2c9cac302220"
+    },
+    {
+      "path": "app/frontend/tests/support/components/linkQueries.ts",
+      "sha256": "9f2956af1a35e0f3281f31d7fd39cfe8f7454355db4e02a047b50bdb7ef910ee"
+    },
+    {
+      "path": "app/frontend/tests/support/components/renderComponent.ts",
+      "sha256": "33f9d6ede28f5c6a470089a715d51719a4bf1e3cd6a6d780affafde779bf319d"
+    },
+    {
+      "path": "app/frontend/tests/support/mock-apollo-client.ts",
+      "sha256": "6de87e6644c2f474fda233328656d3821a3b82acafdee276da1a075b1303df4f"
+    },
+    {
+      "path": "app/frontend/tests/support/components/visitView.ts",
+      "sha256": "1e0328a26be8e70a4a6349f8185bd24639506f5966a2cf812340954938f79c75"
+    },
+    {
+      "path": "app/frontend/tests/support/mock-applicationConfig.ts",
+      "sha256": "1f5c2db01e2a134483ec749db1bf71bdde3c4711170bd594596276622e778252"
+    },
+    {
+      "path": "app/frontend/tests/support/components/mounted.ts",
+      "sha256": "830fa423564137af4e1129eff1452355f47f9ef060a7f764b69139b1f594f201"
+    },
+    {
+      "path": "app/frontend/tests/support/mock-permissions.ts",
+      "sha256": "9e839b40febad58480c35e65f973eefbcecad2cc570eefb37269798a63ea8239"
+    },
+    {
+      "path": "app/frontend/tests/support/mock-mediaTheme.ts",
+      "sha256": "20e647878f74e69836c84eaa2efb8f98c20dd76c742f1e3010b15e765388250e"
+    },
+    {
+      "path": "app/frontend/tests/support/mock-userCurrent.ts",
+      "sha256": "0d67150309436ee2657c0faa59ae495a436e1cee452854e2e6d6fcc66c345384"
+    },
+    {
+      "path": "app/frontend/tests/support/mock-authentication.ts",
+      "sha256": "96381d3f86decb6c5ab8653244f7b4d848e234d127eca060c4b5df45ba941388"
+    },
+    {
+      "path": "app/frontend/tests/support/mock-graphql-api.ts",
+      "sha256": "c64b7eef1e90226fdef0f6d15b2160c2616da1ed87fb23996eccfeb5f27a6696"
+    },
+    {
+      "path": "app/frontend/tests/support/mock-user.ts",
+      "sha256": "53bed450d63be45555e14196e16aad5c5b3a210a5646556c4f9f212b4459c4bb"
+    },
+    {
+      "path": "app/frontend/tests/support/mock-vue-router.ts",
+      "sha256": "e38fbfa2132f1d6d996a4fa003ce3e0d2d571c0b12d091c7d27cfc47d07a3852"
+    },
+    {
+      "path": "app/frontend/tests/support/mock-locale.ts",
+      "sha256": "a47e7216a18297b5c3a28d6448a4e8665406f4d58a61909449971360aefed325"
+    },
+    {
+      "path": "app/frontend/tests/support/vitest-wrapper.ts",
+      "sha256": "42244f4e3ee2e1bbb3f5a116e36eac3beaba526a441e47cec943623e6316e44a"
+    },
+    {
+      "path": "app/frontend/tests/support/utils.ts",
+      "sha256": "6173d419f902be332554460d077854f90466246213fdd25eb771b60e50616c5c"
+    },
+    {
+      "path": "app/frontend/tests/support/mocks/formUpdater.ts",
+      "sha256": "76f69af6695171b087f03c4129aa683a3795c408df9e66f0448863a00b66ac20"
+    },
+    {
+      "path": "app/frontend/tests/support/mock-webauthn.ts",
+      "sha256": "801fadd5060619a071b1c9973d72e50d568655df2b20d46b86b5c2061de0a324"
+    },
+    {
+      "path": "app/frontend/tests/vitest.setup.ts",
+      "sha256": "bcbe778fc93b8f45c09dd017a6f46be20d68dd7c3aa188a35ce69c1b314e4682"
+    },
+    {
+      "path": "app/frontend/tests/support/mocks/ticket-overviews.ts",
+      "sha256": "39ac5100bdde3025902157ac2ca257c8d5aca7958898e7daa5026cc4322b442b"
+    }
+  ]
+}

@@ -1,0 +1,26 @@
+# syntax=docker/dockerfile:1.7
+FROM docker.io/library/golang:1.26.8-alpine@sha256:ce864e7223ac17b1775e6fd0b4c0db580c2eb50e7953a427916379e4b92a1628 AS build
+ARG TARGETOS=linux
+ARG TARGETARCH=amd64
+ENV GOPROXY=https://proxy.golang.org,direct
+ADD --checksum=sha256:f09117dd6ad62d3f53d2618ba3950ced4a318110b95ce5afe76b7df0ba74000f \
+  https://github.com/prometheus/alertmanager/archive/refs/tags/v0.34.0.tar.gz /tmp/source.tar.gz
+ADD --checksum=sha256:990d0be563b733bd0eae180dd609591164028f80cdf47ee8c1c3a1bfafff8d23 \
+  https://github.com/prometheus/alertmanager/releases/download/v0.34.0/alertmanager-web-ui-0.34.0.tar.gz /tmp/ui.tar.gz
+RUN mkdir /src && tar -xzf /tmp/source.tar.gz -C /src --strip-components=1 && \
+    tar -xzf /tmp/ui.tar.gz -C /src/ui/app
+WORKDIR /src
+RUN go get google.golang.org/grpc@v1.83.2
+RUN CGO_ENABLED=0 GOOS="$TARGETOS" GOARCH="$TARGETARCH" go build -mod=mod -trimpath -tags netgo \
+      -ldflags='-s -w -X github.com/prometheus/common/version.Version=0.34.0 -X github.com/prometheus/common/version.Revision=dd880f3d3ce50aab11167f2f45ba16ce8d1ff73a -X github.com/prometheus/common/version.Branch=HEAD' \
+      -o /alertmanager ./cmd/alertmanager
+
+FROM gcr.io/distroless/static-debian13:nonroot@sha256:1c2c046bc09ed40fad370b599a0b1ae7987f55b01e247cf27a7c27cd97e5bbc7
+ARG WASALX_CANDIDATE_SHA=unfrozen
+ARG WASALX_CANDIDATE_TREE=unfrozen
+LABEL org.opencontainers.image.revision="${WASALX_CANDIDATE_SHA}" \
+      io.wasalx.source.tree="${WASALX_CANDIDATE_TREE}"
+COPY --from=build --chown=65534:65534 /alertmanager /bin/alertmanager
+USER 65534:65534
+WORKDIR /alertmanager
+ENTRYPOINT ["/bin/alertmanager"]

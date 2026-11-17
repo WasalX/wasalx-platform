@@ -1,0 +1,50 @@
+# Run with the Compose-pinned Prometheus image and either rule file mounted at
+# /rules.yaml: promtool test rules /tests.yaml (mount this file at /tests.yaml).
+rule_files: [/rules.yaml]
+evaluation_interval: 1m
+tests:
+  - name: idle traffic never alerts
+    interval: 1m
+    input_series:
+      - {series: 'wasalx_provider_send_seconds_count{result="succeeded"}', values: '0+0x20'}
+      - {series: 'wasalx_provider_send_seconds_count{result="terminal_failure"}', values: '0+0x20'}
+    promql_expr_test:
+      - {expr: 'ALERTS{alertname="WasalXProviderSendErrorRateHigh",alertstate="firing"}', eval_time: 10m, exp_samples: []}
+  - name: successes without a failure series never alert
+    interval: 1m
+    input_series:
+      - {series: 'wasalx_provider_send_seconds_count{result="succeeded"}', values: '0+100x20'}
+    promql_expr_test:
+      - {expr: 'ALERTS{alertname="WasalXProviderSendErrorRateHigh",alertstate="firing"}', eval_time: 10m, exp_samples: []}
+  - name: exactly five percent never alerts
+    interval: 1m
+    input_series:
+      - {series: 'wasalx_provider_send_seconds_count{result="succeeded"}', values: '0+95x20'}
+      - {series: 'wasalx_provider_send_seconds_count{result="retryable_failure"}', values: '0+5x20'}
+    promql_expr_test:
+      - {expr: 'ALERTS{alertname="WasalXProviderSendErrorRateHigh",alertstate="firing"}', eval_time: 10m, exp_samples: []}
+  - name: sustained terminal failures alert
+    interval: 1m
+    input_series:
+      - {series: 'wasalx_provider_send_seconds_count{result="succeeded"}', values: '0+90x20'}
+      - {series: 'wasalx_provider_send_seconds_count{result="terminal_failure"}', values: '0+10x20'}
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="WasalXProviderSendErrorRateHigh",alertstate="firing"}'
+        eval_time: 10m
+        exp_samples: &firing
+          - {labels: 'ALERTS{alertname="WasalXProviderSendErrorRateHigh",alertstate="firing",severity="critical",owner="connector"}', value: 1}
+  - name: retryable failures respect the pending period
+    interval: 1m
+    input_series:
+      - {series: 'wasalx_provider_send_seconds_count{result="succeeded"}', values: '0+90x20'}
+      - {series: 'wasalx_provider_send_seconds_count{result="retryable_failure"}', values: '0+10x20'}
+    promql_expr_test:
+      - {expr: 'ALERTS{alertname="WasalXProviderSendErrorRateHigh",alertstate="firing"}', eval_time: 3m, exp_samples: []}
+      - {expr: 'ALERTS{alertname="WasalXProviderSendErrorRateHigh",alertstate="firing"}', eval_time: 10m, exp_samples: *firing}
+  - name: unknown outcomes alert without being counted as successes
+    interval: 1m
+    input_series:
+      - {series: 'wasalx_provider_send_seconds_count{result="succeeded"}', values: '0+90x20'}
+      - {series: 'wasalx_provider_send_seconds_count{result="outcome_unknown"}', values: '0+10x20'}
+    promql_expr_test:
+      - {expr: 'ALERTS{alertname="WasalXProviderSendErrorRateHigh",alertstate="firing"}', eval_time: 10m, exp_samples: *firing}

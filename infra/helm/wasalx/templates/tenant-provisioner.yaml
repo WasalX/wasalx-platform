@@ -1,0 +1,174 @@
+{{- if .Values.provisioner.enabled }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: wasalx-tenant-provisioner
+  labels: { app.kubernetes.io/name: wasalx-tenant-provisioner, app.kubernetes.io/part-of: wasalx, wasalx.io/plane: provisioning }
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: wasalx-tenant-provisioner
+  labels: { app.kubernetes.io/part-of: wasalx }
+rules:
+  # Deliberately no access to Secrets, Pods, Deployments, Namespaces, exec, or
+  # TenantWorkspace/status. A separate reviewed controller realizes the CR.
+  - apiGroups: [platform.wasalx.io]
+    resources: [tenantworkspaces]
+    verbs: [get, list, watch, create, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: wasalx-tenant-provisioner
+  labels: { app.kubernetes.io/part-of: wasalx }
+subjects:
+  - { kind: ServiceAccount, name: wasalx-tenant-provisioner, namespace: {{ .Release.Namespace | quote }} }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: wasalx-tenant-provisioner }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: wasalx-workspace-status-writer
+  labels: { app.kubernetes.io/part-of: wasalx }
+rules:
+  - apiGroups: [platform.wasalx.io]
+    resources: [tenantworkspaces]
+    verbs: [get, list, watch]
+  - apiGroups: [platform.wasalx.io]
+    resources: [tenantworkspaces/status]
+    verbs: [get, patch, update]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: wasalx-workspace-status-writer
+  labels: { app.kubernetes.io/part-of: wasalx }
+subjects:
+  - kind: ServiceAccount
+    name: {{ required "provisioner.reconcilerServiceAccount is required" .Values.provisioner.reconcilerServiceAccount | quote }}
+    namespace: {{ .Release.Namespace | quote }}
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: wasalx-workspace-status-writer }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wasalx-tenant-provisioner
+  labels: { app.kubernetes.io/name: wasalx-tenant-provisioner, app.kubernetes.io/part-of: wasalx, wasalx.io/plane: provisioning }
+spec:
+  replicas: {{ .Values.provisioner.replicas }}
+  revisionHistoryLimit: 3
+  strategy: { type: RollingUpdate, rollingUpdate: { maxUnavailable: 0, maxSurge: 1 } }
+  selector: { matchLabels: { app.kubernetes.io/name: wasalx-tenant-provisioner } }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: wasalx-tenant-provisioner, app.kubernetes.io/part-of: wasalx, wasalx.io/plane: provisioning }
+    spec:
+      serviceAccountName: wasalx-tenant-provisioner
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: tenant-provisioner
+          image: {{ required "provisioner.image is required" .Values.provisioner.image | quote }}
+          imagePullPolicy: IfNotPresent
+          securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, runAsNonRoot: true, capabilities: { drop: [ALL] } }
+          ports: [{ name: http, containerPort: {{ .Values.provisioner.port }}, protocol: TCP }]
+          env:
+            - { name: NODE_ENV, value: production }
+            - { name: PORT, value: {{ .Values.provisioner.port | quote }} }
+            - { name: KUBERNETES_API_URL, value: {{ .Values.provisioner.kubernetesApiUrl | quote }} }
+            - { name: KUBERNETES_BEARER_TOKEN_FILE, value: /var/run/secrets/wasalx-kubernetes/token }
+            - { name: NODE_EXTRA_CA_CERTS, value: /var/run/secrets/wasalx-kubernetes/ca.crt }
+            - name: PROVISIONING_WORKSPACE_NAMESPACE
+              valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
+            - { name: PROVISIONING_RECONCILER_IDENTITY, value: {{ .Values.provisioner.reconcilerIdentity | quote }} }
+            - { name: PROVISIONING_WORKSPACE_BASE_DOMAIN, value: {{ .Values.provisioner.workspaceBaseDomain | quote }} }
+            - { name: PROVISIONING_OIDC_ISSUER, value: {{ .Values.provisioner.oidcIssuer | quote }} }
+            - { name: PROVISIONING_RECONCILE_TIMEOUT_MS, value: {{ .Values.provisioner.reconcileTimeoutMs | quote }} }
+            - { name: OTEL_SERVICE_NAME, value: wasalx-tenant-provisioner }
+            - { name: OTEL_SDK_DISABLED, value: {{ ternary "false" "true" .Values.observability.enabled | quote }} }
+            - { name: OTEL_EXPORTER_OTLP_ENDPOINT, value: {{ .Values.observability.otlpEndpoint | quote }} }
+            - { name: OTEL_EXPORTER_OTLP_PROTOCOL, value: http/protobuf }
+            - { name: OTEL_METRIC_EXPORT_INTERVAL, value: {{ .Values.observability.metricExportIntervalMs | quote }} }
+            - { name: OTEL_TRACES_SAMPLER, value: {{ .Values.observability.tracesSampler | quote }} }
+            - { name: OTEL_TRACES_SAMPLER_ARG, value: {{ .Values.observability.tracesSamplerArg | quote }} }
+            - { name: WASALX_ENVIRONMENT, value: {{ .Values.environment | quote }} }
+            - name: PROVISIONING_DRIVER_JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ required "provisioner.secretName is required" .Values.provisioner.secretName | quote }}
+                  key: PROVISIONING_DRIVER_JWT_SECRET
+          resources: {{ toYaml .Values.provisioner.resources | nindent 12 }}
+          readinessProbe: { httpGet: { path: /readyz, port: http }, initialDelaySeconds: 5, periodSeconds: 10, timeoutSeconds: 3, failureThreshold: 3 }
+          livenessProbe: { httpGet: { path: /livez, port: http }, initialDelaySeconds: 10, periodSeconds: 20, timeoutSeconds: 3, failureThreshold: 3 }
+          startupProbe: { httpGet: { path: /livez, port: http }, periodSeconds: 5, timeoutSeconds: 3, failureThreshold: 24 }
+          volumeMounts:
+            - { name: kubernetes-identity, mountPath: /var/run/secrets/wasalx-kubernetes, readOnly: true }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: kubernetes-identity
+          projected:
+            defaultMode: 0440
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  audience: {{ .Values.provisioner.kubernetesAudience | quote }}
+                  expirationSeconds: 3600
+              - configMap:
+                  name: kube-root-ca.crt
+                  items: [{ key: ca.crt, path: ca.crt }]
+        - { name: tmp, emptyDir: { sizeLimit: 64Mi } }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: wasalx-tenant-provisioner
+  labels: { app.kubernetes.io/name: wasalx-tenant-provisioner, app.kubernetes.io/part-of: wasalx }
+spec:
+  selector: { app.kubernetes.io/name: wasalx-tenant-provisioner }
+  ports: [{ name: http, port: {{ .Values.provisioner.port }}, targetPort: http }]
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: { name: wasalx-tenant-provisioner, labels: { app.kubernetes.io/part-of: wasalx } }
+spec:
+  maxUnavailable: 1
+  selector: { matchLabels: { app.kubernetes.io/name: wasalx-tenant-provisioner } }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: wasalx-tenant-provisioner, labels: { app.kubernetes.io/part-of: wasalx } }
+spec:
+  podSelector: { matchLabels: { app.kubernetes.io/name: wasalx-tenant-provisioner, wasalx.io/plane: provisioning } }
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector: { matchLabels: { app.kubernetes.io/name: wasalx-api, wasalx.io/plane: control } }
+      ports: [{ protocol: TCP, port: {{ .Values.provisioner.port }} }]
+  egress:
+    - to:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: kube-system } }
+      ports: [{ protocol: UDP, port: 53 }, { protocol: TCP, port: 53 }]
+    {{- if .Values.observability.enabled }}
+    - to:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: {{ .Values.observability.collector.namespace | quote }} } }
+          podSelector:
+            matchLabels: {{ toYaml .Values.observability.collector.podLabels | nindent 14 }}
+      ports: [{ protocol: TCP, port: {{ .Values.observability.collector.port }} }]
+    {{- end }}
+    {{- range .Values.provisioner.allowedEgressCidrs }}
+    - to: [{ ipBlock: { cidr: {{ .cidr | quote }} } }]
+      ports:
+        {{- range .ports }}
+        - { protocol: TCP, port: {{ . }} }
+        {{- end }}
+    {{- end }}
+{{- end }}

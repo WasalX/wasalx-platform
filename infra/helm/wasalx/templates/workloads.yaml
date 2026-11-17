@@ -1,0 +1,140 @@
+{{- $root := . -}}
+{{- range $name, $service := dict "portal" .Values.portal "api" .Values.api "worker" .Values.worker "invitation-mailer" .Values.invitationMailer "identity-policy-activator" .Values.identityPolicyActivator }}
+{{- $secretClient := and $root.Values.productionSecretSidecar.enabled (has $name (list "api" "worker" "invitation-mailer")) }}
+{{- $trustClient := $root.Values.productionSecretSidecar.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wasalx-{{ $name }}
+  labels: { app.kubernetes.io/name: "wasalx-{{ $name }}", app.kubernetes.io/part-of: wasalx, app.kubernetes.io/component: {{ $name | quote }}, wasalx.io/plane: control }
+spec:
+  replicas: {{ $service.replicas }}
+  revisionHistoryLimit: 3
+  strategy: { type: RollingUpdate, rollingUpdate: { maxUnavailable: 0, maxSurge: 1 } }
+  selector: { matchLabels: { app.kubernetes.io/name: "wasalx-{{ $name }}" } }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: "wasalx-{{ $name }}", app.kubernetes.io/part-of: wasalx, app.kubernetes.io/component: {{ $name | quote }}, wasalx.io/plane: control }
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/config.yaml") $root | sha256sum }}
+{{- if and (eq $name "worker") $root.Values.managedWaha.enabled }}
+        checksum/managed-waha-registry: {{ toJson $root.Values.managedWaha | sha256sum }}
+{{- end }}
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 60
+      securityContext: {{ toYaml $root.Values.podSecurityContext | nindent 8 }}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector: { matchLabels: { app.kubernetes.io/name: "wasalx-{{ $name }}" } }
+      containers:
+        - name: {{ $name }}
+          image: {{ required (printf "%s.image is required" $name) $service.image | quote }}
+          imagePullPolicy: IfNotPresent
+          securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, runAsNonRoot: true, capabilities: { drop: ["ALL"] } }
+          ports: [{ name: http, containerPort: {{ $service.port }}, protocol: TCP }]
+          resources: {{ toYaml $service.resources | nindent 12 }}
+          env:
+{{- if $trustClient }}
+            - { name: NODE_EXTRA_CA_CERTS, value: /secret-adapter-ca/ca.crt }
+{{- end }}
+{{- if $secretClient }}
+            - { name: SECRET_SIDECAR_TOKEN, valueFrom: { secretKeyRef: { name: {{ $root.Values.productionSecretSidecar.credentialsSecretName | quote }}, key: SECRET_SIDECAR_TOKEN } } }
+{{- if eq $name "api" }}
+            - { name: SECRET_SIDECAR_WRITE_TOKEN, valueFrom: { secretKeyRef: { name: {{ $root.Values.productionSecretSidecar.credentialsSecretName | quote }}, key: SECRET_SIDECAR_WRITE_TOKEN } } }
+{{- end }}
+{{- end }}
+            - { name: OTEL_SERVICE_NAME, value: {{ printf "wasalx-%s" $name | quote }} }
+{{- if eq $name "portal" }}
+            - { name: VINEXT_TRUSTED_HOSTS, value: {{ (urlParse $root.Values.portalPublicOrigin).host | quote }} }
+            - { name: PORTAL_SESSION_REDIS_URL, valueFrom: { secretKeyRef: { name: {{ $service.secretName | quote }}, key: PORTAL_SESSION_REDIS_URL } } }
+            - { name: PLATFORM_PORTAL_SESSION_REDIS_URL, valueFrom: { secretKeyRef: { name: {{ $service.secretName | quote }}, key: PLATFORM_PORTAL_SESSION_REDIS_URL } } }
+{{- else if or (eq $name "api") (eq $name "worker") }}
+            - { name: REDIS_URL, valueFrom: { secretKeyRef: { name: {{ $service.secretName | quote }}, key: REDIS_URL } } }
+{{- end }}
+{{- if eq $name "api" }}
+            # This is an opaque secret-manager reference used when creating a
+            # connection. WAHA worker endpoints and API keys are never exposed
+            # to this pod.
+            - { name: WAHA_ADMIN_SECRET_REFERENCE, value: {{ $root.Values.wahaAdminSecretReference | quote }} }
+{{- if $root.Values.provisioner.enabled }}
+{{- range $key := list "PROVISIONING_DRIVER_URL" "PROVISIONING_DRIVER_TIMEOUT_MS" "WASALX_ZAMMAD_PACKAGE_VERSION" "WASALX_ZAMMAD_PACKAGE_SHA256" "ZAMMAD_IMAGE_BY_VERSION_JSON" "ZAMMAD_CONFIGURATOR_IMAGE" "ZAMMAD_NGINX_IMAGE" "ZAMMAD_REDIS_IMAGE" "ZAMMAD_MEMCACHED_IMAGE" }}
+            - name: {{ $key }}
+              valueFrom: { configMapKeyRef: { name: wasalx-runtime, key: {{ $key }} } }
+{{- end }}
+{{- end }}
+{{- end }}
+{{- if and (eq $name "worker") $root.Values.managedWaha.enabled }}
+            # Explicit env overrides any stale WAHA_WORKERS_JSON accidentally
+            # left in worker.secretName. The generated Secret contains private
+            # endpoints and opaque secret references, never API-key material.
+            - name: WAHA_WORKERS_JSON
+              valueFrom: { secretKeyRef: { name: wasalx-managed-waha-registry, key: WAHA_WORKERS_JSON } }
+{{- else if eq $name "worker" }}
+            # Backward-compatible external-worker/development fallback.
+            # Production continues to require WAHA_WORKERS_JSON in the
+            # connector-only worker Secret.
+            - { name: WAHA_BASE_URL, value: {{ $root.Values.wahaBaseUrl | quote }} }
+            - { name: WAHA_ADMIN_SECRET_REFERENCE, value: {{ $root.Values.wahaAdminSecretReference | quote }} }
+{{- end }}
+{{- if eq $name "worker" }}
+            # The public callback origin is control-plane configuration, not a
+            # connector secret. Keep it explicit so a stale same-named key in
+            # worker.secretName cannot redirect provider webhook registration.
+            - name: PUBLIC_WEBHOOK_BASE_URL
+              valueFrom: { configMapKeyRef: { name: wasalx-runtime, key: PUBLIC_WEBHOOK_BASE_URL } }
+            - { name: WAHA_WORKER_PROBE_TIMEOUT_MS, value: {{ $root.Values.connectorRetries.wahaWorkerProbeTimeoutMs | quote }} }
+            - { name: WAHA_DELIVERY_MAX_ATTEMPTS, value: {{ $root.Values.connectorRetries.wahaDeliveryMaxAttempts | quote }} }
+            - { name: META_DELIVERY_MAX_ATTEMPTS, value: {{ $root.Values.connectorRetries.metaDeliveryMaxAttempts | quote }} }
+            - { name: ZAMMAD_STATUS_MAX_ATTEMPTS, value: {{ $root.Values.connectorRetries.zammadStatusMaxAttempts | quote }} }
+{{- end }}
+{{- if or (eq $name "api") (eq $name "worker") }}
+            # One shared, non-secret release gate controls both configuration
+            # ingress and connector execution. Explicit env wins over any stale
+            # same-named key accidentally left in a workload Secret.
+            - name: CLIENT_ROUTING_EXTERNAL_CONNECTORS_ENABLED
+              valueFrom: { configMapKeyRef: { name: wasalx-runtime, key: CLIENT_ROUTING_EXTERNAL_CONNECTORS_ENABLED } }
+{{- end }}
+          envFrom:
+            - configMapRef: { name: wasalx-runtime }
+            - secretRef: { name: {{ required (printf "%s.secretName is required" $name) $service.secretName | quote }} }
+{{- if eq $name "api" }}
+            # The cross-tenant cleanup database login and sidecar write token
+            # live only in this dedicated secret. Portal, migration, and
+            # connector-worker pods never receive them.
+            - secretRef: { name: {{ required "api.cleanupSecretName is required" $service.cleanupSecretName | quote }} }
+            # api.secretName must provide a distinct read-only
+            # PRIVACY_EXPORT_S3_ACCESS_KEY_ID / PRIVACY_EXPORT_S3_SECRET_ACCESS_KEY.
+            # It also provides INVITATION_TOKEN_ENCRYPTION_PUBLIC_KEY only;
+            # the invitation-mailer private key belongs to a separate worker.
+{{- end }}
+          readinessProbe: { httpGet: { path: {{ $service.readinessPath | quote }}, port: http }, initialDelaySeconds: 5, periodSeconds: 10, timeoutSeconds: 3, failureThreshold: 3 }
+          livenessProbe: { httpGet: { path: {{ $service.livenessPath | quote }}, port: http }, initialDelaySeconds: 15, periodSeconds: 20, timeoutSeconds: 3, failureThreshold: 3 }
+          startupProbe: { httpGet: { path: {{ $service.livenessPath | quote }}, port: http }, periodSeconds: 5, timeoutSeconds: 3, failureThreshold: 24 }
+          lifecycle: { preStop: { exec: { command: ["node", "-e", "setTimeout(() => {}, 10000)"] } } }
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+{{- if $trustClient }}
+            - { name: secret-adapter-ca, mountPath: /secret-adapter-ca, readOnly: true }
+{{- end }}
+      volumes:
+        - { name: tmp, emptyDir: { sizeLimit: 256Mi } }
+{{- if $trustClient }}
+        - name: secret-adapter-ca
+          configMap:
+            name: {{ required "production secret adapter requires caConfigMapName" $root.Values.productionSecretSidecar.caConfigMapName | quote }}
+            items: [{ key: ca.crt, path: ca.crt }]
+{{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: wasalx-{{ $name }}
+  labels: { app.kubernetes.io/name: "wasalx-{{ $name }}", app.kubernetes.io/part-of: wasalx }
+spec:
+  selector: { app.kubernetes.io/name: "wasalx-{{ $name }}" }
+  ports: [{ name: http, port: {{ $service.port }}, targetPort: http }]
+---
+{{- end }}

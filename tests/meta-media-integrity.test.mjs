@@ -1,0 +1,7 @@
+import test from 'node:test';import assert from 'node:assert/strict';import {createHash}from'node:crypto';import{validateSyntheticMedia,validateStoredSyntheticMedia}from'../scripts/contracts/meta-simulation-server.mjs';
+const png=Buffer.from([137,80,78,71,13,10,26,10,1]),pdf=Buffer.from('%PDF-1.4\n');
+const stored=()=>({id:'SIMMEDIA1',filename:'fixture.png',mime:'image/png',bytes:png.length,base64:png.toString('base64'),sha256:createHash('sha256').update(png).digest('hex')});
+test('PNG and PDF byte signatures agree with MIME',()=>{assert.equal(validateSyntheticMedia(png,'image/png'),png);assert.equal(validateSyntheticMedia(pdf,'application/pdf'),pdf)});
+test('mislabeled and unsupported media rejected',()=>{assert.throws(()=>validateSyntheticMedia(pdf,'image/png'));assert.throws(()=>validateSyntheticMedia(png,'application/pdf'));assert.throws(()=>validateSyntheticMedia(png,'text/plain'))});
+test('empty and oversized objects rejected',()=>{assert.throws(()=>validateSyntheticMedia(Buffer.alloc(0),'image/png'));assert.throws(()=>validateSyntheticMedia(Buffer.alloc(1048577),'image/png'))});
+test('restoration validates sequence and all byte identity fields',()=>{validateStoredSyntheticMedia(stored(),0);for(const change of [{id:'SIMMEDIA2'},{bytes:1},{sha256:'0'.repeat(64)},{mime:'application/pdf'},{base64:stored().base64+'!'}])assert.throws(()=>validateStoredSyntheticMedia({...stored(),...change},0));assert.throws(()=>validateStoredSyntheticMedia(stored(),1));});

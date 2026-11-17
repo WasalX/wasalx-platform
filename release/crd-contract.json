@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "contracts": [
+    {
+      "name": "tenantworkspaces.platform.wasalx.io",
+      "resource": "tenantworkspaces.platform.wasalx.io",
+      "apiVersion": "platform.wasalx.io/v1alpha1",
+      "listKind": "TenantWorkspaceList",
+      "source": "infra/helm/wasalx/crds/platform.wasalx.io_tenantworkspaces.yaml",
+      "sourceSha256": "ce93a07fd9f587a5cabbdc34fc692457e11f41fec04eacee87f63c6eb8761370",
+      "projectionSha256": "2b4cd830d8fb0f391477bc8e9e16fbf5fdc0b5678776d050f76fa3c0e50f0afb"
+    },
+    {
+      "name": "workspaceproviderresources.providers.wasalx.io",
+      "resource": "workspaceproviderresources.providers.wasalx.io",
+      "apiVersion": "providers.wasalx.io/v1alpha1",
+      "listKind": "WorkspaceProviderResourceList",
+      "source": "infra/helm/wasalx/crds/providers.wasalx.io_workspaceproviderresources.yaml",
+      "sourceSha256": "01136e49795d7ed02fafa4867aa66477505a10f73d9fea9e8378611dcbbb00dd",
+      "projectionSha256": "ca17554d261d214fcc5647baa593eff71a4f507f84174a46213cf2b7b8c53c94"
+    }
+  ]
+}

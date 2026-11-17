@@ -1,0 +1,7 @@
+apiVersion: v2
+name: wasalx
+description: WasalX multi-tenant WhatsApp operations control plane
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+kubeVersion: ">=1.30.0-0"

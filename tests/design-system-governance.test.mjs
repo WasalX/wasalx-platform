@@ -1,0 +1,206 @@
+import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import test from "node:test";
+import { isAbsolute, relative, resolve, sep } from "node:path";
+
+const root = new URL("../", import.meta.url);
+const read = (path) => readFile(new URL(path, root), "utf8");
+
+function relativeLuminance(hex) {
+  const channels = hex.match(/[\da-f]{2}/giu).map((channel) => Number.parseInt(channel, 16) / 255);
+  const linear = channels.map((channel) => channel <= 0.03928 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4);
+  return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2];
+}
+
+function contrast(first, second) {
+  const luminances = [relativeLuminance(first), relativeLuminance(second)].sort((a, b) => b - a);
+  return (luminances[0] + 0.05) / (luminances[1] + 0.05);
+}
+
+test("Storybook dependencies and scripts are exact and version-aligned", async () => {
+  const packageJson = JSON.parse(await read("package.json"));
+  const required = [
+    "storybook",
+    "@storybook/react-vite",
+    "@storybook/addon-docs",
+    "@storybook/addon-a11y",
+  ];
+  for (const dependency of required) {
+    assert.equal(packageJson.devDependencies[dependency], "10.6.2", `${dependency} must stay pinned to the Storybook release`);
+  }
+  assert.equal(packageJson.devDependencies["@playwright/test"], "1.62.1");
+  assert.equal(packageJson.devDependencies["@axe-core/playwright"], "4.12.1");
+  assert.match(packageJson.scripts["build:storybook"], /storybook build/u);
+  assert.match(packageJson.scripts["test:visual"], /storybook-visual-regression/u);
+});
+
+test("production and Storybook share the pinned local Geist assets", async () => {
+  const fonts = new Map([
+    ["app/fonts/Geist-Variable.woff2", "a369fcf5628ea2aa4e1b9e2ec6a5b3624e365bda588e1f0f2f12b564f728fbb8"],
+    ["app/fonts/GeistMono-Variable.woff2", "fba8f577f38a2bbcbe818efa6348dd58f36303a10b8737c42fefad275be563ab"],
+  ]);
+  for (const [path, expected] of fonts) {
+    const contents = await readFile(new URL(path, root));
+    assert.equal(createHash("sha256").update(contents).digest("hex"), expected, `${path} must remain pinned`);
+  }
+  assert.match(await read("app/fonts/LICENSE.txt"), /SIL OPEN FONT LICENSE/u);
+});
+
+test("token source defines the complete WasalX foundation and theme aliases", async () => {
+  const tokens = await read("app/design-system/tokens.css");
+  for (const value of ["0.75rem", "0.8125rem", "0.875rem", "1rem", "1.25rem", "1.5rem", "2rem"]) {
+    assert.match(tokens, new RegExp(value.replace(".", "\\."), "u"), `missing type size ${value}`);
+  }
+  for (const step of ["1", "2", "3", "4", "6", "8", "12", "16"]) {
+    assert.match(tokens, new RegExp(`--wx-space-${step}:`, "u"), `missing spacing token ${step}`);
+  }
+  for (const token of [
+    "--wx-radius-control",
+    "--wx-radius-panel",
+    "--wx-radius-dialog",
+    "--wx-duration-fast",
+    "--wx-duration-default",
+    "--wx-duration-slow",
+    "--wx-color-success",
+    "--wx-color-warning",
+    "--wx-color-danger",
+  ]) assert.match(tokens, new RegExp(`${token}:`, "u"), `missing ${token}`);
+  assert.match(tokens, /\.theme-light\s*\{/u);
+  assert.match(tokens, /\.theme-dark\s*\{/u);
+  assert.match(tokens, /@media \(prefers-reduced-motion: reduce\)/u);
+});
+
+test("semantic text and solid-action pairs meet WCAG AA contrast", async () => {
+  const tokens = await read("app/design-system/tokens.css");
+  for (const theme of ["dark", "light"]) {
+    const block = tokens.match(new RegExp(`\\.theme-${theme} \\{([\\s\\S]*?)\\n\\}`, "u"))?.[1] ?? "";
+    const values = Object.fromEntries(
+      [...block.matchAll(/(--wx-color-[\w-]+):\s*(#[\da-f]{6});/giu)].map((match) => [match[1], match[2]]),
+    );
+    const pairs = [
+      ["--wx-color-text", "--wx-color-surface"],
+      ["--wx-color-text-muted", "--wx-color-surface"],
+      ["--wx-color-text-subtle", "--wx-color-surface"],
+      ["--wx-color-text-subtle", "--wx-color-surface-raised"],
+      ["--wx-color-success", "--wx-color-surface-raised"],
+      ["--wx-color-warning", "--wx-color-surface-raised"],
+      ["--wx-color-danger", "--wx-color-surface"],
+      ["--wx-color-accent-solid", "--wx-color-on-solid"],
+      ["--wx-color-accent-solid-hover", "--wx-color-on-solid"],
+    ];
+    for (const [background, foreground] of pairs) {
+      assert.ok(contrast(values[background], values[foreground]) >= 4.5, `${theme} ${background}/${foreground} must meet 4.5:1`);
+    }
+  }
+});
+
+test("new primitives consume tokens instead of feature-local color and spacing literals", async () => {
+  const primitives = await read("app/design-system/primitives.css");
+  assert.doesNotMatch(primitives, /#[\da-f]{3,8}\b/iu);
+  assert.doesNotMatch(primitives, /rgba?\(/iu);
+  for (const declaration of primitives.matchAll(/(?:gap|margin|padding)(?:-[a-z]+)?\s*:\s*([^;]+)/giu)) {
+    const value = declaration[1].trim();
+    assert.ok(value === "0" || value.includes("var(--wx-space-"), `spacing declaration must use a token: ${declaration[0]}`);
+  }
+});
+
+test("the production portal consumes governed tokens without duplicate theme values", async () => {
+  const layout = await read("app/layout.tsx");
+  const globals = await read("app/globals.css");
+  const packageJson = JSON.parse(await read("package.json"));
+  const dockerfile = await read("Dockerfile.portal");
+  const authenticationError = await read("app/auth/error/page.tsx");
+  const tokenImport = layout.indexOf('import "./design-system/tokens.css"');
+  const primitiveImport = layout.indexOf('import "./design-system/primitives.css"');
+  const legacyImport = layout.indexOf('import "./globals.css"');
+  assert.ok(tokenImport >= 0 && tokenImport < primitiveImport && primitiveImport < legacyImport, "governed CSS must load before portal features");
+  assert.match(layout, /localFont.*next\/font\/local/u);
+  assert.match(layout, /src:\s*"\.\/fonts\/Geist-Variable\.woff2"/u);
+  assert.match(layout, /src:\s*"\.\/fonts\/GeistMono-Variable\.woff2"/u);
+  assert.doesNotMatch(layout, /next\/font\/google/u);
+  assert.doesNotMatch(globals, /\.theme-(?:dark|light)\s*\{\s*--bg:/u);
+  assert.doesNotMatch(globals, /\.theme-dark,\.theme-light\s*\{[^}]*transition:/u, "theme changes must not animate through inaccessible contrast states");
+  assert.match(globals, /--sidebar-effective-width:var\(--wx-sidebar-width\)/u);
+  assert.match(globals, /grid-template-columns:var\(--sidebar-effective-width\)/u);
+  assert.match(globals, /max-width:var\(--wx-content-max\)/u);
+  assert.doesNotMatch(globals, /tailwind/u);
+  assert.equal(packageJson.devDependencies.tailwindcss, undefined);
+  assert.equal(packageJson.devDependencies["@tailwindcss/postcss"], undefined);
+  assert.doesNotMatch(dockerfile, /postcss\.config|tailwind/u);
+  assert.doesNotMatch(authenticationError, /style=\{\{/u);
+  assert.match(authenticationError, /wx-button wx-button-primary/u);
+});
+
+test("Storybook fails accessibility violations and exposes theme exploration", async () => {
+  const preview = await read(".storybook/preview.tsx");
+  const styles = await read(".storybook/storybook.css");
+  const main = await read(".storybook/main.ts");
+  const vite = await read(".storybook/vite.storybook-isolated.ts");
+  assert.match(main, /@storybook\/react-vite/u);
+  assert.match(main, /@storybook\/addon-a11y/u);
+  assert.match(main, /@storybook\/addon-docs/u);
+  assert.match(main, /viteConfigPath:\s*"\.storybook\/vite\.storybook-isolated\.ts"/u);
+  assert.match(main, /developmentModeForBuild:\s*true/u);
+  assert.match(preview, /a11y:\s*\{\s*test:\s*"error"/su);
+  assert.match(preview, /initialGlobals:\s*\{\s*theme:\s*"light"/su);
+  assert.match(preview, /value:\s*"dark"/u);
+  assert.match(styles, /Geist-Variable\.woff2/u);
+  assert.match(styles, /GeistMono-Variable\.woff2/u);
+  assert.match(vite, /defineConfig\(\{\}\)/u);
+  assert.doesNotMatch(vite, /plugins\s*:/u);
+});
+
+test("stories cover every governed interaction and operational state", async () => {
+  const controls = await read("app/design-system/Controls.stories.tsx");
+  const operations = await read("app/design-system/OperationalStates.stories.tsx");
+  for (const state of ["default", "hover", "focus", "disabled", "loading"]) {
+    assert.match(controls, new RegExp(`\\b${state}\\b`, "u"), `missing control state ${state}`);
+  }
+  for (const state of ["loading", "empty", "sparse", "dense", "partial", "fatal", "recovery"]) {
+    assert.match(operations, new RegExp(`\\b${state}\\b`, "u"), `missing operational state ${state}`);
+  }
+  assert.match(controls, /ControlStatesLight/u);
+  assert.match(controls, /ControlStatesDark/u);
+  assert.match(operations, /StateMatrixLight/u);
+  assert.match(operations, /StateMatrixDark/u);
+});
+
+test("visual gate reports browser absence truthfully and can fail closed", async () => {
+  const runner = await read("scripts/storybook-visual-regression.mjs");
+  const spec = await read("tests/visual/design-system.spec.ts");
+  const config = await read("playwright.storybook.config.ts");
+  assert.match(runner, /SKIP design-system visual regression/u);
+  assert.match(runner, /WASALX_REQUIRE_VISUAL/u);
+  assert.match(spec, /toHaveScreenshot/u);
+  assert.match(spec, /AxeBuilder/u);
+  assert.match(spec, /violations/u);
+  assert.match(config, /timeout:\s*60_000/u);
+  assert.match(config, /outputFolder:\s*resolve\("output",\s*"playwright",\s*"design-system"\)/u);
+});
+
+
+test("Arabic typography shares one font registration across explicit locale boundaries", async () => {
+  const tokens = await read("app/design-system/tokens.css");
+  assert.match(tokens, /@font-face\s*\{[^}]*font-family: "Noto Sans Arabic"/u);
+  for (const locale of ["ar", "en"]) {
+    const block = tokens.match(new RegExp(`\\[lang="${locale}"\\] \\{([^}]+)`, "u"))?.[1] ?? "";
+    assert.match(block, /--wx-font-sans:/u);
+    assert.match(block, /--font-sans: var\(--wx-font-sans\)/u);
+    assert.match(block, /font-family: var\(--wx-font-sans\)/u);
+  }
+  assert.doesNotMatch(await read("app/marketing.css"), /@font-face/u);
+  assert.ok((await readFile(new URL("public/fonts/NotoSansArabic-Variable.woff2", root))).length > 1000);
+});
+
+test("platform case-service labels keep backend identifiers out of visible copy", async () => {
+  const console = await read("app/platform/PlatformConsole.tsx");
+  assert.doesNotMatch(console, />Zammad</u);
+  for (const locale of ["en", "ar"]) {
+    const messages = await read(`lib/i18n/messages/${locale}/platform.ts`);
+    assert.doesNotMatch(messages, /: "[^"\n]*Zammad/u);
+    assert.match(messages, /"platform\.states\.zammad":/u);
+  }
+  assert.match(console, /zammadVersion: String\(data\.get\("zammadVersion"\)\)/u);
+});
+

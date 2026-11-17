@@ -1,0 +1,3 @@
+﻿import assert from 'node:assert/strict';
+export function groupCatalogRead(request,origin){const u=new URL(request.url());return request.method()==='GET'&&u.origin===origin&&u.pathname==='/api/v1/wasalx/group_workspace/groups';}
+export function groupCatalogBoundary({origin,mode,onSeen,held}){return async route=>{if(!groupCatalogRead(route.request(),origin))return route.fallback();onSeen();if(mode==='delay'){await held;return route.continue();}assert(['empty','error'].includes(mode));return route.fulfill({status:mode==='error'?503:200,contentType:'application/json',body:JSON.stringify(mode==='error'?{error:'PRIVATE_TEST_SENTINEL'}:{items:[],next_cursor:null})});};}

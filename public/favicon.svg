@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <title>WasalX</title>
+  <rect width="64" height="64" rx="14" fill="#fff"/>
+  <path aria-label="W" d="M4 16h6l3 23 4.5-23h5L27 39l3-23h6l-6 32h-6l-4-21-4 21h-6Z" fill="#191a20"/>
+  <path aria-label="X" d="M37 16h7l5 10 5-10h7l-8.5 16L61 48h-7l-5-10-5 10h-7l8.5-16Z" fill="#6557d8"/>
+</svg>

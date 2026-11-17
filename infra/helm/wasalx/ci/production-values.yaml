@@ -1,0 +1,99 @@
+environment: production
+deploymentProfile: standard
+allowedOrigins: ["https://release.home.arpa"]
+publicWebhookBaseUrl: "https://release.home.arpa"
+secretSidecarUrl: "https://release.home.arpa"
+portalPublicOrigin: "https://release.home.arpa"
+portalCookieSecure: "true"
+observability:
+  enabled: true
+  otlpEndpoint: "https://release.home.arpa:4318"
+  prometheusRule:
+    enabled: true
+    runbookBaseUrl: "https://release.home.arpa"
+media:
+  s3:
+    endpoint: "https://release.home.arpa"
+    kmsKeyId: "arn:aws:kms:us-east-1:111122223333:key/ci-wasalx-media"
+oidc:
+  issuer: "https://release.home.arpa/realms/tenant"
+  audience: "wasalx-control-api-ci"
+  jwksUri: "https://release.home.arpa/realms/tenant/certs"
+  clientId: "wasalx-portal-ci"
+  redirectUri: "https://release.home.arpa/auth/callback"
+  invitationRedirectUri: "https://release.home.arpa/invitations/callback"
+platformOperatorOidc:
+  issuer: "https://release.home.arpa/realms/platform"
+  audience: "wasalx-platform-api-ci"
+  jwksUri: "https://release.home.arpa/realms/platform/certs"
+  clientId: "wasalx-platform-portal-ci"
+  redirectUri: "https://release.home.arpa/platform/auth/callback"
+
+controlPlaneBackup:
+  enabled: true
+  image: "release.home.arpa/workspace-configurator@sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+  s3:
+    endpoint: "https://release.home.arpa"
+    kmsKeyReference: "arn:aws:kms:us-east-1:111122223333:key/ci-wasalx-control-backup"
+  allowedEgressCidrs: [{ cidr: "192.0.2.1/8", ports: [443, 5432] }]
+
+managedWaha:
+  enabled: true
+  allowedEgressCidrs: [{ cidr: "192.0.2.1/10", ports: [443] }]
+  rolloutGate:
+    allowedEgressCidrs: [{ cidr: "192.0.2.1/8", ports: [5432] }]
+  gows:
+    enabled: true
+    image: "release.home.arpa/waha-gows@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    credentialSecretNames: [waha-gows-ci-api-key]
+    secretReferences: [secret://platform/waha/gows-ci]
+
+workspaceProvider:
+  enabled: true
+  image: "release.home.arpa/workspace-provider@sha256:1111111111111111111111111111111111111111111111111111111111111111"
+  operatorDeployments:
+    identity: identity-operator
+    database: database-operator
+    search: search-operator
+    storage: storage-operator
+    secrets: secrets-operator
+  allowedEgressCidrs: [{ cidr: "192.0.2.1/8", ports: [443, 5432] }]
+
+provisioner:
+  enabled: true
+  image: "release.home.arpa/tenant-provisioner@sha256:2222222222222222222222222222222222222222222222222222222222222222"
+  workspaceBaseDomain: "release.home.arpa"
+  oidcIssuer: "https://release.home.arpa/realms/tenant"
+  allowedEgressCidrs: [{ cidr: "192.0.2.1/8", ports: [443, 5432] }]
+  controller:
+    image: "release.home.arpa/tenant-workspace-controller@sha256:3333333333333333333333333333333333333333333333333333333333333333"
+    providerUrl: "https://workspace-provider.wasalx.svc.cluster.local:8092"
+    controlPlaneUrl: "https://wasalx-api.wasalx.svc.cluster.local:3001"
+    configuratorImage: "release.home.arpa/workspace-configurator@sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    nginxImage: "release.home.arpa/nginx@sha256:4444444444444444444444444444444444444444444444444444444444444444"
+    redisImage: "release.home.arpa/redis@sha256:5555555555555555555555555555555555555555555555555555555555555555"
+    memcachedImage: "release.home.arpa/memcached@sha256:6666666666666666666666666666666666666666666666666666666666666666"
+    zammadImages:
+      7.1.3: "release.home.arpa/zammad@sha256:7777777777777777777777777777777777777777777777777777777777777777"
+    allowedEgressCidrs: [{ cidr: "192.0.2.1/8", ports: [443, 5432, 6379, 9200] }]
+    admissionPolicy: { enabled: true }
+
+allowedEgressCidrs: [{ cidr: "192.0.2.1/8", ports: [443] }]
+portalAllowedEgressCidrs: [{ cidr: "192.0.2.1/8", ports: [443, 6379] }]
+apiAllowedEgressCidrs: [{ cidr: "192.0.2.1/8", ports: [443, 5432, 6379] }]
+workerAllowedEgressCidrs: [{ cidr: "192.0.2.1/8", ports: [443, 3310, 5432, 6379] }]
+invitationMailerAllowedEgressCidrs: [{ cidr: "192.0.2.1/8", ports: [443, 587, 5432] }]
+identityPolicyAllowedEgressCidrs: [{ cidr: "192.0.2.1/8", ports: [443, 5432] }]
+
+portal:
+  image: "release.home.arpa/portal@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+api:
+  image: "release.home.arpa/control-api@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+worker:
+  image: "release.home.arpa/connector-worker@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+invitationMailer:
+  image: "release.home.arpa/invitation-mailer@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+identityPolicyActivator:
+  image: "release.home.arpa/identity-policy-activator@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+migration:
+  image: "release.home.arpa/control-api@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"

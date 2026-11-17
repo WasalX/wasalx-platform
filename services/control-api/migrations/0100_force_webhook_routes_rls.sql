@@ -1,0 +1,1 @@
+ALTER TABLE webhook_routes FORCE ROW LEVEL SECURITY;

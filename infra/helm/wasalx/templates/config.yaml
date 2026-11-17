@@ -1,0 +1,255 @@
+{{- $admissionHash := sha256sum (printf "%s/%s" .Release.Namespace .Release.Name) | trunc 12 -}}
+{{- $admissionName := printf "wasalx-admission-%s" $admissionHash -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $admissionName }}
+  labels: { app.kubernetes.io/name: wasalx-commercial-go-admission, app.kubernetes.io/part-of: wasalx, wasalx.io/plane: control }
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-8"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded
+    argocd.argoproj.io/sync-wave: "-8"
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $admissionName }}
+  labels: { app.kubernetes.io/part-of: wasalx }
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-8"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded
+    argocd.argoproj.io/sync-wave: "-8"
+rules:
+  - { apiGroups: [platform.wasalx.io], resources: [tenantworkspaces], verbs: [list] }
+  - { apiGroups: [providers.wasalx.io], resources: [workspaceproviderresources], verbs: [list] }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $admissionName }}
+  labels: { app.kubernetes.io/part-of: wasalx }
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-8"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded
+    argocd.argoproj.io/sync-wave: "-8"
+subjects:
+  - { kind: ServiceAccount, name: {{ $admissionName }}, namespace: {{ .Release.Namespace | quote }} }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: {{ $admissionName }} }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $admissionName }}
+  labels: { app.kubernetes.io/part-of: wasalx }
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-8"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded
+    argocd.argoproj.io/sync-wave: "-8"
+rules:
+  - apiGroups: [apiextensions.k8s.io]
+    resources: [customresourcedefinitions]
+    resourceNames: [tenantworkspaces.platform.wasalx.io, workspaceproviderresources.providers.wasalx.io]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $admissionName }}
+  labels: { app.kubernetes.io/part-of: wasalx }
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-8"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded
+    argocd.argoproj.io/sync-wave: "-8"
+subjects:
+  - { kind: ServiceAccount, name: {{ $admissionName }}, namespace: {{ .Release.Namespace | quote }} }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: {{ $admissionName }} }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: { name: wasalx-runtime, labels: { app.kubernetes.io/part-of: wasalx } }
+data:
+  NODE_ENV: production
+  WASALX_ENVIRONMENT: {{ .Values.environment | quote }}
+  WASALX_DEPLOYMENT_PROFILE: {{ .Values.deploymentProfile | quote }}
+  META_GRAPH_VERSION: {{ .Values.metaGraphVersion | quote }}
+  META_APP_ID: {{ .Values.metaAppId | quote }}
+  META_SIGNUP_ENABLED: {{ .Values.metaSignupEnabled | quote }}
+  META_SIGNUP_CUSTOMER_CONFIG_ID: {{ .Values.metaSignupCustomerConfigId | quote }}
+  PUBLIC_WEBHOOK_BASE_URL: {{ required "publicWebhookBaseUrl is required" .Values.publicWebhookBaseUrl | quote }}
+  ALLOWED_ORIGINS: {{ join "," .Values.allowedOrigins | quote }}
+  DATABASE_POOL_SIZE: {{ .Values.databasePoolSize | quote }}
+  WORKER_CONCURRENCY: {{ .Values.workerConcurrency | quote }}
+  CLIENT_ROUTING_EXTERNAL_CONNECTORS_ENABLED: {{ ternary "true" "false" .Values.externalRoutingConnectorsEnabled | quote }}
+  PUBLIC_PORTAL_BASE_URL: {{ .Values.portalPublicOrigin | quote }}
+  NOTION_OAUTH_CLIENT_ID: {{ .Values.notionOAuthClientId | quote }}
+  NOTION_OAUTH_CLIENT_SECRET_REFERENCE: {{ .Values.notionOAuthClientSecretReference | quote }}
+  OTEL_SDK_DISABLED: {{ ternary "false" "true" .Values.observability.enabled | quote }}
+  OTEL_EXPORTER_OTLP_ENDPOINT: {{ .Values.observability.otlpEndpoint | quote }}
+  OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+  OTEL_METRIC_EXPORT_INTERVAL: {{ .Values.observability.metricExportIntervalMs | quote }}
+  OTEL_TRACES_SAMPLER: {{ .Values.observability.tracesSampler | quote }}
+  OTEL_TRACES_SAMPLER_ARG: {{ .Values.observability.tracesSamplerArg | quote }}
+  SECRET_SIDECAR_URL: {{ .Values.secretSidecarUrl | quote }}
+  # Media locations are non-secret. S3_ACCESS_KEY_ID and
+  # S3_SECRET_ACCESS_KEY are injected only from worker.secretName.
+  S3_ENDPOINT: {{ required "media.s3.endpoint is required" .Values.media.s3.endpoint | quote }}
+  S3_REGION: {{ required "media.s3.region is required" .Values.media.s3.region | quote }}
+  S3_BUCKET: {{ required "media.s3.bucket is required" .Values.media.s3.bucket | quote }}
+  S3_SERVER_SIDE_ENCRYPTION: {{ required "media.s3.serverSideEncryption is required" .Values.media.s3.serverSideEncryption | quote }}
+  S3_KMS_KEY_ID: {{ .Values.media.s3.kmsKeyId | quote }}
+  PRIVACY_EXPORT_S3_ENDPOINT: {{ required "media.s3.endpoint is required" .Values.media.s3.endpoint | quote }}
+  PRIVACY_EXPORT_S3_REGION: {{ required "media.s3.region is required" .Values.media.s3.region | quote }}
+  PRIVACY_EXPORT_S3_BUCKET: {{ required "media.s3.bucket is required" .Values.media.s3.bucket | quote }}
+  CLAMAV_HOST: {{ required "media.clamav.host is required" .Values.media.clamav.host | quote }}
+  CLAMAV_PORT: {{ .Values.media.clamav.port | quote }}
+  PORTAL_DATA_BACKEND: {{ .Values.portalDataBackend | quote }}
+  CONTROL_API_URL: {{ .Values.controlApiUrl | quote }}
+  CONNECTOR_WORKER_INTERNAL_URL: {{ .Values.connectorWorkerInternalUrl | quote }}
+  PORTAL_COOKIE_SECURE: {{ .Values.portalCookieSecure | quote }}
+  PORTAL_PUBLIC_ORIGIN: {{ .Values.portalPublicOrigin | quote }}
+  OIDC_ISSUER: {{ .Values.oidc.issuer | quote }}
+  OIDC_AUDIENCE: {{ .Values.oidc.audience | quote }}
+  OIDC_JWKS_URI: {{ .Values.oidc.jwksUri | quote }}
+  OIDC_TOKEN_ENDPOINT: {{ default (printf "%s/protocol/openid-connect/token" (trimSuffix "/" .Values.oidc.issuer)) .Values.oidc.tokenEndpoint | quote }}
+  OIDC_CLIENT_ID: {{ .Values.oidc.clientId | quote }}
+  OIDC_REDIRECT_URI: {{ .Values.oidc.redirectUri | quote }}
+  OIDC_INVITATION_REDIRECT_URI: {{ .Values.oidc.invitationRedirectUri | quote }}
+  OIDC_PRIVILEGED_ACR_VALUES: {{ required "oidc.privilegedAcrValues must name a production-issued assurance context" .Values.oidc.privilegedAcrValues | quote }}
+  OIDC_PRIVILEGED_MFA_AMR_VALUES: {{ required "oidc.privilegedMfaAmrValues is required" .Values.oidc.privilegedMfaAmrValues | quote }}
+  PLATFORM_OPERATOR_OIDC_ISSUER: {{ .Values.platformOperatorOidc.issuer | quote }}
+  PLATFORM_OPERATOR_OIDC_AUDIENCE: {{ .Values.platformOperatorOidc.audience | quote }}
+  PLATFORM_OPERATOR_OIDC_JWKS_URI: {{ .Values.platformOperatorOidc.jwksUri | quote }}
+  PLATFORM_OPERATOR_OIDC_TOKEN_ENDPOINT: {{ default (printf "%s/protocol/openid-connect/token" (trimSuffix "/" .Values.platformOperatorOidc.issuer)) .Values.platformOperatorOidc.tokenEndpoint | quote }}
+  PLATFORM_OPERATOR_OIDC_CLIENT_ID: {{ .Values.platformOperatorOidc.clientId | quote }}
+  PLATFORM_OPERATOR_OIDC_REDIRECT_URI: {{ .Values.platformOperatorOidc.redirectUri | quote }}
+  PLATFORM_OPERATOR_MAX_AUTH_AGE_SECONDS: {{ .Values.platformOperatorOidc.maxAuthAgeSeconds | quote }}
+  METERING_CATCHUP_PERIODS_PER_TICK: {{ .Values.metering.catchupPeriodsPerTick | quote }}
+  METERING_RECONCILE_INTERVAL_MS: {{ .Values.metering.reconcileIntervalMs | quote }}
+{{- if .Values.provisioner.enabled }}
+  PROVISIONING_DRIVER_URL: {{ printf "http://wasalx-tenant-provisioner:%v" .Values.provisioner.port | quote }}
+  PROVISIONING_DRIVER_TIMEOUT_MS: {{ .Values.provisioner.driverTimeoutMs | quote }}
+  WASALX_ZAMMAD_PACKAGE_VERSION: {{ .Values.provisioner.packageVersion | quote }}
+  WASALX_ZAMMAD_PACKAGE_SHA256: {{ .Values.provisioner.packageSha256 | quote }}
+  ZAMMAD_CONFIGURATOR_IMAGE: {{ required "provisioner.controller.configuratorImage is required" .Values.provisioner.controller.configuratorImage | quote }}
+  ZAMMAD_NGINX_IMAGE: {{ required "provisioner.controller.nginxImage is required" .Values.provisioner.controller.nginxImage | quote }}
+  ZAMMAD_REDIS_IMAGE: {{ required "provisioner.controller.redisImage is required" .Values.provisioner.controller.redisImage | quote }}
+  ZAMMAD_MEMCACHED_IMAGE: {{ required "provisioner.controller.memcachedImage is required" .Values.provisioner.controller.memcachedImage | quote }}
+  ZAMMAD_IMAGE_BY_VERSION_JSON: {{ toJson .Values.provisioner.controller.zammadImages | quote }}
+{{- end }}
+{{- if ne .Values.deploymentProfile "assisted-alpha" }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: "{{ $admissionName }}-{{ .Release.Revision }}"
+  labels: { app.kubernetes.io/name: wasalx-migration, app.kubernetes.io/component: commercial-go-admission, app.kubernetes.io/part-of: wasalx, wasalx.io/plane: control }
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-7"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded
+    argocd.argoproj.io/sync-wave: "-7"
+spec:
+  activeDeadlineSeconds: 120
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata: { labels: { app.kubernetes.io/name: wasalx-migration, app.kubernetes.io/component: commercial-go-admission, app.kubernetes.io/part-of: wasalx, wasalx.io/plane: control } }
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ $admissionName }}
+      automountServiceAccountToken: false
+      securityContext: {{ toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: commercial-go-admission
+          image: {{ required "migration.image is required" .Values.migration.image | quote }}
+          args: ["admit-commercial-go"]
+          securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, runAsNonRoot: true, capabilities: { drop: ["ALL"] } }
+          env:
+            - { name: KUBERNETES_API_URL, value: {{ .Values.provisioner.kubernetesApiUrl | quote }} }
+            - { name: KUBERNETES_BEARER_TOKEN_FILE, value: /var/run/secrets/wasalx-kubernetes/token }
+            - { name: NODE_EXTRA_CA_CERTS, value: /var/run/secrets/wasalx-kubernetes/ca.crt }
+            - name: PROVISIONING_WORKSPACE_NAMESPACE
+              valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
+          envFrom: [{ secretRef: { name: {{ required "migration.secretName is required" .Values.migration.secretName | quote }} } }]
+          volumeMounts:
+            - { name: kubernetes-identity, mountPath: /var/run/secrets/wasalx-kubernetes, readOnly: true }
+{{- if .Values.productionSecretSidecar.enabled }}
+            - { name: secret-adapter-ca, mountPath: /secret-adapter-ca, readOnly: true }
+{{- end }}
+          resources: { requests: { cpu: 25m, memory: 32Mi }, limits: { cpu: 250m, memory: 128Mi } }
+      volumes:
+        - name: kubernetes-identity
+          projected:
+            defaultMode: 0440
+            sources:
+              - serviceAccountToken: { path: token, audience: {{ .Values.provisioner.kubernetesAudience | quote }}, expirationSeconds: 600 }
+              - configMap: { name: kube-root-ca.crt, items: [{ key: ca.crt, path: ca.crt }] }
+{{- if .Values.productionSecretSidecar.enabled }}
+        - name: secret-adapter-ca
+          configMap:
+            name: {{ required "production secret adapter requires caConfigMapName" .Values.productionSecretSidecar.caConfigMapName | quote }}
+            items: [{ key: ca.crt, path: ca.crt }]
+{{- end }}
+{{- end }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: "wasalx-migrate-{{ .Release.Revision }}"
+  labels: { app.kubernetes.io/name: wasalx-migration, app.kubernetes.io/part-of: wasalx, wasalx.io/plane: control }
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded
+    argocd.argoproj.io/sync-wave: "-5"
+spec:
+  activeDeadlineSeconds: 720
+  # Failed migrations require diagnosis before a new attempt.
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata: { labels: { app.kubernetes.io/name: wasalx-migration, app.kubernetes.io/part-of: wasalx, wasalx.io/plane: control } }
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext: {{ toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: migrate
+          image: {{ required "migration.image is required" .Values.migration.image | quote }}
+          args: ["migrate", "--path", "/app/migrations"]
+          securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, runAsNonRoot: true, capabilities: { drop: ["ALL"] } }
+{{- if .Values.productionSecretSidecar.enabled }}
+          env: [{ name: NODE_EXTRA_CA_CERTS, value: /secret-adapter-ca/ca.crt }]
+{{- end }}
+          envFrom: [{ secretRef: { name: {{ required "migration.secretName is required" .Values.migration.secretName | quote }} } }]
+{{- if .Values.productionSecretSidecar.enabled }}
+          volumeMounts: [{ name: secret-adapter-ca, mountPath: /secret-adapter-ca, readOnly: true }]
+{{- end }}
+          resources: { requests: { cpu: 50m, memory: 64Mi }, limits: { cpu: 500m, memory: 256Mi } }
+{{- if .Values.productionSecretSidecar.enabled }}
+      volumes:
+        - name: secret-adapter-ca
+          configMap:
+            name: {{ required "production secret adapter requires caConfigMapName" .Values.productionSecretSidecar.caConfigMapName | quote }}
+            items: [{ key: ca.crt, path: ca.crt }]
+{{- end }}

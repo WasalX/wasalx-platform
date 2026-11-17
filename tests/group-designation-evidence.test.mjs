@@ -1,0 +1,4 @@
+import test from 'node:test';import assert from 'node:assert/strict';import{designationResults,designationTestIds}from './group-designation-evidence.mjs';
+const proof={mode:'simulated',scope:'postgresql-invariant-only',lockOverlap:true,conflict:{code:'23505',constraint:'group_designated_binding_unique'},originalPreserved:true,independentScopes:['tenant','provider','group'],transition:['ACTIVE/PAUSED','PAUSED/PAUSED','PAUSED/ACTIVE']},time={startedAt:'2026-01-01T00:00:00Z',finishedAt:'2026-01-01T00:00:01Z'};
+test('exact two database invariants only',()=>{assert.deepEqual(designationResults(proof,time).map(x=>x.testId),designationTestIds);});
+test('unproven overlap or transition cannot pass',()=>{assert.throws(()=>designationResults({...proof,lockOverlap:false},time));assert.throws(()=>designationResults({...proof,transition:['ACTIVE/ACTIVE']},time));assert.throws(()=>designationResults({...proof,independentScopes:['tenant']},time));});

@@ -1,0 +1,18 @@
+{
+  "@context": "https://openvex.dev/ns/v0.2.0",
+  "@id": "https://github.com/WasalX/WasalX/security/vex/braces-3.0.3",
+  "author": "https://github.com/WasalX/WasalX",
+  "timestamp": "2026-10-05T00:00:00Z",
+  "version": 1,
+  "statements": [{
+    "vulnerability": {
+      "@id": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+      "name": "GHSA-vfj7-8cjw-p6xm",
+      "aliases": ["CVE-2026-93687"]
+    },
+    "products": [{ "@id": "pkg:npm/braces@3.0.3" }],
+    "status": "not_affected",
+    "justification": "inline_mitigations_already_exist",
+    "impact_statement": "WasalX applies the depth and cycle guards from micromatch/braces PR 72. Release verification checks all five patched runtime files and depth rejection inside each immutable image, and binds every scanner-reported braces copy to that proof. This statement is inadmissible without the image-bound verification receipt."
+  }]
+}

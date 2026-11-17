@@ -1,0 +1,1471 @@
+{
+  "providerVersion": "2026.7.2",
+  "source": "Selected WAHA 2026.7.2 OpenAPI definitions; upstream: https://github.com/devlikeapro/waha/tree/2026.7.2; SPDX-License-Identifier: Apache-2.0; licence: LICENSES/WAHA-2026.7.2-Apache-2.0.txt; WasalX adaptations: selected definitions and synthetic examples",
+  "sourceSha256": "86217e28c927da02d2acdd1dfd3ecac0818b9154f748485f6073811def0a2df9",
+  "paths": {
+    "/api/sessions": {
+      "get": {
+        "operationId": "SessionsController_list",
+        "summary": "List all sessions",
+        "parameters": [
+          {
+            "name": "expand",
+            "required": false,
+            "in": "query",
+            "description": "Expand additional session details.",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "apps"
+                ]
+              }
+            }
+          },
+          {
+            "name": "all",
+            "required": false,
+            "in": "query",
+            "description": "Return all sessions, including those that are in the STOPPED state.",
+            "schema": {
+              "example": false,
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SessionInfo"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "🖥️ Sessions"
+        ],
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "oauth2": [
+              "read:items"
+            ]
+          }
+        ]
+      },
+      "post": {
+        "operationId": "SessionsController_create",
+        "summary": "Create a session",
+        "description": "Create session a new session (and start it at the same time if required).",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SessionCreateRequest"
+              },
+              "examples": {
+                "basic": {
+                  "summary": "Basic Session",
+                  "value": {
+                    "name": "default"
+                  }
+                },
+                "withWebhooks": {
+                  "summary": "Session Webhooks",
+                  "value": {
+                    "name": "default",
+                    "config": {
+                      "webhooks": [
+                        {
+                          "url": "https://example.com/webhooks/waha",
+                          "events": [
+                            "message",
+                            "session.status"
+                          ],
+                          "hmac": {
+                            "key": "super-secret"
+                          },
+                          "retries": {
+                            "delaySeconds": 2,
+                            "attempts": 5,
+                            "policy": "linear"
+                          },
+                          "customHeaders": [
+                            {
+                              "name": "X-Request-ID",
+                              "value": "123"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  }
+                },
+                "withApps": {
+                  "summary": "Session Apps",
+                  "value": {
+                    "name": "default",
+                    "apps": [
+                      {
+                        "app": "calls",
+                        "id": "app_unique_id",
+                        "session": "",
+                        "config": {
+                          "dm": {
+                            "reject": true,
+                            "message": "📞❌ We don't take calls right now.\n🎤 Please send a voice message or 📝 text — we'll reply ASAP!"
+                          },
+                          "group": {
+                            "reject": true,
+                            "message": "📞❌ We don't take calls right now.\n🎤 Please send a voice message or 📝 text — we'll reply ASAP!"
+                          }
+                        }
+                      }
+                    ],
+                    "start": true
+                  }
+                },
+                "full": {
+                  "summary": "Full Session Example",
+                  "value": {
+                    "name": "default",
+                    "start": true,
+                    "config": {
+                      "metadata": {
+                        "user.id": "123"
+                      },
+                      "debug": true,
+                      "webhooks": [
+                        {
+                          "url": "https://example.com/webhooks/waha",
+                          "events": [
+                            "message",
+                            "session.status"
+                          ],
+                          "hmac": {
+                            "key": "super-secret"
+                          }
+                        }
+                      ]
+                    },
+                    "apps": [
+                      {
+                        "app": "calls",
+                        "enabled": true,
+                        "config": {
+                          "dm": {
+                            "reject": true,
+                            "message": "📞❌ We don't take calls right now.\n🎤 Please send a voice message or 📝 text — we'll reply ASAP!"
+                          },
+                          "group": {
+                            "reject": true
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionDTO"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "🖥️ Sessions"
+        ],
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/api/sessions/{session}": {
+      "get": {
+        "operationId": "SessionsController_get",
+        "summary": "Get session information",
+        "parameters": [
+          {
+            "name": "session",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "default": "default"
+            },
+            "description": "Session name"
+          },
+          {
+            "name": "expand",
+            "required": false,
+            "in": "query",
+            "description": "Expand additional session details.",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "apps"
+                ]
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionInfo"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "🖥️ Sessions"
+        ],
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      },
+      "put": {
+        "operationId": "SessionsController_update",
+        "summary": "Update a session",
+        "parameters": [
+          {
+            "name": "session",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "default": "default"
+            },
+            "description": "Session name"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SessionUpdateRequest"
+              },
+              "examples": {
+                "basic": {
+                  "summary": "Basic Session",
+                  "value": {
+                    "name": "default"
+                  }
+                },
+                "withWebhooks": {
+                  "summary": "Session Webhooks",
+                  "value": {
+                    "name": "default",
+                    "config": {
+                      "webhooks": [
+                        {
+                          "url": "https://example.com/webhooks/waha",
+                          "events": [
+                            "message",
+                            "session.status"
+                          ],
+                          "hmac": {
+                            "key": "super-secret"
+                          },
+                          "retries": {
+                            "delaySeconds": 2,
+                            "attempts": 5,
+                            "policy": "linear"
+                          },
+                          "customHeaders": [
+                            {
+                              "name": "X-Request-ID",
+                              "value": "123"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  }
+                },
+                "withApps": {
+                  "summary": "Session Apps",
+                  "value": {
+                    "name": "default",
+                    "apps": [
+                      {
+                        "app": "calls",
+                        "id": "app_unique_id",
+                        "session": "",
+                        "config": {
+                          "dm": {
+                            "reject": true,
+                            "message": "📞❌ We don't take calls right now.\n🎤 Please send a voice message or 📝 text — we'll reply ASAP!"
+                          },
+                          "group": {
+                            "reject": true,
+                            "message": "📞❌ We don't take calls right now.\n🎤 Please send a voice message or 📝 text — we'll reply ASAP!"
+                          }
+                        }
+                      }
+                    ],
+                    "start": true
+                  }
+                },
+                "full": {
+                  "summary": "Full Session Example",
+                  "value": {
+                    "name": "default",
+                    "start": true,
+                    "config": {
+                      "metadata": {
+                        "user.id": "123"
+                      },
+                      "debug": true,
+                      "webhooks": [
+                        {
+                          "url": "https://example.com/webhooks/waha",
+                          "events": [
+                            "message",
+                            "session.status"
+                          ],
+                          "hmac": {
+                            "key": "super-secret"
+                          }
+                        }
+                      ]
+                    },
+                    "apps": [
+                      {
+                        "app": "calls",
+                        "enabled": true,
+                        "config": {
+                          "dm": {
+                            "reject": true,
+                            "message": "📞❌ We don't take calls right now.\n🎤 Please send a voice message or 📝 text — we'll reply ASAP!"
+                          },
+                          "group": {
+                            "reject": true
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionDTO"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "🖥️ Sessions"
+        ],
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      },
+      "delete": {
+        "operationId": "SessionsController_delete",
+        "summary": "Delete the session",
+        "description": "Delete the session with the given name. Stop and logout as well. Idempotent operation.",
+        "parameters": [
+          {
+            "name": "session",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "default": "default"
+            },
+            "description": "Session name"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "🖥️ Sessions"
+        ],
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/api/sessions/{session}/start": {
+      "post": {
+        "operationId": "SessionsController_start",
+        "summary": "Start the session",
+        "description": "Start the session with the given name. The session must exist. Idempotent operation.",
+        "parameters": [
+          {
+            "name": "session",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "default": "default"
+            },
+            "description": "Session name"
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionDTO"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "🖥️ Sessions"
+        ],
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/api/sessions/{session}/stop": {
+      "post": {
+        "operationId": "SessionsController_stop",
+        "summary": "Stop the session",
+        "description": "Stop the session with the given name. Idempotent operation.",
+        "parameters": [
+          {
+            "name": "session",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "default": "default"
+            },
+            "description": "Session name"
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionDTO"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "🖥️ Sessions"
+        ],
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/api/sessions/{session}/restart": {
+      "post": {
+        "operationId": "SessionsController_restart",
+        "summary": "Restart the session",
+        "description": "Restart the session with the given name.",
+        "parameters": [
+          {
+            "name": "session",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "default": "default"
+            },
+            "description": "Session name"
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionDTO"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "🖥️ Sessions"
+        ],
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/api/{session}/auth/qr": {
+      "get": {
+        "operationId": "AuthController_getQR",
+        "summary": "Get QR code for pairing WhatsApp API.",
+        "parameters": [
+          {
+            "name": "session",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "default": "default"
+            },
+            "description": "Session name"
+          },
+          {
+            "name": "format",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "default": "image",
+              "enum": [
+                "image",
+                "raw"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "image/png": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/Base64File"
+                    },
+                    {
+                      "$ref": "#/components/schemas/QRCodeValue"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "tags": [
+          "📱 Pairing"
+        ],
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/api/sendText": {
+      "post": {
+        "operationId": "ChattingController_sendText",
+        "summary": "Send a text message",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MessageTextRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WAMessage"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "📤 Chatting"
+        ],
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      },
+      "get": {
+        "operationId": "ChattingController_sendTextGet",
+        "summary": "Send a text message",
+        "deprecated": true,
+        "parameters": [
+          {
+            "name": "phone",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "text",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "session",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "default": "default",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "📤 Chatting"
+        ],
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    }
+  },
+  "schemas": {
+    "SessionCreateRequest": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "example": "default",
+          "description": "Session name (id)"
+        },
+        "apps": {
+          "nullable": true,
+          "description": "Apps to be synchronized for this session.",
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/App"
+          }
+        },
+        "start": {
+          "type": "boolean",
+          "description": "Start session after creation",
+          "example": true,
+          "default": true
+        },
+        "config": {
+          "$ref": "#/components/schemas/SessionConfig"
+        }
+      }
+    },
+    "SessionDTO": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "example": "default",
+          "description": "Session name (id)"
+        },
+        "status": {
+          "enum": [
+            "STOPPED",
+            "STARTING",
+            "SCAN_QR_CODE",
+            "PASSKEY_REQUIRED",
+            "PASSKEY_CONFIRMATION_REQUIRED",
+            "WORKING",
+            "FAILED"
+          ],
+          "type": "string"
+        },
+        "config": {
+          "$ref": "#/components/schemas/SessionConfig"
+        }
+      },
+      "required": [
+        "name",
+        "status"
+      ]
+    },
+    "SessionInfo": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "example": "default",
+          "description": "Session name (id)"
+        },
+        "apps": {
+          "description": "Apps configured for the session.",
+          "nullable": true,
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/App"
+          }
+        },
+        "me": {
+          "$ref": "#/components/schemas/MeInfo"
+        },
+        "assignedWorker": {
+          "type": "string"
+        },
+        "presence": {
+          "type": "object"
+        },
+        "timestamps": {
+          "type": "object",
+          "properties": {
+            "activity": {
+              "required": true,
+              "type": "number",
+              "nullable": true
+            }
+          }
+        },
+        "status": {
+          "enum": [
+            "STOPPED",
+            "STARTING",
+            "SCAN_QR_CODE",
+            "PASSKEY_REQUIRED",
+            "PASSKEY_CONFIRMATION_REQUIRED",
+            "WORKING",
+            "FAILED"
+          ],
+          "type": "string"
+        },
+        "config": {
+          "$ref": "#/components/schemas/SessionConfig"
+        }
+      },
+      "required": [
+        "name",
+        "presence",
+        "timestamps",
+        "status"
+      ]
+    },
+    "Base64File": {
+      "type": "object",
+      "properties": {
+        "mimetype": {
+          "type": "string"
+        },
+        "data": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "mimetype",
+        "data"
+      ]
+    },
+    "QRCodeValue": {
+      "type": "object",
+      "properties": {
+        "value": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "value"
+      ]
+    },
+    "MessageTextRequest": {
+      "type": "object",
+      "properties": {
+        "chatId": {
+          "type": "string",
+          "example": "11111111111@c.us"
+        },
+        "id": {
+          "type": "string",
+          "description": "Pre-generated message id",
+          "example": "BBBBBBBBBBBBBBBBB",
+          "default": null
+        },
+        "reply_to": {
+          "type": "string",
+          "description": "The ID of the message to reply to - false_11111111111@c.us_AAAAAAAAAAAAAAAAAAAA",
+          "example": null
+        },
+        "text": {
+          "type": "string",
+          "default": "Hi there!"
+        },
+        "linkPreview": {
+          "type": "boolean",
+          "default": true
+        },
+        "linkPreviewHighQuality": {
+          "type": "boolean",
+          "default": false
+        },
+        "session": {
+          "type": "string",
+          "default": "default"
+        }
+      },
+      "required": [
+        "chatId",
+        "text",
+        "session"
+      ]
+    },
+    "WAMessage": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Message ID",
+          "example": "false_11111111111@c.us_AAAAAAAAAAAAAAAAAAAA"
+        },
+        "timestamp": {
+          "type": "number",
+          "description": "Unix timestamp for when the message was created",
+          "example": 1666943582
+        },
+        "from": {
+          "type": "string",
+          "description": "ID for the Chat that this message was sent to, except if the message was sent by the current user ",
+          "example": "11111111111@c.us"
+        },
+        "fromMe": {
+          "type": "boolean",
+          "description": "Indicates if the message was sent by the current user"
+        },
+        "source": {
+          "enum": [
+            "api",
+            "app"
+          ],
+          "type": "string",
+          "description": "The device that sent the message - either API or APP. Available in events (webhooks/websockets) only and only \"fromMe: true\" messages.",
+          "example": "api"
+        },
+        "to": {
+          "type": "string",
+          "description": "\n* ID for who this message is for.\n* If the message is sent by the current user, it will be the Chat to which the message is being sent.\n* If the message is sent by another user, it will be the ID for the current user.\n",
+          "example": "11111111111@c.us"
+        },
+        "participant": {
+          "type": "string",
+          "description": "For groups - participant who sent the message"
+        },
+        "body": {
+          "type": "string",
+          "description": "Message content"
+        },
+        "hasMedia": {
+          "type": "boolean",
+          "description": "Indicates if the message has media available for download"
+        },
+        "media": {
+          "description": "Media object for the message if any and downloaded",
+          "allOf": [
+            {
+              "$ref": "#/components/schemas/WAMedia"
+            }
+          ]
+        },
+        "mediaUrl": {
+          "type": "string",
+          "description": "Use `media.url` instead! The URL for the media in the message if any",
+          "deprecated": true,
+          "example": "http://localhost:3000/api/files/false_11111111111@c.us_AAAAAAAAAAAAAAAAAAAA.oga"
+        },
+        "ack": {
+          "enum": [
+            -1,
+            0,
+            1,
+            2,
+            3,
+            4
+          ],
+          "type": "number",
+          "description": "ACK status for the message"
+        },
+        "ackName": {
+          "type": "string",
+          "description": "ACK status name for the message"
+        },
+        "author": {
+          "type": "string",
+          "description": "If the message was sent to a group, this field will contain the user that sent the message."
+        },
+        "location": {
+          "description": "Location information contained in the message, if the message is type \"location\"",
+          "allOf": [
+            {
+              "$ref": "#/components/schemas/WALocation"
+            }
+          ]
+        },
+        "vCards": {
+          "description": "List of vCards contained in the message.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "_data": {
+          "type": "object",
+          "description": "Message in a raw format that we get from WhatsApp. May be changed anytime, use it with caution! It depends a lot on the underlying backend."
+        },
+        "replyTo": {
+          "$ref": "#/components/schemas/ReplyToMessage"
+        }
+      },
+      "required": [
+        "id",
+        "timestamp",
+        "from",
+        "fromMe",
+        "source",
+        "to",
+        "participant",
+        "body",
+        "hasMedia",
+        "mediaUrl",
+        "ack",
+        "ackName"
+      ]
+    },
+    "WAHAWebhookMessage": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "example": "evt_01aaaaaaaaaaaaaaaaaaaaaaaa",
+          "description": "Unique identifier for the event - lower case ULID format. https://github.com/ulid/spec"
+        },
+        "timestamp": {
+          "type": "number",
+          "example": 1634567890123,
+          "description": "Unix timestamp (ms) for when the event was created."
+        },
+        "session": {
+          "type": "string",
+          "example": "default"
+        },
+        "metadata": {
+          "type": "object",
+          "example": {
+            "user.id": "123",
+            "user.email": "email@example.com"
+          },
+          "description": "Metadata for the session."
+        },
+        "engine": {
+          "enum": [
+            "WEBJS",
+            "WPP",
+            "NOWEB",
+            "GOWS"
+          ],
+          "type": "string",
+          "example": "WEBJS"
+        },
+        "event": {
+          "enum": [
+            "session.status",
+            "message",
+            "message.reaction",
+            "message.any",
+            "message.ack",
+            "message.ack.group",
+            "message.waiting",
+            "message.revoked",
+            "message.edited",
+            "state.change",
+            "group.join",
+            "group.leave",
+            "group.v2.join",
+            "group.v2.leave",
+            "group.v2.update",
+            "group.v2.participants",
+            "presence.update",
+            "poll.vote",
+            "poll.vote.failed",
+            "chat.archive",
+            "call.received",
+            "call.accepted",
+            "call.rejected",
+            "label.upsert",
+            "label.deleted",
+            "label.chat.added",
+            "label.chat.deleted",
+            "event.response",
+            "event.response.failed",
+            "engine.event"
+          ],
+          "type": "object",
+          "default": "message",
+          "description": "Incoming message."
+        },
+        "payload": {
+          "$ref": "#/components/schemas/WAMessage"
+        },
+        "me": {
+          "$ref": "#/components/schemas/MeInfo"
+        },
+        "environment": {
+          "$ref": "#/components/schemas/WAHAEnvironment"
+        }
+      },
+      "required": [
+        "id",
+        "timestamp",
+        "session",
+        "engine",
+        "event",
+        "payload",
+        "environment"
+      ]
+    },
+    "WAHAWebhookMessageAckGroup": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "example": "evt_01aaaaaaaaaaaaaaaaaaaaaaaa",
+          "description": "Unique identifier for the event - lower case ULID format. https://github.com/ulid/spec"
+        },
+        "timestamp": {
+          "type": "number",
+          "example": 1634567890123,
+          "description": "Unix timestamp (ms) for when the event was created."
+        },
+        "session": {
+          "type": "string",
+          "example": "default"
+        },
+        "metadata": {
+          "type": "object",
+          "example": {
+            "user.id": "123",
+            "user.email": "email@example.com"
+          },
+          "description": "Metadata for the session."
+        },
+        "engine": {
+          "enum": [
+            "WEBJS",
+            "WPP",
+            "NOWEB",
+            "GOWS"
+          ],
+          "type": "string",
+          "example": "WEBJS"
+        },
+        "event": {
+          "enum": [
+            "session.status",
+            "message",
+            "message.reaction",
+            "message.any",
+            "message.ack",
+            "message.ack.group",
+            "message.waiting",
+            "message.revoked",
+            "message.edited",
+            "state.change",
+            "group.join",
+            "group.leave",
+            "group.v2.join",
+            "group.v2.leave",
+            "group.v2.update",
+            "group.v2.participants",
+            "presence.update",
+            "poll.vote",
+            "poll.vote.failed",
+            "chat.archive",
+            "call.received",
+            "call.accepted",
+            "call.rejected",
+            "label.upsert",
+            "label.deleted",
+            "label.chat.added",
+            "label.chat.deleted",
+            "event.response",
+            "event.response.failed",
+            "engine.event"
+          ],
+          "type": "object",
+          "default": "message.ack.group",
+          "description": "Receive events when participants in a group read or play messages."
+        },
+        "payload": {
+          "$ref": "#/components/schemas/WAMessageAckBody"
+        },
+        "me": {
+          "$ref": "#/components/schemas/MeInfo"
+        },
+        "environment": {
+          "$ref": "#/components/schemas/WAHAEnvironment"
+        }
+      },
+      "required": [
+        "id",
+        "timestamp",
+        "session",
+        "engine",
+        "event",
+        "payload",
+        "environment"
+      ]
+    },
+    "WAMessageAckBody": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Message ID",
+          "example": "false_11111111111@c.us_AAAAAAAAAAAAAAAAAAAA"
+        },
+        "from": {
+          "type": "string",
+          "example": "11111111111@c.us"
+        },
+        "to": {
+          "type": "string",
+          "example": "11111111111@c.us"
+        },
+        "participant": {
+          "type": "string",
+          "example": "11111111111@c.us"
+        },
+        "fromMe": {
+          "type": "boolean"
+        },
+        "ack": {
+          "type": "number",
+          "enum": [
+            -1,
+            0,
+            1,
+            2,
+            3,
+            4
+          ]
+        },
+        "ackName": {
+          "type": "string"
+        },
+        "_data": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "id",
+        "from",
+        "to",
+        "participant",
+        "fromMe",
+        "ack",
+        "ackName"
+      ]
+    },
+    "MeInfo": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "example": "11111111111@c.us"
+        },
+        "lid": {
+          "type": "string",
+          "example": "123123@lid"
+        },
+        "jid": {
+          "type": "string",
+          "example": "123123:123@s.whatsapp.net",
+          "description": "Your id with device number"
+        },
+        "reachoutTimelock": {
+          "nullable": true,
+          "description": "WhatsApp reachout timelock (account restriction) info. Null if no enforcement has been seen for the account.",
+          "allOf": [
+            {
+              "$ref": "#/components/schemas/ReachoutTimelockData"
+            }
+          ]
+        },
+        "pushName": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "pushName"
+      ]
+    },
+    "WAHAEnvironment": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "string",
+          "example": "YYYY.MM.BUILD"
+        },
+        "engine": {
+          "type": "string",
+          "example": "WEBJS"
+        },
+        "tier": {
+          "type": "string",
+          "example": "PLUS"
+        },
+        "browser": {
+          "type": "string",
+          "example": "/usr/path/to/bin/google-chrome"
+        },
+        "platform": {
+          "type": "string",
+          "example": "linux/x86"
+        },
+        "worker": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "required": true,
+              "type": "string",
+              "nullable": true
+            }
+          }
+        }
+      },
+      "required": [
+        "version",
+        "engine",
+        "tier",
+        "browser",
+        "platform",
+        "worker"
+      ]
+    },
+    "WAHAWebhookSessionStatus": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "example": "evt_01aaaaaaaaaaaaaaaaaaaaaaaa",
+          "description": "Unique identifier for the event - lower case ULID format. https://github.com/ulid/spec"
+        },
+        "timestamp": {
+          "type": "number",
+          "example": 1634567890123,
+          "description": "Unix timestamp (ms) for when the event was created."
+        },
+        "session": {
+          "type": "string",
+          "example": "default"
+        },
+        "metadata": {
+          "type": "object",
+          "example": {
+            "user.id": "123",
+            "user.email": "email@example.com"
+          },
+          "description": "Metadata for the session."
+        },
+        "engine": {
+          "enum": [
+            "WEBJS",
+            "WPP",
+            "NOWEB",
+            "GOWS"
+          ],
+          "type": "string",
+          "example": "WEBJS"
+        },
+        "event": {
+          "enum": [
+            "session.status",
+            "message",
+            "message.reaction",
+            "message.any",
+            "message.ack",
+            "message.ack.group",
+            "message.waiting",
+            "message.revoked",
+            "message.edited",
+            "state.change",
+            "group.join",
+            "group.leave",
+            "group.v2.join",
+            "group.v2.leave",
+            "group.v2.update",
+            "group.v2.participants",
+            "presence.update",
+            "poll.vote",
+            "poll.vote.failed",
+            "chat.archive",
+            "call.received",
+            "call.accepted",
+            "call.rejected",
+            "label.upsert",
+            "label.deleted",
+            "label.chat.added",
+            "label.chat.deleted",
+            "event.response",
+            "event.response.failed",
+            "engine.event"
+          ],
+          "type": "object",
+          "default": "session.status",
+          "description": "The event is triggered when the session status changes."
+        },
+        "payload": {
+          "$ref": "#/components/schemas/WASessionStatusBody"
+        },
+        "me": {
+          "$ref": "#/components/schemas/MeInfo"
+        },
+        "environment": {
+          "$ref": "#/components/schemas/WAHAEnvironment"
+        }
+      },
+      "required": [
+        "id",
+        "timestamp",
+        "session",
+        "engine",
+        "event",
+        "payload",
+        "environment"
+      ]
+    },
+    "WASessionStatusBody": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "example": "default"
+        },
+        "data": {
+          "type": "object",
+          "nullable": true,
+          "description": "Extra info that belongs to the current status, null for most of them.\nPASSKEY_REQUIRED - the WebAuthn challenge, pass it to navigator.credentials.get({ publicKey: data }).\nPASSKEY_CONFIRMATION_REQUIRED - { code } - the code to verify against the phone.\nWORKING - { reachoutTimelock } - present when WhatsApp restricts the account from messaging new contacts (the cause of 463 errors on send); the session stays connected and the restriction lifts automatically.",
+          "example": null
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "STOPPED",
+            "STARTING",
+            "SCAN_QR_CODE",
+            "PASSKEY_REQUIRED",
+            "PASSKEY_CONFIRMATION_REQUIRED",
+            "WORKING",
+            "FAILED"
+          ]
+        },
+        "statuses": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/SessionStatusPoint"
+          }
+        }
+      },
+      "required": [
+        "name",
+        "status",
+        "statuses"
+      ]
+    },
+    "SessionStatusPoint": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "STOPPED",
+            "STARTING",
+            "SCAN_QR_CODE",
+            "PASSKEY_REQUIRED",
+            "PASSKEY_CONFIRMATION_REQUIRED",
+            "WORKING",
+            "FAILED"
+          ]
+        },
+        "timestamp": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "status",
+        "timestamp"
+      ]
+    }
+  }
+}

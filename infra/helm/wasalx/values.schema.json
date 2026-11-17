@@ -1,0 +1,786 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "required": ["environment", "deploymentProfile", "podSecurityContext", "observability", "wahaBaseUrl", "wahaAdminSecretReference", "publicWebhookBaseUrl", "managedWaha", "connectorRetries", "externalRoutingConnectorsEnabled", "media", "portalDataBackend", "controlApiUrl", "portalCookieSecure", "portalPublicOrigin", "oidc", "platformOperatorOidc", "metering", "controlPlaneBackup", "workspaceProvider", "provisioner", "portal", "api", "worker", "invitationMailer", "identityPolicyActivator", "migration", "invitationMailerAllowedEgressCidrs", "identityPolicyAllowedEgressCidrs"],
+  "properties": {
+    "metaSignupEnabled": { "type": "boolean" },
+    "metaSignupCustomerConfigId": { "type": "string", "pattern": "^([0-9]{5,32})?$" },
+    "metaAppId": { "type": "string", "pattern": "^([0-9]{5,32})?$" },
+    "productionSecretSidecar": {
+      "type": "object", "additionalProperties": false,
+      "required": ["enabled", "image", "credentialsSecretName", "tlsSecretName", "caConfigMapName", "storeNamespace", "apiServerCidrs"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "image": { "type": "string" },
+        "credentialsSecretName": { "type": "string" },
+        "tlsSecretName": { "type": "string" },
+        "caConfigMapName": { "type": "string" },
+        "storeNamespace": { "type": "string" },
+        "apiServerCidrs": { "type": "array", "uniqueItems": true, "items": { "type": "string", "pattern": "^[0-9a-fA-F.:]+/(32|128)$" } }
+      },
+      "if": { "properties": { "enabled": { "const": true } } },
+      "then": { "properties": {
+        "image": { "pattern": "^[a-z0-9./_-]+@sha256:[0-9a-f]{64}$" },
+        "credentialsSecretName": { "$ref": "#/definitions/secretName" },
+        "tlsSecretName": { "$ref": "#/definitions/secretName" },
+        "caConfigMapName": { "$ref": "#/definitions/secretName" },
+        "storeNamespace": { "type": "string", "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$" },
+        "apiServerCidrs": { "minItems": 1 }
+      } }
+    },
+    "environment": { "enum": ["development", "staging", "production"] },
+    "deploymentProfile": { "enum": ["standard", "assisted-alpha"] },
+    "podSecurityContext": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["runAsNonRoot", "runAsUser", "runAsGroup", "fsGroup", "fsGroupChangePolicy", "seccompProfile"],
+      "properties": {
+        "runAsNonRoot": { "const": true },
+        "runAsUser": { "const": 1000 },
+        "runAsGroup": { "const": 1000 },
+        "fsGroup": { "const": 1000 },
+        "fsGroupChangePolicy": { "const": "OnRootMismatch" },
+        "seccompProfile": { "type": "object", "additionalProperties": false, "required": ["type"], "properties": { "type": { "const": "RuntimeDefault" } } }
+      }
+    },
+    "observability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "otlpEndpoint", "metricExportIntervalMs", "tracesSampler", "tracesSamplerArg", "collector", "prometheusRule"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "otlpEndpoint": { "type": "string", "format": "uri", "pattern": "^https?://" },
+        "metricExportIntervalMs": { "type": "string", "pattern": "^(?:[5-9][0-9]{3}|[1-5][0-9]{4}|60000)$" },
+        "tracesSampler": { "enum": ["always_on", "always_off", "traceidratio", "parentbased_always_on", "parentbased_always_off", "parentbased_traceidratio"] },
+        "tracesSamplerArg": { "type": "string", "pattern": "^(?:0(?:\\.[0-9]{1,6})?|1(?:\\.0{1,6})?)$" },
+        "collector": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["namespace", "podLabels", "port"],
+          "properties": {
+            "namespace": { "$ref": "#/definitions/secretName" },
+            "podLabels": {
+              "type": "object",
+              "minProperties": 1,
+              "maxProperties": 10,
+              "propertyNames": { "pattern": "^[A-Za-z0-9]([A-Za-z0-9./_-]{0,251}[A-Za-z0-9])?$" },
+              "additionalProperties": { "type": "string", "minLength": 1, "maxLength": 63 }
+            },
+            "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
+          }
+        },
+        "prometheusRule": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "namespace", "labels", "runbookBaseUrl"],
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "namespace": { "$ref": "#/definitions/secretName" },
+            "labels": { "type": "object", "maxProperties": 20, "additionalProperties": { "type": "string", "maxLength": 63 } },
+            "runbookBaseUrl": { "type": "string", "format": "uri", "pattern": "^https://" }
+          }
+        }
+      }
+    },
+    "wahaBaseUrl": { "type": "string", "format": "uri" },
+    "wahaAdminSecretReference": { "type": "string", "pattern": "^secret://[A-Za-z0-9][A-Za-z0-9._~:/-]*$", "maxLength": 512 },
+    "publicWebhookBaseUrl": { "type": "string", "format": "uri", "pattern": "^https://[^?#]+$" },
+    "externalRoutingConnectorsEnabled": { "type": "boolean" },
+    "notionOAuthClientId": { "type": "string", "maxLength": 256 },
+    "notionOAuthClientSecretReference": { "type": "string", "pattern": "^(?:|secret://[A-Za-z0-9][A-Za-z0-9._~:/-]*)$", "maxLength": 512 },
+    "connectorRetries": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["wahaWorkerProbeTimeoutMs", "wahaDeliveryMaxAttempts", "metaDeliveryMaxAttempts", "zammadStatusMaxAttempts"],
+      "properties": {
+        "wahaWorkerProbeTimeoutMs": { "type": "integer", "minimum": 1000, "maximum": 30000 },
+        "wahaDeliveryMaxAttempts": { "type": "integer", "minimum": 1, "maximum": 25 },
+        "metaDeliveryMaxAttempts": { "type": "integer", "minimum": 1, "maximum": 25 },
+        "zammadStatusMaxAttempts": { "type": "integer", "minimum": 1, "maximum": 25 }
+      }
+    },
+    "managedWaha": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "clusterDomain", "port", "heartbeatTtlSeconds", "healthProbeTimeoutSeconds", "storageClassName", "allowedEgressCidrs", "rolloutGate", "gows", "noweb"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "clusterDomain": { "type": "string", "minLength": 5, "maxLength": 253, "pattern": "^(?:cluster\\.local|[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?\\.(?:internal|local))$" },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "heartbeatTtlSeconds": { "type": "integer", "minimum": 15, "maximum": 300 },
+        "healthProbeTimeoutSeconds": { "type": "integer", "minimum": 5, "maximum": 30 },
+        "storageClassName": { "$ref": "#/definitions/secretName" },
+        "allowedEgressCidrs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["cidr", "ports"],
+            "properties": {
+              "cidr": { "$ref": "#/definitions/cidr" },
+              "ports": { "type": "array", "minItems": 1, "items": { "type": "integer", "minimum": 1, "maximum": 65535 } }
+            }
+          }
+        },
+        "rolloutGate": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["secretName", "allowedEgressCidrs", "resources"],
+          "properties": {
+            "secretName": { "$ref": "#/definitions/secretName" },
+            "allowedEgressCidrs": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["cidr", "ports"],
+                "properties": {
+                  "cidr": { "$ref": "#/definitions/cidr" },
+                  "ports": { "type": "array", "minItems": 1, "items": { "type": "integer", "minimum": 1, "maximum": 65535 } }
+                }
+              }
+            },
+            "resources": { "type": "object" }
+          }
+        },
+        "gows": { "$ref": "#/definitions/managedWahaEngine" },
+        "noweb": { "$ref": "#/definitions/managedWahaEngine" }
+      },
+      "allOf": [{
+        "if": { "properties": { "enabled": { "const": true } } },
+        "then": {
+          "anyOf": [
+            { "properties": { "gows": { "properties": { "enabled": { "const": true } } } } },
+            { "properties": { "noweb": { "properties": { "enabled": { "const": true } } } } }
+          ],
+          "properties": { "allowedEgressCidrs": { "minItems": 1 } }
+        }
+      }]
+    },
+    "media": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["s3", "clamav"],
+      "properties": {
+        "s3": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["endpoint", "region", "bucket", "serverSideEncryption", "kmsKeyId"],
+          "properties": {
+            "endpoint": { "type": "string", "format": "uri", "pattern": "^https://" },
+            "region": { "type": "string", "minLength": 1, "maxLength": 63, "pattern": "^[a-z0-9-]+$" },
+            "bucket": { "type": "string", "minLength": 3, "maxLength": 63, "pattern": "^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])$" },
+            "serverSideEncryption": { "enum": ["AES256", "aws:kms", "MANAGED"] },
+            "kmsKeyId": { "type": "string", "maxLength": 2048, "pattern": "^(?:[A-Za-z0-9:/_-]+)?$" }
+          },
+          "if": { "properties": { "serverSideEncryption": { "const": "aws:kms" } } },
+          "then": { "properties": { "kmsKeyId": { "minLength": 1 } } },
+          "else": { "properties": { "kmsKeyId": { "const": "" } } }
+        },
+        "clamav": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["host", "port"],
+          "properties": {
+            "host": { "type": "string", "minLength": 1, "maxLength": 253, "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?$" },
+            "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
+          }
+        }
+      }
+    },
+    "portalDataBackend": { "enum": ["control-plane"] },
+    "controlApiUrl": { "type": "string", "format": "uri" },
+    "portalCookieSecure": { "enum": ["true", "false"] },
+    "portalPublicOrigin": { "type": "string", "format": "uri" },
+    "oidc": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["issuer", "audience", "jwksUri", "clientId", "redirectUri", "invitationRedirectUri", "privilegedAcrValues", "privilegedMfaAmrValues"],
+      "properties": {
+        "issuer": { "type": "string", "format": "uri" },
+        "audience": { "type": "string", "minLength": 1 },
+        "jwksUri": { "type": "string", "format": "uri" },
+        "tokenEndpoint": { "type": "string", "format": "uri", "pattern": "^https://" },
+        "clientId": { "type": "string", "minLength": 1 },
+        "redirectUri": { "type": "string", "format": "uri" },
+        "invitationRedirectUri": { "type": "string", "format": "uri" },
+        "privilegedAcrValues": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 512,
+          "pattern": "^[^\\s\\x00-\\x1F\\x7F]+$",
+          "not": { "pattern": "(?i)(example|placeholder|changeme|replace[-_]?me)" }
+        },
+        "privilegedMfaAmrValues": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255,
+          "pattern": "^[^\\s\\x00-\\x1F\\x7F]+$"
+        }
+      }
+    },
+    "platformOperatorOidc": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["issuer", "audience", "jwksUri", "clientId", "redirectUri", "maxAuthAgeSeconds"],
+      "properties": {
+        "issuer": { "type": "string", "format": "uri", "pattern": "^https://" },
+        "audience": { "type": "string", "minLength": 1, "maxLength": 255 },
+        "jwksUri": { "type": "string", "format": "uri", "pattern": "^https://" },
+        "tokenEndpoint": { "type": "string", "format": "uri", "pattern": "^https://" },
+        "clientId": { "type": "string", "minLength": 1, "maxLength": 255 },
+        "redirectUri": { "type": "string", "format": "uri", "pattern": "^https://" },
+        "maxAuthAgeSeconds": { "type": "string", "pattern": "^(?:[6-9][0-9]|[1-8][0-9]{2}|900)$" }
+      }
+    },
+    "metering": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["catchupPeriodsPerTick", "reconcileIntervalMs"],
+      "properties": {
+        "catchupPeriodsPerTick": { "type": "string", "pattern": "^(?:[1-9]|1[0-2])$" },
+        "reconcileIntervalMs": { "type": "string", "pattern": "^(?:1[0-9]{4}|[2-9][0-9]{4}|[12][0-9]{5}|300000)$" }
+      }
+    },
+    "controlPlaneBackup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "image", "schedule", "secretName", "databaseName", "region", "storageClassName", "stagingSize", "s3", "allowedEgressCidrs", "resources"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "image": { "type": "string", "pattern": "^(?:|[A-Za-z0-9._/-]+@sha256:[0-9a-f]{64})$" },
+        "schedule": { "type": "string", "minLength": 9, "maxLength": 100 },
+        "secretName": { "$ref": "#/definitions/secretName" },
+        "databaseName": { "type": "string", "minLength": 1, "maxLength": 63, "pattern": "^[a-z][a-z0-9_]*$" },
+        "region": { "type": "string", "minLength": 1, "maxLength": 80, "pattern": "^[A-Za-z0-9._-]+$" },
+        "storageClassName": { "$ref": "#/definitions/secretName" },
+        "stagingSize": { "type": "string", "pattern": "^[1-9][0-9]*(?:Mi|Gi|Ti)$" },
+        "s3": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["endpoint", "region", "bucket", "lifecycleRuleId", "provider"],
+          "allOf": [{
+            "if": { "required": ["encryptionMode"], "properties": { "encryptionMode": { "const": "CLIENT_ENVELOPE" } } },
+            "then": { "required": ["ageRecipient"] },
+            "else": { "required": ["kmsKeyReference"] }
+          }],
+          "properties": {
+            "encryptionMode": { "enum": ["SSE_KMS", "CLIENT_ENVELOPE"] },
+            "ageRecipient": { "type": "string", "pattern": "^age1[qpzry9x8gf2tvdw0s3jn54khce6mua7l]{58}$" },
+            "endpoint": { "type": "string", "format": "uri", "pattern": "^https://" },
+            "region": { "type": "string", "minLength": 1, "maxLength": 80, "pattern": "^[A-Za-z0-9._-]+$" },
+            "bucket": { "type": "string", "minLength": 3, "maxLength": 63, "pattern": "^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])$" },
+            "kmsKeyReference": { "type": "string", "minLength": 1, "maxLength": 2048, "pattern": "^(?:arn:|kms:|key:|https://|projects/|subscriptions/|secret://)" },
+            "lifecycleRuleId": { "type": "string", "minLength": 1, "maxLength": 256 },
+            "provider": { "type": "string", "minLength": 1, "maxLength": 80 }
+          }
+        },
+        "allowedEgressCidrs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["cidr", "ports"],
+            "properties": {
+              "cidr": { "$ref": "#/definitions/cidr" },
+              "ports": { "type": "array", "minItems": 1, "items": { "type": "integer", "minimum": 1, "maximum": 65535 } }
+            }
+          }
+        },
+        "resources": { "type": "object" }
+      },
+      "allOf": [{
+        "if": { "properties": { "enabled": { "const": true } } },
+        "then": {
+          "properties": {
+            "image": { "pattern": "^[A-Za-z0-9._/-]+@sha256:[0-9a-f]{64}$" }
+          }
+        }
+      }]
+    },
+    "workspaceProvider": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "image", "replicas", "port", "serviceAccountName", "secretName", "migrationSecretName", "tlsSecretName", "kubernetesAudience", "fieldManager", "requestTimeoutMs", "operatorDeployments", "allowedEgressCidrs", "resources", "migrationResources"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "image": { "type": "string", "minLength": 1, "not": { "pattern": ":latest$" } },
+        "replicas": { "type": "integer", "minimum": 2, "maximum": 10 },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "serviceAccountName": { "$ref": "#/definitions/secretName" },
+        "secretName": { "$ref": "#/definitions/secretName" },
+        "migrationSecretName": { "$ref": "#/definitions/secretName" },
+        "tlsSecretName": { "$ref": "#/definitions/secretName" },
+        "kubernetesAudience": { "type": "string", "minLength": 3, "maxLength": 255 },
+        "fieldManager": { "type": "string", "minLength": 3, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*$" },
+        "requestTimeoutMs": { "type": "string", "pattern": "^(?:[1-9][0-9]{3,4}|60000)$" },
+        "operatorDeployments": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "identity": { "$ref": "#/definitions/secretName" },
+            "database": { "$ref": "#/definitions/secretName" },
+            "search": { "$ref": "#/definitions/secretName" },
+            "storage": { "$ref": "#/definitions/secretName" },
+            "secrets": { "$ref": "#/definitions/secretName" }
+          }
+        },
+        "allowedEgressCidrs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["cidr", "ports"],
+            "properties": { "cidr": { "$ref": "#/definitions/cidr" }, "ports": { "type": "array", "minItems": 1, "items": { "type": "integer", "minimum": 1, "maximum": 65535 } } }
+          }
+        },
+        "resources": { "type": "object" },
+        "migrationResources": { "type": "object" }
+      },
+      "allOf": [{
+        "if": { "properties": { "enabled": { "const": true } } },
+        "then": { "properties": { "image": { "pattern": "@sha256:[a-f0-9]{64}$" }, "allowedEgressCidrs": { "minItems": 1 }, "operatorDeployments": { "required": ["identity", "database", "search", "storage", "secrets"] } } }
+      }]
+    },
+    "provisioner": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "image", "secretName", "replicas", "port", "kubernetesApiUrl", "kubernetesAudience", "reconcilerIdentity", "reconcilerServiceAccount", "reconcilerServiceAccountNamespace", "workspaceBaseDomain", "oidcIssuer", "packageVersion", "packageSha256", "reconcileTimeoutMs", "driverTimeoutMs", "allowedEgressCidrs", "resources", "controller"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "image": { "type": "string", "minLength": 1, "not": { "pattern": ":latest$" } },
+        "secretName": { "$ref": "#/definitions/secretName" },
+        "replicas": { "type": "integer", "minimum": 1, "maximum": 10 },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "kubernetesApiUrl": { "type": "string", "format": "uri", "pattern": "^https://" },
+        "kubernetesAudience": { "type": "string", "minLength": 1, "maxLength": 255 },
+        "reconcilerIdentity": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$" },
+        "reconcilerServiceAccount": { "$ref": "#/definitions/secretName" },
+        "reconcilerServiceAccountNamespace": { "type": "string", "maxLength": 63, "pattern": "^(?:|[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)$" },
+        "workspaceBaseDomain": { "type": "string", "minLength": 3, "maxLength": 253, "pattern": "^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])$" },
+        "oidcIssuer": { "type": "string", "format": "uri", "pattern": "^https://" },
+        "packageVersion": { "type": "string", "maxLength": 64, "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?$" },
+        "packageSha256": { "type": "string", "pattern": "^(?:|[0-9a-f]{64})$" },
+        "reconcileTimeoutMs": { "type": "string", "pattern": "^(?:[1-9][0-9]{3,5}|1[01][0-9]{5})$" },
+        "driverTimeoutMs": { "type": "string", "pattern": "^(?:[5-9][0-9]{3}|[1-9][0-9]{4}|1[01][0-9]{4}|120000)$" },
+        "allowedEgressCidrs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["cidr", "ports"],
+            "properties": { "cidr": { "type": "string" }, "ports": { "type": "array", "minItems": 1, "items": { "type": "integer", "minimum": 1, "maximum": 65535 } } }
+          }
+        },
+        "resources": { "type": "object" },
+        "controller": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["image", "replicas", "port", "providerUrl", "controlPlaneUrl", "providerSecretName", "externalSecretStoreName", "externalSecretStoreKind", "ingressClassName", "ingressNamespace", "clusterIssuer", "storageClassName", "configuratorImage", "nginxImage", "redisImage", "memcachedImage", "zammadImages", "resourceProfiles", "backupSchedule", "leaseDurationSeconds", "pollIntervalMs", "allowedEgressCidrs", "resources", "admissionPolicy"],
+          "properties": {
+            "image": { "type": "string", "minLength": 1, "not": { "pattern": ":latest$" } },
+            "replicas": { "type": "integer", "minimum": 2, "maximum": 10 },
+            "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+            "providerUrl": { "type": "string", "format": "uri", "pattern": "^https://" },
+            "controlPlaneUrl": { "type": "string", "format": "uri", "pattern": "^https://" },
+            "providerSecretName": { "$ref": "#/definitions/secretName" },
+            "externalSecretStoreName": { "$ref": "#/definitions/secretName" },
+            "externalSecretStoreKind": { "enum": ["ClusterSecretStore", "SecretStore"] },
+            "ingressClassName": { "$ref": "#/definitions/secretName" },
+            "ingressNamespace": { "$ref": "#/definitions/secretName" },
+            "clusterIssuer": { "$ref": "#/definitions/secretName" },
+            "storageClassName": { "$ref": "#/definitions/secretName" },
+            "configuratorImage": { "type": "string", "maxLength": 2048, "pattern": "^(?:|[A-Za-z0-9._/-]+@sha256:[0-9a-f]{64})$" },
+            "nginxImage": { "type": "string", "maxLength": 2048, "pattern": "^(?:|[A-Za-z0-9._/-]+@sha256:[0-9a-f]{64})$" },
+            "redisImage": { "type": "string", "maxLength": 2048, "pattern": "^(?:|[A-Za-z0-9._/-]+@sha256:[0-9a-f]{64})$" },
+            "memcachedImage": { "type": "string", "maxLength": 2048, "pattern": "^(?:|[A-Za-z0-9._/-]+@sha256:[0-9a-f]{64})$" },
+            "zammadImages": {
+              "type": "object",
+              "propertyNames": { "maxLength": 64, "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?$" },
+              "additionalProperties": { "type": "string", "maxLength": 2048, "pattern": "^[A-Za-z0-9._/-]+@sha256:[0-9a-f]{64}$" }
+            },
+            "resourceProfiles": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["small", "medium", "large"],
+              "properties": {
+                "small": { "$ref": "#/definitions/zammadProfile" },
+                "medium": { "$ref": "#/definitions/zammadProfile" },
+                "large": { "$ref": "#/definitions/zammadProfile" }
+              }
+            },
+            "backupSchedule": { "type": "string", "minLength": 9, "maxLength": 100 },
+            "leaseDurationSeconds": { "type": "string", "pattern": "^(?:10[0-9]|11[0-9]|120)$" },
+            "pollIntervalMs": { "type": "string", "pattern": "^(?:[1-9][0-9]{3,4}|60000)$" },
+            "allowedEgressCidrs": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["cidr", "ports"],
+                "properties": { "cidr": { "type": "string" }, "ports": { "type": "array", "minItems": 1, "items": { "type": "integer", "minimum": 1, "maximum": 65535 } } }
+              }
+            },
+            "resources": { "type": "object" },
+            "admissionPolicy": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["enabled"],
+              "properties": { "enabled": { "type": "boolean" } }
+            }
+          }
+        }
+      },
+      "allOf": [{
+        "if": { "properties": { "enabled": { "const": true } } },
+        "then": {
+          "properties": {
+            "image": { "pattern": "@sha256:[a-f0-9]{64}$" },
+            "packageSha256": { "pattern": "^[0-9a-f]{64}$" },
+            "allowedEgressCidrs": { "minItems": 1 },
+            "controller": {
+              "properties": {
+                "image": { "pattern": "@sha256:[a-f0-9]{64}$" },
+                "configuratorImage": { "pattern": "^[A-Za-z0-9._/-]+@sha256:[0-9a-f]{64}$" },
+                "nginxImage": { "pattern": "^[A-Za-z0-9._/-]+@sha256:[0-9a-f]{64}$" },
+                "redisImage": { "pattern": "^[A-Za-z0-9._/-]+@sha256:[0-9a-f]{64}$" },
+                "memcachedImage": { "pattern": "^[A-Za-z0-9._/-]+@sha256:[0-9a-f]{64}$" },
+                "zammadImages": { "minProperties": 1 },
+                "allowedEgressCidrs": { "minItems": 1 },
+                "admissionPolicy": { "properties": { "enabled": { "const": true } } }
+              }
+            }
+          }
+        }
+      }]
+    },
+    "allowedOrigins": { "type": "array", "items": { "type": "string", "format": "uri" } },
+    "allowedEgressCidrs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["cidr", "ports"],
+        "properties": { "cidr": { "type": "string" }, "ports": { "type": "array", "items": { "type": "integer", "minimum": 1, "maximum": 65535 } } }
+      }
+    },
+    "portalAllowedEgressCidrs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["cidr", "ports"],
+        "properties": { "cidr": { "type": "string" }, "ports": { "type": "array", "items": { "type": "integer", "minimum": 1, "maximum": 65535 } } }
+      }
+    },
+    "apiAllowedEgressCidrs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["cidr", "ports"],
+        "properties": { "cidr": { "type": "string" }, "ports": { "type": "array", "items": { "type": "integer", "minimum": 1, "maximum": 65535 } } }
+      }
+    },
+    "workerAllowedEgressCidrs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["cidr", "ports"],
+        "properties": { "cidr": { "type": "string" }, "ports": { "type": "array", "items": { "type": "integer", "minimum": 1, "maximum": 65535 } } }
+      }
+    },
+    "invitationMailerAllowedEgressCidrs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["cidr", "ports"],
+        "properties": { "cidr": { "type": "string" }, "ports": { "type": "array", "items": { "type": "integer", "minimum": 1, "maximum": 65535 } } }
+      }
+    },
+    "identityPolicyAllowedEgressCidrs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["cidr", "ports"],
+        "properties": { "cidr": { "type": "string" }, "ports": { "type": "array", "items": { "type": "integer", "minimum": 1, "maximum": 65535 } } }
+      }
+    },
+    "portal": { "$ref": "#/definitions/workload" },
+    "api": {
+      "allOf": [
+        { "$ref": "#/definitions/workload" },
+        { "type": "object", "required": ["cleanupSecretName"], "properties": { "cleanupSecretName": { "$ref": "#/definitions/secretName" } } }
+      ]
+    },
+    "worker": { "$ref": "#/definitions/workload" },
+    "invitationMailer": { "$ref": "#/definitions/workload" },
+    "identityPolicyActivator": { "$ref": "#/definitions/workload" },
+    "migration": {
+      "type": "object",
+      "required": ["image", "secretName"],
+      "properties": {
+        "image": { "type": "string", "minLength": 1, "not": { "pattern": ":latest$" } },
+        "secretName": { "$ref": "#/definitions/secretName" }
+      }
+    }
+  },
+  "definitions": {
+    "productionValue": { "not": { "pattern": "(?i)(example|placeholder|changeme|replace[-_]?me|localhost|127[.]0[.]0[.]1|[.]invalid(?:[/:]|$)|[.]test(?:[/:]|$))" } },
+    "secretName": { "type": "string", "minLength": 1, "maxLength": 253, "pattern": "^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$" },
+    "cidr": { "type": "string", "minLength": 4, "maxLength": 64, "pattern": "^(?:(?:(?:25[0-5]|2[0-4][0-9]|1?[0-9]{1,2})\\.){3}(?:25[0-5]|2[0-4][0-9]|1?[0-9]{1,2})/(?:[0-9]|[12][0-9]|3[0-2])|[0-9A-Fa-f:]+/(?:[0-9]|[1-9][0-9]|1[01][0-9]|12[0-8]))$" },
+    "zammadProfile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cpu", "memory", "storage", "replicas"],
+      "properties": {
+        "cpu": { "type": "string", "minLength": 1, "maxLength": 20 },
+        "memory": { "type": "string", "minLength": 2, "maxLength": 20 },
+        "storage": { "type": "string", "minLength": 2, "maxLength": 20 },
+        "replicas": { "type": "integer", "minimum": 1, "maximum": 10 }
+      }
+    },
+    "managedWahaEngine": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "image", "replicas", "capacityPerReplica", "canaryOrdinals", "canarySessionLimitPerReplica", "sessionStorageSize", "credentialSecretNames", "secretReferences", "resources", "podSecurityContext", "containerSecurityContext"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "image": { "type": "string", "pattern": "^(?:|[A-Za-z0-9._/-]+@sha256:[0-9a-f]{64})$" },
+        "replicas": { "type": "integer", "minimum": 1, "maximum": 50 },
+        "capacityPerReplica": { "type": "integer", "minimum": 1, "maximum": 10000 },
+        "canaryOrdinals": { "type": "array", "maxItems": 50, "uniqueItems": true, "items": { "type": "integer", "minimum": 0, "maximum": 49 } },
+        "canarySessionLimitPerReplica": { "type": "integer", "minimum": 1, "maximum": 10000 },
+        "sessionStorageSize": { "type": "string", "pattern": "^[1-9][0-9]*(?:Mi|Gi|Ti)$" },
+        "credentialSecretNames": { "type": "array", "maxItems": 50, "items": { "$ref": "#/definitions/secretName" } },
+        "secretReferences": { "type": "array", "maxItems": 50, "items": { "type": "string", "pattern": "^secret://[A-Za-z0-9][A-Za-z0-9._~:/-]*$", "maxLength": 512 } },
+        "resources": { "type": "object" },
+        "podSecurityContext": { "$ref": "#/definitions/managedWahaPodSecurityContext" },
+        "containerSecurityContext": { "$ref": "#/definitions/managedWahaContainerSecurityContext" }
+      },
+      "allOf": [{
+        "if": { "properties": { "enabled": { "const": true } } },
+        "then": {
+          "properties": {
+            "image": { "pattern": "^[A-Za-z0-9._/-]+@sha256:[0-9a-f]{64}$" },
+            "credentialSecretNames": { "minItems": 1 },
+            "secretReferences": { "minItems": 1 }
+          }
+        }
+      }]
+    },
+    "managedWahaPodSecurityContext": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["runAsNonRoot", "seccompProfile"],
+      "properties": {
+        "runAsNonRoot": { "const": true },
+        "runAsUser": { "type": "integer", "minimum": 1, "maximum": 2147483647 },
+        "runAsGroup": { "type": "integer", "minimum": 1, "maximum": 2147483647 },
+        "fsGroup": { "type": "integer", "minimum": 1, "maximum": 2147483647 },
+        "fsGroupChangePolicy": { "enum": ["Always", "OnRootMismatch"] },
+        "seccompProfile": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type"],
+          "properties": { "type": { "const": "RuntimeDefault" } }
+        }
+      }
+    },
+    "managedWahaContainerSecurityContext": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["allowPrivilegeEscalation", "readOnlyRootFilesystem", "runAsNonRoot", "capabilities"],
+      "properties": {
+        "allowPrivilegeEscalation": { "const": false },
+        "readOnlyRootFilesystem": { "type": "boolean" },
+        "runAsNonRoot": { "const": true },
+        "runAsUser": { "type": "integer", "minimum": 1, "maximum": 2147483647 },
+        "runAsGroup": { "type": "integer", "minimum": 1, "maximum": 2147483647 },
+        "capabilities": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["drop"],
+          "properties": {
+            "drop": { "type": "array", "minItems": 1, "uniqueItems": true, "contains": { "const": "ALL" }, "items": { "type": "string" } }
+          }
+        },
+        "seccompProfile": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type"],
+          "properties": { "type": { "const": "RuntimeDefault" } }
+        }
+      }
+    },
+    "workload": {
+      "type": "object",
+      "required": ["image", "secretName", "replicas", "port", "livenessPath", "readinessPath", "resources", "autoscaling"],
+      "properties": {
+        "image": { "type": "string", "minLength": 1, "not": { "pattern": ":latest$" } },
+        "secretName": { "$ref": "#/definitions/secretName" },
+        "replicas": { "type": "integer", "minimum": 1 },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "livenessPath": { "type": "string", "pattern": "^/" },
+        "readinessPath": { "type": "string", "pattern": "^/" },
+        "resources": { "type": "object" },
+        "autoscaling": { "type": "object", "required": ["enabled", "minReplicas", "maxReplicas", "targetCPUUtilizationPercentage"] }
+      }
+    }
+  },
+  "allOf": [{
+    "if": { "required": ["productionSecretSidecar"], "properties": { "productionSecretSidecar": { "required": ["enabled"], "properties": { "enabled": { "const": true } } } } },
+    "then": { "properties": { "environment": { "const": "production" }, "secretSidecarUrl": { "pattern": "^https://secrets-agent\\.[a-z0-9-]+\\.svc\\.cluster\\.local:8443$" } } }
+  }, {
+    "if": { "properties": { "environment": { "const": "production" } } },
+    "then": {
+      "properties": {
+        "allowedOrigins": {
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^https://[^/?#]+$",
+            "allOf": [{ "$ref": "#/definitions/productionValue" }]
+          }
+        },
+        "publicWebhookBaseUrl": { "allOf": [{ "$ref": "#/definitions/productionValue" }] },
+        "secretSidecarUrl": { "pattern": "^https://", "allOf": [{ "$ref": "#/definitions/productionValue" }] },
+        "portalPublicOrigin": { "pattern": "^https://[^/?#]+$", "allOf": [{ "$ref": "#/definitions/productionValue" }] },
+        "controlApiUrl": {
+          "allOf": [{ "$ref": "#/definitions/productionValue" }],
+          "anyOf": [
+            { "pattern": "^https://" },
+            { "const": "http://wasalx-api:3001" }
+          ]
+        },
+        "portalCookieSecure": { "const": "true" },
+        "wahaBaseUrl": { "allOf": [{ "$ref": "#/definitions/productionValue" }] },
+        "observability": {
+          "properties": {
+            "enabled": { "const": true },
+            "otlpEndpoint": { "pattern": "^https://", "allOf": [{ "$ref": "#/definitions/productionValue" }] },
+            "prometheusRule": {
+              "properties": {
+                "enabled": { "const": true },
+                "runbookBaseUrl": { "allOf": [{ "$ref": "#/definitions/productionValue" }] }
+              }
+            }
+          }
+        },
+        "media": {
+          "properties": {
+            "s3": {
+              "properties": {
+                "endpoint": { "allOf": [{ "$ref": "#/definitions/productionValue" }] },
+                "kmsKeyId": { "allOf": [{ "$ref": "#/definitions/productionValue" }] }
+              }
+            }
+          }
+        },
+        "oidc": {
+          "properties": {
+            "issuer": { "pattern": "^https://", "allOf": [{ "$ref": "#/definitions/productionValue" }] },
+            "audience": { "allOf": [{ "$ref": "#/definitions/productionValue" }] },
+            "jwksUri": { "pattern": "^https://", "allOf": [{ "$ref": "#/definitions/productionValue" }] },
+            "clientId": { "allOf": [{ "$ref": "#/definitions/productionValue" }] },
+            "redirectUri": { "pattern": "^https://", "allOf": [{ "$ref": "#/definitions/productionValue" }] },
+            "invitationRedirectUri": { "pattern": "^https://", "allOf": [{ "$ref": "#/definitions/productionValue" }] }
+          }
+        },
+        "platformOperatorOidc": {
+          "properties": {
+            "issuer": { "allOf": [{ "$ref": "#/definitions/productionValue" }] },
+            "audience": { "allOf": [{ "$ref": "#/definitions/productionValue" }] },
+            "jwksUri": { "allOf": [{ "$ref": "#/definitions/productionValue" }] },
+            "clientId": { "allOf": [{ "$ref": "#/definitions/productionValue" }] },
+            "redirectUri": { "allOf": [{ "$ref": "#/definitions/productionValue" }] }
+          }
+        },
+        "managedWaha": {
+          "properties": {
+            "enabled": { "const": true },
+            "allowedEgressCidrs": { "minItems": 1 },
+            "rolloutGate": { "properties": { "allowedEgressCidrs": { "minItems": 1 } } },
+            "gows": {
+              "properties": {
+                "enabled": { "const": true },
+                "image": { "pattern": "^[A-Za-z0-9._/-]+@sha256:[0-9a-f]{64}$" }
+              }
+            }
+          }
+        },
+        "allowedEgressCidrs": { "minItems": 1 },
+        "portalAllowedEgressCidrs": { "minItems": 1 },
+        "apiAllowedEgressCidrs": { "minItems": 1 },
+        "workerAllowedEgressCidrs": { "minItems": 1 },
+        "invitationMailerAllowedEgressCidrs": { "minItems": 1 },
+        "identityPolicyAllowedEgressCidrs": { "minItems": 1 },
+        "portal": { "properties": { "image": { "pattern": "^[A-Za-z0-9._/-]+@sha256:[a-f0-9]{64}$" } } },
+        "api": { "properties": { "image": { "pattern": "^[A-Za-z0-9._/-]+@sha256:[a-f0-9]{64}$" } } },
+        "worker": { "properties": { "image": { "pattern": "^[A-Za-z0-9._/-]+@sha256:[a-f0-9]{64}$" } } },
+        "invitationMailer": { "properties": { "image": { "pattern": "^[A-Za-z0-9._/-]+@sha256:[a-f0-9]{64}$" } } },
+        "identityPolicyActivator": { "properties": { "image": { "pattern": "^[A-Za-z0-9._/-]+@sha256:[a-f0-9]{64}$" } } },
+        "migration": { "properties": { "image": { "pattern": "^[A-Za-z0-9._/-]+@sha256:[a-f0-9]{64}$" } } }
+      }
+    }
+  }, {
+    "if": {
+      "required": ["environment", "deploymentProfile"],
+      "properties": { "environment": { "const": "production" }, "deploymentProfile": { "const": "standard" } }
+    },
+    "then": {
+      "properties": {
+        "controlPlaneBackup": {
+          "properties": {
+            "enabled": { "const": true },
+            "image": { "pattern": "^[A-Za-z0-9._/-]+@sha256:[0-9a-f]{64}$" },
+            "allowedEgressCidrs": { "minItems": 1 },
+            "s3": {
+              "properties": { "endpoint": { "allOf": [{ "$ref": "#/definitions/productionValue" }] } },
+              "if": { "required": ["encryptionMode"], "properties": { "encryptionMode": { "const": "CLIENT_ENVELOPE" } } },
+              "else": { "properties": { "kmsKeyReference": { "allOf": [{ "$ref": "#/definitions/productionValue" }] } } }
+            }
+          }
+        },
+        "workspaceProvider": {
+          "properties": {
+            "enabled": { "const": true },
+            "image": { "pattern": "^[A-Za-z0-9._/-]+@sha256:[0-9a-f]{64}$" },
+            "allowedEgressCidrs": { "minItems": 1 },
+            "operatorDeployments": { "required": ["identity", "database", "search", "storage", "secrets"] }
+          }
+        },
+        "provisioner": {
+          "properties": {
+            "enabled": { "const": true },
+            "image": { "pattern": "^[A-Za-z0-9._/-]+@sha256:[0-9a-f]{64}$" },
+            "workspaceBaseDomain": { "allOf": [{ "$ref": "#/definitions/productionValue" }] },
+            "oidcIssuer": { "allOf": [{ "$ref": "#/definitions/productionValue" }] },
+            "allowedEgressCidrs": { "minItems": 1 },
+            "controller": { "properties": {
+              "image": { "pattern": "^[A-Za-z0-9._/-]+@sha256:[0-9a-f]{64}$" },
+              "providerUrl": { "allOf": [{ "$ref": "#/definitions/productionValue" }] },
+              "controlPlaneUrl": { "allOf": [{ "$ref": "#/definitions/productionValue" }] },
+              "configuratorImage": { "pattern": "^[A-Za-z0-9._/-]+@sha256:[0-9a-f]{64}$" },
+              "nginxImage": { "pattern": "^[A-Za-z0-9._/-]+@sha256:[0-9a-f]{64}$" },
+              "redisImage": { "pattern": "^[A-Za-z0-9._/-]+@sha256:[0-9a-f]{64}$" },
+              "memcachedImage": { "pattern": "^[A-Za-z0-9._/-]+@sha256:[0-9a-f]{64}$" },
+              "zammadImages": { "minProperties": 1 },
+              "allowedEgressCidrs": { "minItems": 1 },
+              "admissionPolicy": { "properties": { "enabled": { "const": true } } }
+            } }
+          }
+        }
+      }
+    }
+  }, {
+    "if": {
+      "required": ["environment", "deploymentProfile"],
+      "properties": { "environment": { "const": "production" }, "deploymentProfile": { "const": "assisted-alpha" } }
+    },
+    "then": {
+      "properties": {
+        "workspaceProvider": { "properties": { "enabled": { "const": false } } },
+        "provisioner": { "properties": { "enabled": { "const": false } } }
+      }
+    }
+  }]
+}

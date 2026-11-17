@@ -1,0 +1,335 @@
+environment: development
+deploymentProfile: standard
+productionSecretSidecar:
+  enabled: false
+  image: ""
+  credentialsSecretName: ""
+  tlsSecretName: ""
+  caConfigMapName: ""
+  storeNamespace: ""
+  apiServerCidrs: []
+connectorWorkerInternalUrl: "http://wasalx-worker:8080"
+allowedOrigins: ["http://localhost:3000"]
+metaGraphVersion: v24.0
+metaAppId: ""
+metaSignupEnabled: false
+metaSignupCustomerConfigId: ""
+databasePoolSize: "20"
+workerConcurrency: "10"
+externalRoutingConnectorsEnabled: false
+notionOAuthClientId: ""
+notionOAuthClientSecretReference: ""
+connectorRetries:
+  wahaWorkerProbeTimeoutMs: 20000
+  wahaDeliveryMaxAttempts: 8
+  metaDeliveryMaxAttempts: 8
+  zammadStatusMaxAttempts: 8
+observability:
+  enabled: true
+  otlpEndpoint: "https://otel-collector.observability.svc.cluster.local:4318"
+  metricExportIntervalMs: "15000"
+  tracesSampler: parentbased_traceidratio
+  tracesSamplerArg: "0.25"
+  collector:
+    namespace: observability
+    podLabels: { app.kubernetes.io/name: opentelemetry-collector }
+    port: 4318
+  prometheusRule:
+    enabled: false
+    namespace: observability
+    labels: { release: kube-prometheus-stack }
+    runbookBaseUrl: "https://runbooks.wasalx.com/observability"
+wahaBaseUrl: "http://waha.wasalx.svc.cluster.local:3000"
+wahaAdminSecretReference: "secret://platform/waha-admin"
+# Public HTTPS origin accepted by Meta and WAHA. The connector appends the
+# opaque per-connection route; no credential or route token belongs here.
+publicWebhookBaseUrl: "https://hooks.example.com"
+# Existing/private WAHA workers remain supported by leaving this disabled and
+# supplying WAHA_WORKERS_JSON in worker.secretName. When enabled, the chart
+# owns one persistent StatefulSet per worker and injects a generated registry
+# Secret into the connector worker only. It never places worker endpoints or
+# secret-manager references in the shared runtime ConfigMap.
+managedWaha:
+  enabled: false
+  clusterDomain: cluster.local
+  port: 3000
+  heartbeatTtlSeconds: 45
+  # Session-bearing WAHA engines can briefly pause while handling provider
+  # work. This remains bounded and matches the connector's default probe cap.
+  healthProbeTimeoutSeconds: 20
+  storageClassName: encrypted-rwo
+  allowedEgressCidrs: []
+  rolloutGate:
+    # Always active, including external-worker mode and transitions away from
+    # managed mode. The Secret contains only the dedicated least-privilege
+    # WAHA_ROLLOUT_GATE_DATABASE_URL login.
+    secretName: wasalx-waha-rollout-gate-secrets
+    allowedEgressCidrs: []
+    resources: { requests: { cpu: 25m, memory: 48Mi }, limits: { cpu: 250m, memory: 128Mi } }
+  gows:
+    enabled: false
+    image: ""
+    replicas: 1
+    capacityPerReplica: 100
+    # Explicit ordinals allow a newly added worker (for example ordinal 2) to
+    # register as the canary without changing the rollout mode of ordinals 0–1.
+    canaryOrdinals: []
+    canarySessionLimitPerReplica: 5
+    sessionStorageSize: 20Gi
+    # Exactly one Kubernetes Secret and one secret-manager reference are
+    # required per replica. Each Kubernetes Secret must contain WAHA_API_KEY
+    # as a SHA-512 value accepted by WAHA; the matching plaintext API key is
+    # resolved by the connector from the corresponding secret:// reference.
+    credentialSecretNames: []
+    secretReferences: []
+    resources: { requests: { cpu: "3", memory: 4Gi }, limits: { cpu: "6", memory: 6Gi } }
+    podSecurityContext: { runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, fsGroup: 1000, seccompProfile: { type: RuntimeDefault } }
+    containerSecurityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: false, runAsNonRoot: true, capabilities: { drop: ["ALL"] } }
+  noweb:
+    enabled: false
+    image: ""
+    replicas: 1
+    capacityPerReplica: 25
+    canaryOrdinals: []
+    canarySessionLimitPerReplica: 2
+    sessionStorageSize: 20Gi
+    credentialSecretNames: []
+    secretReferences: []
+    resources: { requests: { cpu: 500m, memory: 1Gi }, limits: { cpu: "2", memory: 3Gi } }
+    podSecurityContext: { runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, fsGroup: 1000, seccompProfile: { type: RuntimeDefault } }
+    containerSecurityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: false, runAsNonRoot: true, capabilities: { drop: ["ALL"] } }
+secretSidecarUrl: "https://secrets-agent.wasalx.svc.cluster.local:8443"
+media:
+  s3:
+    endpoint: "https://s3.example.com"
+    region: "us-east-1"
+    bucket: "wasalx-media"
+    serverSideEncryption: "aws:kms"
+    kmsKeyId: "arn:aws:kms:us-east-1:111122223333:key/replace-me"
+  clamav:
+    host: "clamav.security.svc.cluster.local"
+    port: 3310
+ingressNamespace: ingress-nginx
+allowedEgressCidrs: []
+portalAllowedEgressCidrs: []
+apiAllowedEgressCidrs: []
+workerAllowedEgressCidrs: []
+invitationMailerAllowedEgressCidrs: []
+identityPolicyAllowedEgressCidrs: []
+portalDataBackend: control-plane
+controlApiUrl: "http://wasalx-api:3001"
+portalCookieSecure: "true"
+portalPublicOrigin: "https://app.example.com"
+oidc:
+  issuer: "https://identity.example.com/realms/wasalx"
+  audience: "wasalx-control-api"
+  jwksUri: "https://identity.example.com/realms/wasalx/protocol/openid-connect/certs"
+  clientId: "wasalx-portal"
+  redirectUri: "https://app.example.com/auth/callback"
+  invitationRedirectUri: "https://app.example.com/invitations/callback"
+  # Reviewed assurance context used by privileged tenant actions. This must
+  # match an ACR the production identity provider actually issues.
+  privilegedAcrValues: "urn:wasalx:loa:2"
+  privilegedMfaAmrValues: "mfa"
+platformOperatorOidc:
+  issuer: "https://identity.example.com/realms/wasalx-platform"
+  audience: "wasalx-platform-api"
+  jwksUri: "https://identity.example.com/realms/wasalx-platform/protocol/openid-connect/certs"
+  clientId: "wasalx-platform-portal"
+  redirectUri: "https://app.example.com/platform/auth/callback"
+  maxAuthAgeSeconds: "900"
+metering:
+  catchupPeriodsPerTick: "4"
+  reconcileIntervalMs: "60000"
+
+# Independent daily logical recovery artifact. Production must replace the
+# image with its published digest, provide a backup-only database login and
+# S3 credentials in secretName, and allow only the database/S3 endpoints.
+controlPlaneBackup:
+  enabled: false
+  image: ""
+  schedule: "0 2 * * *"
+  secretName: wasalx-control-backup-secrets
+  databaseName: wasalx
+  region: us-east-1
+  storageClassName: encrypted-rwo
+  stagingSize: 20Gi
+  s3:
+    endpoint: "https://s3.example.com"
+    region: us-east-1
+    bucket: wasalx-control-backups
+    kmsKeyReference: "arn:aws:kms:us-east-1:111122223333:key/replace-me"
+    lifecycleRuleId: control-plane-backup-retention
+    provider: aws-s3
+  allowedEgressCidrs: []
+  resources: { requests: { cpu: 100m, memory: 256Mi }, limits: { cpu: "2", memory: 1Gi } }
+
+# Production provider gateway. It persists fencing/idempotency/audit state in
+# PostgreSQL and only reports READY after a provider operator has written
+# verified status to a WorkspaceProviderResource. Keep disabled until the
+# digest-pinned image, TLS identity, database roles, and egress allowlist exist.
+workspaceProvider:
+  enabled: false
+  image: wasalx/workspace-provider:dev
+  replicas: 2
+  port: 8092
+  serviceAccountName: wasalx-workspace-provider
+  secretName: wasalx-workspace-provider-secrets
+  migrationSecretName: wasalx-workspace-provider-migration
+  tlsSecretName: wasalx-workspace-provider-tls
+  kubernetesAudience: "https://kubernetes.default.svc"
+  fieldManager: wasalx-workspace-provider-v1
+  requestTimeoutMs: "10000"
+  # Trusted controllers that reconcile each declarative provider contract and
+  # write status. Enabling the gateway requires all five to be available.
+  operatorDeployments: {}
+  allowedEgressCidrs: []
+  resources: { requests: { cpu: 100m, memory: 128Mi }, limits: { cpu: "1", memory: 512Mi } }
+  migrationResources: { requests: { cpu: 50m, memory: 64Mi }, limits: { cpu: 500m, memory: 256Mi } }
+
+# Disabled until the controller's provider gateway, External Secrets store,
+# digest-pinned Zammad/configurator images, and egress policy are configured.
+# Missing dependencies keep both services fail-closed and never synthesize a
+# successful tenant workspace.
+provisioner:
+  enabled: false
+  image: wasalx/tenant-provisioner:dev
+  secretName: wasalx-tenant-provisioner-secrets
+  replicas: 2
+  port: 8090
+  kubernetesApiUrl: "https://kubernetes.default.svc"
+  kubernetesAudience: "https://kubernetes.default.svc"
+  reconcilerIdentity: "wasalx-workspace-controller/v1"
+  reconcilerServiceAccount: wasalx-workspace-controller
+  reconcilerServiceAccountNamespace: ""
+  workspaceBaseDomain: "support.example.com"
+  oidcIssuer: "https://identity.example.com/realms/wasalx"
+  packageVersion: "0.5.83"
+  packageSha256: "00069cb9565f2a9002d5df73cc29532f3adde2fce28f4f09400370f9c9d11153"
+
+  reconcileTimeoutMs: "45000"
+  driverTimeoutMs: "60000"
+  allowedEgressCidrs: []
+  resources: { requests: { cpu: 100m, memory: 128Mi }, limits: { cpu: "1", memory: 512Mi } }
+  controller:
+    image: wasalx/tenant-workspace-controller:dev
+    replicas: 2
+    port: 8091
+    providerUrl: "https://workspace-provider.platform.svc.cluster.local"
+    controlPlaneUrl: "https://wasalx-api.platform.svc.cluster.local"
+    providerSecretName: wasalx-workspace-provider-identity
+    externalSecretStoreName: wasalx-tenant-secrets
+    externalSecretStoreKind: ClusterSecretStore
+    ingressClassName: nginx
+    ingressNamespace: ingress-nginx
+    clusterIssuer: letsencrypt-production
+    storageClassName: encrypted-rwo
+    configuratorImage: ""
+    # The controller mounts the managed `/` -> `/desktop` nginx contract and
+    # probes `/desktop`; this image must honor `/etc/nginx/nginx.conf`.
+    nginxImage: ""
+    redisImage: ""
+    memcachedImage: ""
+    zammadImages: {}
+    resourceProfiles:
+      small: { cpu: "1", memory: 2Gi, storage: 20Gi, replicas: 1 }
+      medium: { cpu: "2", memory: 4Gi, storage: 50Gi, replicas: 2 }
+      large: { cpu: "4", memory: 8Gi, storage: 100Gi, replicas: 3 }
+    backupSchedule: "0 3 * * *"
+    # Must leave a failover margin longer than the longest provider request.
+    leaseDurationSeconds: "120"
+    pollIntervalMs: "5000"
+    allowedEgressCidrs: []
+    resources: { requests: { cpu: 100m, memory: 128Mi }, limits: { cpu: "1", memory: 512Mi } }
+    admissionPolicy: { enabled: true }
+
+portal:
+  image: wasalx/portal:dev
+  # This Secret must provide PORTAL_SESSION_SECRET and
+  # PLATFORM_PORTAL_SESSION_SECRET as distinct values, plus authenticated
+  # rediss:// URLs in PORTAL_SESSION_REDIS_URL and
+  # PLATFORM_PORTAL_SESSION_REDIS_URL using separately scoped ACL users. A
+  # confidential platform OIDC client may also supply
+  # PLATFORM_OPERATOR_OIDC_CLIENT_SECRET; the default example is public/PKCE.
+  secretName: wasalx-portal-secrets
+  replicas: 2
+  port: 3000
+  livenessPath: /api/health
+  readinessPath: /api/health
+  resources: { requests: { cpu: 100m, memory: 256Mi }, limits: { cpu: "1", memory: 1Gi } }
+  autoscaling: { enabled: false, minReplicas: 2, maxReplicas: 10, targetCPUUtilizationPercentage: 70 }
+api:
+  image: wasalx/control-api:dev
+  # In addition to API/database credentials, this Secret must contain a
+  # distinct read-only PRIVACY_EXPORT_S3_ACCESS_KEY_ID and
+  # PRIVACY_EXPORT_S3_SECRET_ACCESS_KEY for five-minute export URLs, plus the
+  # invitation encryption public key and key version. The matching private
+  # key must never be injected into this API pod. DATABASE_URL,
+  # PROVISIONING_DATABASE_URL, SUPPORT_ACCESS_DATABASE_URL, and
+  # WAHA_OPERATOR_DATABASE_URL, METERING_INGEST_DATABASE_URL, and
+  # PLATFORM_OPERATIONS_DATABASE_URL must use distinct logins with only their
+  # intended database role. METERING_SERVICE_JWT_SECRET must also be distinct.
+  # REDIS_URL must be an authenticated rediss:// URL using an API-only ACL user.
+  # The cleanup login stays in cleanupSecretName.
+  secretName: wasalx-api-secrets
+  cleanupSecretName: wasalx-secret-cleanup-secrets
+  replicas: 2
+  port: 3001
+  livenessPath: /health/live
+  readinessPath: /health/ready
+  resources: { requests: { cpu: 200m, memory: 256Mi }, limits: { cpu: "2", memory: 1Gi } }
+  autoscaling: { enabled: false, minReplicas: 2, maxReplicas: 10, targetCPUUtilizationPercentage: 70 }
+worker:
+  image: wasalx/connector-worker:dev
+  # This Secret must contain S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY in
+  # addition to the worker's ordinary database, queue, job-JWT, and sidecar
+  # credentials. DATABASE_URL must use the wasalx_connector_worker_runtime
+  # login, never the API runtime login. WAHA_REGISTRY_DATABASE_URL must use the registry-only login;
+  # REDIS_URL must be an authenticated rediss:// URL using a worker-only ACL user;
+  # WAHA_WORKERS_JSON is mandatory in production and must contain only private
+  # endpoints plus secret references. Never place credentials in this values
+  # file or a ConfigMap.
+  secretName: wasalx-worker-secrets
+  replicas: 2
+  port: 8080
+  livenessPath: /livez
+  readinessPath: /readyz
+  resources: { requests: { cpu: 200m, memory: 256Mi }, limits: { cpu: "2", memory: 1Gi } }
+  autoscaling: { enabled: false, minReplicas: 2, maxReplicas: 20, targetCPUUtilizationPercentage: 70 }
+invitationMailer:
+  image: wasalx/invitation-mailer:dev
+  # This worker Secret must provide the discovery-capable, mailer-only
+  # INVITATION_MAILER_DATABASE_URL, the sidecar read token, private-key secret
+  # references, provider endpoint/reference, sender/template, and portal origin.
+  # Set INVITATION_MAILER_TENANT_ID only for an intentionally dedicated tenant
+  # worker; the shared deployment omits it and discovers only tenant UUIDs with
+  # eligible jobs through its SECURITY DEFINER function.
+  secretName: wasalx-invitation-mailer-secrets
+  replicas: 2
+  port: 8085
+  livenessPath: /livez
+  readinessPath: /readyz
+  resources: { requests: { cpu: 100m, memory: 128Mi }, limits: { cpu: "1", memory: 512Mi } }
+  autoscaling: { enabled: false, minReplicas: 2, maxReplicas: 10, targetCPUUtilizationPercentage: 70 }
+identityPolicyActivator:
+  image: wasalx/identity-policy-activator:dev
+  # This Secret must provide IDENTITY_POLICY_DATABASE_URL and the attestation
+  # issuer, audience, and JWKS URI. No ordinary tenant/API database URL belongs here.
+  secretName: wasalx-identity-policy-activator-secrets
+  replicas: 2
+  port: 8086
+  livenessPath: /livez
+  readinessPath: /readyz
+  resources: { requests: { cpu: 100m, memory: 128Mi }, limits: { cpu: "1", memory: 512Mi } }
+  autoscaling: { enabled: false, minReplicas: 2, maxReplicas: 10, targetCPUUtilizationPercentage: 70 }
+migration:
+  image: wasalx/control-api:dev
+  secretName: wasalx-migration-secrets
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+  fsGroupChangePolicy: OnRootMismatch
+  seccompProfile: { type: RuntimeDefault }

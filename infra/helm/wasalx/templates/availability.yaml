@@ -1,0 +1,25 @@
+{{- range $name, $service := dict "portal" .Values.portal "api" .Values.api "worker" .Values.worker "invitation-mailer" .Values.invitationMailer "identity-policy-activator" .Values.identityPolicyActivator }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: { name: "wasalx-{{ $name }}", labels: { app.kubernetes.io/part-of: wasalx } }
+spec:
+  maxUnavailable: 1
+  selector: { matchLabels: { app.kubernetes.io/name: "wasalx-{{ $name }}" } }
+---
+{{- if $service.autoscaling.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata: { name: "wasalx-{{ $name }}", labels: { app.kubernetes.io/part-of: wasalx } }
+spec:
+  scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: "wasalx-{{ $name }}" }
+  minReplicas: {{ $service.autoscaling.minReplicas }}
+  maxReplicas: {{ $service.autoscaling.maxReplicas }}
+  behavior:
+    scaleDown: { stabilizationWindowSeconds: 300 }
+    scaleUp: { stabilizationWindowSeconds: 30 }
+  metrics:
+    - type: Resource
+      resource: { name: cpu, target: { type: Utilization, averageUtilization: {{ $service.autoscaling.targetCPUUtilizationPercentage }} } }
+---
+{{- end }}
+{{- end }}

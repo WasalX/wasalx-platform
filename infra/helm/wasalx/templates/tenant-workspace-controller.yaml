@@ -1,0 +1,197 @@
+{{- if .Values.provisioner.enabled }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Values.provisioner.reconcilerServiceAccount | quote }}
+  labels: { app.kubernetes.io/name: wasalx-workspace-controller, app.kubernetes.io/part-of: wasalx, wasalx.io/plane: provisioning }
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: wasalx-workspace-resource-controller
+  labels: { app.kubernetes.io/part-of: wasalx }
+rules:
+  - apiGroups: [""]
+    resources: [services, persistentvolumeclaims, configmaps]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [apps]
+    resources: [deployments]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [batch]
+    resources: [jobs, cronjobs]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [networking.k8s.io]
+    resources: [ingresses, networkpolicies]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [policy]
+    resources: [poddisruptionbudgets]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [external-secrets.io]
+    resources: [externalsecrets]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    verbs: [get, create, update]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: wasalx-workspace-resource-controller
+  labels: { app.kubernetes.io/part-of: wasalx }
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.provisioner.reconcilerServiceAccount | quote }}
+    namespace: {{ .Release.Namespace | quote }}
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: wasalx-workspace-resource-controller }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wasalx-workspace-controller
+  labels: { app.kubernetes.io/name: wasalx-workspace-controller, app.kubernetes.io/part-of: wasalx, wasalx.io/plane: provisioning }
+spec:
+  replicas: {{ .Values.provisioner.controller.replicas }}
+  revisionHistoryLimit: 3
+  strategy: { type: RollingUpdate, rollingUpdate: { maxUnavailable: 1, maxSurge: 1 } }
+  selector: { matchLabels: { app.kubernetes.io/name: wasalx-workspace-controller } }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: wasalx-workspace-controller, app.kubernetes.io/part-of: wasalx, wasalx.io/plane: provisioning }
+    spec:
+      serviceAccountName: {{ .Values.provisioner.reconcilerServiceAccount | quote }}
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: workspace-controller
+          image: {{ required "provisioner.controller.image is required" .Values.provisioner.controller.image | quote }}
+          imagePullPolicy: IfNotPresent
+          securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, runAsNonRoot: true, capabilities: { drop: ["ALL"] } }
+          ports: [{ name: health, containerPort: {{ .Values.provisioner.controller.port }}, protocol: TCP }]
+          env:
+            - { name: NODE_ENV, value: production }
+            - { name: PORT, value: {{ .Values.provisioner.controller.port | quote }} }
+            - { name: KUBERNETES_API_URL, value: {{ .Values.provisioner.kubernetesApiUrl | quote }} }
+            - { name: KUBERNETES_BEARER_TOKEN_FILE, value: /var/run/secrets/wasalx-kubernetes/token }
+            - { name: NODE_EXTRA_CA_CERTS, value: /var/run/secrets/wasalx-kubernetes/ca.crt }
+            - { name: PROVISIONING_WORKSPACE_NAMESPACE, value: {{ .Release.Namespace | quote }} }
+            - { name: PROVISIONING_RECONCILER_IDENTITY, value: {{ .Values.provisioner.reconcilerIdentity | quote }} }
+            - name: CONTROLLER_INSTANCE_ID
+              valueFrom: { fieldRef: { fieldPath: metadata.name } }
+            - { name: CONTROLLER_LEASE_NAME, value: wasalx-workspace-controller }
+            - { name: CONTROLLER_LEASE_DURATION_SECONDS, value: {{ .Values.provisioner.controller.leaseDurationSeconds | quote }} }
+            - { name: CONTROLLER_POLL_INTERVAL_MS, value: {{ .Values.provisioner.controller.pollIntervalMs | quote }} }
+            - { name: WORKSPACE_PROVIDER_URL, value: {{ .Values.provisioner.controller.providerUrl | quote }} }
+            - { name: WASALX_CONTROL_URL, value: {{ .Values.provisioner.controller.controlPlaneUrl | quote }} }
+            - { name: WASALX_PORTAL_URL, value: {{ .Values.portalPublicOrigin | quote }} }
+            - { name: WORKSPACE_PROVIDER_TOKEN_FILE, value: /var/run/secrets/wasalx-provider/token }
+            - { name: EXTERNAL_SECRET_STORE_NAME, value: {{ .Values.provisioner.controller.externalSecretStoreName | quote }} }
+            - { name: EXTERNAL_SECRET_STORE_KIND, value: {{ .Values.provisioner.controller.externalSecretStoreKind | quote }} }
+            - { name: PROVISIONING_WORKSPACE_BASE_DOMAIN, value: {{ .Values.provisioner.workspaceBaseDomain | quote }} }
+            - { name: ZAMMAD_INGRESS_CLASS_NAME, value: {{ .Values.provisioner.controller.ingressClassName | quote }} }
+            - { name: ZAMMAD_INGRESS_NAMESPACE, value: {{ .Values.provisioner.controller.ingressNamespace | quote }} }
+            - { name: ZAMMAD_CLUSTER_ISSUER, value: {{ .Values.provisioner.controller.clusterIssuer | quote }} }
+            - { name: ZAMMAD_STORAGE_CLASS_NAME, value: {{ .Values.provisioner.controller.storageClassName | quote }} }
+            - { name: ZAMMAD_RESOURCE_PROFILES_JSON, value: {{ toJson .Values.provisioner.controller.resourceProfiles | quote }} }
+            - { name: ZAMMAD_BACKUP_SCHEDULE, value: {{ .Values.provisioner.controller.backupSchedule | quote }} }
+            - { name: ZAMMAD_ALLOWED_EGRESS_JSON, value: {{ toJson .Values.provisioner.controller.allowedEgressCidrs | quote }} }
+          resources: {{ toYaml .Values.provisioner.controller.resources | nindent 12 }}
+          readinessProbe: { httpGet: { path: /readyz, port: health }, initialDelaySeconds: 5, periodSeconds: 10, timeoutSeconds: 3, failureThreshold: 3 }
+          livenessProbe: { httpGet: { path: /livez, port: health }, initialDelaySeconds: 10, periodSeconds: 20, timeoutSeconds: 3, failureThreshold: 3 }
+          startupProbe: { httpGet: { path: /livez, port: health }, periodSeconds: 5, timeoutSeconds: 3, failureThreshold: 24 }
+          volumeMounts:
+            - { name: kubernetes-identity, mountPath: /var/run/secrets/wasalx-kubernetes, readOnly: true }
+            - { name: provider-identity, mountPath: /var/run/secrets/wasalx-provider, readOnly: true }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: kubernetes-identity
+          projected:
+            defaultMode: 0440
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  audience: {{ .Values.provisioner.kubernetesAudience | quote }}
+                  expirationSeconds: 3600
+              - configMap:
+                  name: kube-root-ca.crt
+                  items: [{ key: ca.crt, path: ca.crt }]
+        - name: provider-identity
+          secret:
+            secretName: {{ required "provisioner.controller.providerSecretName is required" .Values.provisioner.controller.providerSecretName | quote }}
+            defaultMode: 0440
+            items: [{ key: token, path: token }]
+        - { name: tmp, emptyDir: { sizeLimit: 64Mi } }
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: { name: wasalx-workspace-controller, labels: { app.kubernetes.io/part-of: wasalx } }
+spec:
+  maxUnavailable: 1
+  selector: { matchLabels: { app.kubernetes.io/name: wasalx-workspace-controller } }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: wasalx-workspace-controller, labels: { app.kubernetes.io/part-of: wasalx } }
+spec:
+  podSelector: { matchLabels: { app.kubernetes.io/name: wasalx-workspace-controller, wasalx.io/plane: provisioning } }
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: kube-system } }
+      ports: [{ protocol: UDP, port: 53 }, { protocol: TCP, port: 53 }]
+    {{- range .Values.provisioner.controller.allowedEgressCidrs }}
+    - to: [{ ipBlock: { cidr: {{ .cidr | quote }} } }]
+      ports:
+        {{- range .ports }}
+        - { protocol: TCP, port: {{ . }} }
+        {{- end }}
+    {{- end }}
+{{- if .Values.provisioner.controller.admissionPolicy.enabled }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ printf "wasalx-workspace-owner-%s" .Release.Namespace | trunc 63 | trimSuffix "-" }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["", apps, batch, networking.k8s.io, policy, external-secrets.io]
+        apiVersions: ["*"]
+        operations: [CREATE, UPDATE, DELETE]
+        resources: [services, persistentvolumeclaims, configmaps, deployments, jobs, cronjobs, ingresses, networkpolicies, poddisruptionbudgets, externalsecrets]
+        scope: Namespaced
+  matchConditions:
+    - name: only-workspace-controller
+      expression: "request.userInfo.username == 'system:serviceaccount:{{ .Release.Namespace }}:{{ .Values.provisioner.reconcilerServiceAccount }}'"
+  validations:
+    - expression: >-
+        request.operation == 'DELETE'
+          ? has(oldObject.metadata.labels) && 'app.kubernetes.io/managed-by' in oldObject.metadata.labels && oldObject.metadata.labels['app.kubernetes.io/managed-by'] == 'wasalx-workspace-controller' && 'wasalx.io/plane' in oldObject.metadata.labels && oldObject.metadata.labels['wasalx.io/plane'] == 'tenant' && 'wasalx.io/tenant' in oldObject.metadata.labels
+          : has(object.metadata.labels) && 'app.kubernetes.io/managed-by' in object.metadata.labels && object.metadata.labels['app.kubernetes.io/managed-by'] == 'wasalx-workspace-controller' && 'wasalx.io/plane' in object.metadata.labels && object.metadata.labels['wasalx.io/plane'] == 'tenant' && 'wasalx.io/tenant' in object.metadata.labels && (request.operation == 'CREATE' || (has(oldObject.metadata.labels) && oldObject.metadata.labels['wasalx.io/tenant'] == object.metadata.labels['wasalx.io/tenant'] && oldObject.metadata.labels['app.kubernetes.io/managed-by'] == object.metadata.labels['app.kubernetes.io/managed-by'] && oldObject.metadata.labels['wasalx.io/plane'] == object.metadata.labels['wasalx.io/plane']))
+      message: Workspace controller mutations require immutable tenant ownership labels.
+    - expression: >-
+        request.operation == 'DELETE'
+          ? has(oldObject.metadata.annotations) && 'wasalx.io/workspace' in oldObject.metadata.annotations && 'wasalx.io/fencing-token' in oldObject.metadata.annotations && oldObject.metadata.annotations['wasalx.io/fencing-token'].matches('^[1-9][0-9]*$') && 'wasalx.io/idempotency-key-hash' in oldObject.metadata.annotations && oldObject.metadata.annotations['wasalx.io/idempotency-key-hash'].matches('^[0-9a-f]{64}$')
+          : has(object.metadata.annotations) && 'wasalx.io/workspace' in object.metadata.annotations && 'wasalx.io/fencing-token' in object.metadata.annotations && object.metadata.annotations['wasalx.io/fencing-token'].matches('^[1-9][0-9]*$') && 'wasalx.io/idempotency-key-hash' in object.metadata.annotations && object.metadata.annotations['wasalx.io/idempotency-key-hash'].matches('^[0-9a-f]{64}$') && (request.operation == 'CREATE' || (oldObject.metadata.annotations['wasalx.io/workspace'] == object.metadata.annotations['wasalx.io/workspace'] && int(object.metadata.annotations['wasalx.io/fencing-token']) >= int(oldObject.metadata.annotations['wasalx.io/fencing-token']) && (object.metadata.annotations['wasalx.io/fencing-token'] != oldObject.metadata.annotations['wasalx.io/fencing-token'] || object.metadata.annotations['wasalx.io/idempotency-key-hash'] == oldObject.metadata.annotations['wasalx.io/idempotency-key-hash'])))
+      message: Workspace controller mutations require monotonic request-bound ownership annotations.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ printf "wasalx-workspace-owner-%s" .Release.Namespace | trunc 63 | trimSuffix "-" }}
+spec:
+  policyName: {{ printf "wasalx-workspace-owner-%s" .Release.Namespace | trunc 63 | trimSuffix "-" }}
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector:
+      matchLabels: { kubernetes.io/metadata.name: {{ .Release.Namespace | quote }} }
+{{- end }}
+{{- end }}

@@ -1,0 +1,328 @@
+name: wasalx
+
+x-app-environment: &app-environment
+  NODE_ENV: development
+  DATABASE_URL: postgresql://wasalx_runtime:${WASALX_APP_PASSWORD:-wasalx-local-app}@postgres:5432/wasalx
+  DATABASE_POOL_SIZE: "10"
+  REDIS_URL: redis://redis:6379
+  WORKER_JOB_JWT_SECRET: ${WORKER_JOB_JWT_SECRET:-local-worker-jwt-secret-change-before-shared-use}
+  SECRET_SIDECAR_URL: http://secret-sidecar:8082
+  SECRET_SIDECAR_TOKEN: ${SECRET_SIDECAR_TOKEN:-local-sidecar-read-token-change-before-shared-use}
+  CLIENT_ROUTING_EXTERNAL_CONNECTORS_ENABLED: ${CLIENT_ROUTING_EXTERNAL_CONNECTORS_ENABLED:-false}
+
+x-container-security: &container-security
+  init: true
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  restart: unless-stopped
+
+services:
+  postgres:
+    image: postgres:17.10-alpine3.23@sha256:8189a1f6e40904781fc9e2612687877791d21679866db58b1de996b31fc312e4
+    environment:
+      POSTGRES_DB: wasalx
+      POSTGRES_USER: wasalx
+      POSTGRES_PASSWORD: ${WASALX_ADMIN_PASSWORD:-wasalx-local-admin}
+      WASALX_APP_PASSWORD: ${WASALX_APP_PASSWORD:-wasalx-local-app}
+      WASALX_CONNECTOR_WORKER_DB_PASSWORD: ${WASALX_CONNECTOR_WORKER_DB_PASSWORD:-wasalx-local-connector-worker}
+      WASALX_SECRET_CLEANUP_DB_PASSWORD: ${WASALX_SECRET_CLEANUP_DB_PASSWORD:-wasalx-local-secret-cleanup}
+      WASALX_PROVISIONING_DB_PASSWORD: ${WASALX_PROVISIONING_DB_PASSWORD:-wasalx-local-provisioning}
+      WASALX_SUPPORT_DB_PASSWORD: ${WASALX_SUPPORT_DB_PASSWORD:-wasalx-local-support}
+      WASALX_WAHA_REGISTRY_DB_PASSWORD: ${WASALX_WAHA_REGISTRY_DB_PASSWORD:-wasalx-local-waha-registry}
+      WASALX_WAHA_OPERATOR_DB_PASSWORD: ${WASALX_WAHA_OPERATOR_DB_PASSWORD:-wasalx-local-waha-operator}
+      WASALX_WAHA_ROLLOUT_GATE_DB_PASSWORD: ${WASALX_WAHA_ROLLOUT_GATE_DB_PASSWORD:-wasalx-local-waha-rollout-gate}
+      WASALX_INVITATION_MAILER_DB_PASSWORD: ${WASALX_INVITATION_MAILER_DB_PASSWORD:-wasalx-local-invitation-mailer}
+      WASALX_IDENTITY_POLICY_DB_PASSWORD: ${WASALX_IDENTITY_POLICY_DB_PASSWORD:-wasalx-local-identity-policy}
+      WASALX_METERING_INGEST_DB_PASSWORD: ${WASALX_METERING_INGEST_DB_PASSWORD:-wasalx-local-metering-ingest}
+      WASALX_PLATFORM_OPERATIONS_DB_PASSWORD: ${WASALX_PLATFORM_OPERATIONS_DB_PASSWORD:-wasalx-local-platform-operations}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./infra/docker/postgres/init-app-role.sh:/docker-entrypoint-initdb.d/10-app-role.sh:ro
+    healthcheck:
+      # The official image runs a temporary PostgreSQL server while executing
+      # init scripts. Require the final PID 1 server so dependants cannot race
+      # the temporary server's shutdown and receive ECONNREFUSED.
+      test: [CMD-SHELL, "test \"$$(cat /proc/1/comm)\" = postgres && pg_isready -U wasalx -d wasalx"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [core]
+    restart: unless-stopped
+
+  redis:
+    image: redis:8.4.1-alpine@sha256:e55195a3afbb812a14306909caad6583a1ab6c79f393f53490e42cb2111084a9
+    command: [redis-server, --appendonly, "yes", --save, "60", "1"]
+    volumes: [redis-data:/data]
+    healthcheck:
+      test: [CMD, redis-cli, ping]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [core]
+    restart: unless-stopped
+
+  secret-sidecar:
+    <<: *container-security
+    build:
+      context: .
+      dockerfile: Dockerfile.secret-sidecar
+    image: wasalx/dev-secret-sidecar:local
+    environment:
+      NODE_ENV: development
+      DEV_SECRET_SIDECAR_READ_TOKEN: ${SECRET_SIDECAR_TOKEN:-local-sidecar-read-token-change-before-shared-use}
+      DEV_SECRET_SIDECAR_WRITE_TOKEN: ${SECRET_SIDECAR_WRITE_TOKEN:-local-sidecar-write-token-change-before-shared-use}
+      DEV_SECRET_STORE_PATH: /data/secrets.enc
+      DEV_SECRET_STORE_ENCRYPTION_KEY: ${DEV_SECRET_STORE_ENCRYPTION_KEY:?Set DEV_SECRET_STORE_ENCRYPTION_KEY}
+      DEV_SECRET_STORE_JSON: ${DEV_SECRET_STORE_JSON:-{}}
+    volumes: [secret-sidecar-data:/data]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8082/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 20s
+      timeout: 10s
+      start_period: 30s
+      retries: 5
+    tmpfs: [/tmp]
+    networks: [core]
+
+  # Reconcile local runtime login passwords on every startup. PostgreSQL runs
+  # docker-entrypoint-initdb.d only for a new volume, so without this bounded
+  # job an existing development volume can retain obsolete scoped credentials.
+  runtime-role-bootstrap:
+    image: postgres:17.10-alpine3.23@sha256:8189a1f6e40904781fc9e2612687877791d21679866db58b1de996b31fc312e4
+    command: [/bin/sh, /bootstrap/sync-runtime-roles.sh]
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGPASSWORD: ${WASALX_ADMIN_PASSWORD:-wasalx-local-admin}
+      POSTGRES_DB: wasalx
+      POSTGRES_USER: wasalx
+      WASALX_APP_PASSWORD: ${WASALX_APP_PASSWORD:-wasalx-local-app}
+      WASALX_CONNECTOR_WORKER_DB_PASSWORD: ${WASALX_CONNECTOR_WORKER_DB_PASSWORD:-wasalx-local-connector-worker}
+      WASALX_SECRET_CLEANUP_DB_PASSWORD: ${WASALX_SECRET_CLEANUP_DB_PASSWORD:-wasalx-local-secret-cleanup}
+      WASALX_PROVISIONING_DB_PASSWORD: ${WASALX_PROVISIONING_DB_PASSWORD:-wasalx-local-provisioning}
+      WASALX_SUPPORT_DB_PASSWORD: ${WASALX_SUPPORT_DB_PASSWORD:-wasalx-local-support}
+      WASALX_WAHA_REGISTRY_DB_PASSWORD: ${WASALX_WAHA_REGISTRY_DB_PASSWORD:-wasalx-local-waha-registry}
+      WASALX_WAHA_OPERATOR_DB_PASSWORD: ${WASALX_WAHA_OPERATOR_DB_PASSWORD:-wasalx-local-waha-operator}
+      WASALX_WAHA_ROLLOUT_GATE_DB_PASSWORD: ${WASALX_WAHA_ROLLOUT_GATE_DB_PASSWORD:-wasalx-local-waha-rollout-gate}
+      WASALX_INVITATION_MAILER_DB_PASSWORD: ${WASALX_INVITATION_MAILER_DB_PASSWORD:-wasalx-local-invitation-mailer}
+      WASALX_IDENTITY_POLICY_DB_PASSWORD: ${WASALX_IDENTITY_POLICY_DB_PASSWORD:-wasalx-local-identity-policy}
+      WASALX_METERING_INGEST_DB_PASSWORD: ${WASALX_METERING_INGEST_DB_PASSWORD:-wasalx-local-metering-ingest}
+      WASALX_PLATFORM_OPERATIONS_DB_PASSWORD: ${WASALX_PLATFORM_OPERATIONS_DB_PASSWORD:-wasalx-local-platform-operations}
+    volumes:
+      - ./infra/docker/postgres/init-app-role.sh:/bootstrap/sync-runtime-roles.sh:ro
+    depends_on:
+      # Migrations may create or harden the same scoped roles. Serialize the
+      # password reconciliation job afterward to avoid concurrent role DDL.
+      migrate: { condition: service_completed_successfully }
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    networks: [core]
+    restart: "no"
+
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile.control-api
+    image: wasalx/control-api:local
+    command: [migrate, --path, /app/migrations]
+    environment:
+      DATABASE_ADMIN_URL: postgresql://wasalx:${WASALX_ADMIN_PASSWORD:-wasalx-local-admin}@postgres:5432/wasalx
+    depends_on:
+      postgres: { condition: service_healthy }
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    networks: [core]
+    restart: "no"
+
+  control-api:
+    <<: *container-security
+    build:
+      context: .
+      dockerfile: Dockerfile.control-api
+    image: wasalx/control-api:local
+    environment:
+      <<: *app-environment
+      PORT: "3001"
+      ALLOWED_ORIGINS: http://localhost:3000
+      OIDC_ISSUER: http://identity.local/realms/wasalx
+      OIDC_AUDIENCE: wasalx-control-api
+      OIDC_JWKS_URI: http://identity.local/realms/wasalx/protocol/openid-connect/certs
+      OIDC_PRIVILEGED_ACR_VALUES: ${OIDC_PRIVILEGED_ACR_VALUES:-urn:wasalx:loa:2}
+      OIDC_PRIVILEGED_MFA_AMR_VALUES: ${OIDC_PRIVILEGED_MFA_AMR_VALUES:-mfa}
+      INVITATION_TOKEN_ENCRYPTION_PUBLIC_KEY: ${INVITATION_TOKEN_ENCRYPTION_PUBLIC_KEY:?Set INVITATION_TOKEN_ENCRYPTION_PUBLIC_KEY}
+      INVITATION_TOKEN_KEY_VERSION: ${INVITATION_TOKEN_KEY_VERSION:-local-v1}
+      META_VERIFY_TOKEN: ${META_VERIFY_TOKEN:-local-meta-verify-token}
+      META_APP_SECRET_REFERENCE: secret://platform/meta-webhook
+      META_SIGNUP_ENABLED: ${META_SIGNUP_ENABLED:-false}
+      META_SIGNUP_CUSTOMER_CONFIG_ID: ${META_SIGNUP_CUSTOMER_CONFIG_ID:-}
+      PORTAL_PUBLIC_ORIGIN: ${PORTAL_PUBLIC_ORIGIN:-http://localhost:3000}
+      META_GRAPH_VERSION: v24.0
+      META_APP_ID: ${META_APP_ID:-}
+      WAHA_ADMIN_BASE_URL: http://waha:3000
+      WAHA_ADMIN_SECRET_REFERENCE: secret://platform/waha-admin
+      SECRET_CLEANUP_DATABASE_URL: postgresql://wasalx_secret_cleanup_runtime:${WASALX_SECRET_CLEANUP_DB_PASSWORD:-wasalx-local-secret-cleanup}@postgres:5432/wasalx
+      PROVISIONING_DATABASE_URL: postgresql://wasalx_provisioning_runtime:${WASALX_PROVISIONING_DB_PASSWORD:-wasalx-local-provisioning}@postgres:5432/wasalx
+      SUPPORT_ACCESS_DATABASE_URL: postgresql://wasalx_support_runtime:${WASALX_SUPPORT_DB_PASSWORD:-wasalx-local-support}@postgres:5432/wasalx
+      WAHA_OPERATOR_DATABASE_URL: postgresql://wasalx_waha_operator_runtime:${WASALX_WAHA_OPERATOR_DB_PASSWORD:-wasalx-local-waha-operator}@postgres:5432/wasalx
+      METERING_INGEST_DATABASE_URL: postgresql://wasalx_metering_ingest_runtime:${WASALX_METERING_INGEST_DB_PASSWORD:-wasalx-local-metering-ingest}@postgres:5432/wasalx
+      PLATFORM_OPERATIONS_DATABASE_URL: postgresql://wasalx_platform_operations_runtime:${WASALX_PLATFORM_OPERATIONS_DB_PASSWORD:-wasalx-local-platform-operations}@postgres:5432/wasalx
+      METERING_SERVICE_JWT_SECRET: ${METERING_SERVICE_JWT_SECRET:-local-metering-jwt-secret-change-before-shared-use}
+      SECRET_SIDECAR_WRITE_TOKEN: ${SECRET_SIDECAR_WRITE_TOKEN:-local-sidecar-write-token-change-before-shared-use}
+      PUBLIC_PORTAL_BASE_URL: ${PUBLIC_PORTAL_BASE_URL:-http://localhost:3000}
+      NOTION_OAUTH_CLIENT_ID: ${NOTION_OAUTH_CLIENT_ID:-}
+      NOTION_OAUTH_CLIENT_SECRET_REFERENCE: ${NOTION_OAUTH_CLIENT_SECRET_REFERENCE:-}
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      runtime-role-bootstrap: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+      secret-sidecar: { condition: service_healthy }
+    # Readiness checks three independent dependencies. Keep them bounded while
+    # allowing cold local Docker Desktop scheduling under the 6 GB proof profile.
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/health/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 20s
+      timeout: 10s
+      start_period: 60s
+      retries: 5
+    ports: ["${CONTROL_API_PORT:-3001}:3001"]
+    tmpfs: [/tmp]
+    networks: [edge, core]
+
+  connector-worker:
+    <<: *container-security
+    build:
+      context: .
+      dockerfile: Dockerfile.connector-worker
+    image: wasalx/connector-worker:local
+    environment:
+      <<: *app-environment
+      DATABASE_URL: postgresql://wasalx_connector_worker_runtime:${WASALX_CONNECTOR_WORKER_DB_PASSWORD:-wasalx-local-connector-worker}@postgres:5432/wasalx
+      PORT: "8080"
+      WAHA_BASE_URL: http://waha:3000
+      # The empty development secret store keeps provider operations closed,
+      # while this opaque reference lets the monitor persist an unhealthy probe.
+      WAHA_ADMIN_SECRET_REFERENCE: secret://platform/waha-admin
+      WAHA_WORKER_PROBE_TIMEOUT_MS: ${WAHA_WORKER_PROBE_TIMEOUT_MS:-20000}
+      WAHA_REGISTRY_DATABASE_URL: postgresql://wasalx_waha_registry_runtime:${WASALX_WAHA_REGISTRY_DB_PASSWORD:-wasalx-local-waha-registry}@postgres:5432/wasalx
+      PUBLIC_WEBHOOK_BASE_URL: http://control-api:3001
+      ALLOW_INSECURE_WEBHOOK_URL: "true"
+      META_GRAPH_VERSION: v24.0
+      META_APP_ID: ${META_APP_ID:-}
+      META_SIGNUP_ENABLED: ${META_SIGNUP_ENABLED:-false}
+      META_SIGNUP_CUSTOMER_CONFIG_ID: ${META_SIGNUP_CUSTOMER_CONFIG_ID:-}
+      META_APP_SECRET_REFERENCE: secret://platform/meta-webhook
+      PORTAL_PUBLIC_ORIGIN: ${PORTAL_PUBLIC_ORIGIN:-http://localhost:3000}
+      WAHA_DELIVERY_MAX_ATTEMPTS: ${WAHA_DELIVERY_MAX_ATTEMPTS:-8}
+      META_DELIVERY_MAX_ATTEMPTS: ${META_DELIVERY_MAX_ATTEMPTS:-8}
+      ZAMMAD_STATUS_MAX_ATTEMPTS: ${ZAMMAD_STATUS_MAX_ATTEMPTS:-8}
+      WORKER_CONCURRENCY: "4"
+      INBOUND_WORKER_CONCURRENCY: "4"
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      runtime-role-bootstrap: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+      secret-sidecar: { condition: service_healthy }
+    # The worker readiness path verifies database, Redis, the provider registry,
+    # and queue state. Docker Desktop can exceed the image's 3-second probe
+    # budget while Zammad is indexing, without the worker being unavailable.
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/readyz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 20s
+      timeout: 10s
+      start_period: 60s
+      retries: 5
+    tmpfs: [/tmp]
+    networks: [core]
+
+  # These hardened runtimes are image-buildable in the fast developer stack,
+  # but require real tenant/provider identity inputs before startup. Enable the
+  # runtime-workers profile only when those inputs are configured.
+  invitation-mailer:
+    <<: *container-security
+    profiles: [runtime-workers]
+    build:
+      context: .
+      dockerfile: Dockerfile.invitation-mailer
+    image: wasalx/invitation-mailer:local
+    environment:
+      NODE_ENV: development
+      PORT: "8085"
+      INVITATION_MAILER_DATABASE_URL: postgresql://wasalx_invitation_mailer_runtime:${WASALX_INVITATION_MAILER_DB_PASSWORD:-wasalx-local-invitation-mailer}@postgres:5432/wasalx
+      SECRET_SIDECAR_URL: http://secret-sidecar:8082
+      SECRET_SIDECAR_TOKEN: ${SECRET_SIDECAR_TOKEN:-local-sidecar-read-token-change-before-shared-use}
+      INVITATION_TOKEN_PRIVATE_KEY_REFERENCES_JSON: '${INVITATION_TOKEN_PRIVATE_KEY_REFERENCES_JSON:-{"local-v1":"secret://platform/invitation-token-private-key"}}'
+      INVITATION_EMAIL_PROVIDER_URL: ${INVITATION_EMAIL_PROVIDER_URL:-https://email-provider.invalid/v1/send}
+      INVITATION_EMAIL_PROVIDER_SECRET_REFERENCE: ${INVITATION_EMAIL_PROVIDER_SECRET_REFERENCE:-secret://platform/invitation-email-provider}
+      INVITATION_EMAIL_FROM: ${INVITATION_EMAIL_FROM:-support@wasalx.invalid}
+      INVITATION_EMAIL_TEMPLATE_ID: ${INVITATION_EMAIL_TEMPLATE_ID:-wasalx-invitation-v1}
+      PORTAL_PUBLIC_ORIGIN: ${PORTAL_PUBLIC_ORIGIN:-http://localhost:3000}
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      runtime-role-bootstrap: { condition: service_completed_successfully }
+      secret-sidecar: { condition: service_healthy }
+    tmpfs: [/tmp]
+    networks: [core]
+
+  identity-policy-activator:
+    <<: *container-security
+    profiles: [runtime-workers]
+    build:
+      context: .
+      dockerfile: Dockerfile.identity-policy-activator
+    image: wasalx/identity-policy-activator:local
+    environment:
+      NODE_ENV: development
+      PORT: "8086"
+      IDENTITY_POLICY_DATABASE_URL: postgresql://wasalx_identity_policy_runtime:${WASALX_IDENTITY_POLICY_DB_PASSWORD:-wasalx-local-identity-policy}@postgres:5432/wasalx
+      IDENTITY_POLICY_ATTESTATION_ISSUER: ${IDENTITY_POLICY_ATTESTATION_ISSUER:-http://identity.local/realms/wasalx}
+      IDENTITY_POLICY_ATTESTATION_AUDIENCE: ${IDENTITY_POLICY_ATTESTATION_AUDIENCE:-wasalx-identity-policy-activator}
+      IDENTITY_POLICY_ATTESTATION_JWKS_URI: ${IDENTITY_POLICY_ATTESTATION_JWKS_URI:-http://identity.local/realms/wasalx/protocol/openid-connect/certs}
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      runtime-role-bootstrap: { condition: service_completed_successfully }
+    tmpfs: [/tmp]
+    networks: [core]
+
+  portal:
+    <<: *container-security
+    build:
+      context: .
+      dockerfile: Dockerfile.portal
+    image: wasalx/portal:local
+    environment:
+      NODE_ENV: production
+      PORTAL_FIXTURE_ROLE: ${PORTAL_FIXTURE_ROLE:-}
+      PORT: "3000"
+      PORTAL_DATA_BACKEND: fixture
+      # The fast local profile intentionally has no collector. Production and
+      # the full profile must override this to false and provide an endpoint.
+      OTEL_SDK_DISABLED: "true"
+      OIDC_INVITATION_REDIRECT_URI: ${OIDC_INVITATION_REDIRECT_URI:-http://localhost:3000/invitations/callback}
+      WRANGLER_LOG_PATH: /tmp/wrangler.log
+    ports: ["${PORTAL_PORT:-3000}:3000"]
+    # Vinext can take several seconds to answer while Docker Desktop is under
+    # the documented local full-stack memory load. Keep the probe bounded, but
+    # do not mark a responsive portal unhealthy on the image's old 3s budget.
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 20s
+      timeout: 10s
+      start_period: 60s
+      retries: 5
+    tmpfs: [/tmp]
+    networks: [edge]
+
+networks:
+  edge: {}
+  core:
+    internal: true
+
+volumes:
+  postgres-data: {}
+  redis-data: {}
+  secret-sidecar-data: {}

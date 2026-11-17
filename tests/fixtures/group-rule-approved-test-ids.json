@@ -1,0 +1,34 @@
+{
+  "description": "Exact approved IDs for source mapping regression only; not execution status or competing operational baseline.",
+  "sourceBaselineSha256": "38e9599532ffcd1119c8552c3b848fc44776915aab4d43896092a93f73dc3171",
+  "derived": [
+    "group-rules/create-test-activate-rollback::rule-version-test-activation-and-rollback-render::03",
+    "group-management/discover-authorize-and-configure-groups::group-configuration-persists-after-reload::01",
+    "group-management/discover-authorize-and-configure-groups::unauthorized-groups-remain-unavailable::01"
+  ],
+  "quality": [
+    "group-management/discover-authorize-and-configure-groups::ui-quality::loading",
+    "group-management/discover-authorize-and-configure-groups::ui-quality::safe-error-recovery",
+    "group-management/discover-authorize-and-configure-groups::ui-quality::keyboard-focus",
+    "group-management/discover-authorize-and-configure-groups::ui-quality::console",
+    "group-management/discover-authorize-and-configure-groups::ui-quality::network",
+    "group-management/discover-authorize-and-configure-groups::ui-quality::empty",
+    "group-management/discover-authorize-and-configure-groups::ui-quality::degraded",
+    "group-rules/create-test-activate-rollback::ui-quality::loading",
+    "group-rules/create-test-activate-rollback::ui-quality::safe-error-recovery",
+    "group-rules/create-test-activate-rollback::ui-quality::reload",
+    "group-rules/create-test-activate-rollback::ui-quality::keyboard-focus",
+    "group-rules/create-test-activate-rollback::ui-quality::console",
+    "group-rules/create-test-activate-rollback::ui-quality::network",
+    "group-rules/create-test-activate-rollback::ui-quality::empty",
+    "group-rules/create-test-activate-rollback::ui-quality::degraded",
+    "group-rules/commands-triggers-and-friendly-ticket-naming::ui-quality::loading",
+    "group-rules/commands-triggers-and-friendly-ticket-naming::ui-quality::safe-error-recovery",
+    "group-rules/commands-triggers-and-friendly-ticket-naming::ui-quality::reload",
+    "group-rules/commands-triggers-and-friendly-ticket-naming::ui-quality::keyboard-focus",
+    "group-rules/commands-triggers-and-friendly-ticket-naming::ui-quality::console",
+    "group-rules/commands-triggers-and-friendly-ticket-naming::ui-quality::network",
+    "group-rules/commands-triggers-and-friendly-ticket-naming::ui-quality::empty",
+    "group-rules/commands-triggers-and-friendly-ticket-naming::ui-quality::degraded"
+  ]
+}

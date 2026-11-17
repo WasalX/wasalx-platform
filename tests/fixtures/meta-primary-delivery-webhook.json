@@ -1,0 +1,41 @@
+{
+  "entry": [
+    {
+      "id": "9876543210987654",
+      "changes": [
+        {
+          "field": "messages",
+          "value": {
+            "contacts": [
+              {
+                "wa_id": "12025550104",
+                "profile": {
+                  "name": "Synthetic fixture"
+                },
+                "user_id": "SA.1234567890123456"
+              }
+            ],
+            "messages": [
+              {
+                "id": "wamid.synthetic",
+                "from": "12025550104",
+                "text": {
+                  "body": "Synthetic fixture"
+                },
+                "type": "text",
+                "timestamp": "1760000000",
+                "from_user_id": "SA.1234567890123456"
+              }
+            ],
+            "metadata": {
+              "phone_number_id": "1234567890123456",
+              "display_phone_number": "15555556846"
+            },
+            "messaging_product": "whatsapp",
+            "test_recipient_source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        }
+      ]
+    }
+  ]
+}

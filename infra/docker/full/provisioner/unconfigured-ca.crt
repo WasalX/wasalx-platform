@@ -1,0 +1,3 @@
+# Replace this file with the Kubernetes cluster CA when enabling the
+# tenant-provisioning Compose profile. This placeholder is intentionally not a
+# valid certificate, so the provisioner cannot report readiness by accident.

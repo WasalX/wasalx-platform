@@ -1,0 +1,15 @@
+zammad-package/**/*.rb text eol=lf
+zammad-package/**/*.ts text eol=lf
+zammad-package/**/*.vue text eol=lf
+zammad-package/**/*.css text eol=lf
+zammad-package/**/*.po text eol=lf
+zammad-package/**/*.json text eol=lf
+zammad-package/LICENSE text eol=lf
+infra/helm/wasalx/crds/*.yaml text eol=lf
+infra/docker/full/keycloak/themes/wasalx/login/resources/css/*.css text eol=lf
+infra/docker/full/keycloak/themes/wasalx/login/resources/js/*.js text eol=lf
+services/control-api/migrations/*.sql text eol=lf
+*.sh text eol=lf
+patches/braces@3.0.3.patch text eol=lf
+patches/storybook@10.6.2.patch text eol=lf
+tests/fixtures/native-group/document.txt -text

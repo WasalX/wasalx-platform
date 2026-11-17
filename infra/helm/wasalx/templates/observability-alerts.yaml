@@ -1,0 +1,29 @@
+{{- if and .Values.observability.enabled .Values.observability.prometheusRule.enabled }}
+{{- $runbook := trimSuffix "/" .Values.observability.prometheusRule.runbookBaseUrl -}}
+{{- $rules := replace "__RUNBOOK_BASE_URL__" $runbook (.Files.Get "files/observability-rules.yaml") -}}
+{{- if eq .Values.deploymentProfile "assisted-alpha" }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: wasalx-prometheus-rules
+  namespace: {{ .Values.observability.prometheusRule.namespace | quote }}
+  labels: { app.kubernetes.io/name: wasalx-observability, app.kubernetes.io/part-of: wasalx }
+data:
+  wasalx.yaml: |
+{{ $rules | nindent 4 }}
+{{- else }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: wasalx-pilot-observability
+  namespace: {{ .Values.observability.prometheusRule.namespace | quote }}
+  labels:
+    app.kubernetes.io/name: wasalx-observability
+    app.kubernetes.io/part-of: wasalx
+    {{- with .Values.observability.prometheusRule.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+{{ $rules | nindent 2 }}
+{{- end }}
+{{- end }}

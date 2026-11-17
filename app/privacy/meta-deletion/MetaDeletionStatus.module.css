@@ -1,0 +1,14 @@
+.page { min-height:100dvh; display:grid; place-items:center; padding:clamp(1rem,4vw,3rem); background:var(--bg); color:var(--text); }
+.card { inline-size:min(100%,42rem); border:1px solid var(--border); border-radius:var(--wx-radius-panel); padding:clamp(1.25rem,4vw,2.5rem); background:var(--surface); }
+.card header { display:flex; align-items:center; justify-content:space-between; gap:1rem; }
+.card h1 { font-size:2rem; line-height:1.2; }
+.card p { line-height:1.7; }
+.card form { display:grid; gap:1rem; margin-block:1.5rem; }
+.card label { display:grid; gap:.5rem; }
+.card form :is(input,button) { inline-size:100%; min-inline-size:0; min-block-size:2.75rem; padding:.75rem; border:1px solid var(--border); border-radius:var(--wx-radius-control); background:var(--surface); color:inherit; }
+.card form button { cursor:pointer; font-weight:600; }
+.card form button:disabled { opacity:.6; cursor:wait; }
+.card form button:hover:not(:disabled) { background:var(--surface-2); }
+.card form button:active:not(:disabled) { border-color:var(--accent); }
+.card :is(input,button,a):focus-visible { outline:2px solid var(--accent); outline-offset:3px; }
+.card section { border-inline-start:3px solid var(--accent); padding-inline-start:1rem; }

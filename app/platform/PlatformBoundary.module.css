@@ -1,0 +1,129 @@
+.operatorMark {
+  display: grid;
+  width: var(--wx-icon-size);
+  height: var(--wx-icon-size);
+  place-items: center;
+  border-radius: var(--wx-radius-control);
+  background: linear-gradient(145deg, var(--wx-color-brand-start), var(--wx-color-brand-end));
+  color: var(--wx-color-on-solid);
+  font: var(--wx-weight-semibold) var(--wx-font-size-1) var(--wx-font-mono);
+  box-shadow: inset 0 0 0 1px var(--wx-color-inset);
+}
+
+.eyebrow {
+  margin: 0 0 var(--wx-space-2);
+  color: var(--wx-color-accent);
+  font: var(--wx-weight-semibold) var(--wx-font-size-1) var(--wx-font-mono);
+  letter-spacing: .08em;
+}
+
+.primaryButton,
+.secondaryButton {
+  min-height: var(--wx-control-height);
+  border: 1px solid var(--wx-color-border-strong);
+  border-radius: var(--wx-radius-control);
+  padding: 0 var(--wx-space-3);
+  font-size: var(--wx-font-size-2);
+  font-weight: var(--wx-weight-medium);
+}
+
+.primaryButton {
+  border-color: var(--wx-color-text);
+  background: var(--wx-color-text);
+  color: var(--wx-color-page);
+}
+
+.secondaryButton {
+  background: var(--wx-color-surface-raised);
+  color: var(--wx-color-text);
+}
+
+.authPage {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  padding: var(--wx-space-6);
+}
+
+.authPanel {
+  width: min(28rem, 100%);
+  border: 1px solid var(--wx-color-border);
+  border-radius: var(--wx-radius-dialog);
+  background: var(--wx-color-surface);
+  padding: var(--wx-space-8);
+}
+
+.authPanel .operatorMark {
+  margin-block-end: var(--wx-space-4);
+}
+
+.authPanel h1 {
+  margin: 0 0 var(--wx-space-3);
+  font-size: var(--wx-font-size-6);
+}
+
+.authPanel > p:not(.eyebrow) {
+  margin: 0 0 var(--wx-space-6);
+  color: var(--wx-color-text-muted);
+  line-height: var(--wx-line-height-relaxed);
+}
+
+.recoveryPage,
+.loadingPage {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  padding: var(--wx-space-6);
+  background: var(--wx-color-page);
+  color: var(--wx-color-text);
+}
+
+.recoveryPage > section,
+.loadingPage > section {
+  width: min(100%, 42rem);
+  border: 1px solid var(--wx-color-border);
+  border-radius: var(--wx-radius-panel);
+  background: var(--wx-color-surface);
+  padding: var(--wx-space-8);
+  box-shadow: var(--wx-shadow-dialog);
+}
+
+.recoveryPage h1,
+.loadingPage h1 {
+  margin: var(--wx-space-4) 0 var(--wx-space-3);
+  font-size: var(--wx-font-size-6);
+}
+
+.recoveryPage p:not(.eyebrow) {
+  color: var(--wx-color-text-muted);
+  line-height: var(--wx-line-height-relaxed);
+}
+
+.recoveryActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--wx-space-3);
+  margin-block-start: var(--wx-space-6);
+}
+
+.recoveryActions a {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+}
+
+.loadingGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--wx-space-3);
+  margin-block-start: var(--wx-space-6);
+}
+
+.loadingGrid i {
+  display: block;
+  min-height: calc(var(--wx-space-16) + var(--wx-space-12));
+  border: 1px solid var(--wx-color-border);
+  border-radius: var(--wx-radius-panel);
+  background: var(--wx-color-surface-raised);
+}

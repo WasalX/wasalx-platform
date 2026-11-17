@@ -1,0 +1,29 @@
+# syntax=docker/dockerfile:1.7
+FROM docker.io/library/golang:1.26.8-alpine@sha256:ce864e7223ac17b1775e6fd0b4c0db580c2eb50e7953a427916379e4b92a1628 AS build
+ARG TARGETOS=linux
+ARG TARGETARCH=amd64
+ENV GOPROXY=https://proxy.golang.org,direct \
+    GOWORK=off
+RUN apk add --no-cache bash gzip
+ADD --checksum=sha256:9294e72722fe8f90e54994ce36f331ea6176cb0edc4149cbf1d023bc89536505 \
+  https://github.com/prometheus/prometheus/archive/refs/tags/v3.14.0.tar.gz /tmp/source.tar.gz
+ADD --checksum=sha256:be18623c5891d32572998070de0d48522c966b737d9204aa41e0e88d6318e029 \
+  https://github.com/prometheus/prometheus/releases/download/v3.14.0/prometheus-web-ui-3.14.0.tar.gz /tmp/ui.tar.gz
+RUN mkdir /src && tar -xzf /tmp/source.tar.gz -C /src --strip-components=1 && \
+    tar -xzf /tmp/ui.tar.gz -C /src/web/ui
+WORKDIR /src
+RUN PREBUILT_ASSETS_STATIC_DIR=/src/web/ui/static ./scripts/compress_assets.sh && \
+    go get google.golang.org/grpc@v1.83.2
+RUN CGO_ENABLED=0 GOOS="$TARGETOS" GOARCH="$TARGETARCH" go build -mod=mod -trimpath -tags netgo,builtinassets \
+      -ldflags='-s -w -X github.com/prometheus/common/version.Version=3.14.0 -X github.com/prometheus/common/version.Revision=b0fe514e0dd48d35050bda4da9bd35aafcfd159b -X github.com/prometheus/common/version.Branch=HEAD' \
+      -o /prometheus ./cmd/prometheus
+
+FROM gcr.io/distroless/static-debian13:nonroot@sha256:1c2c046bc09ed40fad370b599a0b1ae7987f55b01e247cf27a7c27cd97e5bbc7
+ARG WASALX_CANDIDATE_SHA=unfrozen
+ARG WASALX_CANDIDATE_TREE=unfrozen
+LABEL org.opencontainers.image.revision="${WASALX_CANDIDATE_SHA}" \
+      io.wasalx.source.tree="${WASALX_CANDIDATE_TREE}"
+COPY --from=build --chown=65534:65534 /prometheus /bin/prometheus
+USER 65534:65534
+WORKDIR /prometheus
+ENTRYPOINT ["/bin/prometheus"]

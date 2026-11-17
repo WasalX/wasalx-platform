@@ -1,0 +1,62 @@
+evaluation_interval: 15s
+rule_files:
+  - application-rules.yaml
+tests:
+  - name: runtime healthy observations do not page
+    interval: 1m
+    input_series:
+      - series: wasalx_runtime_observed_timestamp_seconds
+        values: 0+60x15
+      - series: wasalx_runtime_unready_workloads
+        values: 0+0x15
+      - series: wasalx_runtime_storage_observation_failed
+        values: 0+0x15
+      - series: wasalx_certificate_expiry_timestamp_seconds
+        values: 2592000+0x15
+      - series: wasalx_deployment_failed
+        values: 0+0x15
+      - series: wasalx_search_cluster_red
+        values: 0+0x15
+      - series: wasalx_production_disk_free_ratio
+        values: 0.5+0x15
+    alert_rule_test:
+      - alertname: WasalXSearchClusterRed
+        eval_time: 15m
+        exp_alerts: []
+      - alertname: WasalXObjectStorageLow
+        eval_time: 15m
+        exp_alerts: []
+  - name: actual private search health drives the existing search alert
+    interval: 1m
+    input_series:
+      - series: wasalx_search_cluster_red
+        values: 1+0x5
+    alert_rule_test:
+      - alertname: WasalXSearchClusterRed
+        eval_time: 2m
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              owner: platform
+            exp_annotations:
+              summary: The Zammad search cluster is red.
+              runbook_url: __RUNBOOK_BASE_URL__#search-saturation
+  - name: actual guest storage pressure drives the existing capacity alert
+    interval: 1m
+    input_series:
+      - series: wasalx_production_disk_free_ratio
+        values: 0.14+0x12
+    alert_rule_test:
+      - alertname: WasalXObjectStorageLow
+        eval_time: 9m
+        exp_alerts: []
+      - alertname: WasalXObjectStorageLow
+        eval_time: 10m
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              owner: platform
+            exp_annotations:
+              summary: Object-storage or its production filesystem has less than 15% usable
+                free capacity.
+              runbook_url: __RUNBOOK_BASE_URL__#object-storage-saturation

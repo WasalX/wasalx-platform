@@ -1,0 +1,12 @@
+.page { display: grid; min-block-size: calc(100dvh - 6rem); align-content: start; justify-items: center; padding: var(--wx-space-16) var(--wx-space-6); background: var(--wx-color-surface); }
+.panel { inline-size: min(30rem, 100%); border: 1px solid var(--wx-color-border); border-radius: var(--wx-radius-dialog); background: var(--wx-color-surface); padding: var(--wx-space-12) var(--wx-space-8); text-align: center; }
+.icon { display: grid; inline-size: 3.5rem; block-size: 3.5rem; place-items: center; margin: 0 auto var(--wx-space-6); border-radius: 50%; background: var(--wx-color-accent-wash); color: var(--wx-color-accent); font-size: var(--wx-font-size-6); font-weight: var(--wx-weight-semibold); }
+.icon[data-state="invalid"], .icon[data-state="unavailable"], .icon[data-tone="danger"], .icon[data-tone="warning"] { color: var(--wx-color-warning); background: color-mix(in srgb, var(--wx-color-warning) 9%, var(--wx-color-surface)); }
+.panel h1 { margin: 0 0 var(--wx-space-4); font-size: 1.75rem; line-height: 1.3; letter-spacing: -.03em; text-wrap: balance; }
+.panel p { margin: 0 0 var(--wx-space-6); color: var(--wx-color-text-muted); font-size: var(--wx-font-size-4); line-height: var(--wx-line-height-relaxed); text-wrap: pretty; }
+.panel :global(.wx-button) { min-block-size: 2.75rem; padding-inline: var(--wx-space-6); text-decoration: none; font-size: var(--wx-font-size-3); }
+.panel small, .back { display: block; margin-block-start: var(--wx-space-8); border-block-start: 1px solid var(--wx-color-border); padding-block-start: var(--wx-space-6); color: var(--wx-color-text-muted); font-size: var(--wx-font-size-2); line-height: 1.6; }
+.back { text-decoration: none; color: var(--wx-color-accent); }
+.progress { display: inline-flex; min-block-size: 2.75rem; align-items: center; gap: var(--wx-space-2); color: var(--wx-color-text-muted); }
+:global([dir="rtl"]) .panel h1 { letter-spacing: 0; line-height: 1.5; }
+@media (max-width: 40rem) { .page { padding: var(--wx-space-8) var(--wx-space-4); } .panel { padding: var(--wx-space-8) var(--wx-space-6); } }

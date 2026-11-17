@@ -1,0 +1,20 @@
+.setup { display: grid; gap: 16px; min-width: 0; padding: 18px 22px; }
+.setup h3, .setup p { margin: 0; }
+.setup p { color: var(--muted); line-height: 1.6; }
+.setup label { display: grid; gap: 7px; }
+.setup small { display: block; color: var(--muted); line-height: 1.5; }
+.setup input[type="password"] { width: 100%; min-width: 0; }
+.setup .error { color: var(--danger); }
+.choices { display: grid; gap: 0; margin: 0; padding: 0; border: 0; min-width: 0; }
+.choices legend { margin-block-end: 8px; font-weight: 600; }
+.choice { display: flex !important; align-items: flex-start; gap: 12px; padding-block: 14px; border-block-end: 1px solid var(--border); cursor: pointer; }
+.choice input { width: 20px; height: 20px; flex: 0 0 auto; margin-block-start: 3px; }
+.choice > span { display: grid; gap: 4px; min-width: 0; overflow-wrap: anywhere; }
+.choice small { color: var(--muted); line-height: 1.5; }
+.readiness { margin: 0; }
+.readiness > div { display: flex; justify-content: space-between; gap: 16px; padding-block: 10px; border-block-end: 1px solid var(--border); }
+.readiness dt { color: var(--muted); }
+.readiness dd { margin: 0; text-align: end; overflow-wrap: anywhere; }
+.actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.actions > button { min-height: 44px; white-space: normal; }
+@media (max-width: 520px) { .actions > button { flex: 1 1 100%; } }

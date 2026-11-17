@@ -1,0 +1,212 @@
+@font-face {
+  font-family: "Geist Sans";
+  src: url("../app/fonts/Geist-Variable.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Geist Mono";
+  src: url("../app/fonts/GeistMono-Variable.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+html,
+body,
+#storybook-root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+.wx-story-canvas,
+.wx-story-inline-theme {
+  --font-geist-sans: "Geist Sans";
+  --font-geist-mono: "Geist Mono";
+  min-height: 100vh;
+  padding: var(--wx-space-8);
+}
+
+.wx-story-inline-theme {
+  min-height: auto;
+  border: 1px solid var(--wx-color-border);
+  border-radius: var(--wx-radius-panel);
+}
+
+.wx-story-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--wx-space-4);
+  margin: 0 auto;
+  max-width: var(--wx-content-max);
+}
+
+.wx-story-section > header {
+  display: flex;
+  max-width: 48rem;
+  flex-direction: column;
+  gap: var(--wx-space-2);
+}
+
+.wx-story-section h1,
+.wx-story-section h2,
+.wx-story-section p {
+  margin: 0;
+}
+
+.wx-story-section h1 {
+  font-size: var(--wx-font-size-7);
+  letter-spacing: -0.04em;
+}
+
+.wx-story-section h2 {
+  font-size: var(--wx-font-size-5);
+  letter-spacing: -0.02em;
+}
+
+.wx-story-section > header p,
+.wx-token-card p {
+  color: var(--wx-color-text-muted);
+  line-height: var(--wx-line-height-relaxed);
+}
+
+.wx-story-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr));
+  gap: var(--wx-space-4);
+}
+
+.wx-story-grid-wide {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 28rem), 1fr));
+}
+
+.wx-story-card,
+.wx-token-card {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: var(--wx-space-3);
+  border: 1px solid var(--wx-color-border);
+  border-radius: var(--wx-radius-panel);
+  background: var(--wx-color-surface);
+  padding: var(--wx-space-4);
+}
+
+.wx-story-card > small,
+.wx-token-card > small {
+  color: var(--wx-color-text-subtle);
+  font: var(--wx-weight-medium) var(--wx-font-size-1) / var(--wx-line-height-default) var(--wx-font-mono);
+}
+
+.wx-token-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--wx-space-2);
+}
+
+.wx-token-row {
+  display: grid;
+  grid-template-columns: minmax(8rem, 1fr) minmax(8rem, 1fr);
+  gap: var(--wx-space-3);
+  align-items: center;
+}
+
+.wx-token-row code {
+  overflow: hidden;
+  color: var(--wx-color-text-subtle);
+  font: var(--wx-weight-regular) var(--wx-font-size-1) / var(--wx-line-height-default) var(--wx-font-mono);
+  text-overflow: ellipsis;
+}
+
+.wx-color-swatch {
+  display: flex;
+  min-height: var(--wx-control-height);
+  align-items: center;
+  gap: var(--wx-space-2);
+}
+
+.wx-color-swatch::before {
+  width: var(--wx-icon-size);
+  height: var(--wx-icon-size);
+  flex: 0 0 auto;
+  border: 1px solid var(--wx-color-border-strong);
+  border-radius: var(--wx-radius-control);
+  background: var(--swatch);
+  content: "";
+}
+
+.wx-space-demo {
+  height: var(--wx-space-2);
+  border-radius: var(--wx-radius-control);
+  background: var(--wx-color-accent);
+}
+
+.wx-control-preview {
+  display: flex;
+  min-height: 5rem;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed var(--wx-color-border);
+  border-radius: var(--wx-radius-control);
+  background: var(--wx-color-surface-raised);
+  padding: var(--wx-space-4);
+}
+
+.wx-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--wx-space-2);
+}
+
+.wx-field span {
+  color: var(--wx-color-text-muted);
+  font-size: var(--wx-font-size-2);
+}
+
+.wx-field input {
+  min-height: var(--wx-control-height);
+  border: 1px solid var(--wx-color-border-strong);
+  border-radius: var(--wx-radius-control);
+  background: var(--wx-color-surface-raised);
+  color: var(--wx-color-text);
+  padding: 0 var(--wx-space-3);
+}
+
+.wx-field input:focus-visible,
+[data-preview-state="focus"] .wx-field input {
+  outline: 2px solid var(--wx-color-accent);
+  outline-offset: 2px;
+}
+
+.wx-state-showcase {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--wx-space-4);
+}
+
+.wx-state-showcase .wx-data-panel,
+.wx-state-showcase .wx-state-panel {
+  min-width: 0;
+}
+
+@media (max-width: 48rem) {
+  .wx-story-canvas,
+  .wx-story-inline-theme { padding: var(--wx-space-4); }
+  .wx-state-showcase { grid-template-columns: 1fr; }
+}

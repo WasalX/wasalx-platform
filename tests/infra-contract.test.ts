@@ -1,0 +1,1129 @@
+import assert from "node:assert/strict";
+import { spawnSync, type SpawnSyncReturns } from "node:child_process";
+import { existsSync } from "node:fs";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createHash } from "node:crypto";
+import test from "node:test";
+import { fileURLToPath } from "node:url";
+import { parse as parseYaml } from "yaml";
+
+const read = (path: string) =>
+  readFile(new URL(`../${path}`, import.meta.url), "utf8");
+const bash = process.platform === "win32"
+  ? [process.env.BASH, process.env.GIT_BASH, process.env.ProgramFiles && join(process.env.ProgramFiles, "Git", "bin", "bash.exe"), "bash"]
+    .filter((candidate): candidate is string => Boolean(candidate)).find(existsSync) ?? "bash"
+  : "bash";
+
+
+
+test("control API image includes the shared domain matcher dependency", async () => {
+  const dockerfile = await read("Dockerfile.control-api");
+  assert.match(dockerfile, /COPY lib\/domain\.ts lib\/literal-matcher\.ts \.\/lib\//);
+  assert.match(await read("scripts/test-unit.mjs"), /"tests\/literal-matcher\.test\.ts"/);
+});
+
+test("release assets use one bounded mirror attempt and reject corrupt bytes before fallback", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "wasalx-tool-fetch-quote'-"));
+  const posix = (value: string) => process.platform === "win32" ? value.replaceAll("\\", "/").replace(/^([A-Za-z]):/u, (_, drive) => `/${drive.toLowerCase()}`) : value;
+  try {
+    const fixture = join(directory, "fixture");
+    await writeFile(fixture, "verified release asset\n");
+    const expected = createHash("sha256").update(await readFile(fixture)).digest("hex");
+    const helper = posix(fileURLToPath(new URL("../scripts/release/fetch-verified-asset.sh", import.meta.url)));
+    const upstream = "https://github.com/example/tool/releases/download/v1/tool.tar.gz";
+    for (const scenario of ["hit", "dns", "trailing-slash", "miss", "timeout", "redirect-301", "redirect-302", "redirect-307", "redirect-308", "corrupt-mirror", "corrupt-origin", "both-down", "bad-pin"]) {
+      const mirror = scenario === "dns" ? "https://mirror.example-1.test:65535" : `http://192.0.2.1:3143${scenario === "trailing-slash" ? "/" : ""}`;
+      const output = join(directory, `${scenario}.archive`), trace = join(directory, `${scenario}.trace`);
+      await writeFile(output, "previous verified file");
+      const program = `curl() {
+        local output="" url="\${!#}" proto="" redirs="" location=no writeout=""
+        printf '%s\\n' "$url" >> "$FETCH_TRACE"
+        while [[ $# -gt 0 ]]; do
+          case "$1" in
+            --output) output="$2"; shift ;;
+            --proto) proto="$2"; shift ;;
+            --max-redirs) redirs="$2"; shift ;;
+            --location) location=yes ;;
+            --write-out) writeout="$2"; shift ;;
+          esac
+          shift
+        done
+        if [[ "$url" != "$FETCH_URL" ]]; then
+          [[ "$proto" == '=http,https' && "$redirs" == 0 && "$location" == no && "$writeout" == '%{http_code}' ]] || return 99
+          [[ "$FETCH_CASE" != miss && "$FETCH_CASE" != corrupt-origin && "$FETCH_CASE" != both-down ]] || return 22
+          [[ "$FETCH_CASE" != timeout ]] || return 28
+          if [[ "$FETCH_CASE" == redirect-* ]]; then
+            cp "$FETCH_FIXTURE" "$output"
+            printf '%s' "\${FETCH_CASE#redirect-}"
+            return 0
+          fi
+        else
+          [[ "$proto" == '=https' && "$location" == yes ]] || return 99
+          [[ "$FETCH_CASE" != both-down ]] || return 7
+        fi
+        if [[ "$FETCH_CASE" == corrupt-mirror || "$FETCH_CASE" == corrupt-origin ]]; then printf corrupt > "$output";
+        else cp "$FETCH_FIXTURE" "$output"; fi
+        [[ "$url" == "$FETCH_URL" ]] || printf 200
+      }
+      export -f curl
+      bash "$FETCH_HELPER" "$FETCH_URL" "$FETCH_OUTPUT" "$FETCH_PIN"`;
+      const result = spawnSync(bash, ["--noprofile", "--norc", "-c", program], {
+        encoding: "utf8", timeout: 10_000, windowsHide: true,
+        env: { ...process.env, BIN_MIRROR_BASE: mirror, FETCH_CASE: scenario, FETCH_TRACE: posix(trace), FETCH_FIXTURE: posix(fixture),
+          FETCH_HELPER: helper, FETCH_URL: upstream, FETCH_OUTPUT: posix(output), FETCH_PIN: scenario === "bad-pin" ? "invalid" : expected },
+      });
+      const success = ["hit", "dns", "trailing-slash", "miss", "timeout"].includes(scenario) || scenario.startsWith("redirect-");
+      assert.equal(result.status, success ? 0 : scenario === "both-down" ? 1 : 2, `${scenario}: ${result.stderr}`);
+      assert.equal(await readFile(output, "utf8"), success ? "verified release asset\n" : "previous verified file");
+      const calls = scenario === "bad-pin" ? [] : (await readFile(trace, "utf8")).trim().split("\n");
+      assert.deepEqual(calls, scenario === "bad-pin" ? [] : [`${mirror.replace(/\/$/u, "")}/github.com/example/tool/releases/download/v1/tool.tar.gz`, ...(["miss", "timeout", "corrupt-origin", "both-down"].includes(scenario) || scenario.startsWith("redirect-") ? [upstream] : [])]);
+    }
+    assert(!(await readdir(directory)).some(name => name.includes(".pending.")), "partial downloads must be removed");
+    const source = await read("scripts/release/fetch-verified-asset.sh");
+    assert.match(source, /--retry 0[\s\S]*--connect-timeout 3 --max-time 8/u);
+    assert.match(source, /--proto '=https' --proto-redir '=https'[\s\S]*--retry-max-time 120/u);
+    const infra = await read("scripts/validate-infra.sh");
+    const prepare = infra.split("prepare_verified_archive() {")[1].split("prepare_pinned_provider() {")[0];
+    assert(prepare.indexOf('"$checksum_url"') < prepare.indexOf("fetch-verified-asset.sh"), "Helm/Tofu metadata must come directly from upstream before mirror bytes");
+    assert.doesNotMatch(infra, /TOFU_CONTAINER|archive_status/, "archive failures cannot fall back to Docker");
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("release assets reject invalid mirror origins before any network or output change", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "wasalx-tool-mirror-format-"));
+  const posix = (value: string) => process.platform === "win32" ? value.replaceAll("\\", "/").replace(/^([A-Za-z]):/u, (_, drive) => `/${drive.toLowerCase()}`) : value;
+  try {
+    const invalid = [
+      "ftp://mirror.test", "file:///tmp/mirror", "http://", "http:///mirror.test", "http://mirror.test//", "http://mirror.test/prefix",
+      "https://fixture:placeholder@api.example.test/path", "http://mirror.test?token=secret", "http://mirror.test/#fragment", "http://mirror.test\\evil",
+      "http://mirror.test:0", "http://mirror.test:65536", "http://mirror.test:999999", "http://mirror.test:", "http://mirror.test:abc",
+      "http://mirror.test:https://other.test", "http://mirror..test", "http://-mirror.test", "http://mirror-.test", "http://mirror.test.",
+      "http://256.0.0.1", "http://127.1", "http://01.2.3.4", "http://[::1]", "http://[::1]:3143",
+      " http://mirror.test", "http://mirror.test ", "http://mirror.test\n", "http://mirror.test\t", "http://mirror.test\x7f",
+      `http://${"a".repeat(64)}.test`, `http://${Array(5).fill("a".repeat(51)).join(".")}`,
+    ];
+    const output = join(directory, "output"), trace = join(directory, "trace");
+    await writeFile(output, "previous verified file");
+    await writeFile(trace, "");
+    const result = spawnSync(bash, ["--noprofile", "--norc", "-c", `curl() { printf network >> "$FETCH_TRACE"; }
+      export -f curl
+      for ((index=0; index<FETCH_COUNT; index++)); do
+        key="FETCH_BASE_$index"
+        BIN_MIRROR_BASE="\${!key}" bash "$FETCH_HELPER" https://github.com/example/tool "$FETCH_OUTPUT" "$FETCH_PIN" 2>/dev/null
+        printf '%s\\n' "$?"
+      done`], {
+      encoding: "utf8", timeout: 60_000, windowsHide: true,
+      env: { ...process.env, FETCH_COUNT: String(invalid.length), ...Object.fromEntries(invalid.map((base, index) => [`FETCH_BASE_${index}`, base])),
+        FETCH_HELPER: posix(fileURLToPath(new URL("../scripts/release/fetch-verified-asset.sh", import.meta.url))),
+        FETCH_OUTPUT: posix(output), FETCH_TRACE: posix(trace), FETCH_PIN: "0".repeat(64) },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(result.stdout.trim().split(/\r?\n/u), invalid.map(() => "2"));
+    assert.equal(await readFile(trace, "utf8"), "", "invalid mirror configuration must not call curl");
+    assert.equal(await readFile(output, "utf8"), "previous verified file");
+    assert(!(await readdir(directory)).some(name => name.includes(".pending.")));
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("infrastructure validation keeps Docker on fullruntime and pins native cloud tools in source", async () => {
+  const script = await read("scripts/validate-infra.sh");
+  assert.match(script, /\.wasalx-infra-tool-cache/);
+  assert.match(script, /cached infrastructure tool failed checksum verification/);
+  assert.match(script, /--retry 3 --retry-all-errors/);
+  assert.match(script, /NATIVE_INFRA=false/);
+  assert.match(script, /\bdocker\s+run/);
+  assert.match(script, /TOFU_IMAGE="ghcr\.io\/opentofu\/opentofu@sha256:[0-9a-f]{64}"/);
+  assert.match(script, /TOFU_VERSION="1\.12\.1"/);
+  assert.match(script, /PROMTOOL_VERSION="3\.13\.1"/);
+  assert.match(script, /HELM_VERSION="4\.2\.0"/);
+  assert.match(script, /prometheus\/prometheus\/releases\/download\/v\$\{PROMTOOL_VERSION\}\/sha256sums\.txt/);
+  assert.match(script, /tofu_\$\{TOFU_VERSION\}_SHA256SUMS/);
+  assert.match(script, /get\.helm\.sh\/\$\{HELM_ARCHIVE\}\.sha256sum/);
+  assert.match(script, /"\$PROMTOOL" test rules tests\.yaml/);
+  assert.match(script, /ci-phase-guard\.py --payload ;;/);
+  assert.match(script, /missing infrastructure prerequisite: %s/);
+  assert.match(script, /-lockfile=readonly/);
+  assert.match(script, /provider-mirror\/registry\.opentofu\.org\/hashicorp/);
+  assert.match(script, /filesystem_mirror/);
+  assert.match(script, /github\.com\/opentofu\/terraform-provider-/);
+  assert.match(script, /WASALX_GITHUB_RELEASE_PROXY/);
+  for (const platform of [
+    /Darwin:arm64[\s\S]*TOOL_OS="darwin"[\s\S]*TOOL_ARCH="arm64"/,
+    /Linux:x86_64[\s\S]*TOOL_OS="linux"[\s\S]*TOOL_ARCH="amd64"/,
+    /Linux:aarch64 \| Linux:arm64[\s\S]*TOOL_OS="linux"[\s\S]*TOOL_ARCH="arm64"/,
+    /unsupported infrastructure validation platform/,
+  ]) assert.match(script, platform);
+  for (const checksum of [
+    "620fd5d0fbc2d7a24ac6b420a4922e6093020358162a62fa8cbd37b2bac1d22e",
+    "2d0a5babfa73604b3fefc9dab9c87f91c77fce756c2e32b294e9f1290aed26c0",
+    "96eecc9f94938a0bc35b8a63d2c4a5f972395e44206620db06760b730d0471fc",
+    "6512e2ab9f2fa31cbb90d9249647b5c5798f62eb1215ec44da2cdaa24e38ad25",
+    "5082f98fcb3389c73339365f7df39fc6912bf2bd1a46d5f97778f441a67fd337",
+    "c5c8575c4458835c2acbc3d1ed5570589b14baa2525d8fbd04295c097caf41eb",
+    "28d1f1224b2a22f84c801487fad4b3bd58f94a8cb58cf9340557e787030c9703",
+    "962b812371aff838d152b6ff2d56fdb7a6396f5542f48ebf73421b9721f0d103",
+    "fbd8e5e0f6ad2e7d053e717739186caee4fd0cab2cf9335bfc86c292fe2a2bfe",
+    "06cff265b39c437ba81f91cfa85ae91b6ae28d3112bb2273294431a3f54e8bf5",
+    "1fc9af962e3632b7cd0ba27076cd9f1ced177567defe9e331ac37f5a40468575",
+    "1a53dd57697dc04d243ddb81a0f70e44ab83c256f15dde173e5538120dc6a0bb",
+  ]) assert.match(script, new RegExp(checksum));
+  assert.match(script, /HELM_ARCHIVE="helm-v\$\{HELM_VERSION\}-\$\{HELM_TARGET\}\.tar\.gz"/);
+  assert.match(script, /TOFU_ARCHIVE="tofu_\$\{TOFU_VERSION\}_\$\{HOST_PROVIDER_TARGET\}\.zip"/);
+  assert.match(script, /prepare_pinned_archive/);
+});
+
+test("infrastructure validation routes runner-example fullruntime away from native tools", async () => {
+  const script = await read("scripts/validate-infra.sh");
+  const routing = script.match(/NATIVE_INFRA=false\nif \[\[ [\s\S]*?\nfi/u)?.[0];
+  assert.ok(routing, "validate-infra.sh must define the managed cloud native route");
+  for (const [runtime, route, expected] of [
+    ["managed", "cloud", "true"],
+    ["managed", "fullruntime", "false"],
+    ["native", "fullruntime", "false"],
+    ["native", "cloud", "false"],
+  ] as const) {
+    const result: SpawnSyncReturns<string> = spawnSync(bash, ["--noprofile", "--norc", "-c", `${routing}\nprintf '%s\\n' "$NATIVE_INFRA"`], {
+      encoding: "utf8",
+      timeout: 10_000,
+      windowsHide: true,
+      env: { ...process.env, WASALX_CI_RUNTIME: runtime, WASALX_CI_ROUTE: route },
+    });
+    assert.equal(result.status, 0, `${runtime}/${route}: ${result.stderr}`);
+    assert.equal(result.stdout.trim(), expected, `${runtime}/${route} selected the wrong infrastructure tool mode`);
+  }
+});
+
+test("infrastructure validation rejects a tampered cache-hit archive before copying it", async () => {
+  const script = await read("scripts/validate-infra.sh");
+  const start = script.indexOf("prepare_pinned_archive() {");
+  const end = script.indexOf("\n}\n\nHELM_ARCHIVE", start);
+  assert.ok(start >= 0 && end >= 0, "validate-infra.sh must define prepare_pinned_archive");
+  const prepare = script.slice(start, end + 2);
+  const root = await mkdtemp(join(tmpdir(), "wasalx-infra-cache-hit-"));
+  const cache = await mkdtemp(join(root, "cache-"));
+  const tools = await mkdtemp(join(root, "tools-"));
+  const posix = (value: string) => process.platform === "win32"
+    ? value.replaceAll("\\", "/").replace(/^([A-Za-z]):/u, (_, drive) => `/${drive.toLowerCase()}`)
+    : value;
+  const filename = "tool.tar.gz";
+  const expected = createHash("sha256").update("pinned bytes\n").digest("hex");
+  const archive = join(cache, filename);
+  const checksum = join(cache, `${filename}.sha256`);
+  const trace = join(root, "curl.trace");
+  try {
+    await writeFile(archive, "tampered bytes\n");
+    await writeFile(checksum, `${expected}  ${filename}\n`);
+    await writeFile(trace, "");
+    const program = `set -u
+CACHE_DIR="$CACHE_DIR"
+TOOLS_DIR="$TOOLS_DIR"
+workspace_root="$WORKSPACE_ROOT"
+curl() { printf 'network\\n' >> "$CURL_TRACE"; return 99; }
+${prepare}
+set +e
+prepare_pinned_archive archive-url checksum-url "$FILENAME" "$EXPECTED"
+status=$?
+set -e
+printf 'status=%s\\n' "$status"
+exit "$status"`;
+    const result = spawnSync(bash, ["--noprofile", "--norc", "-c", program], {
+      encoding: "utf8",
+      timeout: 10_000,
+      windowsHide: true,
+      env: {
+        ...process.env,
+        CACHE_DIR: posix(cache),
+        TOOLS_DIR: posix(tools),
+        WORKSPACE_ROOT: posix(fileURLToPath(new URL("..", import.meta.url))),
+        CURL_TRACE: posix(trace),
+        FILENAME: filename,
+        EXPECTED: expected,
+      },
+    });
+    assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}`);
+    assert.equal(await readFile(trace, "utf8"), "", "a cache hit must not fetch from the network");
+    assert.equal(existsSync(archive), false, "a rejected cache entry must be removed");
+    assert.equal(existsSync(checksum), false, "a rejected cache checksum must be removed");
+    assert.equal(existsSync(join(tools, filename)), false, "a rejected archive must not reach TOOLS_DIR");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("native promtool preserves its pinned version and the public alert fixture seal", async () => {
+  const script = await read("scripts/validate-infra.sh");
+  const compose = await read("compose.full.yaml");
+  const version = script.match(/^PROMTOOL_VERSION="([^"]+)"/m)![1];
+  assert(compose.includes(`prom/prometheus:v${version}@sha256:3c42b892cf723fa54d2f262c37a0e1f80aa8c8ddb1da7b9b0df9455a35a7f893`));
+  const fixture = (await read("tests/fixtures/production-backup-alerts.yaml")).replaceAll("\r\n", "\n");
+  const c1Fixture = fixture.replace(/^- (rules\.yaml|application-rules\.yaml)$/gm, "- /checks/$1");
+  assert.equal(createHash("sha256").update(c1Fixture).digest("hex"), "9fbf1d71d03626aeb3566677544f1874e0a4a1fd58eea56d9dc8a1ec85566ace");
+});
+
+test("direct Helm production installs reject development defaults and incomplete runtime dependencies", async () => {
+  const schema = JSON.parse(
+    await read("infra/helm/wasalx/values.schema.json"),
+  );
+  const fixture = await read("infra/helm/wasalx/ci/production-values.yaml");
+  const script = await read("scripts/validate-infra.sh");
+  const productionBase = schema.allOf.find(
+    (rule: { if?: { properties?: { environment?: { const?: string } } } }) =>
+      rule.if?.properties?.environment?.const === "production",
+  ).then.properties;
+  const standard = schema.allOf.find(
+    (rule: { if?: { properties?: { deploymentProfile?: { const?: string } } } }) =>
+      rule.if?.properties?.deploymentProfile?.const === "standard",
+  ).then.properties;
+  const assisted = schema.allOf.find(
+    (rule: { if?: { properties?: { deploymentProfile?: { const?: string } } } }) =>
+      rule.if?.properties?.deploymentProfile?.const === "assisted-alpha",
+  ).then.properties;
+  const production = { ...productionBase, ...standard };
+
+  assert.match(
+    schema.definitions.productionValue.not.pattern,
+    /example\|placeholder[\s\S]*localhost[\s\S]*127/,
+  );
+  for (const component of [
+    "controlPlaneBackup",
+    "managedWaha",
+    "workspaceProvider",
+    "provisioner",
+  ]) {
+    assert.equal(production[component].properties.enabled.const, true);
+    if (component === "workspaceProvider" || component === "provisioner") {
+      assert.equal(assisted[component].properties.enabled.const, false);
+    }
+  }
+  assert.equal(assisted.controlPlaneBackup, undefined);
+  assert.equal(production.managedWaha.properties.gows.properties.enabled.const, true);
+  assert.equal(production.portalCookieSecure.const, "true");
+  assert.equal(production.observability.properties.enabled.const, true);
+  assert.equal(
+    production.observability.properties.prometheusRule.properties.enabled.const,
+    true,
+  );
+  assert.deepEqual(
+    production.controlApiUrl.anyOf,
+    [{ pattern: "^https://" }, { const: "http://wasalx-api:3001" }],
+  );
+  assert.equal(
+    production.provisioner.properties.controller.properties.admissionPolicy
+      .properties.enabled.const,
+    true,
+  );
+
+  for (const property of [
+    "allowedEgressCidrs",
+    "portalAllowedEgressCidrs",
+    "apiAllowedEgressCidrs",
+    "workerAllowedEgressCidrs",
+    "invitationMailerAllowedEgressCidrs",
+    "identityPolicyAllowedEgressCidrs",
+  ]) {
+    assert.equal(production[property].minItems, 1);
+  }
+  assert.equal(production.managedWaha.properties.allowedEgressCidrs.minItems, 1);
+  assert.equal(production.controlPlaneBackup.properties.allowedEgressCidrs.minItems, 1);
+  assert.equal(production.workspaceProvider.properties.allowedEgressCidrs.minItems, 1);
+  assert.equal(production.provisioner.properties.allowedEgressCidrs.minItems, 1);
+  assert.equal(
+    production.provisioner.properties.controller.properties.allowedEgressCidrs
+      .minItems,
+    1,
+  );
+
+  const productionText = JSON.stringify(production);
+  for (const image of [
+    "portal",
+    "api",
+    "worker",
+    "invitationMailer",
+    "identityPolicyActivator",
+    "migration",
+    "controlPlaneBackup",
+    "workspaceProvider",
+    "provisioner",
+  ]) assert.match(productionText, new RegExp(`\\"${image}\\"[\\s\\S]*?@sha256`));
+  assert.match(productionText, /gows[\s\S]*@sha256/);
+  for (const image of [
+    "configuratorImage",
+    "nginxImage",
+    "redisImage",
+    "memcachedImage",
+  ]) assert.match(productionText, new RegExp(`${image}[\\s\\S]*?@sha256`));
+  assert.equal(
+    production.provisioner.properties.controller.properties.zammadImages
+      .minProperties,
+    1,
+  );
+
+  assert.doesNotMatch(
+    fixture,
+    /(?:example|placeholder|changeme|replace[-_]?me|localhost|127\.0\.0\.1|:dev|:latest)/iu,
+  );
+  const forbiddenProductionValue = new RegExp(schema.definitions.productionValue.not.pattern.replace(/^\(\?i\)/u, ""), "i");
+  function assertProductionUrls(value: unknown) {
+    if (typeof value === "string" && /^https?:\/\//u.test(value)) assert.doesNotMatch(value, forbiddenProductionValue);
+    else if (value && typeof value === "object") for (const child of Object.values(value)) assertProductionUrls(child);
+  }
+  assertProductionUrls(parseYaml(fixture));
+  assert.match(script, /PRODUCTION_VALUES_FILE="infra\/helm\/wasalx\/ci\/production-values\.yaml"/u);
+  assert.match(script, /ASSISTED_ALPHA_VALUES_FILE="\$\{WASALX_ASSISTED_PROFILE_VALUES:\?Set WASALX_ASSISTED_PROFILE_VALUES\}"/u);
+  assert.match(script, /assisted alpha unexpectedly enabled deferred component/u);
+  assert.match(script, /if "\$HELM" lint infra\/helm\/wasalx --set environment=production/u);
+  assert.match(script, /production Helm defaults unexpectedly passed the fail-closed schema/u);
+  for (const invalidCase of [
+    "example-origin",
+    "local-origin",
+    "insecure-cookie",
+    "observability-disabled",
+    "alerts-disabled",
+    "external-plain-http-api",
+    "example-kms",
+    "local-kms",
+    "backup-disabled",
+    "provider-disabled",
+    "provisioner-disabled",
+    "controller-policy-disabled",
+    "managed-waha-disabled",
+    "managed-gows-disabled",
+    "mutable-image",
+    "empty-egress",
+  ]) assert.match(script, new RegExp(`expect_production_lint_failure ${invalidCase}`));
+});
+
+test("Docker smoke preserves the failure and captures diagnostics before destructive cleanup", async () => {
+  const script = await read("scripts/test-docker-stack.sh");
+  const cleanup = script.match(/cleanup\(\) \{[\s\S]*?\n\}\ntrap cleanup EXIT/u)?.[0];
+  assert.ok(cleanup);
+  assert.match(cleanup, /docker inspect --format '\{\{json \.State\}\}'/u);
+  assert.doesNotMatch(cleanup, /\.Config|\.Env/u);
+  const bash = process.platform === "win32" ? "C:/Program Files/Git/bin/bash.exe" : "bash";
+  for (const [status, diagnosticsFail] of [[42, false], [42, true], [0, false]] as const) {
+    const result: SpawnSyncReturns<string> = spawnSync(bash, ["--noprofile", "--norc", "-c", `
+set -euo pipefail
+exec 3>&2
+compose=(docker compose --project-name synthetic-smoke)
+provisioner_image=synthetic-provisioner
+controller_image=synthetic-controller
+provider_image=synthetic-provider
+configurator_image=synthetic-configurator
+timeout() { test "$1" = 15s; shift; "$@"; }
+docker() {
+  printf 'CALL %s\\n' "$*" >&3
+  case "$*" in
+    *down*|*"image rm"*) return 19 ;;
+    *) ${diagnosticsFail ? "return 23" : "true"} ;;
+  esac
+  if [[ "$*" == *"ps --all --quiet postgres" ]]; then printf 'synthetic-pg\\n'; fi
+}
+${cleanup}
+exit ${status}
+`], { encoding: "utf8", timeout: 10_000 });
+    assert.equal(result.status, status, result.stderr);
+    assert.match(result.stderr, /down --volumes --remove-orphans/u);
+    if (status) {
+      assert.match(result.stderr, /capturing PostgreSQL diagnostics/u);
+      assert.ok(result.stderr.indexOf("logs --no-color --tail 200 postgres") < result.stderr.indexOf("down --volumes"));
+      if (!diagnosticsFail) assert.match(result.stderr, /inspect --format.*synthetic-pg/u);
+    } else {
+      assert.doesNotMatch(result.stderr, /logs --no-color|inspect --format/u);
+    }
+  }
+});
+
+test("workspace configurator resolves the repository-pinned pnpm and fails on tool drift", async () => {
+  const root = JSON.parse(await read("package.json"));
+  const configurator = JSON.parse(await read("services/workspace-configurator/package.json"));
+  assert.equal(configurator.packageManager, root.packageManager);
+  const version = root.packageManager.split("@")[1];
+  assert.ok((await read("Dockerfile.workspace-configurator")).includes(`test "$(pnpm --version)" = "${version}"`));
+});
+
+test("Docker smoke fails before BuildKit when host disk is unsafe", async () => {
+  const script = await read("scripts/test-docker-stack.sh");
+  assert.match(script, /export DOCKER_BUILDKIT=1/);
+  assert.match(script, /docker buildx version/);
+  assert.match(script, /refusing an incompatible legacy build/);
+  assert.match(script, /WASALX_DOCKER_SMOKE_MIN_FREE_BYTES:-10737418240/);
+  assert.match(script, /df -Pk "\$repository"/);
+  assert.match(script, /available_bytes < minimum_free_bytes/);
+  assert.match(script, /Free disk space or explicitly lower WASALX_DOCKER_SMOKE_MIN_FREE_BYTES/);
+  assert.ok(
+    script.indexOf("available_bytes < minimum_free_bytes") <
+      script.indexOf('"${compose[@]}" build'),
+    "the resource guard must run before any image build",
+  );
+  assert.ok(
+    script.indexOf("docker buildx version") <
+      script.indexOf('"${compose[@]}" build'),
+    "the BuildKit guard must run before any image build",
+  );
+  const dockerignore = await read(".dockerignore");
+  const ignored = new Set(dockerignore.split(/\r?\n/u));
+  for (const generated of [".pnpm-store", "output", "storybook-static", "test-results", "**/.terraform"]) {
+    assert.ok(ignored.has(generated), `Docker context includes generated path: ${generated}`);
+  }
+});
+
+test("Helm workloads have rollout, health, secret, migration, and disruption controls", async () => {
+  const workloads = await read("infra/helm/wasalx/templates/workloads.yaml");
+  const config = await read("infra/helm/wasalx/templates/config.yaml");
+  const availability = await read("infra/helm/wasalx/templates/availability.yaml");
+  assert.match(workloads, /maxUnavailable: 0/);
+  assert.match(workloads, /readinessProbe/);
+  assert.match(workloads, /livenessProbe/);
+  assert.match(workloads, /startupProbe/);
+  assert.match(workloads, /secretRef/);
+  assert.match(workloads, /readOnlyRootFilesystem: true/);
+  assert.match(workloads, /name: PUBLIC_WEBHOOK_BASE_URL\s+valueFrom: \{ configMapKeyRef: \{ name: wasalx-runtime, key: PUBLIC_WEBHOOK_BASE_URL \} \}/);
+  assert.match(config, /OIDC_PRIVILEGED_ACR_VALUES: \{\{ required "oidc\.privilegedAcrValues must name a production-issued assurance context"/);
+  assert.match(config, /OIDC_PRIVILEGED_MFA_AMR_VALUES: \{\{ required "oidc\.privilegedMfaAmrValues is required"/);
+  assert.match(config, /pre-install,pre-upgrade/);
+  assert.match(config, /name: "wasalx-migrate-[\s\S]*?backoffLimit: 0/);
+  assert.match(availability, /kind: PodDisruptionBudget/);
+  assert.match(availability, /kind: HorizontalPodAutoscaler/);
+});
+
+test("Helm renders a fail-closed control-plane logical backup producer", async () => {
+  const [backup, network, values] = await Promise.all([
+    read("infra/helm/wasalx/templates/control-plane-backup.yaml"),
+    read("infra/helm/wasalx/templates/networkpolicy.yaml"),
+    read("infra/helm/wasalx/values.yaml"),
+  ]);
+  const schema = JSON.parse(await read("infra/helm/wasalx/values.schema.json"));
+  for (const contract of [
+    /kind: CronJob/,
+    /concurrencyPolicy: Forbid/,
+    /activeDeadlineSeconds: 3300/,
+    /args: \["control-backup"\]/,
+    /OBJECT_STORAGE_PREFIX, value: "control-plane\/"/,
+    /automountServiceAccountToken: false/,
+    /readOnlyRootFilesystem: true/,
+    /capabilities: \{ drop: \["ALL"\] \}/,
+    /persistentVolumeClaim: \{ claimName: wasalx-control-backup-staging \}/,
+    /secretKeyRef: \{ name:/,
+  ]) assert.match(backup, contract);
+  assert.doesNotMatch(backup, /BACKUP_S3_(?:ACCESS_KEY_ID|SECRET_ACCESS_KEY).*value:/);
+  assert.doesNotMatch(backup, /envFrom:|(?:startup|readiness|liveness)Probe:/);
+  assert.match(network, /name: wasalx-control-backup-egress/);
+  assert.match(values, /controlPlaneBackup:[\s\S]*enabled: false/);
+  const configured = schema.properties.controlPlaneBackup;
+  assert.equal(configured.additionalProperties, false);
+  assert.deepEqual(configured.properties.s3.required, [
+    "endpoint", "region", "bucket", "lifecycleRuleId", "provider",
+  ]);
+  assert.equal(configured.properties.s3.properties.endpoint.pattern, "^https://");
+  assert.match(configured.properties.s3.properties.kmsKeyReference.pattern, /arn:/);
+  assert.deepEqual(configured.properties.s3.allOf[0].then.required, ["ageRecipient"]);
+  assert.deepEqual(configured.properties.s3.allOf[0].else.required, ["kmsKeyReference"]);
+  assert.equal(configured.allOf[0].then.properties.allowedEgressCidrs, undefined);
+  assert.match(backup, /NODE_EXTRA_CA_CERTS, value: \/backup-ca\/ca.crt/);
+  assert.match(backup, /BACKUP_CA_CERT_FILE, value: \/backup-ca\/ca.crt/);
+  assert.match(network, /wasalx\.io\/foundation: "true"[\s\S]*port: 5432[\s\S]*port: 9000/);
+  assert.match(configured.allOf[0].then.properties.image.pattern, /sha256/);
+});
+
+test("Helm can own persistent, private, drain-safe GOWS and NOWEB pools", async () => {
+  const [chart, managed, rolloutGate, workloads, config, network, values, validation, verifier] = await Promise.all([
+    read("infra/helm/wasalx/Chart.yaml"),
+    read("infra/helm/wasalx/templates/managed-waha.yaml"),
+    read("infra/helm/wasalx/templates/waha-rollout-gate.yaml"),
+    read("infra/helm/wasalx/templates/workloads.yaml"),
+    read("infra/helm/wasalx/templates/config.yaml"),
+    read("infra/helm/wasalx/templates/networkpolicy.yaml"),
+    read("infra/helm/wasalx/values.yaml"),
+    read("scripts/validate-infra.sh"),
+    read("scripts/validate-managed-waha-render.rb"),
+  ]);
+  const schema = JSON.parse(
+    await read("infra/helm/wasalx/values.schema.json"),
+  );
+
+  for (const contract of [
+    /kind: StatefulSet/,
+    /kind: Service/,
+    /clusterIP: None/,
+    /volumeClaimTemplates:/,
+    /mountPath: \/app\/\.sessions/,
+    /persistentVolumeClaimRetentionPolicy: \{ whenDeleted: Retain, whenScaled: Retain \}/,
+    /updateStrategy: \{ type: OnDelete \}/,
+    /kind: PodDisruptionBudget/,
+    /minAvailable: 1/,
+    /helm\.sh\/resource-policy: keep/,
+    /argocd\.argoproj\.io\/sync-options: Prune=false/,
+    /kustomize\.toolkit\.fluxcd\.io\/prune: disabled/,
+    /startupProbe:/,
+    /readinessProbe:/,
+    /livenessProbe:/,
+    /automountServiceAccountToken: false/,
+    /secretKeyRef: \{ name: \{\{ \$credentialSecretName \| quote \}\}, key: WAHA_API_KEY \}/,
+    /WAHA_WORKER_RESTART_SESSIONS/,
+    /WAHA_LOG_LEVEL, value: warn/,
+    /WAHA_HTTP_LOG_LEVEL, value: warn/,
+    /WAHA_API_KEY_EXCLUDE_PATH, value: health/,
+    /WHATSAPP_API_KEY_EXCLUDE_PATH, value: health/,
+    /WAHA_WORKERS_JSON: \{\{ toJson \$workers \| quote \}\}/,
+    /wasalx\.io\/scope: connector-worker-only/,
+  ]) assert.match(managed, contract);
+
+  assert.match(values, /managedWaha:[\s\S]*gows:[\s\S]*noweb:/);
+  assert.match(chart, /kubeVersion: ">=1\.30\.0-0"/);
+  assert.match(values, /runAsNonRoot: true/);
+  assert.match(values, /healthProbeTimeoutSeconds: 20/);
+  assert.match(values, /credentialSecretNames: \[\]/);
+  assert.match(values, /secretReferences: \[\]/);
+  assert.match(workloads, /secretKeyRef: \{ name: wasalx-managed-waha-registry, key: WAHA_WORKERS_JSON \}/);
+  assert.match(workloads, /Backward-compatible external-worker\/development fallback/);
+  for (const name of [
+    "WAHA_WORKER_PROBE_TIMEOUT_MS",
+    "WAHA_DELIVERY_MAX_ATTEMPTS",
+    "META_DELIVERY_MAX_ATTEMPTS",
+    "ZAMMAD_STATUS_MAX_ATTEMPTS",
+  ]) assert.match(workloads, new RegExp(`${name}, value:`));
+  assert.doesNotMatch(config, /WAHA_(?:BASE_URL|ADMIN_BASE_URL|ADMIN_SECRET_REFERENCE):/);
+  assert.match(network, /name: wasalx-managed-waha-default-deny/);
+  assert.match(network, /name: wasalx-managed-waha-private-ingress/);
+  assert.match(network, /name: wasalx-managed-waha-egress/);
+  assert.match(network, /name: wasalx-waha-rollout-gate/);
+  assert.match(network, /name: wasalx-waha-rollout-gate[\s\S]*helm\.sh\/hook-weight: "-5"[\s\S]*argocd\.argoproj\.io\/hook: PreSync/);
+  assert.match(network, /app\.kubernetes\.io\/name: wasalx-worker, wasalx\.io\/plane: control/);
+  assert.match(network, /app\.kubernetes\.io\/name: wasalx-api, wasalx\.io\/plane: control/);
+  assert.match(network, /QR, pairing-code, and passkey actions are proxied by the authenticated/);
+  assert.match(validation, /ci\/managed-waha-values\.yaml/);
+  assert.match(validation, /validate-managed-waha-render\.rb/);
+  assert.match(verifier, /registry\/StatefulSet cardinality mismatch/);
+  assert.match(verifier, /portal received WAHA infrastructure/);
+  assert.match(verifier, /shared ConfigMap received WAHA infrastructure/);
+  assert.match(verifier, /non-connector received delivery retries/);
+  assert.match(verifier, /managed WAHA prune protection is incomplete/);
+  for (const contract of [
+    /helm\.sh\/hook: pre-install,pre-upgrade/,
+    /argocd\.argoproj\.io\/hook: PreSync/,
+    /WAHA_DESIRED_MANAGED_WORKERS_JSON/,
+    /WAHA_ROLLOUT_GATE_DATABASE_URL/,
+    /waha-rollout-preflight-bootstrap\.js/,
+    /automountServiceAccountToken: false/,
+  ]) assert.match(rolloutGate, contract);
+
+  assert.ok(schema.required.includes("managedWaha"));
+  assert.equal(schema.properties.managedWaha.additionalProperties, false);
+  assert.deepEqual(schema.properties.managedWaha.properties.healthProbeTimeoutSeconds, {
+    type: "integer",
+    minimum: 5,
+    maximum: 30,
+  });
+  assert.equal(
+    schema.definitions.managedWahaEngine.properties.image.pattern,
+    "^(?:|[A-Za-z0-9._/-]+@sha256:[0-9a-f]{64})$",
+  );
+  assert.equal(
+    schema.definitions.managedWahaEngine.allOf[0].then.properties.image.pattern,
+    "^[A-Za-z0-9._/-]+@sha256:[0-9a-f]{64}$",
+  );
+  assert.equal(
+    schema.definitions.managedWahaPodSecurityContext.properties.runAsNonRoot.const,
+    true,
+  );
+  assert.equal(
+    schema.definitions.managedWahaContainerSecurityContext.properties.allowPrivilegeEscalation.const,
+    false,
+  );
+  assert.equal(
+    schema.definitions.managedWahaContainerSecurityContext.properties.capabilities.properties.drop.contains.const,
+    "ALL",
+  );
+  assert.ok(schema.required.includes("connectorRetries"));
+  assert.deepEqual(schema.properties.connectorRetries.properties.wahaWorkerProbeTimeoutMs, {
+    type: "integer",
+    minimum: 1000,
+    maximum: 30000,
+  });
+  for (const retry of ["wahaDeliveryMaxAttempts", "metaDeliveryMaxAttempts", "zammadStatusMaxAttempts"].map(
+    (name) => schema.properties.connectorRetries.properties[name],
+  ) as Array<{ minimum: number; maximum: number }>) {
+    assert.deepEqual(
+      { minimum: retry.minimum, maximum: retry.maximum },
+      { minimum: 1, maximum: 25 },
+    );
+  }
+});
+
+test("Helm networking is deny-by-default and selects controller-owned tenant pods", async () => {
+  const network = await read("infra/helm/wasalx/templates/networkpolicy.yaml");
+  assert.match(network, /name: wasalx-control-default-deny/);
+  assert.match(network, /wasalx\.io\/plane: control/);
+  assert.match(network, /name: wasalx-portal-traffic/);
+  assert.match(network, /name: wasalx-api-traffic/);
+  assert.equal((network.match(/app\.kubernetes\.io\/managed-by: wasalx-workspace-controller, wasalx\.io\/plane: tenant/g) ?? []).length, 3);
+  assert.doesNotMatch(network, /app\.kubernetes\.io\/name: zammad, wasalx\.io\/plane: tenant/);
+  assert.match(network, /name: wasalx-worker-egress/);
+  assert.match(network, /name: wasalx-worker-egress[\s\S]*policyTypes: \[Ingress, Egress\][\s\S]*app\.kubernetes\.io\/name: wasalx-portal[\s\S]*port: 8080/);
+  assert.match(network, /name: wasalx-invitation-mailer-traffic/);
+  assert.match(network, /name: wasalx-identity-policy-activator-traffic/);
+  assert.match(network, /port: 53/);
+  assert.match(network, /ipBlock/);
+  assert.doesNotMatch(
+    network,
+    /podSelector: \{ matchLabels: \{ app\.kubernetes\.io\/part-of: wasalx \} \}/,
+  );
+  assert.doesNotMatch(network, /egress:\s*\{\}/);
+});
+
+test("Terraform delegates tenant workspaces to the fenced CR/controller topology", async () => {
+  const versions = await read("infra/terraform/versions.tf");
+  const root = await read("infra/terraform/main.tf");
+  const variables = await read("infra/terraform/variables.tf");
+  const crd = await read(
+    "infra/helm/wasalx/crds/platform.wasalx.io_tenantworkspaces.yaml",
+  );
+  const controller = await read(
+    "services/tenant-provisioner/src/controller/resources.ts",
+  );
+  const schema = JSON.parse(
+    await read("infra/helm/wasalx/values.schema.json"),
+  );
+
+  assert.doesNotMatch(versions, /hashicorp\/random/);
+  assert.doesNotMatch(
+    root,
+    /module\s+"tenant"|resource\s+"kubernetes_deployment"/,
+  );
+  assert.doesNotMatch(variables, /tenant_profiles|:latest"\s*\}/);
+  assert.match(
+    root,
+    /removed\s*\{[\s\S]*from\s*=\s*module\.tenant[\s\S]*destroy\s*=\s*false/,
+  );
+  await assert.rejects(
+    () => read("infra/terraform/modules/tenant-workspace/main.tf"),
+    { code: "ENOENT" },
+  );
+  for (const value of [
+    "DedicatedDatabaseAndRole",
+    "DedicatedNamespaceAndCredential",
+    "DedicatedPrefixAndCredential",
+    "database_secret_reference",
+    "search_secret_reference",
+    "storage_secret_reference",
+    "oidc_secret_reference",
+  ]) assert.match(crd, new RegExp(value));
+  for (const value of [
+    "zammad-railsserver",
+    "zammad-websocket",
+    "zammad-scheduler",
+    "PersistentVolumeClaim",
+    "PodDisruptionBudget",
+    "NetworkPolicy",
+    "CronJob",
+    "ownerReferences",
+  ]) assert.match(controller, new RegExp(value));
+  const enabled = schema.properties.provisioner.allOf[0].then.properties;
+  assert.equal(enabled.image.pattern, "@sha256:[a-f0-9]{64}$");
+  assert.equal(enabled.controller.properties.image.pattern, "@sha256:[a-f0-9]{64}$");
+  assert.equal(enabled.controller.properties.zammadImages.minProperties, 1);
+  const production = schema.allOf.find(
+    (rule: { if?: { properties?: { environment?: { const?: string }, deploymentProfile?: unknown } } }) =>
+      rule.if?.properties?.environment?.const === "production" &&
+      rule.if.properties.deploymentProfile === undefined,
+  ).then.properties;
+  assert.equal(
+    production.invitationMailer.properties.image.pattern,
+    "^[A-Za-z0-9._/-]+@sha256:[a-f0-9]{64}$",
+  );
+  assert.equal(
+    production.identityPolicyActivator.properties.image.pattern,
+    "^[A-Za-z0-9._/-]+@sha256:[a-f0-9]{64}$",
+  );
+});
+
+test("all WasalX deployables have pinned, non-root, health-checked container images", async () => {
+  const runtimeImage = "cgr.dev/chainguard/wolfi-base:latest@sha256:3754b6da0e1ccdab0fe46abfdd7bbbba994b593c28149f6659fa6597f2261aeb";
+  const releaseDockerfiles = [
+    "Dockerfile.portal",
+    "Dockerfile.control-api",
+    "Dockerfile.connector-worker",
+    "Dockerfile.secret-sidecar",
+    "Dockerfile.invitation-mailer",
+    "Dockerfile.identity-policy-activator",
+    "Dockerfile.tenant-provisioner",
+    "Dockerfile.tenant-workspace-controller",
+    "Dockerfile.workspace-provider",
+    "Dockerfile.workspace-configurator",
+  ];
+  for (const file of releaseDockerfiles.slice(0, 8)) {
+    const dockerfile = await read(file);
+    assert.match(
+      dockerfile,
+      /FROM node:22-bookworm-slim@sha256:[a-f0-9]{64}/,
+    );
+    assert.match(dockerfile, /USER 65532:65532/);
+    assert.match(dockerfile, /HEALTHCHECK/);
+    assert.doesNotMatch(dockerfile, /FROM\s+[^\n]*:latest(?!@sha256:[a-f0-9]{64}\b)/);
+  }
+  for (const file of [...releaseDockerfiles.slice(0, 9), "Dockerfile.production-secret-sidecar"]) {
+    const dockerfile = await read(file);
+    assert.ok(dockerfile.includes(`FROM ${runtimeImage}`));
+    assert.match(dockerfile, /ENV PATH=\/usr\/local\/sbin:\/usr\/local\/bin:\/usr\/sbin:\/usr\/bin:\/sbin:\/bin/);
+    assert.match(dockerfile, /USER 65532:65532/);
+  }
+  const invitationMailer = await read("Dockerfile.invitation-mailer");
+  assert.match(invitationMailer, /HEALTHCHECK --interval=20s --timeout=45s --start-period=60s --retries=3/);
+  const configurator = await read("Dockerfile.workspace-configurator");
+  assert.match(configurator, /FROM node:22-bookworm-slim@sha256:[a-f0-9]{64}/);
+  assert.ok(configurator.includes(`FROM ${runtimeImage} AS runtime`));
+  assert.match(configurator, /libstdc\+\+=16\.2\.0-r1/);
+  assert.match(configurator, /postgresql-18-client=18\.6-r2/);
+  assert.match(configurator, /zlib=1\.3\.1-r51/);
+  assert.match(configurator, /USER 1000:1000/);
+  assert.match(configurator, /ENTRYPOINT \["node","dist\/bootstrap\.js"\]/);
+  assert.doesNotMatch(configurator, /apt-get|FROM\s+[^\n]*:latest(?!@sha256:[a-f0-9]{64}\b)/);
+  for (const file of releaseDockerfiles) {
+    const dockerfile = await read(file);
+    assert.match(dockerfile,/ARG WASALX_CANDIDATE_SHA=unfrozen/u,file);
+    assert.match(dockerfile,/ARG WASALX_CANDIDATE_TREE=unfrozen/u,file);
+    assert.match(dockerfile,/org\.opencontainers\.image\.revision="\$\{WASALX_CANDIDATE_SHA\}"/u,file);
+    assert.match(dockerfile,/io\.wasalx\.source\.tree="\$\{WASALX_CANDIDATE_TREE\}"/u,file);
+  }
+  const compose = await read("compose.yaml");
+  assert.match(compose, /migrate:/);
+  assert.match(compose, /runtime-role-bootstrap:/);
+  assert.match(compose, /sync-runtime-roles\.sh/);
+  const roleBootstrapConfig = compose.match(/ {2}runtime-role-bootstrap:\r?\n([\s\S]*?)\r?\n\r?\n {2}migrate:/)?.[1] ?? "";
+  assert.match(
+    roleBootstrapConfig,
+    /migrate: \{ condition: service_completed_successfully \}/,
+  );
+  assert.match(
+    compose,
+    /runtime-role-bootstrap: \{ condition: service_completed_successfully \}/,
+  );
+  assert.match(compose, /wasalx_connector_worker_runtime/);
+  assert.match(compose, /WASALX_CONNECTOR_WORKER_DB_PASSWORD/);
+  assert.match(compose, /condition: service_completed_successfully/);
+  assert.match(compose, /internal: true/);
+  assert.match(compose, /no-new-privileges:true/);
+  const postgres = compose.match(/ {2}postgres:\r?\n([\s\S]*?)\r?\n\r?\n {2}redis:/)?.[1] ?? "";
+  assert.match(postgres, /cat \/proc\/1\/comm/);
+  assert.match(postgres, /pg_isready -U wasalx -d wasalx/);
+  const secretSidecar = compose.match(/ {2}secret-sidecar:\r?\n([\s\S]*?)\r?\n\r?\n {2}# Reconcile/)?.[1] ?? "";
+  assert.match(secretSidecar, /healthcheck:/);
+  assert.match(secretSidecar, /timeout: 10s/);
+  assert.match(secretSidecar, /start_period: 30s/);
+  assert.match(secretSidecar, /retries: 5/);
+  const portal = compose.match(/ {2}portal:\r?\n([\s\S]*?)\r?\n\r?\nnetworks:/)?.[1] ?? "";
+  assert.match(portal, /healthcheck:/);
+  assert.match(portal, /timeout: 10s/);
+  assert.match(portal, /start_period: 60s/);
+  assert.match(portal, /retries: 5/);
+  const controlApi = compose.match(/ {2}control-api:\r?\n([\s\S]*?)\r?\n {2}connector-worker:/)?.[1] ?? "";
+  const connectorWorker = compose.match(/ {2}connector-worker:\r?\n([\s\S]*?)\r?\n {2}# These hardened runtimes/)?.[1] ?? "";
+  assert.match(controlApi, /healthcheck:/);
+  assert.match(controlApi, /timeout: 10s/);
+  assert.match(controlApi, /start_period: 60s/);
+  assert.match(controlApi, /retries: 5/);
+  assert.match(controlApi, /META_GRAPH_VERSION: v24\.0/);
+  assert.match(controlApi, /META_APP_ID: \$\{META_APP_ID:-\}/);
+  assert.match(connectorWorker, /META_APP_ID: \$\{META_APP_ID:-\}/);
+  assert.match(controlApi, /WAHA_ADMIN_BASE_URL: http:\/\/waha:3000/);
+  assert.match(connectorWorker, /DATABASE_URL: postgresql:\/\/wasalx_connector_worker_runtime:/);
+  assert.match(
+    connectorWorker,
+    /WAHA_ADMIN_SECRET_REFERENCE: secret:\/\/platform\/waha-admin/,
+  );
+  assert.match(connectorWorker, /WAHA_BASE_URL: http:\/\/waha:3000/);
+  assert.doesNotMatch(compose, /waha\.private/);
+  const roleBootstrap = await read("infra/docker/postgres/init-app-role.sh");
+  for (const role of [
+    "wasalx_runtime",
+    "wasalx_connector_worker_runtime",
+    "wasalx_secret_cleanup_runtime",
+    "wasalx_provisioning_runtime",
+    "wasalx_support_runtime",
+    "wasalx_waha_registry_runtime",
+    "wasalx_waha_operator_runtime",
+    "wasalx_waha_rollout_gate_runtime",
+    "wasalx_invitation_mailer_runtime",
+    "wasalx_identity_policy_runtime",
+    "wasalx_metering_ingest_runtime",
+    "wasalx_platform_operations_runtime",
+  ]) {
+    assert.match(roleBootstrap, new RegExp(`ALTER ROLE ${role} LOGIN PASSWORD`));
+  }
+  assert.match(roleBootstrap, /while \[ "\$attempt" -le 10 \]/);
+  assert.match(roleBootstrap, /Runtime database role reconciliation failed after 10 attempts/);
+  assert.match(compose, /DEV_SECRET_STORE_JSON: \$\{DEV_SECRET_STORE_JSON:-\{\}\}/);
+});
+
+test("Docker dependency stages coalesce safely and keep pnpm trust checks enabled", async () => {
+  assert.doesNotMatch(await read("Dockerfile.connector-worker"), /^#\s*syntax=/m);
+  const backendDockerfiles = [
+    "Dockerfile.control-api",
+    "Dockerfile.connector-worker",
+    "Dockerfile.invitation-mailer",
+    "Dockerfile.identity-policy-activator",
+    "Dockerfile.tenant-provisioner",
+    "Dockerfile.tenant-workspace-controller",
+  ];
+  const dockerfiles = await Promise.all(backendDockerfiles.map(read));
+  const dependencyStages = dockerfiles.map((dockerfile) =>
+    dockerfile.slice(dockerfile.indexOf("FROM "), dockerfile.indexOf("FROM dependencies AS build")),
+  );
+
+  const portalStage = await read("Dockerfile.portal");
+  assert.equal(dependencyStages[0], portalStage.slice(portalStage.indexOf("FROM "), portalStage.indexOf("FROM dependencies AS ")));
+
+  for (const dependencyStage of dependencyStages) {
+    assert.equal(dependencyStage, dependencyStages[0]);
+    assert.match(dependencyStage, /pnpm install --frozen-lockfile --prefer-offline/);
+    assert.match(dependencyStage, /sharing=locked/);
+    assert.match(
+      dependencyStage,
+      /id=wasalx-pnpm-v11,target=\/pnpm\/store,sharing=locked/,
+    );
+    assert.match(
+      dependencyStage,
+      /id=pnpm-metadata,target=\/pnpm\/cache,sharing=locked/,
+    );
+    assert.doesNotMatch(dependencyStage, /--filter\b/u);
+    assert.doesNotMatch(dependencyStage, /--no-verify-store-integrity|--ignore-scripts/);
+  }
+
+  for (const dockerfile of [await read("Dockerfile.portal"), ...dockerfiles]) {
+    assert.match(
+      dockerfile,
+      /pnpm --prefer-offline --filter .* deploy --prod --legacy/,
+    );
+    assert.match(dockerfile, /ENV XDG_CACHE_HOME=\/pnpm\/cache/);
+    assert.match(
+      dockerfile,
+      /find \/[^\s]+\/node_modules\/\.pnpm -path '\*\/node_modules\/@wasalx\/observability'/,
+    );
+    assert.match(
+      dockerfile,
+      /node -e "[^"]*import\('@wasalx\/observability\/node'\)/,
+    );
+    assert.doesNotMatch(
+      dockerfile,
+      /cp -R packages\/observability\/dist packages\/observability\/package\.json/,
+    );
+    assert.doesNotMatch(dockerfile, /minimum-release-age=0/);
+  }
+
+  const portalDockerfile = await read("Dockerfile.portal");
+  assert.match(portalDockerfile, /^ENV ROLLDOWN_WORKER_THREADS=1$/m);
+  assert.doesNotMatch(portalDockerfile, /COPY \. \./);
+  assert.match(portalDockerfile, /COPY packages\/core\/package\.json \.\/packages\/core\/package\.json/);
+  for (const directory of ["app", "build", "db", "lib", "packages", "public", "worker"]) {
+    assert.match(portalDockerfile, new RegExp(`COPY ${directory} \\.\\/${directory}`));
+  }
+  assert.match(
+    portalDockerfile,
+    /CMD \["node","--import=@wasalx\/observability\/node-register","node_modules\/vinext\/dist\/cli\.js","start"\]/,
+  );
+  assert.doesNotMatch(portalDockerfile, /"node_modules\/\.bin\/vinext"/);
+
+  const pnpmConfig = await read("infra/docker/pnpm.npmrc");
+  assert.match(pnpmConfig, /^network-concurrency=4$/m);
+  assert.match(pnpmConfig, /^maxsockets=4$/m);
+  assert.match(pnpmConfig, /^cache-dir=\/pnpm\/cache$/m);
+  assert.match(pnpmConfig, /^fetch-retries=2$/m);
+  assert.match(pnpmConfig, /^fetch-timeout=60000$/m);
+  assert.doesNotMatch(pnpmConfig, /verify-store-integrity=false|ignore-scripts=true/);
+
+  const workspace = await read("pnpm-workspace.yaml");
+  assert.match(workspace, /allowBuilds:/);
+  assert.match(workspace, /image-size@2\.0\.2: patches\/image-size@2\.0\.2\.patch/);
+});
+
+test("Docker smoke may reuse only a complete, explicitly verified local image set", async () => {
+  const smoke = await read("scripts/test-docker-stack.sh");
+  assert.match(smoke, /WASALX_DOCKER_SMOKE_SKIP_BUILD/);
+  for (const image of [
+    "wasalx/portal:local",
+    "wasalx/control-api:local",
+    "wasalx/connector-worker:local",
+    "wasalx/dev-secret-sidecar:local",
+    "wasalx/invitation-mailer:local",
+    "wasalx/identity-policy-activator:local",
+    "wasalx/tenant-provisioner:local",
+    "wasalx/tenant-workspace-controller:local",
+    "wasalx/workspace-provider:local",
+    "wasalx/workspace-configurator:local",
+  ]) {
+    assert.match(smoke, new RegExp(image.replace("/", "\\/").replace(":", "\\:")));
+  }
+  assert.match(smoke, /docker image inspect "\$image"/);
+  assert.match(smoke, /Required prebuilt image is missing/);
+  assert.match(smoke, /for service in portal control-api connector-worker secret-sidecar invitation-mailer identity-policy-activator/);
+  assert.match(smoke, /compose=\(docker compose --file compose\.yaml --file compose\.smoke\.yaml --project-name "\$project"\)/u);
+  assert.match(smoke, /"\$\{compose\[@\]\}" build[\s\S]*--build-arg "WASALX_CANDIDATE_SHA=\$\{WASALX_CANDIDATE_SHA\}"[\s\S]*--build-arg "WASALX_CANDIDATE_TREE=\$\{WASALX_CANDIDATE_TREE\}" "\$service"/u);
+  assert.doesNotMatch(smoke, /build portal control-api connector-worker/);
+  for (const dockerfile of [
+    "Dockerfile.tenant-provisioner",
+    "Dockerfile.tenant-workspace-controller",
+    "Dockerfile.workspace-provider",
+    "Dockerfile.workspace-configurator",
+  ]) {
+    assert.match(smoke, new RegExp(`docker build "\\$\\{build_args\\[@\\]\\}" --file ${dockerfile.replaceAll(".", "\\.")}`));
+  }
+  assert.match(smoke,/node "\$\{WASALX_STACK_VERIFY_SCRIPT:\?Set WASALX_STACK_VERIFY_SCRIPT\}" "\$project" [\\\s]+--compose-file compose\.yaml --compose-file compose\.smoke\.yaml/u);
+  assert.match(smoke, /<title>Operational overview · WasalX<\/title>/);
+  assert.match(smoke, /Operational overview/);
+  assert.doesNotMatch(smoke, /Operations control plane/);
+});
+
+
+
+
+
+test("Helm and Terraform keep workload, migration, and secret-cleanup credentials isolated", async () => {
+  const workloads = await read("infra/helm/wasalx/templates/workloads.yaml");
+  const config = await read("infra/helm/wasalx/templates/config.yaml");
+  const values = await read("infra/helm/wasalx/values.yaml");
+  const root = await read("infra/terraform/main.tf");
+  assert.match(workloads, /\$service\.secretName/);
+  assert.match(workloads, /api\.cleanupSecretName is required/);
+  assert.match(config, /migration\.secretName is required/);
+  assert.match(values, /secretName: wasalx-portal-secrets/);
+  assert.match(values, /secretName: wasalx-api-secrets/);
+  assert.match(values, /cleanupSecretName: wasalx-secret-cleanup-secrets/);
+  assert.match(values, /secretName: wasalx-worker-secrets/);
+  assert.match(values, /secretName: wasalx-invitation-mailer-secrets/);
+  assert.match(values, /secretName: wasalx-identity-policy-activator-secrets/);
+  assert.match(values, /secretName: wasalx-migration-secrets/);
+  assert.match(values, /PLATFORM_PORTAL_SESSION_SECRET as distinct values/);
+  assert.match(values, /METERING_SERVICE_JWT_SECRET must also be distinct/);
+  for (const apiCredential of [
+    "PROVISIONING_DATABASE_URL",
+    "SUPPORT_ACCESS_DATABASE_URL",
+    "WAHA_OPERATOR_DATABASE_URL",
+  ]) assert.match(values, new RegExp(apiCredential));
+  for (const workerCredential of [
+    "WAHA_REGISTRY_DATABASE_URL",
+    "WAHA_WORKERS_JSON",
+  ]) assert.match(values, new RegExp(workerCredential));
+  assert.doesNotMatch(workloads, /Values\.existingSecret/);
+  assert.doesNotMatch(config, /Values\.existingSecret/);
+  for (const variable of [
+    "portal_secret_name",
+    "control_api_secret_name",
+    "connector_worker_secret_name",
+    "invitation_mailer_secret_name",
+    "identity_policy_activator_secret_name",
+    "migration_secret_name",
+    "secret_cleanup_secret_name",
+  ]) assert.match(root, new RegExp(`var\\.${variable}`));
+});
+
+test("Helm exposes bounded platform OIDC and metering runtime configuration", async () => {
+  const config = await read("infra/helm/wasalx/templates/config.yaml");
+  const schema = JSON.parse(
+    await read("infra/helm/wasalx/values.schema.json"),
+  );
+  for (const name of [
+    "PLATFORM_OPERATOR_OIDC_ISSUER",
+    "PLATFORM_OPERATOR_OIDC_AUDIENCE",
+    "PLATFORM_OPERATOR_OIDC_JWKS_URI",
+    "PLATFORM_OPERATOR_OIDC_CLIENT_ID",
+    "PLATFORM_OPERATOR_OIDC_REDIRECT_URI",
+    "PLATFORM_OPERATOR_MAX_AUTH_AGE_SECONDS",
+    "OIDC_PRIVILEGED_ACR_VALUES",
+    "OIDC_PRIVILEGED_MFA_AMR_VALUES",
+    "METERING_CATCHUP_PERIODS_PER_TICK",
+    "METERING_RECONCILE_INTERVAL_MS",
+  ]) assert.match(config, new RegExp(`${name}:`));
+  assert.deepEqual(schema.properties.platformOperatorOidc.required, [
+    "issuer",
+    "audience",
+    "jwksUri",
+    "clientId",
+    "redirectUri",
+    "maxAuthAgeSeconds",
+  ]);
+  assert.deepEqual(schema.properties.metering.required, [
+    "catchupPeriodsPerTick",
+    "reconcileIntervalMs",
+  ]);
+  assert.ok(schema.properties.oidc.required.includes("privilegedAcrValues"));
+  assert.ok(schema.properties.oidc.required.includes("privilegedMfaAmrValues"));
+  assert.match(
+    schema.properties.oidc.properties.privilegedAcrValues.not.pattern,
+    /example\|placeholder/,
+  );
+  assert.equal(
+    schema.properties.platformOperatorOidc.properties.redirectUri.pattern,
+    "^https://",
+  );
+});
+
+test("tenant Zammad signing keys remain per-instance and never enter the control-plane ConfigMap", async () => {
+  const controller = await read(
+    "services/tenant-provisioner/src/controller/resources.ts",
+  );
+  const config = await read("infra/helm/wasalx/templates/config.yaml");
+  const values = await read("infra/helm/wasalx/values.yaml");
+  assert.match(
+    controller,
+    /secretProperty\("WASALX_SERVICE_JWT_SECRET",[\s\S]*?"jwt_secret"\)/,
+  );
+  assert.match(
+    controller,
+    /secretProperty\("WASALX_ZAMMAD_INSTANCE_ID",[\s\S]*?"instance_id"\)/,
+  );
+  assert.match(
+    controller,
+    /secretEnv\("WASALX_SERVICE_JWT_SECRET", secretName, "WASALX_SERVICE_JWT_SECRET"\)/,
+  );
+  assert.match(controller, /WASALX_TENANT_ID/);
+  assert.match(controller, /WASALX_CONTROL_URL/);
+  assert.match(controller, /WASALX_PORTAL_URL/);
+  assert.doesNotMatch(config, /ZAMMAD_SERVICE_JWT_SECRET/);
+  assert.doesNotMatch(config, /WASALX_SERVICE_JWT_SECRET/);
+  assert.doesNotMatch(values, /ZAMMAD_SERVICE_JWT_SECRET/);
+});
+
+test("Helm media runtime exposes only non-secret locations and requires credentials in the worker Secret", async () => {
+  const config = await read("infra/helm/wasalx/templates/config.yaml");
+  const values = await read("infra/helm/wasalx/values.yaml");
+  const schema = JSON.parse(
+    await read("infra/helm/wasalx/values.schema.json"),
+  );
+
+  for (const name of [
+    "S3_ENDPOINT",
+    "S3_REGION",
+    "S3_BUCKET",
+    "S3_SERVER_SIDE_ENCRYPTION",
+    "S3_KMS_KEY_ID",
+    "CLAMAV_HOST",
+    "CLAMAV_PORT",
+  ]) assert.match(config, new RegExp(`${name}:`));
+  assert.doesNotMatch(config, /^\s*S3_(?:ACCESS_KEY_ID|SECRET_ACCESS_KEY):/m);
+  assert.ok(schema.required.includes("media"));
+  assert.deepEqual(schema.properties.media.properties.s3.required, [
+    "endpoint",
+    "region",
+    "bucket",
+    "serverSideEncryption",
+    "kmsKeyId",
+  ]);
+  assert.equal(schema.properties.media.properties.s3.properties.endpoint.pattern, "^https://");
+  assert.deepEqual(schema.properties.media.properties.s3.properties.serverSideEncryption.enum, [
+    "AES256",
+    "aws:kms",
+    "MANAGED",
+  ]);
+  assert.equal(schema.properties.media.properties.s3.then.properties.kmsKeyId.minLength, 1);
+  assert.equal(schema.properties.media.properties.s3.else.properties.kmsKeyId.const, "");
+  assert.deepEqual(schema.properties.media.properties.clamav.required, [
+    "host",
+    "port",
+  ]);
+  assert.equal(schema.properties.media.properties.s3.additionalProperties, false);
+  assert.match(values, /host: "clamav\.security\.svc\.cluster\.local"/);
+  
+  
+});

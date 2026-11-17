@@ -1,0 +1,138 @@
+# syntax=docker/dockerfile:1.7
+
+ARG ZAMMAD_BASE_IMAGE=ghcr.io/zammad/zammad@sha256:390705d0eefd8a473293c1f9130cb2f40a2484bd629dd3b33aa0e700ee86d13b
+ARG NODE_IMAGE=node:24-trixie-slim@sha256:0711b541c1c33a8a530ac4f0d391baa9a15b3d804695b1b24a47daa5fb60e74d
+
+FROM ${NODE_IMAGE} AS node-toolchain
+RUN npm install --global pnpm@10.33.3 && npm cache clean --force
+WORKDIR /src
+ADD https://github.com/WasalX/wasalx-zammad-addon-next.git#65b589f13cc13f4b0eda3c37df2719d17736d8a9 /src
+COPY scripts/build-zammad-package.mjs ./scripts/build-zammad-package.mjs
+RUN node scripts/build-zammad-package.mjs
+
+FROM ${ZAMMAD_BASE_IMAGE} AS package-source
+ARG WASALX_PACKAGE_VERSION=0.5.83
+ARG WASALX_PACKAGE_SHA256=00069cb9565f2a9002d5df73cc29532f3adde2fce28f4f09400370f9c9d11153
+USER 0:0
+COPY --from=node-toolchain /usr/local/lib/node_modules /usr/local/lib/node_modules
+COPY --from=node-toolchain /usr/local/bin /usr/local/bin
+COPY --chown=1000:1000 --from=node-toolchain /src/build/zammad/wasalx-0.5.83.zpm /tmp/wasalx.zpm
+
+COPY --chown=1000:1000 infra/docker/full/zammad/unpack-zpm.mjs /tmp/unpack-zpm.mjs
+COPY --chown=1000:1000 scripts/prepare-zammad-typecheck.mjs /tmp/prepare-zammad-typecheck.mjs
+COPY --chown=1000:1000 infra/docker/full/zammad/typecheck-upstream.json /tmp/typecheck-upstream.json
+RUN test -n "${WASALX_PACKAGE_SHA256}" \
+    && echo "${WASALX_PACKAGE_SHA256}  /tmp/wasalx.zpm" | sha256sum --check --strict \
+    && node /tmp/unpack-zpm.mjs /tmp/wasalx.zpm /opt/zammad wasalx "${WASALX_PACKAGE_VERSION}" \
+    && install -d -o 1000 -g 1000 /opt/zammad/contrib \
+    && install -o 1000 -g 1000 -m 0644 /tmp/wasalx.zpm /opt/zammad/contrib/wasalx.zpm
+FROM package-source AS package-build
+USER 1000:1000
+WORKDIR /opt/zammad
+RUN --mount=type=cache,id=wasalx-zammad-pnpm-v10,target=/opt/zammad/.local/share/pnpm/store,uid=1000,gid=1000,sharing=locked \
+    pnpm install --frozen-lockfile --production=false
+# The pinned Zammad base already contains its compiled Sprockets/legacy assets.
+# WasalX packages only app/frontend files, so rebuild the Vite bundle that can
+# actually reference those plugins. A full `assets:precompile` needlessly
+# recompiles the entire legacy application and is not required for this package.
+RUN --mount=type=cache,id=wasalx-zammad-pnpm-v10,target=/opt/zammad/.local/share/pnpm/store,uid=1000,gid=1000,sharing=locked \
+    node /tmp/prepare-zammad-typecheck.mjs restore /opt/zammad /tmp/typecheck-upstream.json \
+    && NODE_OPTIONS=--max-old-space-size=4096 pnpm lint:ts \
+    && node /tmp/prepare-zammad-typecheck.mjs remove /opt/zammad /tmp/typecheck-upstream.json \
+    && bundle exec vite clobber \
+    && CI=true ZAMMAD_SAFE_MODE=1 DATABASE_URL=postgresql://zammad:/zammad \
+       NODE_OPTIONS=--max-old-space-size=4096 bundle exec vite build \
+    && rm -rf node_modules tmp/* log/*
+# Keep the compiled asset layer reusable while excluding the upstream build-only
+# store from the runtime filesystem copied below.
+RUN rm -rf .pnpm-store
+
+# The application bundle already contains newer locked erb and net-imap gems.
+# Remove the older unused Ruby defaults so they cannot be selected or scanned.
+USER 0:0
+ADD --checksum=sha256:626d044d975ab2daac759bf898416f1b51e2cb8dcd6727c2b5b5b28b97ead2e1 \
+    https://rubygems.org/downloads/resolv-0.7.2.gem /tmp/resolv.gem
+RUN gem unpack /tmp/resolv.gem --target /tmp/resolv-patch \
+    && gem install --local --default --no-document --install-dir /usr/local/lib/ruby/gems/3.4.0 /tmp/resolv.gem \
+    && cp /tmp/resolv-patch/resolv/lib/resolv.rb /usr/local/lib/ruby/3.4.0/resolv.rb \
+    && rm /usr/local/lib/ruby/gems/3.4.0/specifications/default/resolv-0.6.2.gemspec \
+    && ruby -rresolv -e 'abort unless Resolv::VERSION == "0.7.2"' \
+    && rm -rf /tmp/resolv.gem /tmp/resolv-patch
+RUN rm -rf \
+      /usr/local/lib/node_modules \
+      /usr/local/bin/node \
+      /usr/local/bin/npm \
+      /usr/local/bin/npx \
+      /usr/local/bin/corepack \
+      /usr/local/bin/pnpm \
+      /usr/local/bin/pnpx \
+      /usr/local/lib/ruby/gems/3.4.0/gems/net-imap-0.5.8 \
+      /usr/local/lib/ruby/gems/3.4.0/cache/net-imap-0.5.8.gem \
+      /usr/local/lib/ruby/gems/3.4.0/specifications/net-imap-0.5.8.gemspec \
+      /usr/local/lib/ruby/gems/3.4.0/specifications/default/erb-4.0.4.gemspec
+
+FROM cgr.dev/chainguard/ruby@sha256:9caaf3d52f9d9a18ace549352136816d4bfe2bc8bbecec1318ea059ab2503ccb
+ARG WASALX_PACKAGE_VERSION=0.5.83
+ARG WASALX_PACKAGE_SHA256=00069cb9565f2a9002d5df73cc29532f3adde2fce28f4f09400370f9c9d11153
+
+USER 0:0
+RUN apk update && apk add --no-cache \
+    ruby-4.0=4.0.7-r0 ruby-4.0-dev=4.0.7-r0 \
+    bash curl grep nginx postgresql-17-client imlib2 libx11 libxext libxau libxdmcp libxcb \
+    libpng freetype brotli bzip2 gmp libxcrypt libffi 'openssl=3.6.5-r1' 'libcrypto3=3.6.5-r1' 'libssl3=3.6.5-r1' zlib=1.3.1-r51 zstd coreutils
+COPY --from=package-build /usr/local /usr/local
+# The application uses copied Ruby 3.4, independently of the fixed system Ruby.
+COPY --chown=1000:1000 --from=package-build /etc/nginx /etc/nginx
+RUN chown -R 1000:1000 /var/lib/nginx
+RUN apk add --no-cache 'openssl-dev=3.6.5-r1' \
+    && cd /usr/local/bundle/ruby/3.4.0/gems/openssl-4.0.1/ext/openssl \
+    && ruby extconf.rb --with-openssl-dir=/usr \
+    && make -j2 \
+    && cp openssl.so /usr/local/bundle/ruby/3.4.0/gems/openssl-4.0.1/lib/openssl.so \
+    && cd / \
+    && ruby -I/usr/local/bundle/ruby/3.4.0/gems/openssl-4.0.1/lib -ropenssl -e 'abort unless OpenSSL::OPENSSL_VERSION.start_with?("OpenSSL 3.")' \
+    && apk del openssl-dev build-base
+RUN install -d -o 0 -g 0 -m 0755 /usr/local/lib/wasalx
+COPY --chown=1000:1000 --from=package-build /opt/zammad /opt/zammad
+RUN install -d -o 1000 -g 1000 -m 0755 /opt/zammad/tmp
+COPY --chmod=0755 infra/docker/full/zammad/install-package.sh /usr/local/bin/wasalx-package-install
+COPY --chmod=0644 infra/docker/full/zammad/install-package.rb /usr/local/lib/wasalx/install-package.rb
+COPY --chmod=0644 infra/docker/full/zammad/verify-package.rb /usr/local/lib/wasalx/verify-package.rb
+COPY --chmod=0755 infra/docker/full/zammad/bootstrap-runtime.sh /usr/local/bin/wasalx-runtime-bootstrap
+COPY --chmod=0644 infra/docker/full/zammad/bootstrap-runtime.rb /usr/local/lib/wasalx/bootstrap-runtime.rb
+ENV AUTOWIZARD_RELATIVE_PATH=tmp/auto_wizard.json \
+    WASALX_ZPM_PATH=/opt/zammad/contrib/wasalx.zpm \
+    WASALX_PACKAGE_VERSION=${WASALX_PACKAGE_VERSION} \
+    WASALX_PACKAGE_SHA256=${WASALX_PACKAGE_SHA256} \
+    LANG=C.UTF-8 \
+    GEM_HOME=/usr/local/bundle \
+    BUNDLE_APP_CONFIG=/usr/local/bundle \
+    BUNDLE_DEPLOYMENT=1 \
+    BUNDLE_PATH=/usr/local/bundle \
+    BUNDLE_WITHOUT="test development" \
+    RAILS_ENV=production \
+    RAILS_LOG_TO_STDOUT=true
+ARG COMMIT_SHA=unknown
+ARG WASALX_CANDIDATE_TREE=unfrozen
+RUN ruby -rjson -e 'File.write("/usr/local/lib/wasalx/source-identity.json", JSON.generate(commit: ENV.fetch("COMMIT_SHA"), tree: ENV.fetch("WASALX_CANDIDATE_TREE")))' \
+    && chmod 0444 /usr/local/lib/wasalx/source-identity.json
+LABEL org.opencontainers.image.title="WasalX Zammad" \
+      org.opencontainers.image.version="7.1.3-wasalx-${WASALX_PACKAGE_VERSION}" \
+      org.opencontainers.image.revision="${COMMIT_SHA}" \
+      io.wasalx.source.tree="${WASALX_CANDIDATE_TREE}" \
+      com.wasalx.zammad.package.sha256="${WASALX_PACKAGE_SHA256}"
+WORKDIR /opt/zammad
+USER 1000:1000
+RUN bundle exec ruby -rresolv -e 'abort unless Resolv::VERSION == "0.7.2"'
+COPY --chmod=755 infra/docker/full/zammad/entrypoint.rb /usr/local/bin/wasalx-zammad-entrypoint
+COPY --chown=1000:1000 tests/zammad-database-entrypoint.test.rb /tmp/zammad-database-entrypoint.test.rb
+RUN ruby /tmp/zammad-database-entrypoint.test.rb /usr/local/bin/wasalx-zammad-entrypoint \
+    && rm /tmp/zammad-database-entrypoint.test.rb
+COPY --chown=1000:1000 --from=node-toolchain /src/infra/docker/full/zammad/redis-tls.rb /opt/zammad/config/initializers/wasalx_redis_tls.rb
+COPY --chown=1000:1000 tests/zammad-redis-tls.test.rb /tmp/zammad-redis-tls.test.rb
+RUN bundle exec ruby /tmp/zammad-redis-tls.test.rb /opt/zammad/config/initializers/wasalx_redis_tls.rb \
+    && rm /tmp/zammad-redis-tls.test.rb
+COPY --chown=1000:1000 tests/zammad-mailbox-inflection.test.rb /tmp/zammad-mailbox-inflection.test.rb
+RUN bundle exec ruby /tmp/zammad-mailbox-inflection.test.rb /opt/zammad \
+    && rm /tmp/zammad-mailbox-inflection.test.rb
+ENTRYPOINT ["/usr/local/bin/wasalx-zammad-entrypoint"]

@@ -1,0 +1,21 @@
+.ticket-event-editor :is(input, select, textarea) { min-block-size: 3rem; font-size: 1rem; }
+.ticket-event-editor :is(button, summary) { min-block-size: 3rem; }
+.ticket-event-editor :is(fieldset, section, ol, li) { min-inline-size: 0; }
+.ticket-event-editor .ticket-event-stack { display: flex; flex-direction: column; gap: var(--wx-space-3); }
+.ticket-event-editor .ticket-event-inline { display: flex; flex-wrap: wrap; align-items: end; gap: var(--wx-space-3); }
+.ticket-event-editor .ticket-event-inline > label { flex: 1 1 15rem; }
+.ticket-event-editor label.ticket-event-check { display: flex; flex-direction: row; align-items: center; gap: var(--wx-space-2); min-block-size: 3rem; }
+.ticket-event-editor .ticket-event-check input { flex: 0 0 auto; inline-size: 1.25rem; block-size: 1.25rem; min-block-size: 1.25rem; accent-color: var(--accent); }
+.ticket-event-help, .ticket-event-editor small { color: var(--muted); line-height: var(--wx-line-height-default); }
+.ticket-event-editor summary { display: flex; align-items: center; cursor: pointer; font-weight: var(--wx-weight-semibold); }
+.ticket-event-preview-results { margin: 0; padding-inline-start: var(--wx-space-5); }
+.ticket-event-preview-results li { padding-block: var(--wx-space-2); }
+.ticket-event-preview-results p { margin-block: var(--wx-space-2); white-space: pre-wrap; overflow-wrap: anywhere; }
+@media (max-width: 760px) {
+  .ticket-event-editor .ticket-event-inline { align-items: stretch; flex-direction: column; }
+  .ticket-event-editor .ticket-event-inline > label { flex-basis: auto; }
+  .ticket-event-editor .ticket-event-inline > button { inline-size: 100%; }
+}
+
+.ticket-event-workspace { display: flex; flex-direction: column; gap: var(--wx-space-4); }
+.ticket-event-workspace > .bot-section-head { padding: var(--wx-space-4); }

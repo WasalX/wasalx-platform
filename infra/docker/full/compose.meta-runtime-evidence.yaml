@@ -1,0 +1,12 @@
+# Add only to the existing explicitly admitted qualification stack.
+# Prepare the fixed root-owned directory before the existing stack launch;
+# populate it after exact stack verification, with the restricted producer.
+services:
+  connector-worker:
+    volumes:
+      - type: bind
+        source: /var/lib/wasalx/qualification/meta-runtime
+        target: /run/wasalx
+        read_only: true
+        bind:
+          create_host_path: false

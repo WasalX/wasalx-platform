@@ -1,0 +1,124 @@
+{
+  "annotations": { "list": [] },
+  "editable": false,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [
+    { "title": "Alert runbook", "type": "link", "url": "https://runbooks.wasalx.com/observability", "targetBlank": true }
+  ],
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Connections requiring action",
+      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 0 },
+      "targets": [{ "refId": "A", "expr": "wasalx:connections:action_required", "instant": true }],
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] } }, "overrides": [] },
+      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Oldest durable work (seconds)",
+      "gridPos": { "h": 5, "w": 6, "x": 6, "y": 0 },
+      "targets": [{ "refId": "A", "expr": "max(wasalx_work_queue_age_seconds)", "instant": true }],
+      "fieldConfig": { "defaults": { "unit": "s", "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "orange", "value": 30 }, { "color": "red", "value": 60 }] } }, "overrides": [] },
+      "options": { "colorMode": "background", "graphMode": "area", "justifyMode": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Inbound p95",
+      "gridPos": { "h": 5, "w": 6, "x": 12, "y": 0 },
+      "targets": [{ "refId": "A", "expr": "wasalx:inbound_to_zammad:p95_seconds10m", "instant": true }],
+      "fieldConfig": { "defaults": { "unit": "s", "decimals": 2, "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 5 }] } }, "overrides": [] },
+      "options": { "colorMode": "background", "graphMode": "area", "justifyMode": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Outbound p95",
+      "gridPos": { "h": 5, "w": 6, "x": 18, "y": 0 },
+      "targets": [{ "refId": "A", "expr": "wasalx:outbound_to_provider:p95_seconds10m", "instant": true }],
+      "fieldConfig": { "defaults": { "unit": "s", "decimals": 2, "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 5 }] } }, "overrides": [] },
+      "options": { "colorMode": "background", "graphMode": "area", "justifyMode": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Success ratios",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 5 },
+      "targets": [
+        { "refId": "A", "expr": "wasalx:webhook_acceptance:ratio5m", "legendFormat": "webhook acceptance" },
+        { "refId": "B", "expr": "wasalx:ticket_operation_success:ratio5m", "legendFormat": "Zammad operations" },
+        { "refId": "C", "expr": "wasalx:provider_send_success:ratio5m", "legendFormat": "provider sends" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1 }, "overrides": [] },
+      "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Webhook flow",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 5 },
+      "targets": [
+        { "refId": "A", "expr": "sum by (provider) (rate(wasalx_webhook_accepted_total[5m]))", "legendFormat": "{{provider}} accepted" },
+        { "refId": "B", "expr": "sum by (provider) (rate(wasalx_webhook_rejected_total[5m]))", "legendFormat": "{{provider}} rejected" },
+        { "refId": "C", "expr": "sum by (provider) (rate(wasalx_webhook_duplicates_total[5m]))", "legendFormat": "{{provider}} duplicate" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Queue age by work type",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 13 },
+      "targets": [
+        { "refId": "A", "expr": "max by (queue) (wasalx_work_queue_age_seconds)", "legendFormat": "{{queue}}" },
+        { "refId": "B", "expr": "max(wasalx_inbox_queue_age_seconds)", "legendFormat": "inbound" },
+        { "refId": "C", "expr": "max(wasalx_outbox_queue_age_seconds)", "legendFormat": "delivery" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s", "custom": { "drawStyle": "line", "lineInterpolation": "linear", "lineWidth": 2, "fillOpacity": 8, "showPoints": "never" } }, "overrides": [] },
+      "options": { "legend": { "calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Delivery exceptions",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 13 },
+      "targets": [
+        { "refId": "A", "expr": "sum by (provider) (rate(wasalx_delivery_retry_total[5m]))", "legendFormat": "{{provider}} retries" },
+        { "refId": "B", "expr": "sum by (provider) (rate(wasalx_delivery_terminal_failure_total[5m]))", "legendFormat": "{{provider}} terminal" },
+        { "refId": "C", "expr": "sum by (provider) (rate(wasalx_delivery_outcome_unknown_total[5m]))", "legendFormat": "{{provider}} unknown" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Infrastructure saturation",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 21 },
+      "targets": [
+        { "refId": "A", "expr": "max(wasalx_database_pool_connections{state=\"waiting\"})", "legendFormat": "database pool waiters" },
+        { "refId": "B", "expr": "1 - minio_cluster_health_capacity_usable_free_bytes / clamp_min(minio_cluster_health_capacity_usable_total_bytes, 1)", "legendFormat": "object storage used ratio" },
+        { "refId": "C", "expr": "1 - min(elasticsearch_node_fs_disk_available) / clamp_min(min(elasticsearch_node_fs_disk_total), 1)", "legendFormat": "search disk used ratio" },
+        { "refId": "D", "expr": "redis_memory_used / clamp_min(redis_maxmemory, 1) and redis_maxmemory > 0", "legendFormat": "redis memory used ratio" }
+      ],
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 41,
+  "tags": ["wasalx", "pilot", "slo"],
+  "templating": { "list": [] },
+  "time": { "from": "now-6h", "to": "now" },
+  "timezone": "browser",
+  "title": "WasalX Pilot Operations",
+  "uid": "wasalx-pilot-operations",
+  "version": 1,
+  "weekStart": ""
+}

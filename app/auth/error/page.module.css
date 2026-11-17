@@ -1,0 +1,39 @@
+.page {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  background: var(--wx-color-page);
+  padding: var(--wx-space-6);
+}
+
+.panel {
+  width: min(27.5rem, 100%);
+  border: 1px solid var(--wx-color-border);
+  border-radius: var(--wx-radius-dialog);
+  background: var(--wx-color-surface);
+  padding: var(--wx-space-8);
+}
+
+.icon {
+  display: grid;
+  width: var(--wx-control-height);
+  height: var(--wx-control-height);
+  place-items: center;
+  margin-bottom: var(--wx-space-4);
+  border-radius: var(--wx-radius-panel);
+  background: color-mix(in srgb, var(--wx-color-danger) 14%, transparent);
+  color: var(--wx-color-danger);
+  font-weight: var(--wx-weight-semibold);
+}
+
+.panel h1 {
+  margin: 0 0 var(--wx-space-3);
+  font-size: var(--wx-font-size-6);
+  letter-spacing: -0.03em;
+}
+
+.panel p {
+  margin: 0 0 var(--wx-space-6);
+  color: var(--wx-color-text-muted);
+  line-height: var(--wx-line-height-relaxed);
+}

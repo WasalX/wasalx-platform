@@ -1,0 +1,69 @@
+{{ $root := . }}
+{{ $desiredWorkers := list }}
+{{ if .Values.managedWaha.enabled }}
+{{ range $engineName, $engine := dict "gows" .Values.managedWaha.gows "noweb" .Values.managedWaha.noweb }}
+{{ if $engine.enabled }}
+{{ range $ordinal := until (int $engine.replicas) }}
+{{ $name := printf "wasalx-waha-%s-%d" $engineName $ordinal }}
+{{ $desiredWorkers = append $desiredWorkers (dict
+  "workerKey" (printf "managed-%s-%d" $engineName $ordinal)
+  "engine" (upper $engineName)
+  "baseUrl" (printf "http://%s-0.%s.%s.svc.%s:%d/" $name $name $root.Release.Namespace $root.Values.managedWaha.clusterDomain (int $root.Values.managedWaha.port))
+  "secretReference" (index $engine.secretReferences $ordinal)
+) }}
+{{ end }}
+{{ end }}
+{{ end }}
+{{ end }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: wasalx-waha-rollout-gate
+  labels: { app.kubernetes.io/name: wasalx-waha-rollout-gate, app.kubernetes.io/part-of: wasalx, app.kubernetes.io/component: waha-rollout-gate, wasalx.io/plane: rollout-gate }
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    # The database migration hook runs at wave -5 and installs the assertion
+    # function before this gate executes.
+    helm.sh/hook-weight: "-4"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded
+    argocd.argoproj.io/sync-wave: "-4"
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 90
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: wasalx-waha-rollout-gate, app.kubernetes.io/part-of: wasalx, app.kubernetes.io/component: waha-rollout-gate, wasalx.io/plane: rollout-gate }
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext: {{ toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: preflight
+          image: {{ required "worker.image is required for the WAHA rollout gate" .Values.worker.image | quote }}
+          imagePullPolicy: IfNotPresent
+          command: ["node", "dist/services/connector-worker/src/waha-rollout-preflight-bootstrap.js"]
+          securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, runAsNonRoot: true, capabilities: { drop: ["ALL"] } }
+          env:
+{{- if .Values.productionSecretSidecar.enabled }}
+            - { name: NODE_EXTRA_CA_CERTS, value: /secret-adapter-ca/ca.crt }
+{{- end }}
+            - { name: WAHA_DESIRED_MANAGED_WORKERS_JSON, value: {{ toJson $desiredWorkers | quote }} }
+            - name: WAHA_ROLLOUT_GATE_DATABASE_URL
+              valueFrom: { secretKeyRef: { name: {{ .Values.managedWaha.rolloutGate.secretName | quote }}, key: WAHA_ROLLOUT_GATE_DATABASE_URL } }
+          resources: {{ toYaml .Values.managedWaha.rolloutGate.resources | nindent 12 }}
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+{{- if .Values.productionSecretSidecar.enabled }}
+            - { name: secret-adapter-ca, mountPath: /secret-adapter-ca, readOnly: true }
+{{- end }}
+      volumes:
+        - { name: tmp, emptyDir: { sizeLimit: 32Mi } }
+{{- if .Values.productionSecretSidecar.enabled }}
+        - name: secret-adapter-ca
+          configMap:
+            name: {{ required "production secret adapter requires caConfigMapName" .Values.productionSecretSidecar.caConfigMapName | quote }}
+            items: [{ key: ca.crt, path: ca.crt }]
+{{- end }}

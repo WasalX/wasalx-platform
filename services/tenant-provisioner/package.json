@@ -1,0 +1,20 @@
+{
+  "name": "@wasalx/tenant-provisioner",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "start": "node dist/bootstrap.js",
+    "start:controller": "node dist/controller-bootstrap.js"
+  },
+  "dependencies": {
+    "@wasalx/observability": "workspace:*",
+    "jose": "^6.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "22.19.19",
+    "typescript": "5.9.3"
+  }
+}

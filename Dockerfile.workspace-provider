@@ -1,0 +1,43 @@
+# syntax=docker/dockerfile:1.7
+FROM node:22-bookworm-slim@sha256:de170b39439eb0e5a3444ad7d60b015614a381e10fecae2e30ec9e735122f38d AS dependencies
+ENV PNPM_HOME=/pnpm
+ENV PATH=$PNPM_HOME:$PATH
+ENV XDG_CACHE_HOME=/pnpm/cache
+RUN corepack enable && corepack prepare pnpm@11.16.0 --activate
+WORKDIR /workspace
+COPY infra/docker/pnpm.npmrc ./.npmrc
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY patches ./patches
+COPY services/workspace-provider/package.json ./services/workspace-provider/package.json
+COPY packages/observability/package.json ./packages/observability/package.json
+RUN --mount=type=cache,id=wasalx-pnpm-v11,target=/pnpm/store,sharing=locked \
+    --mount=type=cache,id=pnpm-metadata,target=/pnpm/cache,sharing=locked \
+    pnpm install --frozen-lockfile --prefer-offline --filter @wasalx/workspace-provider...
+
+FROM dependencies AS build
+COPY services/workspace-provider ./services/workspace-provider
+COPY tsconfig.json ./tsconfig.json
+RUN pnpm --filter @wasalx/workspace-provider build
+RUN --mount=type=cache,id=wasalx-pnpm-v11,target=/pnpm/store,sharing=locked \
+    --mount=type=cache,id=pnpm-metadata,target=/pnpm/cache,sharing=locked \
+    pnpm --prefer-offline --filter @wasalx/workspace-provider deploy --prod --legacy /workspace-provider
+RUN cp -R services/workspace-provider/dist services/workspace-provider/migrations /workspace-provider/
+
+FROM cgr.dev/chainguard/wolfi-base:latest@sha256:3754b6da0e1ccdab0fe46abfdd7bbbba994b593c28149f6659fa6597f2261aeb AS runtime
+RUN apk add --no-cache 'libcrypto3=3.6.5-r1' 'libssl3=3.6.5-r1' 'libstdc++=16.2.0-r1' 'zlib=1.3.1-r51'
+COPY --from=node:22-bookworm-slim@sha256:de170b39439eb0e5a3444ad7d60b015614a381e10fecae2e30ec9e735122f38d /usr/local/bin/node /usr/bin/node
+RUN node -e "const assert = require('node:assert/strict'); assert.equal(process.version, 'v22.23.4'); assert.equal(process.versions.undici, '6.29.1')"
+ENTRYPOINT []
+ENV PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ENV NODE_ENV=production
+ENV PORT=8092
+WORKDIR /app
+COPY --from=build --chown=65532:65532 /workspace-provider/ ./
+ARG WASALX_CANDIDATE_SHA=unfrozen
+ARG WASALX_CANDIDATE_TREE=unfrozen
+LABEL org.opencontainers.image.revision="${WASALX_CANDIDATE_SHA}" \
+      io.wasalx.source.tree="${WASALX_CANDIDATE_TREE}"
+USER 65532:65532
+EXPOSE 8092
+HEALTHCHECK --interval=20s --timeout=3s --start-period=15s --retries=3 CMD ["node","-e","require('https').get({hostname:'127.0.0.1',port:8092,path:'/health/live',rejectUnauthorized:false},r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+ENTRYPOINT ["node","dist/bootstrap.js"]

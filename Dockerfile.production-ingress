@@ -1,0 +1,14 @@
+# syntax=docker/dockerfile:1.7
+FROM docker.io/library/traefik:v3.7.13@sha256:f86a2cab1b5c649070c49f883c743dd32d8485a56e3368c5f93b9e91f1e91259 AS source
+
+FROM scratch
+COPY --from=source /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+COPY --from=source /usr/share/zoneinfo /usr/share/zoneinfo
+COPY --from=source /usr/local/bin/traefik /usr/local/bin/traefik
+ENV PATH=/usr/local/bin
+ARG WASALX_CANDIDATE_SHA=unfrozen
+ARG WASALX_CANDIDATE_TREE=unfrozen
+LABEL org.opencontainers.image.revision="${WASALX_CANDIDATE_SHA}" \
+      io.wasalx.source.tree="${WASALX_CANDIDATE_TREE}"
+USER 65532:65532
+ENTRYPOINT ["traefik"]

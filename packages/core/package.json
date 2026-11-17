@@ -1,0 +1,201 @@
+{
+  "name": "@wasalx/core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./meta-test-phone-policy": {
+      "types": "./dist/meta-test-phone-policy.d.ts",
+      "default": "./dist/meta-test-phone-policy.js"
+    },
+    "./meta-test-recipient-link": {
+      "types": "./dist/meta-test-recipient-link.d.ts",
+      "default": "./dist/meta-test-recipient-link.js"
+    },
+    "./meta-test-recipient-scope": {
+      "types": "./dist/meta-test-recipient-scope.d.ts",
+      "default": "./dist/meta-test-recipient-scope.js"
+    },
+    "./native-routing-contract": {
+      "types": "./dist/native-routing-contract.d.ts",
+      "default": "./dist/native-routing-contract.js"
+    },
+    "./waha-test-recipient-scope": {
+      "types": "./dist/waha-test-recipient-scope.d.ts",
+      "default": "./dist/waha-test-recipient-scope.js"
+    },
+    "./meta-legacy-migration-contract": {
+      "types": "./dist/meta-legacy-migration-contract.d.ts",
+      "default": "./dist/meta-legacy-migration-contract.js"
+    },
+    "./meta-template-mapping": {
+      "types": "./dist/meta-template-mapping.d.ts",
+      "default": "./dist/meta-template-mapping.js"
+    },
+    "./meta-coexistence": {
+      "types": "./dist/meta-coexistence.d.ts",
+      "default": "./dist/meta-coexistence.js"
+    },
+    "./meta-coexistence-contract": {
+      "types": "./dist/meta-coexistence-contract.d.ts",
+      "default": "./dist/meta-coexistence-contract.js"
+    },
+    "./meta-account-policy": {
+      "types": "./dist/meta-account-policy.d.ts",
+      "default": "./dist/meta-account-policy.js"
+    },
+    "./meta-billing-diagnostic": {
+      "types": "./dist/meta-billing-diagnostic.d.ts",
+      "default": "./dist/meta-billing-diagnostic.js"
+    },
+    "./meta-routing": {
+      "types": "./dist/meta-routing.d.ts",
+      "default": "./dist/meta-routing.js"
+    },
+    "./meta-cost": {
+      "types": "./dist/meta-cost.d.ts",
+      "default": "./dist/meta-cost.js"
+    },
+    "./meta-pricing-observation": {
+      "types": "./dist/meta-pricing-observation.d.ts",
+      "default": "./dist/meta-pricing-observation.js"
+    },
+    "./meta-direct-identity": {
+      "types": "./dist/meta-direct-identity.d.ts",
+      "default": "./dist/meta-direct-identity.js"
+    },
+    "./meta-account-relation": {
+      "types": "./dist/meta-account-relation.d.ts",
+      "default": "./dist/meta-account-relation.js"
+    },
+    "./ticket-event-flow": {
+      "types": "./dist/ticket-event-flow.d.ts",
+      "default": "./dist/ticket-event-flow.js"
+    },
+    "./bot-flow": {
+      "types": "./dist/bot-flow.d.ts",
+      "default": "./dist/bot-flow.js"
+    },
+    "./client-routing": {
+      "types": "./dist/client-routing.d.ts",
+      "default": "./dist/client-routing.js"
+    },
+    "./bot-action-capabilities": {
+      "types": "./dist/bot-action-capabilities.d.ts",
+      "default": "./dist/bot-action-capabilities.js"
+    },
+    "./redis-security": {
+      "types": "./dist/redis-security.d.ts",
+      "default": "./dist/redis-security.js"
+    },
+    "./secret-reference": {
+      "types": "./dist/secret-reference.d.ts",
+      "default": "./dist/secret-reference.js"
+    },
+    "./provider-media-capabilities": {
+      "types": "./dist/provider-media-capabilities.d.ts",
+      "default": "./dist/provider-media-capabilities.js"
+    },
+    "./tenant-permissions": {
+      "types": "./dist/tenant-permissions.d.ts",
+      "default": "./dist/tenant-permissions.js"
+    },
+    "./media": {
+      "types": "./dist/media.d.ts",
+      "default": "./dist/media.js"
+    },
+    "./domain": {
+      "types": "./dist/domain.d.ts",
+      "default": "./dist/domain.js"
+    },
+    "./ticket-event-runtime": {
+      "types": "./dist/ticket-event-runtime.d.ts",
+      "default": "./dist/ticket-event-runtime.js"
+    },
+    "./outbound-text": {
+      "types": "./dist/outbound-text.d.ts",
+      "default": "./dist/outbound-text.js"
+    },
+    "./ticket-command-guards": {
+      "types": "./dist/ticket-command-guards.d.ts",
+      "default": "./dist/ticket-command-guards.js"
+    },
+    "./direct-keep-open": {
+      "types": "./dist/direct-keep-open.d.ts",
+      "default": "./dist/direct-keep-open.js"
+    },
+    "./direct-customer-close": {
+      "types": "./dist/direct-customer-close.d.ts",
+      "default": "./dist/direct-customer-close.js"
+    },
+    "./direct-delivery-guards": {
+      "types": "./dist/direct-delivery-guards.d.ts",
+      "default": "./dist/direct-delivery-guards.js"
+    },
+    "./meta-signup": {
+      "types": "./dist/meta-signup.d.ts",
+      "default": "./dist/meta-signup.js"
+    },
+    "./meta-routing-contract": {
+      "types": "./dist/meta-routing-contract.d.ts",
+      "default": "./dist/meta-routing-contract.js"
+    },
+    "./meta-account-transition-contract": {
+      "types": "./dist/meta-account-transition-contract.d.ts",
+      "default": "./dist/meta-account-transition-contract.js"
+    },
+    "./meta-account-transition-preview": {
+      "types": "./dist/meta-account-transition-preview.d.ts",
+      "default": "./dist/meta-account-transition-preview.js"
+    },
+    "./meta-account-transition-context": {
+      "types": "./dist/meta-account-transition-context.d.ts",
+      "default": "./dist/meta-account-transition-context.js"
+    },
+    "./meta-account-transition-observation": {
+      "types": "./dist/meta-account-transition-observation.d.ts",
+      "default": "./dist/meta-account-transition-observation.js"
+    },
+    "./meta-template-inventory": {
+      "types": "./dist/meta-template-inventory.d.ts",
+      "default": "./dist/meta-template-inventory.js"
+    },
+    "./meta-add-access-activation-contract": {
+      "types": "./dist/meta-add-access-activation-contract.d.ts",
+      "default": "./dist/meta-add-access-activation-contract.js"
+    },
+    "./meta-account-transition-execution": {
+      "types": "./dist/meta-account-transition-execution.d.ts",
+      "default": "./dist/meta-account-transition-execution.js"
+    },
+    "./meta-transition-operator-contract": {
+      "types": "./dist/meta-transition-operator-contract.d.ts",
+      "default": "./dist/meta-transition-operator-contract.js"
+    },
+    "./meta-template-continuity": {
+      "types": "./dist/meta-template-continuity.d.ts",
+      "default": "./dist/meta-template-continuity.js"
+    },
+    "./meta-template-preparation-contract": {
+      "types": "./dist/meta-template-preparation-contract.d.ts",
+      "default": "./dist/meta-template-preparation-contract.js"
+    },
+    "./meta-billing-policy-contract": {
+      "types": "./dist/meta-billing-policy-contract.d.ts",
+      "default": "./dist/meta-billing-policy-contract.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.package.json && tsc -p tsconfig.domain.json",
+    "typecheck": "tsc -p tsconfig.package.json --noEmit && tsc -p tsconfig.domain.json --noEmit"
+  },
+  "dependencies": {
+    "re2-wasm": "1.0.2"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3"
+  }
+}

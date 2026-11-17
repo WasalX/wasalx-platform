@@ -1,0 +1,19 @@
+{
+  "@context": "https://openvex.dev/ns/v0.2.0",
+  "@id": "https://github.com/WasalX/WasalX/security/vex/glibc-2.44",
+  "author": "https://github.com/WasalX/WasalX",
+  "timestamp": "2026-09-19T00:00:00Z",
+  "version": 1,
+  "statements": [
+    {
+      "vulnerability": {
+        "@id": "https://nvd.nist.gov/vuln/detail/CVE-2026-19499",
+        "name": "CVE-2026-19499"
+      },
+      "products": [{ "@id": "pkg:apk/wolfi/glibc-2.44@2.44-r6" }],
+      "status": "not_affected",
+      "justification": "inline_mitigations_already_exist",
+      "impact_statement": "Wolfi glibc-2.44 2.44-r6 pins upstream commit b4f51887c48ac82acfdb13f96d9eab5d120cb2b7, which contains release/2.44 fix 63b53df549451a5d69fcba6d7612ea99f517e8e3 for CVE-2026-19499."
+    }
+  ]
+}

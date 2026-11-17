@@ -1,0 +1,22 @@
+PROPRIETARY SOFTWARE. ALL RIGHTS RESERVED.
+
+Copyright (c) 2026 Mohammed Altoyan.
+
+1. Ownership. The source code, documentation and every other file in this repository (the "Software") belong to Mohammed Altoyan. The Software is made visible for reference only.
+
+2. No licence is granted. Making the Software visible gives no right to it. Without a written licence agreement signed by Mohammed Altoyan and payment of the agreed fees, nobody may:
+   (a) use, run, install, deploy or host the Software or any part of it, for any purpose, including evaluation, internal use, research and teaching;
+   (b) copy, reproduce, modify, translate, adapt or build on the Software, or create works derived from it;
+   (c) distribute, publish, sublicense, sell, rent, lease or otherwise make the Software or any part of it available to anyone;
+   (d) use the Software or any part of it to train, tune or test a machine-learning model, or include it in a dataset;
+   (e) remove or change this notice.
+
+3. The only exception. Where the Software is hosted on a service whose terms require every user to allow certain acts on that service (such as viewing and forking a public repository), those acts are allowed on that service only and give no right to use the Software anywhere else or for anything else.
+
+4. No contributions. Contributions are not accepted. Anything sent to this repository is sent without any claim on the Software.
+
+5. Third parties. Components written by others stay under their own licences, listed in THIRD-PARTY-NOTICES. Nothing here limits the rights those licences give for those components.
+
+6. No warranty, no liability. The Software is provided "as is", without warranty of any kind. To the fullest extent the law allows, Mohammed Altoyan is not liable for any claim, damage or loss arising from the Software or from any use of it.
+
+7. Licences. To obtain a licence: mohammedaltoyan@gmail.com.

@@ -1,0 +1,116 @@
+{{- if .Values.controlPlaneBackup.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: wasalx-control-backup-staging
+  labels: { app.kubernetes.io/name: wasalx-control-backup, app.kubernetes.io/part-of: wasalx, wasalx.io/plane: control }
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: {{ required "controlPlaneBackup.storageClassName is required" .Values.controlPlaneBackup.storageClassName | quote }}
+  resources: { requests: { storage: {{ .Values.controlPlaneBackup.stagingSize | quote }} } }
+---
+# A scheduled CronJob cannot bind WaitForFirstConsumer storage during Helm wait.
+# This finite consumer also verifies staging is writable before release admission.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: wasalx-control-backup-staging-{{ .Release.Revision }}
+  labels: { app.kubernetes.io/name: wasalx-control-backup-staging, app.kubernetes.io/part-of: wasalx, wasalx.io/plane: control }
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 120
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: wasalx-control-backup-staging, app.kubernetes.io/part-of: wasalx, wasalx.io/plane: control }
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext: { runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, fsGroup: 1000, seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: staging-check
+          image: {{ required "controlPlaneBackup.image is required" .Values.controlPlaneBackup.image | quote }}
+          command: [node, -e]
+          args:
+            - "const fs = require('node:fs'); const output = '/staging/control-plane'; fs.mkdirSync(output, { recursive: true, mode: 0o700 }); fs.chmodSync(output, 0o700); const dir = fs.mkdtempSync(output + '/.readiness-'); const file = dir + '/probe'; fs.writeFileSync(file, 'ready', { flag: 'wx', mode: 0o600 }); if (fs.readFileSync(file, 'utf8') !== 'ready') throw new Error('staging readback failed'); fs.unlinkSync(file); fs.rmdirSync(dir);"
+          securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, runAsNonRoot: true, capabilities: { drop: ["ALL"] } }
+          resources: { requests: { cpu: 10m, memory: 32Mi }, limits: { cpu: 100m, memory: 64Mi } }
+          volumeMounts: [{ name: staging, mountPath: /staging }]
+      volumes:
+        - { name: staging, persistentVolumeClaim: { claimName: wasalx-control-backup-staging } }
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: wasalx-control-backup
+  labels: { app.kubernetes.io/name: wasalx-control-backup, app.kubernetes.io/part-of: wasalx, wasalx.io/plane: control }
+spec:
+  schedule: {{ required "controlPlaneBackup.schedule is required" .Values.controlPlaneBackup.schedule | quote }}
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 3300
+      ttlSecondsAfterFinished: 604800
+      template:
+        metadata:
+          labels: { app.kubernetes.io/name: wasalx-control-backup, app.kubernetes.io/part-of: wasalx, wasalx.io/plane: control }
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false
+          securityContext: { runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, fsGroup: 1000, seccompProfile: { type: RuntimeDefault } }
+          containers:
+            - name: backup
+              image: {{ required "controlPlaneBackup.image is required" .Values.controlPlaneBackup.image | quote }}
+              imagePullPolicy: IfNotPresent
+              args: ["control-backup"]
+              securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, runAsNonRoot: true, capabilities: { drop: ["ALL"] } }
+              env:
+                - { name: NODE_ENV, value: production }
+                {{- if .Values.productionSecretSidecar.enabled }}
+                - { name: NODE_EXTRA_CA_CERTS, value: /backup-ca/ca.crt }
+                - { name: BACKUP_CA_CERT_FILE, value: /backup-ca/ca.crt }
+                {{- end }}
+                - { name: DATABASE_NAME, value: {{ required "controlPlaneBackup.databaseName is required" .Values.controlPlaneBackup.databaseName | quote }} }
+                - { name: WORKSPACE_REGION, value: {{ required "controlPlaneBackup.region is required" .Values.controlPlaneBackup.region | quote }} }
+                - { name: OBJECT_STORAGE_PREFIX, value: "control-plane/" }
+                - { name: BACKUP_S3_ENDPOINT, value: {{ required "controlPlaneBackup.s3.endpoint is required" .Values.controlPlaneBackup.s3.endpoint | quote }} }
+                - { name: BACKUP_S3_REGION, value: {{ required "controlPlaneBackup.s3.region is required" .Values.controlPlaneBackup.s3.region | quote }} }
+                - { name: BACKUP_S3_BUCKET, value: {{ required "controlPlaneBackup.s3.bucket is required" .Values.controlPlaneBackup.s3.bucket | quote }} }
+                - { name: BACKUP_ENCRYPTION_MODE, value: {{ default "SSE_KMS" .Values.controlPlaneBackup.s3.encryptionMode | quote }} }
+                {{- if eq (default "SSE_KMS" .Values.controlPlaneBackup.s3.encryptionMode) "CLIENT_ENVELOPE" }}
+                - { name: BACKUP_AGE_RECIPIENT, value: {{ required "controlPlaneBackup.s3.ageRecipient is required" .Values.controlPlaneBackup.s3.ageRecipient | quote }} }
+                {{- else }}
+                - { name: BACKUP_S3_KMS_KEY_REFERENCE, value: {{ required "controlPlaneBackup.s3.kmsKeyReference is required" .Values.controlPlaneBackup.s3.kmsKeyReference | quote }} }
+                {{- end }}
+                - { name: BACKUP_S3_LIFECYCLE_RULE_ID, value: {{ required "controlPlaneBackup.s3.lifecycleRuleId is required" .Values.controlPlaneBackup.s3.lifecycleRuleId | quote }} }
+                - { name: BACKUP_S3_PROVIDER, value: {{ required "controlPlaneBackup.s3.provider is required" .Values.controlPlaneBackup.s3.provider | quote }} }
+                - { name: CONFIGURATOR_OUTPUT_DIRECTORY, value: /var/backups/wasalx/control-plane }
+                # Select exact keys so unrelated credentials in the Secret are
+                # never inherited by this backup-only process.
+                - name: DATABASE_URL
+                  valueFrom: { secretKeyRef: { name: {{ required "controlPlaneBackup.secretName is required" .Values.controlPlaneBackup.secretName | quote }}, key: DATABASE_URL } }
+                - name: BACKUP_S3_ACCESS_KEY_ID
+                  valueFrom: { secretKeyRef: { name: {{ required "controlPlaneBackup.secretName is required" .Values.controlPlaneBackup.secretName | quote }}, key: BACKUP_S3_ACCESS_KEY_ID } }
+                - name: BACKUP_S3_SECRET_ACCESS_KEY
+                  valueFrom: { secretKeyRef: { name: {{ required "controlPlaneBackup.secretName is required" .Values.controlPlaneBackup.secretName | quote }}, key: BACKUP_S3_SECRET_ACCESS_KEY } }
+              resources: {{ toYaml .Values.controlPlaneBackup.resources | nindent 16 }}
+              volumeMounts:
+                - { name: staging, mountPath: /var/backups/wasalx }
+                - { name: tmp, mountPath: /tmp }
+                {{- if .Values.productionSecretSidecar.enabled }}
+                - { name: backup-ca, mountPath: /backup-ca, readOnly: true }
+                {{- end }}
+          volumes:
+            - { name: staging, persistentVolumeClaim: { claimName: wasalx-control-backup-staging } }
+            - { name: tmp, emptyDir: { sizeLimit: 64Mi } }
+            {{- if .Values.productionSecretSidecar.enabled }}
+            - name: backup-ca
+              configMap:
+                name: {{ required "production backup requires internal CA" .Values.productionSecretSidecar.caConfigMapName | quote }}
+                items: [{ key: ca.crt, path: ca.crt }]
+            {{- end }}
+{{- end }}

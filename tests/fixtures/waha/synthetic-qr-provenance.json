@@ -1,0 +1,7 @@
+{
+  "origin": "Project-authored fixed synthetic checkerboard; deliberately non-operational, no account or pairing payload",
+  "sha256": "47de8013225c974899870fa58aac5e672f09863d514ee3d0b666fc0013eea431",
+  "generator": "tests/fixtures/generate-synthetic-qr.py",
+  "width": 64,
+  "height": 64
+}

@@ -1,0 +1,32 @@
+groups:
+  - name: wasalx-slo-recording
+    interval: 30s
+    rules:
+      - record: wasalx:webhook_acceptance:ratio5m
+        expr: >-
+          sum(rate(wasalx_webhook_accepted_total[5m]))
+          /
+          clamp_min(sum(rate(wasalx_webhook_accepted_total[5m])) + sum(rate(wasalx_webhook_rejected_total[5m])), 0.000001)
+      - record: wasalx:ticket_operation_success:ratio5m
+        expr: >-
+          sum(rate(wasalx_ticket_operation_total{result="succeeded"}[5m]))
+          /
+          clamp_min(sum(rate(wasalx_ticket_operation_total[5m])), 0.000001)
+      - record: wasalx:provider_send_success:ratio5m
+        expr: >-
+          sum(rate(wasalx_provider_send_seconds_count{result="succeeded"}[5m]))
+          /
+          clamp_min(sum(rate(wasalx_provider_send_seconds_count[5m])), 0.000001)
+      - record: wasalx:inbound_to_zammad:p95_seconds10m
+        expr: >-
+          histogram_quantile(0.95, sum by (le) (rate(wasalx_inbound_to_zammad_seconds_bucket[10m])))
+      - record: wasalx:outbound_to_provider:p95_seconds10m
+        expr: >-
+          histogram_quantile(0.95, sum by (le) (rate(wasalx_outbound_to_provider_seconds_bucket[10m])))
+      - record: wasalx:provider_send:p95_seconds10m
+        expr: >-
+          histogram_quantile(0.95, sum by (le, provider) (rate(wasalx_provider_send_seconds_bucket[10m])))
+      - record: wasalx:queue:max_age_seconds
+        expr: max by (queue) (wasalx_work_queue_age_seconds)
+      - record: wasalx:connections:action_required
+        expr: sum(wasalx_connection_state{state="action_required"})

@@ -1,0 +1,1 @@
+FROM cgr.dev/chainguard/redis:latest@sha256:d12496c154906bc783d296d9b8acbf70c95d1e23a0733f8a46c3b57c7c95ac41

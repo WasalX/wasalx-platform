@@ -1,0 +1,38 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import {testIds,admitFixture,runIsolationRuleEmpty,groupRuleFailureProof,checkGroupMemberPickerPointer} from '../scripts/release/simulation-group-rule-quality.mjs';
+import {makeOwnedGetHandler} from '../scripts/release/simulation-owned-get-boundary.mjs';
+test('all 23 exact quality IDs exist; no business IDs inferred',()=>{const b=JSON.parse(fs.readFileSync(new URL('./fixtures/group-rule-approved-test-ids.json',import.meta.url)));const ids=new Set(b.quality);assert.deepEqual([...testIds].sort(),[...b.quality].sort());assert.equal(new Set(testIds).size,23);for(const id of testIds){assert(ids.has(id),id);assert(id.includes('::ui-quality::'));}});
+test('admission rejects foreign or stale produced group before page use',()=>{const s={actorBinding:{userMatched:true,workspaceMatched:true},tenantId:'t',ownerPage:{},portalOrigin:'http://127.0.0.1',scoped(){},checkpoint(){},directCallbacks:{providerRead(){}}},g={evidenceMode:'simulated',tenantId:'t',namespace:'run',groupId:'g'};assert.equal(admitFixture(s,{namespace:'run',inputs:{group:g}}),g);for(const bad of [{tenantId:'other'},{namespace:'old'},{evidenceMode:'live'}])assert.throws(()=>admitFixture(s,{namespace:'run',inputs:{group:{...g,...bad}}}));});
+test('shared fault boundary touches only exact owned GET',async()=>{let fulfilled=0,fallback=0,seen=0;const handler=makeOwnedGetHandler({origin:'http://127.0.0.1',path:'/api/rule-sets?limit=200',mode:'error',onSeen:()=>seen++});const route=(method,url)=>({request:()=>({method:()=>method,url:()=>url}),fulfill:async()=>fulfilled++,fallback:async()=>fallback++});await handler(route('GET','http://127.0.0.1/api/rule-sets?limit=200'));await handler(route('POST','http://127.0.0.1/api/rule-sets?limit=200'));await handler(route('GET','http://other/api/rule-sets?limit=200'));await handler(route('GET','http://127.0.0.1/api/rule-sets?limit=25'));assert.deepEqual({fulfilled,fallback,seen},{fulfilled:1,fallback:3,seen:1});});
+test('genuine empty branch refuses populated catalog and removes its owned guard',async()=>{let removed=0;const page={setViewportSize:async()=>{},route:async()=>{},unroute:async()=>removed++,evaluate:async()=>[{id:'populated'}]};const s={portalOrigin:'http://127.0.0.1',verifyOwner:async()=>({userMatched:true,workspaceMatched:true}),directCallbacks:{providerRead:async()=>[]}};await assert.rejects(runIsolationRuleEmpty(s,{tenantId:'isolation'},{page,userId:'distinct'}),/genuine empty/);assert.equal(removed,1);});
+test('group-rule failure proof names the failed step with bounded, nonsecret UI diagnostics',async()=>{
+ const page={evaluate:async(_fn,id)=>{assert.equal(id,'group-config-title');return{modalPresent:true,modalOpen:true,focusCategory:'dialog'};}};
+ const trigger=()=>({count:async()=>5});
+ const proof=await groupRuleFailureProof(new Error('private request detail'),{page,trigger,dialogTitleId:'group-config-title',step:'wait-loading-status',stepStartedAt:Date.now(),ownedGetSeen:7});
+ assert.deepEqual(Object.keys(proof).sort(),['diagnostic','errorClass','messageSha256']);
+ assert.equal(typeof proof.diagnostic.stepDurationMs,'number');delete proof.diagnostic.stepDurationMs;assert.deepEqual(proof.diagnostic,{step:'wait-loading-status',triggerCount:2,modalPresent:true,modalOpen:true,focusCategory:'dialog',ownedGetSeen:2});
+ assert.equal(JSON.stringify(proof).includes('private request detail'),false);
+ const unavailable=await groupRuleFailureProof(new Error('private request detail'),{page:{evaluate:async()=>{throw Error('private page state');}},trigger,dialogTitleId:'group-config-title',step:'open-dialog',stepStartedAt:Date.now()});
+ assert.equal(typeof unavailable.diagnostic.stepDurationMs,'number');delete unavailable.diagnostic.stepDurationMs;assert.deepEqual(unavailable.diagnostic,{step:'open-dialog',unavailable:true});
+});
+test('each independent probe restores the normal page before keyboard or fault injection',()=>{const source=fs.readFileSync(new URL('../scripts/release/simulation-group-rule-quality.mjs',import.meta.url),'utf8');assert(source.includes("const normal=async(onStep=()=>{})=>{onStep('normal-navigation');await page.goto(url);onStep('exact-group-or-rule-trigger');await prepareTrigger();};"));assert.match(source,/findExactGroupPermissionTrigger\(page,\{name:groupName,canWrite:true,connectionId:groupConnectionId\}\)/u);assert.match(source,/await normal\(keyboardMark\);keyboardMark\('reach-trigger-by-tab'\);\s*await reachByTab/);const normalFault=source.indexOf('await normal();let release'),routeFault=source.indexOf("await page.route('**/api/**',handler)",normalFault);assert(normalFault>=0&&routeFault>normalFault);});
+
+test('member picker requires its real pointer hit and refuses an overlay before clicking',async()=>{
+ const previous=Object.getOwnPropertyDescriptor(globalThis,'document');let covered=false,clicks=0,expanded=false,escapes=0;
+ const element={getBoundingClientRect:()=>({left:20,top:100,width:80,height:40}),contains:()=>false},footer={};
+ Object.defineProperty(globalThis,'document',{configurable:true,value:{elementFromPoint:(x,y)=>{assert.equal(x,60);assert.equal(y,120);return covered?footer:element;}}});
+ let subjectType='TEAM';
+ const picker={waitFor:async()=>{},isDisabled:async()=>false,scrollIntoViewIfNeeded:async()=>{},evaluate:async fn=>fn(element),click:async()=>{clicks++;expanded=true;},getAttribute:async()=>String(expanded)},dialog={getByRole:(role,options)=>{assert.equal(role,'combobox');assert.deepEqual(options,{name:'Team member',exact:true});return{count:async()=>subjectType==='USER'?1:0};},locator:selector=>{if(selector==='#group-history-subject-type')return{selectOption:async value=>{assert.equal(value,'USER');subjectType=value;},inputValue:async()=>subjectType};if(selector==='#group-history-subject')return picker;assert.equal(selector,'#group-history-subject-options');return{waitFor:async()=>assert(expanded)};}},page={keyboard:{press:async key=>{assert.equal(key,'Escape');escapes++;expanded=false;}}};
+ try{assert.deepEqual(await checkGroupMemberPickerPointer(page,dialog),{memberPickerCenterHit:true,memberPickerOpened:true,footerDidNotIntercept:true});assert.equal(escapes,1);covered=true;await assert.rejects(checkGroupMemberPickerPointer(page,dialog),/footer intercepts/);assert.equal(clicks,1);}
+ finally{if(previous)Object.defineProperty(globalThis,'document',previous);else delete globalThis.document;}
+});
+test('retained keyboard selection rejects other IDs before browser use and always restores its read-only guard',async()=>{
+ const {runGroupRuleQuality}=await import('../scripts/release/simulation-group-rule-quality.mjs'),id='group-management/discover-authorize-and-configure-groups::ui-quality::keyboard-focus';
+ await assert.rejects(runGroupRuleQuality({selectedTestIds:[id,'other']}),/Only the reviewed group keyboard/);
+ let removed=0,providerReads=0,durableReads=0;const records=[];
+ const page={setViewportSize:async()=>{},setDefaultTimeout(){},route:async()=>{},unroute:async()=>removed++,getByRole:()=>({filter(){return this;}}),goto:async()=>{throw Error('Read-only navigation prerequisite unavailable');}};
+ await assert.rejects(runGroupRuleQuality({page,origin:'http://127.0.0.1',groupId:'owned',namespace:'run',checkpoint:async row=>records.push(row),providerRead:async()=>{providerReads++;return{receipts:[]};},scoped:async()=>{durableReads++;return[];},viewport:{width:820,height:1180},selectedTestIds:[id]}),/navigation prerequisite/);
+ assert.equal(removed,1);assert.equal(providerReads,2);assert.equal(durableReads,4);assert.deepEqual(records.at(-1),{phase:'group-rule-quality-safety',noMutations:true,durableUnchanged:true,providerReceiptsUnchanged:true});
+});

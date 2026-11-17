@@ -1,0 +1,7 @@
+.panel { margin-block: 1rem; }
+.actions { display: flex; flex-wrap: wrap; gap: .5rem; }
+.editor { display: grid; gap: 1rem; margin-block-start: 1rem; }
+.policy { min-inline-size: 0; padding: 1rem; border: 1px solid var(--wx-color-border); border-radius: .75rem; }
+.enabled { display: flex; align-items: center; gap: .5rem; margin-block: .75rem; }
+.editor select { inline-size: 100%; min-inline-size: 0; min-block-size: var(--wx-control-height); }
+.enabled input { inline-size: auto; min-block-size: auto; }

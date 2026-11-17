@@ -1,0 +1,186 @@
+{{- if .Values.workspaceProvider.enabled }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Values.workspaceProvider.serviceAccountName }}
+  labels: { app.kubernetes.io/name: wasalx-workspace-provider, app.kubernetes.io/part-of: wasalx }
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: wasalx-workspace-provider
+  labels: { app.kubernetes.io/part-of: wasalx }
+rules:
+  - apiGroups: [providers.wasalx.io]
+    resources: [workspaceproviderresources]
+    verbs: [get, list, create, patch, update]
+  - apiGroups: [apps]
+    resources: [deployments]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: wasalx-workspace-provider
+  labels: { app.kubernetes.io/part-of: wasalx }
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.workspaceProvider.serviceAccountName }}
+    namespace: {{ .Release.Namespace }}
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: wasalx-workspace-provider }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: wasalx-workspace-provider
+  labels: { app.kubernetes.io/name: wasalx-workspace-provider, app.kubernetes.io/part-of: wasalx }
+spec:
+  selector: { app.kubernetes.io/name: wasalx-workspace-provider }
+  ports: [{ name: https, port: {{ .Values.workspaceProvider.port }}, targetPort: https }]
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ printf "wasalx-workspace-provider-migrate-%s" (.Values.workspaceProvider.image | sha256sum | trunc 10) | trunc 63 }}
+  labels: { app.kubernetes.io/name: wasalx-workspace-provider-migration, app.kubernetes.io/part-of: wasalx }
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded
+    argocd.argoproj.io/sync-wave: "-5"
+spec:
+  activeDeadlineSeconds: 720
+  # Failed migrations require diagnosis before a new attempt.
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata: { labels: { app.kubernetes.io/name: wasalx-workspace-provider-migration, app.kubernetes.io/part-of: wasalx, wasalx.io/plane: provisioning } }
+    spec:
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      securityContext: { runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, fsGroup: 1000, seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: migrate
+          image: {{ required "workspaceProvider.image is required" .Values.workspaceProvider.image | quote }}
+          imagePullPolicy: IfNotPresent
+          command: [node, dist/migrate.js]
+          env:
+            - name: WORKSPACE_PROVIDER_MIGRATION_DATABASE_URL
+              valueFrom: { secretKeyRef: { name: {{ .Values.workspaceProvider.migrationSecretName }}, key: database-url } }
+          securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, capabilities: { drop: [ALL] } }
+          resources: {{ toYaml .Values.workspaceProvider.migrationResources | nindent 12 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wasalx-workspace-provider
+  labels: { app.kubernetes.io/name: wasalx-workspace-provider, app.kubernetes.io/part-of: wasalx }
+spec:
+  replicas: {{ .Values.workspaceProvider.replicas }}
+  strategy: { type: RollingUpdate, rollingUpdate: { maxUnavailable: 0, maxSurge: 1 } }
+  selector: { matchLabels: { app.kubernetes.io/name: wasalx-workspace-provider } }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: wasalx-workspace-provider, app.kubernetes.io/part-of: wasalx, wasalx.io/plane: provisioning }
+    spec:
+      serviceAccountName: {{ .Values.workspaceProvider.serviceAccountName }}
+      automountServiceAccountToken: false
+      securityContext: { runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, fsGroup: 1000, seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: workspace-provider
+          image: {{ required "workspaceProvider.image is required" .Values.workspaceProvider.image | quote }}
+          imagePullPolicy: IfNotPresent
+          ports: [{ name: https, containerPort: {{ .Values.workspaceProvider.port }} }]
+          env:
+            - { name: NODE_ENV, value: production }
+            - { name: PORT, value: {{ .Values.workspaceProvider.port | quote }} }
+            - { name: WORKSPACE_PROVIDER_NAMESPACE, value: {{ .Release.Namespace | quote }} }
+            - { name: WORKSPACE_PROVIDER_FIELD_MANAGER, value: {{ .Values.workspaceProvider.fieldManager | quote }} }
+            - { name: WORKSPACE_PROVIDER_REQUEST_TIMEOUT_MS, value: {{ .Values.workspaceProvider.requestTimeoutMs | quote }} }
+            - { name: WORKSPACE_PROVIDER_OPERATOR_DEPLOYMENTS_JSON, value: {{ toJson .Values.workspaceProvider.operatorDeployments | quote }} }
+            - { name: WORKSPACE_PROVIDER_TOKEN_FILE, value: /var/run/secrets/wasalx-provider/token }
+            - { name: WORKSPACE_PROVIDER_TLS_CERT_FILE, value: /var/run/secrets/wasalx-provider-tls/tls.crt }
+            - { name: WORKSPACE_PROVIDER_TLS_KEY_FILE, value: /var/run/secrets/wasalx-provider-tls/tls.key }
+            - { name: WORKSPACE_PROVIDER_DATABASE_URL, valueFrom: { secretKeyRef: { name: {{ .Values.workspaceProvider.secretName }}, key: database-url } } }
+            - { name: KUBERNETES_API_URL, value: "https://kubernetes.default.svc" }
+            - { name: KUBERNETES_TOKEN_FILE, value: /var/run/secrets/wasalx-kubernetes/token }
+            - { name: KUBERNETES_CA_FILE, value: /var/run/secrets/wasalx-kubernetes/ca.crt }
+          securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, capabilities: { drop: [ALL] } }
+          resources: {{ toYaml .Values.workspaceProvider.resources | nindent 12 }}
+          livenessProbe: { httpGet: { path: /health/live, port: https, scheme: HTTPS }, initialDelaySeconds: 10, periodSeconds: 20, timeoutSeconds: 3, failureThreshold: 3 }
+          readinessProbe: { httpGet: { path: /health/ready, port: https, scheme: HTTPS }, initialDelaySeconds: 5, periodSeconds: 10, timeoutSeconds: 3, failureThreshold: 3 }
+          volumeMounts:
+            - { name: provider-identity, mountPath: /var/run/secrets/wasalx-provider, readOnly: true }
+            - { name: provider-tls, mountPath: /var/run/secrets/wasalx-provider-tls, readOnly: true }
+            - { name: kubernetes-identity, mountPath: /var/run/secrets/wasalx-kubernetes, readOnly: true }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: provider-identity
+          secret: { secretName: {{ .Values.workspaceProvider.secretName }}, defaultMode: 0440, items: [{ key: token, path: token }] }
+        - name: provider-tls
+          secret: { secretName: {{ .Values.workspaceProvider.tlsSecretName }}, defaultMode: 0440, items: [{ key: tls.crt, path: tls.crt }, { key: tls.key, path: tls.key }] }
+        - name: kubernetes-identity
+          projected:
+            defaultMode: 0440
+            sources:
+              - serviceAccountToken: { path: token, audience: {{ .Values.workspaceProvider.kubernetesAudience | quote }}, expirationSeconds: 3600 }
+              - configMap: { name: kube-root-ca.crt, items: [{ key: ca.crt, path: ca.crt }] }
+        - { name: tmp, emptyDir: { sizeLimit: 64Mi } }
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: { name: wasalx-workspace-provider, labels: { app.kubernetes.io/part-of: wasalx } }
+spec:
+  maxUnavailable: 1
+  selector: { matchLabels: { app.kubernetes.io/name: wasalx-workspace-provider } }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: wasalx-workspace-provider, labels: { app.kubernetes.io/part-of: wasalx } }
+spec:
+  podSelector: { matchLabels: { app.kubernetes.io/name: wasalx-workspace-provider } }
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from: [{ podSelector: { matchLabels: { app.kubernetes.io/name: wasalx-workspace-controller } } }]
+      ports: [{ protocol: TCP, port: {{ .Values.workspaceProvider.port }} }]
+  egress:
+    - to: [{ namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: kube-system } } }]
+      ports: [{ protocol: UDP, port: 53 }, { protocol: TCP, port: 53 }]
+    {{- range .Values.workspaceProvider.allowedEgressCidrs }}
+    - to: [{ ipBlock: { cidr: {{ .cidr | quote }} } }]
+      ports:
+        {{- range .ports }}
+        - { protocol: TCP, port: {{ . }} }
+        {{- end }}
+    {{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: wasalx-workspace-provider-migration
+  labels: { app.kubernetes.io/part-of: wasalx }
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-6"
+    helm.sh/hook-delete-policy: before-hook-creation
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+    argocd.argoproj.io/sync-wave: "-6"
+spec:
+  podSelector: { matchLabels: { app.kubernetes.io/name: wasalx-workspace-provider-migration } }
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress:
+    - to: [{ namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: kube-system } } }]
+      ports: [{ protocol: UDP, port: 53 }, { protocol: TCP, port: 53 }]
+    {{- range .Values.workspaceProvider.allowedEgressCidrs }}
+    - to: [{ ipBlock: { cidr: {{ .cidr | quote }} } }]
+      ports:
+        {{- range .ports }}
+        - { protocol: TCP, port: {{ . }} }
+        {{- end }}
+    {{- end }}
+{{- end }}

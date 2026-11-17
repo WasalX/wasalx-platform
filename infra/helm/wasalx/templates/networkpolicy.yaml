@@ -1,0 +1,309 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: wasalx-control-default-deny, labels: { app.kubernetes.io/part-of: wasalx } }
+spec:
+  podSelector: { matchLabels: { wasalx.io/plane: control } }
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: wasalx-control-dns, labels: { app.kubernetes.io/part-of: wasalx } }
+spec:
+  podSelector: { matchLabels: { wasalx.io/plane: control } }
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: kube-system } }
+      ports: [{ protocol: UDP, port: 53 }, { protocol: TCP, port: 53 }]
+{{- if .Values.productionSecretSidecar.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: wasalx-private-identity-egress, labels: { app.kubernetes.io/part-of: wasalx } }
+spec:
+  podSelector:
+    matchLabels: { wasalx.io/plane: control }
+    matchExpressions:
+      - { key: app.kubernetes.io/name, operator: In, values: [wasalx-portal, wasalx-api] }
+  policyTypes: [Egress]
+  egress:
+    - to: [{ podSelector: { matchLabels: { app.kubernetes.io/name: wasalx-keycloak } } }]
+      ports: [{ protocol: TCP, port: 8443 }]
+{{- end }}
+{{- if .Values.observability.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: wasalx-control-observability-egress, labels: { app.kubernetes.io/part-of: wasalx } }
+spec:
+  podSelector: { matchLabels: { wasalx.io/plane: control } }
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: {{ .Values.observability.collector.namespace | quote }} } }
+          podSelector:
+            matchLabels: {{ toYaml .Values.observability.collector.podLabels | nindent 14 }}
+      ports: [{ protocol: TCP, port: {{ .Values.observability.collector.port }} }]
+{{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: wasalx-portal-traffic, labels: { app.kubernetes.io/part-of: wasalx } }
+spec:
+  podSelector: { matchLabels: { app.kubernetes.io/name: wasalx-portal, wasalx.io/plane: control } }
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: {{ .Values.ingressNamespace | quote }} } }
+      ports: [{ protocol: TCP, port: 3000 }]
+  egress:
+    - to:
+        - podSelector: { matchLabels: { app.kubernetes.io/name: wasalx-api, wasalx.io/plane: control } }
+      ports: [{ protocol: TCP, port: 3001 }]
+    - to:
+        - podSelector: { matchLabels: { app.kubernetes.io/name: wasalx-worker, wasalx.io/plane: control } }
+      ports: [{ protocol: TCP, port: 8080 }]
+    {{- range .Values.portalAllowedEgressCidrs }}
+    - to: [{ ipBlock: { cidr: {{ .cidr | quote }} } }]
+      ports:
+        {{- range .ports }}
+        - { protocol: TCP, port: {{ . }} }
+        {{- end }}
+    {{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: wasalx-api-traffic, labels: { app.kubernetes.io/part-of: wasalx } }
+spec:
+  podSelector: { matchLabels: { app.kubernetes.io/name: wasalx-api, wasalx.io/plane: control } }
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: {{ .Values.ingressNamespace | quote }} } }
+        - podSelector: { matchLabels: { app.kubernetes.io/name: wasalx-portal, wasalx.io/plane: control } }
+        # ponytail: controller-owned tenant pods share this API route; add stable role labels if they need distinct network access.
+        - podSelector: { matchLabels: { app.kubernetes.io/managed-by: wasalx-workspace-controller, wasalx.io/plane: tenant } }
+      ports: [{ protocol: TCP, port: 3001 }]
+  egress:
+    - to:
+        - podSelector: { matchLabels: { app.kubernetes.io/managed-by: wasalx-workspace-controller, wasalx.io/plane: tenant } }
+      ports: [{ protocol: TCP, port: 8080 }]
+    {{- if .Values.managedWaha.enabled }}
+    # QR, pairing-code, and passkey actions are proxied by the authenticated
+    # control API. This grants only API -> managed-WAHA TCP traffic.
+    - to:
+        - podSelector: { matchLabels: { app.kubernetes.io/component: waha, wasalx.io/plane: connector } }
+      ports: [{ protocol: TCP, port: {{ .Values.managedWaha.port }} }]
+    {{- end }}
+    {{- if .Values.provisioner.enabled }}
+    - to:
+        - podSelector: { matchLabels: { app.kubernetes.io/name: wasalx-tenant-provisioner, wasalx.io/plane: provisioning } }
+      ports: [{ protocol: TCP, port: {{ .Values.provisioner.port }} }]
+    {{- end }}
+    {{- range .Values.apiAllowedEgressCidrs }}
+    - to: [{ ipBlock: { cidr: {{ .cidr | quote }} } }]
+      ports:
+        {{- range .ports }}
+        - { protocol: TCP, port: {{ . }} }
+        {{- end }}
+    {{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: wasalx-worker-egress, labels: { app.kubernetes.io/part-of: wasalx } }
+spec:
+  podSelector: { matchLabels: { app.kubernetes.io/name: wasalx-worker, wasalx.io/plane: control } }
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector: { matchLabels: { app.kubernetes.io/name: wasalx-portal, wasalx.io/plane: control } }
+      ports: [{ protocol: TCP, port: 8080 }]
+  egress:
+    - to:
+        - podSelector: { matchLabels: { app.kubernetes.io/managed-by: wasalx-workspace-controller, wasalx.io/plane: tenant } }
+      ports: [{ protocol: TCP, port: 8080 }]
+    {{- if .Values.managedWaha.enabled }}
+    - to:
+        - podSelector: { matchLabels: { app.kubernetes.io/component: waha, wasalx.io/plane: connector } }
+      ports: [{ protocol: TCP, port: {{ .Values.managedWaha.port }} }]
+    {{- end }}
+    {{- range .Values.workerAllowedEgressCidrs }}
+    - to: [{ ipBlock: { cidr: {{ .cidr | quote }} } }]
+      ports:
+        {{- range .ports }}
+        - { protocol: TCP, port: {{ . }} }
+        {{- end }}
+    {{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: wasalx-migration-egress
+  labels: { app.kubernetes.io/part-of: wasalx }
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-8"
+    helm.sh/hook-delete-policy: before-hook-creation
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+    argocd.argoproj.io/sync-wave: "-8"
+spec:
+  podSelector: { matchLabels: { app.kubernetes.io/name: wasalx-migration, wasalx.io/plane: control } }
+  policyTypes: [Egress]
+  {{- if or .Values.apiAllowedEgressCidrs .Values.provisioner.allowedEgressCidrs }}
+  egress:
+    - to:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: kube-system } }
+      ports: [{ protocol: UDP, port: 53 }, { protocol: TCP, port: 53 }]
+    {{- range concat .Values.apiAllowedEgressCidrs .Values.provisioner.allowedEgressCidrs }}
+    - to: [{ ipBlock: { cidr: {{ .cidr | quote }} } }]
+      ports:
+        {{- range .ports }}
+        - { protocol: TCP, port: {{ . }} }
+        {{- end }}
+    {{- end }}
+  {{- else }}
+  egress: []
+  {{- end }}
+{{- if .Values.controlPlaneBackup.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: wasalx-control-backup-egress, labels: { app.kubernetes.io/part-of: wasalx } }
+spec:
+  podSelector: { matchLabels: { app.kubernetes.io/name: wasalx-control-backup, wasalx.io/plane: control } }
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress:
+    - to:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: kube-system } }
+      ports: [{ protocol: UDP, port: 53 }, { protocol: TCP, port: 53 }]
+    {{- if .Values.productionSecretSidecar.enabled }}
+    - to: [{ podSelector: { matchLabels: { wasalx.io/foundation: "true" } } }]
+      ports: [{ protocol: TCP, port: 5432 }, { protocol: TCP, port: 9000 }]
+    {{- end }}
+    {{- range .Values.controlPlaneBackup.allowedEgressCidrs }}
+    - to: [{ ipBlock: { cidr: {{ .cidr | quote }} } }]
+      ports:
+        {{- range .ports }}
+        - { protocol: TCP, port: {{ . }} }
+        {{- end }}
+    {{- end }}
+{{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: wasalx-waha-rollout-gate
+  labels: { app.kubernetes.io/part-of: wasalx, app.kubernetes.io/component: waha-rollout-gate }
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+    argocd.argoproj.io/sync-wave: "-5"
+spec:
+  podSelector: { matchLabels: { app.kubernetes.io/name: wasalx-waha-rollout-gate, wasalx.io/plane: rollout-gate } }
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress:
+    - to:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: kube-system } }
+      ports: [{ protocol: UDP, port: 53 }, { protocol: TCP, port: 53 }]
+    {{- range .Values.managedWaha.rolloutGate.allowedEgressCidrs }}
+    - to: [{ ipBlock: { cidr: {{ .cidr | quote }} } }]
+      ports:
+        {{- range .ports }}
+        - { protocol: TCP, port: {{ . }} }
+        {{- end }}
+    {{- end }}
+{{- if .Values.managedWaha.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: wasalx-managed-waha-default-deny, labels: { app.kubernetes.io/part-of: wasalx, app.kubernetes.io/component: waha } }
+spec:
+  podSelector: { matchLabels: { app.kubernetes.io/component: waha, wasalx.io/plane: connector } }
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: wasalx-managed-waha-private-ingress, labels: { app.kubernetes.io/part-of: wasalx, app.kubernetes.io/component: waha } }
+spec:
+  podSelector: { matchLabels: { app.kubernetes.io/component: waha, wasalx.io/plane: connector } }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector: { matchLabels: { app.kubernetes.io/name: wasalx-worker, wasalx.io/plane: control } }
+        - podSelector: { matchLabels: { app.kubernetes.io/name: wasalx-api, wasalx.io/plane: control } }
+      ports: [{ protocol: TCP, port: {{ .Values.managedWaha.port }} }]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: wasalx-managed-waha-egress, labels: { app.kubernetes.io/part-of: wasalx, app.kubernetes.io/component: waha } }
+spec:
+  podSelector: { matchLabels: { app.kubernetes.io/component: waha, wasalx.io/plane: connector } }
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: kube-system } }
+      ports: [{ protocol: UDP, port: 53 }, { protocol: TCP, port: 53 }]
+    {{- range .Values.managedWaha.allowedEgressCidrs }}
+    - to: [{ ipBlock: { cidr: {{ .cidr | quote }} } }]
+      ports:
+        {{- range .ports }}
+        - { protocol: TCP, port: {{ . }} }
+        {{- end }}
+    {{- end }}
+{{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: wasalx-invitation-mailer-traffic, labels: { app.kubernetes.io/part-of: wasalx } }
+spec:
+  podSelector: { matchLabels: { app.kubernetes.io/name: wasalx-invitation-mailer, wasalx.io/plane: control } }
+  policyTypes: [Egress]
+  {{- if .Values.invitationMailerAllowedEgressCidrs }}
+  egress:
+    {{- range .Values.invitationMailerAllowedEgressCidrs }}
+    - to: [{ ipBlock: { cidr: {{ .cidr | quote }} } }]
+      ports:
+        {{- range .ports }}
+        - { protocol: TCP, port: {{ . }} }
+        {{- end }}
+    {{- end }}
+  {{- else }}
+  egress: []
+  {{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: wasalx-identity-policy-activator-traffic, labels: { app.kubernetes.io/part-of: wasalx } }
+spec:
+  podSelector: { matchLabels: { app.kubernetes.io/name: wasalx-identity-policy-activator, wasalx.io/plane: control } }
+  policyTypes: [Ingress, Egress]
+  {{- if .Values.provisioner.enabled }}
+  ingress:
+    - from:
+        - podSelector: { matchLabels: { app.kubernetes.io/name: wasalx-tenant-provisioner, wasalx.io/plane: provisioning } }
+      ports: [{ protocol: TCP, port: {{ .Values.identityPolicyActivator.port }} }]
+  {{- else }}
+  ingress: []
+  {{- end }}
+  {{- if or .Values.identityPolicyAllowedEgressCidrs .Values.productionSecretSidecar.enabled }}
+  egress:
+    {{- if .Values.productionSecretSidecar.enabled }}
+    - to: [{ podSelector: { matchLabels: { app.kubernetes.io/name: wasalx-keycloak } } }]
+      ports: [{ protocol: TCP, port: 8443 }]
+    {{- end }}
+    {{- range .Values.identityPolicyAllowedEgressCidrs }}
+    - to: [{ ipBlock: { cidr: {{ .cidr | quote }} } }]
+      ports:
+        {{- range .ports }}
+        - { protocol: TCP, port: {{ . }} }
+        {{- end }}
+    {{- end }}
+  {{- else }}
+  egress: []
+  {{- end }}

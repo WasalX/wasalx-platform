@@ -1,0 +1,20 @@
+{
+  "@context": "https://openvex.dev/ns/v0.2.0",
+  "@id": "https://github.com/WasalX/WasalX/security/vex/zlib-1.3.1",
+  "author": "https://github.com/WasalX/WasalX",
+  "timestamp": "2026-09-16T00:00:00Z",
+  "version": 1,
+  "statements": [
+    {
+      "vulnerability": {
+        "@id": "https://github.com/advisories/GHSA-g5fp-32jq-cfw2",
+        "name": "GHSA-g5fp-32jq-cfw2",
+        "aliases": ["CVE-2026-85091"]
+      },
+      "products": [{ "@id": "pkg:apk/wolfi/zlib@1.3.1-r51" }],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_present",
+      "impact_statement": "The advisory affects upstream zlib 1.3.1.2 through 1.3.2. WasalX pins upstream zlib 1.3.1, packaged by Wolfi as 1.3.1-r51, before the affected range."
+    }
+  ]
+}

@@ -1,0 +1,267 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: tenantworkspaces.platform.wasalx.io
+  annotations:
+    wasalx.io/contract-version: "commercial-go-v1"
+    wasalx.io/contract-sha256: "2b4cd830d8fb0f391477bc8e9e16fbf5fdc0b5678776d050f76fa3c0e50f0afb"
+  labels:
+    app.kubernetes.io/part-of: wasalx
+spec:
+  group: platform.wasalx.io
+  scope: Namespaced
+  names:
+    plural: tenantworkspaces
+    singular: tenantworkspace
+    kind: TenantWorkspace
+    listKind: TenantWorkspaceList
+    shortNames: [twx]
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources: { status: {} }
+      additionalPrinterColumns:
+        - { name: Tenant, type: string, jsonPath: .spec.tenantId }
+        - { name: Step, type: string, jsonPath: .spec.request.desiredStep }
+        - { name: State, type: string, jsonPath: .spec.desiredState }
+        - { name: Generation, type: integer, jsonPath: .status.observedGeneration }
+      schema:
+        openAPIV3Schema:
+          type: object
+          required: [spec]
+          x-kubernetes-validations:
+            - rule: "self.metadata.name == 'tenant-' + self.spec.tenantId"
+              message: "Tenant workspace names are derived from the tenant identity"
+          properties:
+            spec:
+              type: object
+              x-kubernetes-validations:
+                - rule: "self.tenantId == oldSelf.tenantId && self.displayName == oldSelf.displayName && self.slug == oldSelf.slug && self.region == oldSelf.region && self.resourceProfile == oldSelf.resourceProfile && self.retentionDays == oldSelf.retentionDays && self.owner == oldSelf.owner && self.database == oldSelf.database && self.search == oldSelf.search && self.storage == oldSelf.storage && self.secrets == oldSelf.secrets && self.zammad == oldSelf.zammad && self.oidc == oldSelf.oidc && self.defaults == oldSelf.defaults"
+                  message: "Tenant workspace identity and configuration are immutable"
+                - rule: "self.request.fencingToken >= oldSelf.request.fencingToken"
+                  message: "A tenant workspace fencing token cannot move backwards"
+                - rule: "self.request.fencingToken > oldSelf.request.fencingToken || self.request == oldSelf.request"
+                  message: "A tenant workspace fence is bound to one request"
+                - rule: "self.database.databaseName == 'zammad_' + self.tenantId.replace('-', '') && self.database.roleName == 'zammad_' + self.tenantId.replace('-', '') && self.search.__namespace__ == 'wasalx_' + self.tenantId.replace('-', '') && self.storage.prefix == 'tenants/' + self.tenantId + '/' && self.database.secretReference == 'secret://tenants/' + self.tenantId + '/zammad/database' && self.search.secretReference == 'secret://tenants/' + self.tenantId + '/zammad/search' && self.storage.secretReference == 'secret://tenants/' + self.tenantId + '/zammad/storage' && self.secrets.serviceSecretReference == 'secret://tenants/' + self.tenantId + '/zammad/service' && self.secrets.privacySecretReference == 'secret://tenants/' + self.tenantId + '/zammad/privacy' && self.oidc.clientId == 'wasalx-' + self.tenantId.replace('-', '') && self.oidc.secretReference == 'secret://tenants/' + self.tenantId + '/zammad/oidc' && self.defaults.retentionDays == self.retentionDays"
+                  message: "Tenant workspace names and references must be derived from its tenant identity"
+                - rule: "self.request.completedSteps == [] || self.request.completedSteps == ['identity'] || self.request.completedSteps == ['identity','database'] || self.request.completedSteps == ['identity','database','search'] || self.request.completedSteps == ['identity','database','search','storage'] || self.request.completedSteps == ['identity','database','search','storage','secrets'] || self.request.completedSteps == ['identity','database','search','storage','secrets','zammad'] || self.request.completedSteps == ['identity','database','search','storage','secrets','zammad','package'] || self.request.completedSteps == ['identity','database','search','storage','secrets','zammad','package','oidc'] || self.request.completedSteps == ['identity','database','search','storage','secrets','zammad','package','oidc','defaults'] || self.request.completedSteps == ['identity','database','search','storage','secrets','zammad','package','oidc','defaults','health']"
+                  message: "Completed tenant workspace steps must be the canonical prefix"
+                - rule: "(self.request.action == 'PROVISION' && self.desiredState == 'Active' && !has(self.request.resumePhase) && ((self.request.completedSteps == [] && self.request.desiredStep == 'identity') || (self.request.completedSteps == ['identity'] && self.request.desiredStep == 'database') || (self.request.completedSteps == ['identity','database'] && self.request.desiredStep == 'search') || (self.request.completedSteps == ['identity','database','search'] && self.request.desiredStep == 'storage') || (self.request.completedSteps == ['identity','database','search','storage'] && self.request.desiredStep == 'secrets') || (self.request.completedSteps == ['identity','database','search','storage','secrets'] && self.request.desiredStep == 'zammad') || (self.request.completedSteps == ['identity','database','search','storage','secrets','zammad'] && self.request.desiredStep == 'package') || (self.request.completedSteps == ['identity','database','search','storage','secrets','zammad','package'] && self.request.desiredStep == 'oidc') || (self.request.completedSteps == ['identity','database','search','storage','secrets','zammad','package','oidc'] && self.request.desiredStep == 'defaults') || (self.request.completedSteps == ['identity','database','search','storage','secrets','zammad','package','oidc','defaults'] && self.request.desiredStep == 'health')) && self.request.idempotencyKey == 'provision:' + self.tenantId + ':' + self.request.operationId + ':' + self.request.desiredStep) || (self.request.action == 'SUSPEND' && self.desiredState == 'Suspended' && !has(self.request.resumePhase) && self.request.desiredStep == 'suspend' && self.request.completedSteps == ['identity','database','search','storage','secrets','zammad','package','oidc','defaults','health'] && self.request.idempotencyKey == 'suspend:' + self.tenantId + ':' + self.request.operationId) || (self.request.action == 'RESUME' && self.desiredState == 'Active' && has(self.request.resumePhase) && self.request.resumePhase in ['PREPARE','PUBLISH'] && self.request.desiredStep == (self.request.resumePhase == 'PREPARE' ? 'resume_prepare' : 'resume_publish') && self.request.completedSteps == ['identity','database','search','storage','secrets','zammad','package','oidc','defaults','health'] && self.request.idempotencyKey == 'resume:' + self.tenantId + ':' + self.request.operationId + ':' + self.request.resumePhase.lowerAscii())"
+                  message: "Tenant workspace action, state, step, phase, and idempotency context must match"
+              required: [tenantId, displayName, slug, region, resourceProfile, retentionDays, owner, request, database, search, storage, secrets, zammad, oidc, defaults, desiredState]
+              properties:
+                tenantId: { type: string, format: uuid, maxLength: 36, pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$" }
+                displayName: { type: string, minLength: 2, maxLength: 120 }
+                slug: { type: string, minLength: 1, maxLength: 63, pattern: "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$" }
+                region: { type: string, minLength: 1, maxLength: 63, pattern: "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$" }
+                resourceProfile: { type: string, enum: [small, medium, large] }
+                retentionDays: { type: integer, minimum: 1, maximum: 3650 }
+                owner:
+                  type: object
+                  required: [oidcSubject, email, displayName]
+                  properties:
+                    oidcSubject: { type: string, minLength: 1, maxLength: 255 }
+                    email: { type: string, format: email, maxLength: 320 }
+                    displayName: { type: string, minLength: 1, maxLength: 120 }
+                request:
+                  type: object
+                  required: [operationId, action, desiredStep, fencingToken, idempotencyKey, completedSteps]
+                  properties:
+                    operationId: { type: string, format: uuid, pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$" }
+                    action: { type: string, enum: [PROVISION, SUSPEND, RESUME] }
+                    desiredStep: { type: string, enum: [identity, database, search, storage, secrets, zammad, package, oidc, defaults, health, suspend, resume_prepare, resume_publish] }
+                    resumePhase: { type: string, enum: [PREPARE, PUBLISH] }
+                    fencingToken: { type: integer, format: int64, minimum: 1, maximum: 9007199254740991 }
+                    idempotencyKey: { type: string, minLength: 1, maxLength: 255, pattern: "^[^[:cntrl:]]+$" }
+                    completedSteps:
+                      type: array
+                      maxItems: 10
+                      items: { type: string, enum: [identity, database, search, storage, secrets, zammad, package, oidc, defaults, health] }
+                database:
+                  type: object
+                  required: [isolation, databaseName, roleName, secretReference]
+                  properties:
+                    isolation: { type: string, enum: [DedicatedDatabaseAndRole] }
+                    databaseName: { type: string, pattern: "^zammad_[0-9a-f]{32}$" }
+                    roleName: { type: string, pattern: "^zammad_[0-9a-f]{32}$" }
+                    secretReference: { type: string, pattern: "^secret://tenants/[0-9a-f-]{36}/zammad/database$" }
+                search:
+                  type: object
+                  required: [isolation, namespace, secretReference]
+                  properties:
+                    isolation: { type: string, enum: [DedicatedNamespaceAndCredential] }
+                    namespace: { type: string, pattern: "^wasalx_[0-9a-f]{32}$" }
+                    secretReference: { type: string, pattern: "^secret://tenants/[0-9a-f-]{36}/zammad/search$" }
+                storage:
+                  type: object
+                  required: [isolation, prefix, secretReference]
+                  properties:
+                    isolation: { type: string, enum: [DedicatedPrefixAndCredential] }
+                    prefix: { type: string, pattern: "^tenants/[0-9a-f-]{36}/$" }
+                    secretReference: { type: string, pattern: "^secret://tenants/[0-9a-f-]{36}/zammad/storage$" }
+                secrets:
+                  type: object
+                  required: [serviceSecretReference, privacySecretReference]
+                  properties:
+                    serviceSecretReference: { type: string, pattern: "^secret://tenants/[0-9a-f-]{36}/zammad/service$" }
+                    privacySecretReference: { type: string, pattern: "^secret://tenants/[0-9a-f-]{36}/zammad/privacy$" }
+                zammad:
+                  type: object
+                  x-kubernetes-validations:
+                    - rule: "self == oldSelf"
+                      message: "The pinned Zammad runtime release is immutable after creation"
+                  required: [instanceId, version, image, configuratorImage, nginxImage, redisImage, memcachedImage, hostname, packageVersion, packageSha256]
+                  properties:
+                    instanceId: { type: string, format: uuid, maxLength: 36, pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$" }
+                    version: { type: string, maxLength: 64, pattern: "^[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?$" }
+                    image: { type: string, maxLength: 2048, pattern: "^[A-Za-z0-9._/-]+@sha256:[0-9a-f]{64}$" }
+                    configuratorImage: { type: string, maxLength: 2048, pattern: "^[A-Za-z0-9._/-]+@sha256:[0-9a-f]{64}$" }
+                    nginxImage: { type: string, maxLength: 2048, pattern: "^[A-Za-z0-9._/-]+@sha256:[0-9a-f]{64}$" }
+                    redisImage: { type: string, maxLength: 2048, pattern: "^[A-Za-z0-9._/-]+@sha256:[0-9a-f]{64}$" }
+                    memcachedImage: { type: string, maxLength: 2048, pattern: "^[A-Za-z0-9._/-]+@sha256:[0-9a-f]{64}$" }
+                    hostname: { type: string, minLength: 3, maxLength: 253 }
+                    packageVersion: { type: string, maxLength: 64, pattern: "^[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?$" }
+                    packageSha256: { type: string, minLength: 64, maxLength: 64, pattern: "^[0-9a-f]{64}$" }
+                oidc:
+                  type: object
+                  required: [issuer, clientId, secretReference, disablePasswordLogin]
+                  properties:
+                    issuer: { type: string, format: uri, pattern: "^https://" }
+                    clientId: { type: string, pattern: "^wasalx-[0-9a-f]{32}$" }
+                    secretReference: { type: string, pattern: "^secret://tenants/[0-9a-f-]{36}/zammad/oidc$" }
+                    disablePasswordLogin: { type: boolean, enum: [true] }
+                defaults:
+                  type: object
+                  required: [initialGroup, backupPolicy, retentionDays]
+                  properties:
+                    initialGroup: { type: string, enum: [Operations] }
+                    backupPolicy: { type: string, enum: [daily-encrypted] }
+                    retentionDays: { type: integer, minimum: 1, maximum: 3650 }
+                desiredState: { type: string, enum: [Active, Suspended] }
+            status:
+              type: object
+              properties:
+                observedGeneration: { type: integer, format: int64, minimum: 1, maximum: 9007199254740991 }
+                observedFencingToken: { type: integer, format: int64, minimum: 1, maximum: 9007199254740991 }
+                lastAppliedIdempotencyKey: { type: string, minLength: 1, maxLength: 255 }
+                reconciler: { type: string, minLength: 1, maxLength: 128 }
+                conditions:
+                  type: array
+                  maxItems: 32
+                  x-kubernetes-list-type: map
+                  x-kubernetes-list-map-keys: [type]
+                  items:
+                    type: object
+                    required: [type, status]
+                    properties:
+                      type: { type: string, minLength: 1, maxLength: 64 }
+                      status: { type: string, enum: ["True", "False", Unknown] }
+                      reason: { type: string, maxLength: 128 }
+                      message: { type: string, maxLength: 500 }
+                      observedGeneration: { type: integer, format: int64, minimum: 1, maximum: 9007199254740991 }
+                      lastTransitionTime: { type: string, format: date-time }
+                outputs:
+                  type: object
+                  properties:
+                    identity:
+                      type: object
+                      required: [identity_id, oidc_client_id, oidc_secret_reference]
+                      properties:
+                        identity_id: { type: string, minLength: 1, maxLength: 2048 }
+                        oidc_client_id: { type: string, pattern: "^wasalx-[0-9a-f]{32}$" }
+                        oidc_secret_reference: { type: string, pattern: "^secret://tenants/[0-9a-f-]{36}/zammad/oidc$" }
+                    database:
+                      type: object
+                      required: [database_reference, database_role, database_secret_reference]
+                      properties:
+                        database_reference: { type: string, pattern: "^postgres(?:ql)?://[^@?#]+/zammad_[0-9a-f]{32}$" }
+                        database_role: { type: string, pattern: "^zammad_[0-9a-f]{32}$" }
+                        database_secret_reference: { type: string, pattern: "^secret://tenants/[0-9a-f-]{36}/zammad/database$" }
+                    search:
+                      type: object
+                      required: [search_namespace, search_secret_reference]
+                      properties:
+                        search_namespace: { type: string, pattern: "^wasalx_[0-9a-f]{32}$" }
+                        search_secret_reference: { type: string, pattern: "^secret://tenants/[0-9a-f-]{36}/zammad/search$" }
+                    storage:
+                      type: object
+                      required: [storage_prefix, storage_secret_reference]
+                      properties:
+                        storage_prefix: { type: string, pattern: "^tenants/[0-9a-f-]{36}/$" }
+                        storage_secret_reference: { type: string, pattern: "^secret://tenants/[0-9a-f-]{36}/zammad/storage$" }
+                    secrets:
+                      type: object
+                      required: [service_secret_reference, privacy_secret_reference]
+                      properties:
+                        service_secret_reference: { type: string, pattern: "^secret://tenants/[0-9a-f-]{36}/zammad/service$" }
+                        privacy_secret_reference: { type: string, pattern: "^secret://tenants/[0-9a-f-]{36}/zammad/privacy$" }
+                    zammad:
+                      type: object
+                      required: [zammad_base_url, deployment_name, runtime_image, package_version, package_sha256]
+                      properties:
+                        zammad_base_url: { type: string, format: uri, pattern: "^https://" }
+                        deployment_name: { type: string, pattern: "^zammad-[0-9a-f]{32}$" }
+                        runtime_image: { type: string, pattern: "^[A-Za-z0-9._/-]+@sha256:[0-9a-f]{64}$" }
+                        package_version: { type: string, pattern: "^[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?$" }
+                        package_sha256: { type: string, pattern: "^[0-9a-f]{64}$" }
+                    package:
+                      type: object
+                      required: [package_version, package_sha256]
+                      properties:
+                        package_version: { type: string, pattern: "^[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?$" }
+                        package_sha256: { type: string, pattern: "^[0-9a-f]{64}$" }
+                    oidc:
+                      type: object
+                      required: [oidc_issuer, oidc_client_id, password_login_disabled]
+                      properties:
+                        oidc_issuer: { type: string, format: uri, pattern: "^https://" }
+                        oidc_client_id: { type: string, pattern: "^wasalx-[0-9a-f]{32}$" }
+                        password_login_disabled: { type: boolean, enum: [true] }
+                    defaults:
+                      type: object
+                      required: [zammad_group_id, retention_days, backup_policy]
+                      properties:
+                        zammad_group_id: { type: string, minLength: 1, maxLength: 2048 }
+                        retention_days: { type: integer, minimum: 1, maximum: 3650 }
+                        backup_policy: { type: string, enum: [daily-encrypted] }
+                    health:
+                      type: object
+                      required: [healthy, isolation_verified, zammad_base_url, checked_at]
+                      properties:
+                        healthy: { type: boolean, enum: [true] }
+                        isolation_verified: { type: boolean, enum: [true] }
+                        zammad_base_url: { type: string, format: uri, pattern: "^https://" }
+                        checked_at: { type: string, format: date-time }
+                    suspend:
+                      type: object
+                      required: [suspended, credentials_disabled, workloads_scaled_to_zero, ingress_disabled, suspended_at]
+                      properties:
+                        suspended: { type: boolean, enum: [true] }
+                        credentials_disabled: { type: boolean, enum: [true] }
+                        workloads_scaled_to_zero: { type: boolean, enum: [true] }
+                        ingress_disabled: { type: boolean, enum: [true] }
+                        suspended_at: { type: string, format: date-time }
+                    resume:
+                      type: object
+                      required: [resumed, ingress_enabled, healthy, isolation_verified, zammad_base_url, resumed_at, checked_at]
+                      properties:
+                        resumed: { type: boolean, enum: [true] }
+                        ingress_enabled: { type: boolean, enum: [true] }
+                        healthy: { type: boolean, enum: [true] }
+                        isolation_verified: { type: boolean, enum: [true] }
+                        zammad_base_url: { type: string, format: uri, pattern: "^https://" }
+                        resumed_at: { type: string, format: date-time }
+                        checked_at: { type: string, format: date-time }
+                    resume_prepare:
+                      type: object
+                      required: [prepared, credentials_enabled, workloads_ready, healthy, isolation_verified, zammad_base_url, provider_resumed_at, checked_at]
+                      properties:
+                        prepared: { type: boolean, enum: [true] }
+                        credentials_enabled: { type: boolean, enum: [true] }
+                        workloads_ready: { type: boolean, enum: [true] }
+                        healthy: { type: boolean, enum: [true] }
+                        isolation_verified: { type: boolean, enum: [true] }
+                        zammad_base_url: { type: string, format: uri, pattern: "^https://" }
+                        provider_resumed_at: { type: string, format: date-time }
+                        checked_at: { type: string, format: date-time }

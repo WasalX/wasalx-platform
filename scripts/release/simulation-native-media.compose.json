@@ -1,0 +1,18 @@
+{
+  "services": {
+    "waha-gows": {
+      "environment": {
+        "WAHA_SIM_MEDIA_BASE_URL": "http://waha-gows:3000",
+        "WAHA_SIM_MEDIA_FILES": "[{\"id\":\"native-grant-png\",\"mimetype\":\"image/png\",\"filename\":\"native-grant.png\",\"path\":\"/fixtures/native-grant.png\"}]"
+      },
+      "volumes": [
+        {
+          "type": "bind",
+          "source": "${WASALX_SIM_MEDIA_FIXTURE_PATH:?Set canonical synthetic PNG path}",
+          "target": "/fixtures/native-grant.png",
+          "read_only": true
+        }
+      ]
+    }
+  }
+}

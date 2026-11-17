@@ -1,0 +1,5 @@
+{
+  "lockPath": "/tmp/wasalx-compose-stage.lock",
+  "heldInstallTargets": ["control-api", "connector-worker", "portal", "invitation-mailer", "identity-policy-activator", "secret-sidecar"],
+  "coldResidents": ["postgres", "redis", "keycloak-postgresql", "zammad-postgresql", "zammad-redis", "zammad-memcached", "zammad-elasticsearch", "secret-sidecar"]
+}

@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "rewriteRelativeImportExtensions": true,
+    "outDir": "dist",
+    "rootDir": "../..",
+    "strict": true,
+    "noUncheckedIndexedAccess": false,
+    "esModuleInterop": true,
+    "skipLibCheck": true
+  },
+  "include": ["src/**/*.ts", "../../lib/domain.ts", "../../packages/connectors/src/**/*.ts", "../../packages/core/src/delivery.ts", "../../packages/core/src/media.ts", "../../packages/core/src/provider-media-capabilities.ts", "../../packages/core/src/redis-security.ts", "../../packages/core/src/secret-reference.ts", "../../packages/core/src/service-auth.ts", "../../packages/zammad/src/**/*.ts"]
+}

@@ -1,0 +1,17 @@
+import{observePinnedContexts}from'./simulation-pinned-contexts.mjs';
+import assert from 'node:assert/strict';import {lstat} from 'node:fs/promises';
+import {assertMetaFixtureProvenance,assertMetaRuntimeBinding} from './simulation-meta-producer.mjs';import {privateConfigPath} from './simulation-meta-runtime.mjs';
+import {ensurePortalOperator,bindPortalOperatorResult} from './simulation-portal-operator.mjs';import {createSyntheticRequest} from './seed-simulation-group.mjs';import {runPinnedMedia} from './simulation-pinned-media.mjs';
+export const pinnedMediaIds=['direct-automation/version-pinned-outbound-media-and-zammad-history::pinned-version-media-and-history-render::02','direct-automation/version-pinned-outbound-media-and-zammad-history::pinned-version-media-and-history-render::03'];
+export function assertPinnedInputs(config,recipients){assert(Array.isArray(config.recipients)&&config.recipients.length===2&&new Set(config.recipients).size===2);assert(config.recipients.every(x=>/^\d{7,15}$/.test(x)&&recipients.includes(x)));assert(Array.isArray(config.assets)&&config.assets.length===2);assert(config.assets.every(x=>typeof x.path==='string'&&/^[a-f0-9]{64}$/.test(x.sha256)));assert.notEqual(config.assets[0].sha256,config.assets[1].sha256);}
+export async function pinnedMediaStage(s,{namespace,inputs,config}){
+ const startedAt=new Date().toISOString();assert(/^[a-zA-Z0-9_-]{1,32}$/.test(namespace));const f=inputs.metaDeliveries,h=s.metaCallbacks;assertMetaRuntimeBinding(f,h,s);assertMetaFixtureProvenance(f,namespace);await s.verifyOwner(s.ownerPage);
+ const graph=s.model.services[h.cfg.graphService];assertPinnedInputs(config,JSON.parse(graph.environment.META_SIM_RECIPIENTS));
+ const assets=await Promise.all(config.assets.map(async a=>{const path=privateConfigPath(s.privateDir,a.path);const stat=await lstat(path);assert(stat.isFile()&&!stat.isSymbolicLink());return{path,sha256:a.sha256};}));
+ const operator=await ensurePortalOperator(s);await operator.verify();const request=createSyntheticRequest({page:s.ownerPage,origin:s.portalOrigin,runId:namespace+'-pinned',checkpoint:s.checkpoint});
+ const result=await runPinnedMedia({ownerPage:s.ownerPage,operator,session:s,portalOrigin:s.portalOrigin,privateDir:s.privateDir,output:s.output,runId:namespace+'-pinned',cfg:h.cfg,graph,request,scoped:s.scoped,checkpoint:s.checkpoint,providerRead:h.providerRead,postRaw:h.postInbound,poll:h.poll,connectionId:f.connectionId,recipients:config.recipients,assetFiles:assets,persistInbound:h.persistInbound,drain:h.drain});await operator.verify();
+ const observations=await observePinnedContexts(s,operator,result);const proofs=observations.map(o=>({testId:portalPinnedMediaIds[o.kind==='owner'?0:1],result:o.result,at:new Date().toISOString(),startedAt,finishedAt:new Date().toISOString(),contextId:`${o.context.role}-en-${o.context.viewport}`,context:o.context,proof:{...result,observation:o,actor:o.portalBinding}}));for(const proof of proofs)if(proof.proof.observation.portalBinding)Object.assign(proof,bindPortalOperatorResult(proof,proof.proof.observation.portalBinding));for(const proof of proofs)await s.checkpoint({phase:'pinned-media-result',...proof});return{evidenceMode:'simulated',namespace,tenantId:s.tenantId,startedAt,finishedAt:new Date().toISOString(),proofs};
+}
+
+export const portalPinnedMediaIds=pinnedMediaIds.map(id=>id+"::portal");
+export const portalPinnedMediaStage=pinnedMediaStage;

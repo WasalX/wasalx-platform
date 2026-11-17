@@ -1,0 +1,169 @@
+@font-face {
+  font-family: "Noto Sans Arabic";
+  src: url("/fonts/NotoSansArabic-Variable.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+:root {
+  /* Typography */
+  --wx-font-sans: var(--font-geist-sans, "Geist Sans"), ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --wx-font-mono: var(--font-geist-mono, "Geist Mono"), ui-monospace, "SFMono-Regular", Consolas, monospace;
+  --wx-font-size-1: 0.75rem;
+  --wx-font-size-2: 0.8125rem;
+  --wx-font-size-3: 0.875rem;
+  --wx-font-size-4: 1rem;
+  --wx-font-size-5: 1.25rem;
+  --wx-font-size-6: 1.5rem;
+  --wx-font-size-7: 2rem;
+  --wx-line-height-compact: 1.25;
+  --wx-line-height-default: 1.43;
+  --wx-line-height-relaxed: 1.6;
+  --wx-weight-regular: 400;
+  --wx-weight-medium: 550;
+  --wx-weight-semibold: 650;
+
+  /* Spacing: the only spacing values allowed in new component code. */
+  --wx-space-1: 0.25rem;
+  --wx-space-2: 0.5rem;
+  --wx-space-3: 0.75rem;
+  --wx-space-4: 1rem;
+  --wx-space-6: 1.5rem;
+  --wx-space-8: 2rem;
+  --wx-space-12: 3rem;
+  --wx-space-16: 4rem;
+
+  /* Shape and layout */
+  --wx-radius-control: 0.375rem;
+  --wx-radius-panel: 0.5rem;
+  --wx-radius-dialog: 0.75rem;
+  --wx-control-height: 2.25rem;
+  --wx-icon-size: 1.5rem;
+  --wx-sidebar-width: 15rem;
+  --wx-topbar-height: 3.5rem;
+  --wx-content-max: 90rem;
+
+  /* Motion */
+  --wx-duration-fast: 120ms;
+  --wx-duration-default: 160ms;
+  --wx-duration-slow: 200ms;
+  --wx-ease-enter: cubic-bezier(0.16, 1, 0.3, 1);
+  --wx-ease-exit: cubic-bezier(0.7, 0, 0.84, 0);
+
+  /* Stable compatibility aliases used by the current portal. */
+  --font-sans: var(--wx-font-sans);
+  --font-mono: var(--wx-font-mono);
+}
+
+[lang="ar"] {
+  --wx-font-sans: "Noto Sans Arabic", sans-serif;
+  --font-sans: var(--wx-font-sans);
+  font-family: var(--wx-font-sans);
+}
+
+[lang="en"] {
+  --wx-font-sans: var(--font-geist-sans, "Geist Sans"), ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-sans: var(--wx-font-sans);
+  font-family: var(--wx-font-sans);
+}
+
+.theme-dark {
+  --wx-color-page: #09090b;
+  --wx-color-sidebar: #0d0d0f;
+  --wx-color-surface: #111113;
+  --wx-color-surface-raised: #161619;
+  --wx-color-surface-selected: #1d1d21;
+  --wx-color-border: #29292e;
+  --wx-color-border-strong: #3a3a42;
+  --wx-color-text: #f3f3f5;
+  --wx-color-text-muted: #92929d;
+  --wx-color-text-subtle: #85858f;
+  --wx-color-accent: #8c7cf4;
+  --wx-color-accent-strong: #6d5ce7;
+  --wx-color-accent-solid: #6d5ce7;
+  --wx-color-accent-solid-hover: #6557d8;
+  --wx-color-success: #45c58a;
+  --wx-color-warning: #f3ad4e;
+  --wx-color-danger: #f06b6b;
+  --wx-color-on-solid: #ffffff;
+  --wx-color-qr-surface: #ffffff;
+  --wx-color-provider-waha: #22a06b;
+  --wx-color-provider-meta: #1769e0;
+  --wx-color-brand-start: #a595ff;
+  --wx-color-brand-end: #6650db;
+  --wx-color-accent-wash: rgb(124 105 239 / 12%);
+  --wx-color-overlay: rgb(0 0 0 / 72%);
+  --wx-color-shadow: rgb(0 0 0 / 45%);
+  --wx-color-control-shadow: rgb(0 0 0 / 8%);
+  --wx-color-inset: rgb(255 255 255 / 25%);
+  --wx-color-inset-subtle: rgb(255 255 255 / 2.5%);
+  --wx-color-avatar-border: rgb(128 110 240 / 30%);
+  --wx-shadow-dialog: 0 1.5rem 5rem var(--wx-color-shadow);
+  color-scheme: dark;
+}
+
+.theme-light {
+  --wx-color-page: #f7f7f8;
+  --wx-color-sidebar: #ffffff;
+  --wx-color-surface: #ffffff;
+  --wx-color-surface-raised: #f7f7f8;
+  --wx-color-surface-selected: #efeff1;
+  --wx-color-border: #e4e4e7;
+  --wx-color-border-strong: #cfcfd5;
+  --wx-color-text: #18181b;
+  --wx-color-text-muted: #696970;
+  --wx-color-text-subtle: #6f6f76;
+  --wx-color-accent: #6557d8;
+  --wx-color-accent-strong: #5141c8;
+  --wx-color-accent-solid: #6557d8;
+  --wx-color-accent-solid-hover: #5141c8;
+  --wx-color-success: #167d53;
+  --wx-color-warning: #a45e09;
+  --wx-color-danger: #c64343;
+  --wx-color-on-solid: #ffffff;
+  --wx-color-qr-surface: #ffffff;
+  --wx-color-provider-waha: #16855a;
+  --wx-color-provider-meta: #1769e0;
+  --wx-color-brand-start: #7968e8;
+  --wx-color-brand-end: #5141c8;
+  --wx-color-accent-wash: rgb(101 87 216 / 9%);
+  --wx-color-overlay: rgb(23 23 28 / 52%);
+  --wx-color-shadow: rgb(23 23 28 / 12%);
+  --wx-color-control-shadow: rgb(23 23 28 / 8%);
+  --wx-color-inset: rgb(255 255 255 / 30%);
+  --wx-color-inset-subtle: rgb(23 23 28 / 3%);
+  --wx-color-avatar-border: rgb(101 87 216 / 30%);
+  --wx-shadow-dialog: 0 1.5rem 5rem var(--wx-color-shadow);
+  color-scheme: light;
+}
+
+.theme-dark,
+.theme-light {
+  --bg: var(--wx-color-page);
+  --sidebar: var(--wx-color-sidebar);
+  --surface: var(--wx-color-surface);
+  --surface-2: var(--wx-color-surface-raised);
+  --surface-3: var(--wx-color-surface-selected);
+  --border: var(--wx-color-border);
+  --border-strong: var(--wx-color-border-strong);
+  --text: var(--wx-color-text);
+  --muted: var(--wx-color-text-muted);
+  --subtle: var(--wx-color-text-subtle);
+  --accent: var(--wx-color-accent);
+  --accent-strong: var(--wx-color-accent-strong);
+  --accent-wash: var(--wx-color-accent-wash);
+  --success: var(--wx-color-success);
+  --warning: var(--wx-color-warning);
+  --danger: var(--wx-color-danger);
+  --overlay: var(--wx-color-overlay);
+  --shadow: var(--wx-shadow-dialog);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --wx-duration-fast: 0ms;
+    --wx-duration-default: 0ms;
+    --wx-duration-slow: 0ms;
+  }
+}

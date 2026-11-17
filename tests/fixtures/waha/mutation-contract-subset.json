@@ -1,0 +1,504 @@
+{
+  "source": "Selected WAHA 2026.7.2 OpenAPI definitions; upstream: https://github.com/devlikeapro/waha/tree/2026.7.2; SPDX-License-Identifier: Apache-2.0; licence: LICENSES/WAHA-2026.7.2-Apache-2.0.txt; WasalX adaptations: selected definitions and synthetic examples",
+  "sourceSha256": "86217e28c927da02d2acdd1dfd3ecac0818b9154f748485f6073811def0a2df9",
+  "schemas": {
+    "WAMessageEditedBody": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Message ID",
+          "example": "false_11111111111@c.us_AAAAAAAAAAAAAAAAAAAA"
+        },
+        "timestamp": {
+          "type": "number",
+          "description": "Unix timestamp for when the message was created",
+          "example": 1666943582
+        },
+        "from": {
+          "type": "string",
+          "description": "ID for the Chat that this message was sent to, except if the message was sent by the current user ",
+          "example": "12025550155@c.us"
+        },
+        "fromMe": {
+          "type": "boolean",
+          "description": "Indicates if the message was sent by the current user"
+        },
+        "source": {
+          "enum": [
+            "api",
+            "app"
+          ],
+          "type": "string",
+          "description": "The device that sent the message - either API or APP. Available in events (webhooks/websockets) only and only \"fromMe: true\" messages.",
+          "example": "api"
+        },
+        "to": {
+          "type": "string",
+          "description": "\n* ID for who this message is for.\n* If the message is sent by the current user, it will be the Chat to which the message is being sent.\n* If the message is sent by another user, it will be the ID for the current user.\n",
+          "example": "12025550155@c.us"
+        },
+        "participant": {
+          "type": "string",
+          "description": "For groups - participant who sent the message"
+        },
+        "body": {
+          "type": "string",
+          "description": "Message content"
+        },
+        "hasMedia": {
+          "type": "boolean",
+          "description": "Indicates if the message has media available for download"
+        },
+        "media": {
+          "description": "Media object for the message if any and downloaded",
+          "allOf": [
+            {
+              "$ref": "#/components/schemas/WAMedia"
+            }
+          ]
+        },
+        "mediaUrl": {
+          "type": "string",
+          "description": "Use `media.url` instead! The URL for the media in the message if any",
+          "deprecated": true,
+          "example": "http://localhost:3000/api/files/false_11111111111@c.us_AAAAAAAAAAAAAAAAAAAA.oga"
+        },
+        "ack": {
+          "enum": [
+            -1,
+            0,
+            1,
+            2,
+            3,
+            4
+          ],
+          "type": "number",
+          "description": "ACK status for the message"
+        },
+        "ackName": {
+          "type": "string",
+          "description": "ACK status name for the message"
+        },
+        "author": {
+          "type": "string",
+          "description": "If the message was sent to a group, this field will contain the user that sent the message."
+        },
+        "location": {
+          "description": "Location information contained in the message, if the message is type \"location\"",
+          "allOf": [
+            {
+              "$ref": "#/components/schemas/WALocation"
+            }
+          ]
+        },
+        "vCards": {
+          "description": "List of vCards contained in the message.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "_data": {
+          "type": "object",
+          "description": "Message in a raw format that we get from WhatsApp. May be changed anytime, use it with caution! It depends a lot on the underlying backend."
+        },
+        "editedMessageId": {
+          "type": "string",
+          "description": "ID of the original message that was edited",
+          "example": "A06CA7BB5DD8C8F705628CDB7E3A33C9"
+        },
+        "replyTo": {
+          "$ref": "#/components/schemas/ReplyToMessage"
+        }
+      },
+      "required": [
+        "id",
+        "timestamp",
+        "from",
+        "fromMe",
+        "source",
+        "to",
+        "participant",
+        "body",
+        "hasMedia",
+        "mediaUrl",
+        "ack",
+        "ackName"
+      ]
+    },
+    "WAMessageRevokedBody": {
+      "type": "object",
+      "properties": {
+        "revokedMessageId": {
+          "type": "string",
+          "description": "ID of the message that was revoked",
+          "example": "A06CA7BB5DD8C8F705628CDB7E3A33C9"
+        },
+        "after": {
+          "$ref": "#/components/schemas/WAMessage"
+        },
+        "before": {
+          "$ref": "#/components/schemas/WAMessage"
+        },
+        "_data": {
+          "type": "object"
+        }
+      }
+    },
+    "WAMessageReaction": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Message ID",
+          "example": "false_11111111111@c.us_AAAAAAAAAAAAAAAAAAAA"
+        },
+        "timestamp": {
+          "type": "number",
+          "description": "Unix timestamp for when the message was created",
+          "example": 1666943582
+        },
+        "from": {
+          "type": "string",
+          "description": "ID for the Chat that this message was sent to, except if the message was sent by the current user ",
+          "example": "12025550155@c.us"
+        },
+        "fromMe": {
+          "type": "boolean",
+          "description": "Indicates if the message was sent by the current user"
+        },
+        "source": {
+          "enum": [
+            "api",
+            "app"
+          ],
+          "type": "string",
+          "description": "The device that sent the message - either API or APP. Available in events (webhooks/websockets) only and only \"fromMe: true\" messages.",
+          "example": "api"
+        },
+        "to": {
+          "type": "string",
+          "description": "\n* ID for who this message is for.\n* If the message is sent by the current user, it will be the Chat to which the message is being sent.\n* If the message is sent by another user, it will be the ID for the current user.\n",
+          "example": "12025550155@c.us"
+        },
+        "participant": {
+          "type": "string",
+          "description": "For groups - participant who sent the message"
+        },
+        "reaction": {
+          "description": "Reaction to the message. Either the reaction (emoji) or empty string to remove the reaction",
+          "allOf": [
+            {
+              "$ref": "#/components/schemas/WAReaction"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "timestamp",
+        "from",
+        "fromMe",
+        "source",
+        "to",
+        "participant",
+        "reaction"
+      ]
+    },
+    "WAReaction": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string",
+          "description": "Reaction to the message. Either the reaction (emoji) or empty string to remove the reaction"
+        },
+        "messageId": {
+          "type": "string",
+          "description": "Message ID for the message to react to",
+          "example": "false_11111111111@c.us_AAAAAAAAAAAAAAAAAAAA"
+        }
+      },
+      "required": [
+        "text",
+        "messageId"
+      ]
+    },
+    "WAHAWebhookMessageEdited": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "example": "evt_01aaaaaaaaaaaaaaaaaaaaaaaa",
+          "description": "Unique identifier for the event - lower case ULID format. https://github.com/ulid/spec"
+        },
+        "timestamp": {
+          "type": "number",
+          "example": 1634567890123,
+          "description": "Unix timestamp (ms) for when the event was created."
+        },
+        "session": {
+          "type": "string",
+          "example": "default"
+        },
+        "metadata": {
+          "type": "object",
+          "example": {
+            "user.id": "123",
+            "user.email": "email@example.com"
+          },
+          "description": "Metadata for the session."
+        },
+        "engine": {
+          "enum": [
+            "WEBJS",
+            "WPP",
+            "NOWEB",
+            "GOWS"
+          ],
+          "type": "string",
+          "example": "WEBJS"
+        },
+        "event": {
+          "enum": [
+            "session.status",
+            "message",
+            "message.reaction",
+            "message.any",
+            "message.ack",
+            "message.ack.group",
+            "message.waiting",
+            "message.revoked",
+            "message.edited",
+            "state.change",
+            "group.join",
+            "group.leave",
+            "group.v2.join",
+            "group.v2.leave",
+            "group.v2.update",
+            "group.v2.participants",
+            "presence.update",
+            "poll.vote",
+            "poll.vote.failed",
+            "chat.archive",
+            "call.received",
+            "call.accepted",
+            "call.rejected",
+            "label.upsert",
+            "label.deleted",
+            "label.chat.added",
+            "label.chat.deleted",
+            "event.response",
+            "event.response.failed",
+            "engine.event"
+          ],
+          "type": "object",
+          "default": "message.edited",
+          "description": "The event is triggered when a user edits a previously sent message."
+        },
+        "payload": {
+          "$ref": "#/components/schemas/WAMessageEditedBody"
+        },
+        "me": {
+          "$ref": "#/components/schemas/MeInfo"
+        },
+        "environment": {
+          "$ref": "#/components/schemas/WAHAEnvironment"
+        }
+      },
+      "required": [
+        "id",
+        "timestamp",
+        "session",
+        "engine",
+        "event",
+        "payload",
+        "environment"
+      ]
+    },
+    "WAHAWebhookMessageRevoked": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "example": "evt_01aaaaaaaaaaaaaaaaaaaaaaaa",
+          "description": "Unique identifier for the event - lower case ULID format. https://github.com/ulid/spec"
+        },
+        "timestamp": {
+          "type": "number",
+          "example": 1634567890123,
+          "description": "Unix timestamp (ms) for when the event was created."
+        },
+        "session": {
+          "type": "string",
+          "example": "default"
+        },
+        "metadata": {
+          "type": "object",
+          "example": {
+            "user.id": "123",
+            "user.email": "email@example.com"
+          },
+          "description": "Metadata for the session."
+        },
+        "engine": {
+          "enum": [
+            "WEBJS",
+            "WPP",
+            "NOWEB",
+            "GOWS"
+          ],
+          "type": "string",
+          "example": "WEBJS"
+        },
+        "event": {
+          "enum": [
+            "session.status",
+            "message",
+            "message.reaction",
+            "message.any",
+            "message.ack",
+            "message.ack.group",
+            "message.waiting",
+            "message.revoked",
+            "message.edited",
+            "state.change",
+            "group.join",
+            "group.leave",
+            "group.v2.join",
+            "group.v2.leave",
+            "group.v2.update",
+            "group.v2.participants",
+            "presence.update",
+            "poll.vote",
+            "poll.vote.failed",
+            "chat.archive",
+            "call.received",
+            "call.accepted",
+            "call.rejected",
+            "label.upsert",
+            "label.deleted",
+            "label.chat.added",
+            "label.chat.deleted",
+            "event.response",
+            "event.response.failed",
+            "engine.event"
+          ],
+          "type": "object",
+          "default": "message.revoked",
+          "description": "The event is triggered when a user, whether it be you or any other participant, revokes a previously sent message."
+        },
+        "payload": {
+          "$ref": "#/components/schemas/WAMessageRevokedBody"
+        },
+        "me": {
+          "$ref": "#/components/schemas/MeInfo"
+        },
+        "environment": {
+          "$ref": "#/components/schemas/WAHAEnvironment"
+        }
+      },
+      "required": [
+        "id",
+        "timestamp",
+        "session",
+        "engine",
+        "event",
+        "payload",
+        "environment"
+      ]
+    },
+    "WAHAWebhookMessageReaction": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "example": "evt_01aaaaaaaaaaaaaaaaaaaaaaaa",
+          "description": "Unique identifier for the event - lower case ULID format. https://github.com/ulid/spec"
+        },
+        "timestamp": {
+          "type": "number",
+          "example": 1634567890123,
+          "description": "Unix timestamp (ms) for when the event was created."
+        },
+        "session": {
+          "type": "string",
+          "example": "default"
+        },
+        "metadata": {
+          "type": "object",
+          "example": {
+            "user.id": "123",
+            "user.email": "email@example.com"
+          },
+          "description": "Metadata for the session."
+        },
+        "engine": {
+          "enum": [
+            "WEBJS",
+            "WPP",
+            "NOWEB",
+            "GOWS"
+          ],
+          "type": "string",
+          "example": "WEBJS"
+        },
+        "event": {
+          "enum": [
+            "session.status",
+            "message",
+            "message.reaction",
+            "message.any",
+            "message.ack",
+            "message.ack.group",
+            "message.waiting",
+            "message.revoked",
+            "message.edited",
+            "state.change",
+            "group.join",
+            "group.leave",
+            "group.v2.join",
+            "group.v2.leave",
+            "group.v2.update",
+            "group.v2.participants",
+            "presence.update",
+            "poll.vote",
+            "poll.vote.failed",
+            "chat.archive",
+            "call.received",
+            "call.accepted",
+            "call.rejected",
+            "label.upsert",
+            "label.deleted",
+            "label.chat.added",
+            "label.chat.deleted",
+            "event.response",
+            "event.response.failed",
+            "engine.event"
+          ],
+          "type": "object",
+          "default": "message.reaction",
+          "description": "The event is triggered when a user reacts or removes a reaction."
+        },
+        "payload": {
+          "$ref": "#/components/schemas/WAMessageReaction"
+        },
+        "me": {
+          "$ref": "#/components/schemas/MeInfo"
+        },
+        "environment": {
+          "$ref": "#/components/schemas/WAHAEnvironment"
+        }
+      },
+      "required": [
+        "id",
+        "timestamp",
+        "session",
+        "engine",
+        "event",
+        "payload",
+        "environment"
+      ]
+    }
+  }
+}

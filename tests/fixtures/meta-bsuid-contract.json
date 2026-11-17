@@ -1,0 +1,46 @@
+{
+  "provenance": {
+    "sourceUrl": "https://developers.facebook.com/documentation/business-messaging/whatsapp/business-scoped-user-ids/",
+    "pageUpdated": "2026-09-15",
+    "retainedOn": "2026-10-07",
+    "retainedResearchSha256": "333819493f0897ece5d65484a3d88d191860a9ff0817abfe3d06d7db4309aaad",
+    "fixtureMode": "synthetic identifiers, documented wire shape; no actual provider evidence",
+    "graphVersion": "v24.0, current repository fixture version, not a BSUID-specific version claim"
+  },
+  "phone": "12025550132",
+  "bsuid": "US.13491208655302741918",
+  "nextBsuid": "US.13491208655302741919",
+  "parentBsuid": "US.ENT.11815798345668008403",
+  "bsuidOnly": {
+    "object": "whatsapp_business_account",
+    "entry": [{"id":"987", "changes":[{"field":"messages", "value":{
+      "messaging_product":"whatsapp", "metadata":{"phone_number_id":"123"},
+      "contacts":[{"profile":{"name":"عميل تجريبي", "username":"not-an-identity-grant"}, "user_id":"US.13491208655302741918"}],
+      "messages":[{"id":"wamid.bsuid-text", "from_user_id":"US.13491208655302741918", "timestamp":"1700000000", "type":"text", "text":{"body":"مرحبا"}}]
+    }}]}]
+  },
+  "joint": {
+    "object": "whatsapp_business_account",
+    "entry": [{"id":"987", "changes":[{"field":"messages", "value":{
+      "messaging_product":"whatsapp", "metadata":{"phone_number_id":"123"},
+      "contacts":[{"profile":{"name":"Joint fixture"}, "wa_id":"12025550132", "user_id":"US.13491208655302741918"}],
+      "messages":[{"id":"wamid.joint", "from":"12025550132", "from_user_id":"US.13491208655302741918", "timestamp":"1700000000", "type":"text", "text":{"body":"Both identities"}}]
+    }}]}]
+  },
+  "change": {
+    "object":"whatsapp_business_account",
+    "entry":[{"id":"987", "changes":[{"field":"messages", "value":{
+      "messaging_product":"whatsapp", "metadata":{"phone_number_id":"123"},
+      "messages":[{"id":"wamid.changed", "timestamp":"1700000001", "type":"system", "system":{
+        "type":"user_changed_user_id", "user_id":"US.13491208655302741919", "previous_user_id":"US.13491208655302741918",
+        "body":"User changed from private old identity to private new identity"
+      }}]
+    }}]}]
+  },
+  "status": {
+    "object":"whatsapp_business_account",
+    "entry":[{"id":"987", "changes":[{"field":"messages", "value":{
+      "statuses":[{"id":"wamid.sent", "status":"delivered", "timestamp":"1700000002", "recipient_user_id":"US.13491208655302741918"}]
+    }}]}]
+  }
+}

@@ -1,0 +1,7 @@
+import test from 'node:test';import assert from 'node:assert/strict';import{assertFinalMetaConfig}from '../scripts/release/simulation-final-meta-config.mjs';
+const asset={path:'assets/a.png',sha256:'a'.repeat(64)};const fixture=()=>({namespace:'batch-one',meta:{customer:'12025550192',choiceCustomer:'15555550002',pinned:{recipients:['15555550003','15555550004'],assets:[asset,{path:'assets/b.png',sha256:'b'.repeat(64)}]},terminal:{recipients:['15555550005','15555550006','15555550008']},safeRetry:{recipient:'15555550007',asset}}});
+test('six fresh recipients and immutable private asset descriptors',()=>assert.equal(assertFinalMetaConfig(fixture()).recipients.length,6));
+test('rejects overlap with earlier customer and excessive namespace before stage work',()=>{const f=fixture();f.meta.safeRetry.recipient=f.meta.customer;assert.throws(()=>assertFinalMetaConfig(f));const g=fixture();g.namespace='a'.repeat(31);assert.throws(()=>assertFinalMetaConfig(g));});
+test('rejects unbound and escaping assets',()=>{for(const bad of [{path:'../a',sha256:'a'.repeat(64)},{path:'a',sha256:'wrong'}]){const f=fixture();f.meta.safeRetry.asset=bad;assert.throws(()=>assertFinalMetaConfig(f));}});
+
+test('three terminal recipients are required before constructing the accepted-disconnect scenario',()=>{for(const recipients of [['15555550005','15555550006'],['15555550005','15555550006','15555550005']]){const f=fixture();f.meta.terminal.recipients=recipients;assert.throws(()=>assertFinalMetaConfig(f));}});

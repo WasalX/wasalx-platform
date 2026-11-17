@@ -1,0 +1,181 @@
+{{ $root := . }}
+{{ $allExistingStatefulSets := lookup "apps/v1" "StatefulSet" .Release.Namespace "" }}
+{{ if not .Values.managedWaha.enabled }}
+{{ range $existing := $allExistingStatefulSets.items }}
+{{ if eq (dig "metadata" "labels" "wasalx.io/managed-worker" "" $existing) "true" }}
+{{ fail (printf "managed WAHA cannot be disabled while worker %s exists; drain every worker and explicitly delete its protected resources first" $existing.metadata.name) }}
+{{ end }}
+{{ end }}
+{{ end }}
+{{ if .Values.managedWaha.enabled }}
+{{ $desiredWorkerNames := dict }}
+{{ range $engineName, $engine := dict "gows" .Values.managedWaha.gows "noweb" .Values.managedWaha.noweb }}
+{{ if $engine.enabled }}
+{{ range $ordinal := until (int $engine.replicas) }}
+{{ $_ := set $desiredWorkerNames (printf "wasalx-waha-%s-%d" $engineName $ordinal) true }}
+{{ end }}
+{{ end }}
+{{ end }}
+{{ range $existing := $allExistingStatefulSets.items }}
+{{ if and (eq (dig "metadata" "labels" "wasalx.io/managed-worker" "" $existing) "true") (not (hasKey $desiredWorkerNames $existing.metadata.name)) }}
+{{ fail (printf "managed WAHA worker %s still exists but is absent from desired replicas; drain it to zero assignments and delete that exact StatefulSet before reducing replicas" $existing.metadata.name) }}
+{{ end }}
+{{ end }}
+{{ $workers := list }}
+{{ $seenSecretReferences := dict }}
+{{ $seenCredentialSecrets := dict }}
+{{ range $engineName, $engine := dict "gows" .Values.managedWaha.gows "noweb" .Values.managedWaha.noweb }}
+{{ if $engine.enabled }}
+{{ if ne (len $engine.credentialSecretNames) (int $engine.replicas) }}
+{{ fail (printf "managedWaha.%s.credentialSecretNames must contain exactly one Secret name per replica" $engineName) }}
+{{ end }}
+{{ if ne (len $engine.secretReferences) (int $engine.replicas) }}
+{{ fail (printf "managedWaha.%s.secretReferences must contain exactly one secret reference per replica" $engineName) }}
+{{ end }}
+{{ range $canaryOrdinal := $engine.canaryOrdinals }}
+{{ if ge (int $canaryOrdinal) (int $engine.replicas) }}
+{{ fail (printf "managedWaha.%s.canaryOrdinals contains ordinal %d outside replicas" $engineName (int $canaryOrdinal)) }}
+{{ end }}
+{{ end }}
+{{ if and (gt (len $engine.canaryOrdinals) 0) (gt (int $engine.canarySessionLimitPerReplica) (int $engine.capacityPerReplica)) }}
+{{ fail (printf "managedWaha.%s.canarySessionLimitPerReplica cannot exceed capacityPerReplica" $engineName) }}
+{{ end }}
+{{ range $ordinal := until (int $engine.replicas) }}
+{{ $name := printf "wasalx-waha-%s-%d" $engineName $ordinal }}
+{{ $workerKey := printf "managed-%s-%d" $engineName $ordinal }}
+{{ $credentialSecretName := required (printf "managedWaha.%s.credentialSecretNames[%d] is required" $engineName $ordinal) (index $engine.credentialSecretNames $ordinal) }}
+{{ $secretReference := required (printf "managedWaha.%s.secretReferences[%d] is required" $engineName $ordinal) (index $engine.secretReferences $ordinal) }}
+{{ if hasKey $seenCredentialSecrets $credentialSecretName }}
+{{ fail (printf "managed WAHA credential Secret %s is duplicated" $credentialSecretName) }}
+{{ end }}
+{{ $_ := set $seenCredentialSecrets $credentialSecretName true }}
+{{ if hasKey $seenSecretReferences $secretReference }}
+{{ fail (printf "managed WAHA secret reference %s is duplicated" $secretReference) }}
+{{ end }}
+{{ $_ := set $seenSecretReferences $secretReference true }}
+{{ $canary := dict "enabled" false }}
+{{ range $candidate := $engine.canaryOrdinals }}
+{{ if eq (int $candidate) (int $ordinal) }}
+{{ $_ := set $canary "enabled" true }}
+{{ end }}
+{{ end }}
+{{ $rolloutMode := ternary "CANARY" "STABLE" (get $canary "enabled") }}
+{{ $entry := dict "workerKey" $workerKey "engine" (upper $engineName) "baseUrl" (printf "http://%s-0.%s.%s.svc.%s:%d/" $name $name $root.Release.Namespace $root.Values.managedWaha.clusterDomain (int $root.Values.managedWaha.port)) "secretReference" $secretReference "capacity" (int $engine.capacityPerReplica) "rolloutMode" $rolloutMode "heartbeatTtlSeconds" (int $root.Values.managedWaha.heartbeatTtlSeconds) }}
+{{ if eq $rolloutMode "CANARY" }}
+{{ $_ := set $entry "canarySessionLimit" (int $engine.canarySessionLimitPerReplica) }}
+{{ end }}
+{{ $workers = append $workers $entry }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels: { app.kubernetes.io/name: {{ $name | quote }}, app.kubernetes.io/part-of: wasalx, app.kubernetes.io/component: waha, wasalx.io/waha-engine: {{ $engineName | quote }} }
+  annotations:
+    helm.sh/resource-policy: keep
+    argocd.argoproj.io/sync-options: Prune=false
+    kustomize.toolkit.fluxcd.io/prune: disabled
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: false
+  selector: { app.kubernetes.io/name: {{ $name | quote }}, wasalx.io/plane: connector }
+  ports: [{ name: http, port: {{ $root.Values.managedWaha.port }}, targetPort: http, protocol: TCP }]
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $name }}
+  labels: { app.kubernetes.io/name: {{ $name | quote }}, app.kubernetes.io/part-of: wasalx, app.kubernetes.io/component: waha, wasalx.io/waha-engine: {{ $engineName | quote }}, wasalx.io/managed-worker: "true", wasalx.io/plane: connector }
+  annotations:
+    helm.sh/resource-policy: keep
+    argocd.argoproj.io/sync-options: Prune=false
+    kustomize.toolkit.fluxcd.io/prune: disabled
+spec:
+  serviceName: {{ $name }}
+  replicas: 1
+  podManagementPolicy: Parallel
+  persistentVolumeClaimRetentionPolicy: { whenDeleted: Retain, whenScaled: Retain }
+  # A chart upgrade never restarts a live linked-device session. Operators
+  # first drain this registry worker, then explicitly delete its pod.
+  updateStrategy: { type: OnDelete }
+  selector: { matchLabels: { app.kubernetes.io/name: {{ $name | quote }}, wasalx.io/plane: connector } }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: {{ $name | quote }}, app.kubernetes.io/part-of: wasalx, app.kubernetes.io/component: waha, wasalx.io/waha-engine: {{ $engineName | quote }}, wasalx.io/waha-worker: {{ $workerKey | quote }}, wasalx.io/plane: connector }
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 120
+      securityContext: {{ toYaml $engine.podSecurityContext | nindent 8 }}
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector: { matchLabels: { app.kubernetes.io/component: waha, wasalx.io/plane: connector } }
+      containers:
+        - name: waha
+          image: {{ required (printf "managedWaha.%s.image is required" $engineName) $engine.image | quote }}
+          imagePullPolicy: IfNotPresent
+          securityContext: {{ toYaml $engine.containerSecurityContext | nindent 12 }}
+          ports: [{ name: http, containerPort: {{ $root.Values.managedWaha.port }}, protocol: TCP }]
+          env:
+            - { name: WHATSAPP_DEFAULT_ENGINE, value: {{ upper $engineName | quote }} }
+            - { name: WAHA_WORKER_ID, value: {{ $workerKey | quote }} }
+            - { name: WAHA_NAMESPACE, value: all }
+            - { name: WAHA_LOCAL_STORE_BASE_DIR, value: /app/.sessions }
+            - { name: WAHA_WORKER_RESTART_SESSIONS, value: "True" }
+            - { name: WAHA_PRINT_QR, value: "False" }
+            - { name: WAHA_LOG_LEVEL, value: warn }
+            - { name: WAHA_HTTP_LOG_LEVEL, value: warn }
+            # WAHA protects every route when WAHA_API_KEY is configured. The
+            # kubelet cannot derive the plaintext key from the SHA-512 value,
+            # so only the health path is excluded. NetworkPolicy still limits
+            # pod ingress to the connector worker and node-originated probes.
+            - { name: WAHA_API_KEY_EXCLUDE_PATH, value: health }
+            - { name: WHATSAPP_API_KEY_EXCLUDE_PATH, value: health }
+            - name: WAHA_API_KEY
+              valueFrom: { secretKeyRef: { name: {{ $credentialSecretName | quote }}, key: WAHA_API_KEY } }
+          resources: {{ toYaml $engine.resources | nindent 12 }}
+          startupProbe: { httpGet: { path: /health, port: http }, periodSeconds: 5, timeoutSeconds: {{ $root.Values.managedWaha.healthProbeTimeoutSeconds }}, failureThreshold: 36 }
+          readinessProbe: { httpGet: { path: /health, port: http }, periodSeconds: 10, timeoutSeconds: {{ $root.Values.managedWaha.healthProbeTimeoutSeconds }}, failureThreshold: 3 }
+          livenessProbe: { httpGet: { path: /health, port: http }, initialDelaySeconds: 20, periodSeconds: 20, timeoutSeconds: {{ $root.Values.managedWaha.healthProbeTimeoutSeconds }}, failureThreshold: 3 }
+          lifecycle: { preStop: { exec: { command: ["/bin/sh", "-c", "sleep 30"] } } }
+          volumeMounts:
+            - { name: sessions, mountPath: /app/.sessions }
+            - { name: tmp, mountPath: /tmp }
+      volumes: [{ name: tmp, emptyDir: { sizeLimit: 256Mi } }]
+  volumeClaimTemplates:
+    - metadata: { name: sessions, labels: { app.kubernetes.io/part-of: wasalx, app.kubernetes.io/component: waha, wasalx.io/waha-worker: {{ $workerKey | quote }} } }
+      spec:
+        accessModes: [ReadWriteOnce]
+        storageClassName: {{ $root.Values.managedWaha.storageClassName | quote }}
+        resources: { requests: { storage: {{ $engine.sessionStorageSize | quote }} } }
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ $name }}
+  labels: { app.kubernetes.io/name: {{ $name | quote }}, app.kubernetes.io/part-of: wasalx, app.kubernetes.io/component: waha }
+  annotations:
+    helm.sh/resource-policy: keep
+    argocd.argoproj.io/sync-options: Prune=false
+    kustomize.toolkit.fluxcd.io/prune: disabled
+spec:
+  minAvailable: 1
+  selector: { matchLabels: { app.kubernetes.io/name: {{ $name | quote }}, wasalx.io/plane: connector } }
+{{ end }}
+{{ end }}
+{{ end }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: wasalx-managed-waha-registry
+  labels: { app.kubernetes.io/name: wasalx-worker, app.kubernetes.io/part-of: wasalx, app.kubernetes.io/component: waha-registry }
+  annotations:
+    wasalx.io/scope: connector-worker-only
+type: Opaque
+stringData:
+  WAHA_WORKERS_JSON: {{ toJson $workers | quote }}
+{{ end }}

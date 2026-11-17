@@ -1,0 +1,9 @@
+import assert from 'node:assert/strict';import {createHash} from 'node:crypto';
+const hash=x=>createHash('sha256').update(x).digest('hex');
+export function outboundTextForReceipt(row){let body=row.message_body;if(row.agent_display_name&&row.agent_identity_placement_snapshot!=='OFF'){const identity=((row.agent_prefix_snapshot?.trim()??'Agent:')+' '+row.agent_display_name).trim();body=!body.trim()?identity:row.agent_identity_placement_snapshot==='FOOTER'?body+'\n'+identity:identity+'\n'+body;}return body;}
+export function assertMediaEnvelope({rows,receipts,media,placement,expectedMediaId,before,after}){
+ const count=media&&placement!=='OFF'?2:1;assert.equal(rows.length,count);const ordered=[...rows].sort((a,b)=>a.batch_sequence-b.batch_sequence);assert.equal(new Set(rows.map(x=>x.batch_id)).size,1);assert.equal(new Set(rows.map(x=>x.id)).size,count);
+ for(const [i,row]of ordered.entries()){assert.equal(row.batch_sequence,i);assert.equal(row.batch_part_count,count);assert.equal(row.state,'SENT');assert.equal(Number(row.attempts),1);assert.equal(row.zammad_ticket_id,null);assert.equal(row.zammad_article_id,null);const matches=receipts.filter(x=>x.id===row.external_message_id);assert.equal(matches.length,1,'Exactly one provider receipt per external ID');const receipt=matches[0];assert.equal(receipt.textSha256,hash(outboundTextForReceipt(row)));if(media&&i===count-1){assert.equal(row.id,expectedMediaId);assert(receipt.mediaSha256);assert.equal(row.agent_identity_placement_snapshot,'OFF');}else{assert.equal(receipt.mediaSha256,undefined);assert.equal(row.agent_identity_placement_snapshot,placement);}}
+ if(before){assert.equal(after.receivedSends-before.receivedSends,count);const added=after.receipts.filter(r=>!before.receipts.some(x=>x.id===r.id));assert.deepEqual(added.map(r=>r.id).sort(),ordered.map(r=>r.external_message_id).sort());}
+ return ordered;
+}

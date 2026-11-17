@@ -1,0 +1,37 @@
+{
+  "generator": "tests/fixtures/generate-synthetic-media.py",
+  "generator_sha256": "1c5f6a64e3d36e8d90f164881114682f9cb6863be3e8175e973bdd00ccd7f82f",
+  "policy": "A21_FIXED_MEDIA_NO_ORIGINAL_INPUT",
+  "content": "fixed gray pixels and silent samples",
+  "image": {
+    "width": 64,
+    "height": 64,
+    "rgb": [
+      128,
+      128,
+      128
+    ]
+  },
+  "audio": {
+    "codec": "opus",
+    "sample_rate": 48000,
+    "channels": 1,
+    "duration": 1
+  },
+  "video": {
+    "width": 64,
+    "height": 64,
+    "fps": 10,
+    "duration": 1,
+    "audio": false
+  },
+  "sha256": {
+    "image.png": "161468955b147ebb1e4a5cde41bedb23fd6292d8d62fe6311880910715a1d82e",
+    "audio.ogg": "b71ac643a73fb1a33f097b6d970a007cf29af276c748f0310499514375ffef9f",
+    "video.mp4": "48fe03090db412aa282637b20aa256c172a0d30903f5713a74a196c4c1056a0f"
+  },
+  "originals_used": false,
+  "provenance": "Project-authored fixed synthetic pixels/samples; committed fixtures and generator; not a recording or private media derivative",
+  "ffmpeg_version": "4.1.0",
+  "generator_is_committed": true
+}

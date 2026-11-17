@@ -1,0 +1,20 @@
+import assert from 'node:assert/strict';import{simulationEventId}from'./synthetic-first-group-driver.mjs';import{findRuleSet}from'./seed-simulation-group.mjs';
+export const testIds=['group-rules/commands-triggers-and-friendly-ticket-naming::configured-team-sender-policy-controls-group-trigger-effects::mapping-conflict'];
+export function conflictRoster({participant,teamParticipant}){assert.match(participant,/^[1-9][0-9]{5,14}@c\.us$/);assert.match(teamParticipant,/^[1-9][0-9]{5,14}@c\.us$/);assert.notEqual(participant,teamParticipant);return{JID:participant,PhoneNumber:teamParticipant.split('@')[0],DisplayName:'Synthetic conflicting mapping'};}
+export function admitConflictBinding(binding,ruleSet){assert.equal(binding.binding_state,'ACTIVE');assert.equal(binding.rule_set_id,ruleSet.id);assert.equal(ruleSet.state,'ACTIVE');assert(ruleSet.rules.length>0);assert(ruleSet.rules.every(rule=>rule.matcherOptions?.teamSenderPolicy==='exclude'),'Conflict proof requires the active exclude policy');return binding;}
+// Call inside existing senderPolicy owned try/finally, while teamParticipant is associated,
+// after supported sync of the pre-auth roster. Restore binding through its existing finally.
+export async function senderConflictProof({session:s,namespace,group,request,bindingPath,participant,teamParticipant}){
+ const roster=conflictRoster({participant,teamParticipant}),startedAt=new Date().toISOString();
+ const current=(await s.scoped('SELECT normalized_phone FROM group_workspace_participants WHERE tenant_id=$1 AND whatsapp_group_id=$2 AND external_participant_id=$3',[s.tenantId,group.groupId,participant]))[0];assert.equal(current?.normalized_phone,'+'+roster.PhoneNumber,'Exact conflicting provider roster must have been synced; no SQL fixture substitute');
+ const member=await s.scoped('SELECT id FROM tenant_memberships WHERE tenant_id=$1 AND $2=ANY(whatsapp_numbers)',[s.tenantId,'+'+roster.PhoneNumber]);assert.equal(member.length,1,'Mapped number must belong to tenant team');
+ const binding=await request(bindingPath),ruleSet=await findRuleSet(request,binding.rule_set_id);admitConflictBinding(binding,ruleSet);
+ const snapshot=async()=>({deliveries:await s.scoped('SELECT id,state,attempts,external_message_id FROM delivery_outbox ORDER BY id'),links:await s.scoped('SELECT id FROM message_links ORDER BY id'),actions:await s.scoped('SELECT id FROM group_action_executions ORDER BY id'),receipts:await s.directCallbacks.providerRead()});
+ const before=await snapshot(),eventId=simulationEventId(namespace+'-identity-conflict'),messageId='false_'+group.groupRef+'_'+namespace+'-identity-conflict';
+ assert.equal((await s.scoped("SELECT id FROM event_inbox WHERE connection_id=$1 AND provider_event_id_sha256=app.webhook_event_id_sha256($2,$1,'WAHA',$3)",[group.connectionId,s.tenantId,eventId])).length,0);
+ const receipt=await s.directCallbacks.control({action:'inbound',input:{eventId,messageId,chatId:group.groupRef,participant,text:'1234567890'}});await s.directCallbacks.drainEffects();
+ const inbox=(await s.scoped("SELECT id,status,lease_id,processed_at,safe_error FROM event_inbox WHERE connection_id=$1 AND provider_event_id_sha256=app.webhook_event_id_sha256($2,$1,'WAHA',$3)",[group.connectionId,s.tenantId,eventId]))[0];assert(inbox?.processed_at&&!inbox.lease_id,'Owned conflict event unsettled; never replay');
+ const classification=(await s.scoped('SELECT app.group_rule_sender($1,$2,$3,$4) sender',[s.tenantId,group.connectionId,group.groupRef,participant]))[0]?.sender;
+ assert.equal(classification,'unknown','Contradictory PN/roster must not become confident customer');assert.deepEqual(await snapshot(),before,'Conflicting identity must create no trigger effects');
+ const row={testId:testIds[0],result:'passed',startedAt,finishedAt:new Date().toISOString(),contextId:'tenant_owner-en-desktop',proof:{eventInboxId:inbox.id,providerReceipt:receipt,participant,rosterPhone:roster.PhoneNumber,classification,noTriggerEffects:true,ordinaryPinnedWebhook:true}};await s.checkpoint({phase:'sender-conflict-proof',...row});return row;
+}
