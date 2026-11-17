@@ -46,6 +46,7 @@ function heldPrerequisiteFixture(t) {
       assert.deepEqual(args.slice(0, 3), context.composeArguments);
       assert.ok(args.includes("--no-deps") && args.includes("--no-build") && args.includes("never"));
       const current = row(args.at(-1));
+      current.RestartCount = 0;
       if (args.includes("--exit-code-from")) {
         current.State.ExitCode = context.prerequisiteExit ?? 0;
         return current.State.ExitCode;
@@ -161,13 +162,31 @@ test("non-held installation still refuses historical restarts", async t => {
   await assert.rejects(captureDevInstallPreimages(context), /existing DEV restart history requires review/);
 });
 
-test("held release starts a sender with unchanged historical restarts", async t => {
+test("held release resets a sender's recorded historical restarts on start", async t => {
   const { context, row } = heldPrerequisiteFixture(t);
   row("waha-gows").RestartCount = 1;
   const record = await captureDevInstallPreimages(context);
   assert.equal(await releaseDevHeld(context, record, "waha-gows"), 0);
   assert.equal(row("waha-gows").State.Running, true);
-  assert.equal(row("waha-gows").RestartCount, 1);
+  assert.equal(row("waha-gows").RestartCount, 0);
+});
+
+test("release-held accepts recorded count 1 when Docker reports 0 after start", async t => {
+  const { context, row } = heldPrerequisiteFixture(t);
+  context.plan = []; context.service = "waha-gows";
+  row("waha-gows").RestartCount = 1;
+  const record = await captureDevInstallPreimages(context);
+  assert.equal(record.services.find(({ service }) => service === "waha-gows").restartCount, 1);
+  const containerId = row("waha-gows").Id;
+  const root = await mkdtemp(join(tmpdir(), "wasalx-held-release-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  context.devPreimagesFile = join(root, "preimages.json");
+  const bytes = Buffer.from(JSON.stringify(record)); await writeFile(context.devPreimagesFile, bytes);
+  context.devPreimagesSha256 = sha256(bytes);
+  assert.equal(await executeStage("release-held", context), 0);
+  assert.equal(row("waha-gows").Id, containerId);
+  assert.equal(row("waha-gows").State.Running, true);
+  assert.equal(row("waha-gows").RestartCount, 0);
 });
 
 test("held release refuses changed sender restart history before prerequisites execute", async t => {
@@ -189,15 +208,15 @@ test("held release also binds prerequisite restart history", async t => {
   assert.ok(calls.every(args => !args.includes("up")));
 });
 
-test("held release preserves an unchanged prerequisite restart count through execution", async t => {
+test("held release resets a prerequisite's recorded restart count on start", async t => {
   const { context, row } = heldPrerequisiteFixture(t);
   row("public-webhook-preflight").RestartCount = 1;
   const record = await captureDevInstallPreimages(context);
   assert.equal(await releaseDevHeld(context, record, "waha-gows"), 0);
-  assert.equal(row("public-webhook-preflight").RestartCount, 1);
+  assert.equal(row("public-webhook-preflight").RestartCount, 0);
 });
 
-for (const recreated of [false, true]) test(`held startup ${recreated ? "requires zero restarts on a new container" : "refuses a new restart on the same container"}`, async t => {
+for (const restartCount of [0, 1, 2]) test(`held startup ${restartCount ? `refuses ${restartCount} restarts on the same container` : "requires zero restarts on a new container"}`, async t => {
   const { context, row } = heldPrerequisiteFixture(t);
   row("waha-gows").RestartCount = 1;
   const record = await captureDevInstallPreimages(context);
@@ -205,12 +224,12 @@ for (const recreated of [false, true]) test(`held startup ${recreated ? "require
   context.command = async (...args) => {
     const result = await command(...args);
     if (args[1].includes("up") && args[1].at(-1) === "waha-gows") {
-      if (recreated) row("waha-gows").Id = "e".repeat(64);
-      row("waha-gows").RestartCount = recreated ? 0 : 2;
+      if (!restartCount) row("waha-gows").Id = "e".repeat(64);
+      row("waha-gows").RestartCount = restartCount;
     }
     return result;
   };
-  if (recreated) assert.equal(await releaseDevHeld(context, record, "waha-gows"), 0);
+  if (!restartCount) assert.equal(await releaseDevHeld(context, record, "waha-gows"), 0);
   else await assert.rejects(releaseDevHeld(context, record, "waha-gows"), /restarted during its phase/);
 });
 

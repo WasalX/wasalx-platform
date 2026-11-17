@@ -14,8 +14,10 @@ exit codes. A failed prerequisite is not successful execution evidence.
 Held containers may retain historical restart counts. Each count is recorded
 in `services[].restartCount`; non-held containers still require zero. Release
 refuses a sender or prerequisite whose current count differs from its record.
-Starting the same container must preserve that count; a newly created container
-must have zero restarts. Held-stack smoke uses the same identity distinction.
+The pre-start check binds that history; starting a container resets its count
+to zero, and any non-zero count after the phase is refused. Held-stack smoke
+preserves recorded counts only for the same still-held container; new containers
+must have zero restarts.
 
 ## Release a held sender
 

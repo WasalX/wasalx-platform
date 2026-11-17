@@ -297,8 +297,7 @@ async function devPhase(context, record, name, oneShot = false, released = []) {
   assert.equal(await execute("docker", [...context.composeArguments, "up", "--no-deps", "--no-build", "--pull", "never", ...flags, name], context.environment, true), 0, `${name} phase failed; no replay`);
   const completed = (await devInspect(context)).find((row) => row.Config.Labels["com.docker.compose.service"] === name);
   assert.ok(completed);
-  assert.equal(completed.RestartCount, released.includes(name) && completed.Id === before.Id ? before.RestartCount : 0,
-    `${name} restarted during its phase`);
+  assert.equal(completed.RestartCount, 0, `${name} restarted during its phase`);
   if (oneShot) { assert.equal(completed.State.Status, "exited"); assert.equal(completed.State.ExitCode, 0); }
   else {
     assert.equal(completed.State.Running, true); assert.equal(completed.State.Status, "running");
