@@ -68,7 +68,7 @@ The optional `admit-hosted` stage admits already loaded images. It never pulls,
 loads, builds, replaces or starts a service. Keep the existing local
 `preflight -> build -> replace -> smoke` path for local builds.
 
-Before preloading, run the existing `preflight --capture-preimage` for the exact
+After the verify-only gate below passes, run the existing `preflight --capture-preimage` for the exact
 candidate/project **without hosted flags**. Retain its private replacement
 preimage and rollback tags. Admission requires that existing preimage; capturing
 it after overwriting mutable image references loses the original tag custody.
@@ -87,6 +87,22 @@ Provision the receiver's
 Sigstore trusted root independently through trusted Sigstore TUF setup; never take
 trust roots from an untrusted image/evidence bundle. No receiver egress exception
 is needed.
+
+Before any `docker load` or tag change, run the complete catalog's verify-only gate:
+
+```sh
+node scripts/release/installer-stages.mjs verify-hosted \
+  --env-file /absolute/install.env --project-name <project> \
+  --hosted-images /absolute/evidence/images-manifest.json \
+  --hosted-images-sha256 <inventory-file-sha256> \
+  --hosted-trusted-root /absolute/trusted/trusted_root.json
+```
+
+This verifies the inventory, raw manifests and both signed bundles for every
+catalog image without any Docker calls or admission receipt. On nonzero exit,
+stop: do not preload or change tags. On success, capture the original preimages,
+then run the controlled preload. Normal admission below still verifies the actual
+loaded config bytes; verify-only is not evidence of loaded-image admission.
 
 After the controlled preload has populated the existing Compose candidate
 references, run:
@@ -114,8 +130,10 @@ root hashes, publisher, source, catalog, Compose model/plan, loaded immutable ID
 verified output seals, and private preimage transaction/hash. Replacement rechecks
 admission and loaded bytes before its existing operational gates. Rollback uses
 the same private custody and original safety fences without requiring candidate
-images to remain verifiable. This stage does not qualify live provider behavior,
-operator acceptance or production release. Legacy release-bundle, assisted and
+images to remain verifiable. Keep the hosted inventory and trusted root present
+and byte-identical until rollback is no longer needed; rollback requires both files.
+This stage does not qualify live provider behavior, operator acceptance or
+production release. Legacy release-bundle, assisted and
 historical evidence contracts are unchanged.
 
 ## Public build inputs and inspection

@@ -68,7 +68,7 @@ export function assertHostedStatement(statement, row) {
   }
 }
 
-export async function verifyHostedImages(context) {
+export async function verifyHostedImages(context, { verifyOnly = false } = {}) {
   const inventory = await readHostedInventory(context);
   const execute = context.command;
   const version = JSON.parse(await execute("cosign", ["version", "--json"], context.environment));
@@ -81,6 +81,7 @@ export async function verifyHostedImages(context) {
     const common = ["--offline", "--trusted-root", root,
       "--certificate-identity", hostedPublisher, "--certificate-oidc-issuer", hostedIssuer];
     const images = [];
+    let verified = 0;
     for (const image of context.plan) {
       const row = inventory.images[image.id];
       assert.ok(row, "candidate missing from hosted inventory");
@@ -108,6 +109,8 @@ export async function verifyHostedImages(context) {
           "--bundle", path, "--type", type, "--digest", row.digest.slice(7), "--digestAlg", "sha256"], context.environment);
         seals[name] = sha256(bytes);
       }
+      verified += 1;
+      if (verifyOnly) continue;
       const inspect = async () => JSON.parse(await execute("docker", ["image", "inspect", image.reference], context.environment))[0];
       const before = await inspect();
       assert.ok([row.digest, row.configDigest].includes(before?.Id), "loaded hosted image identity mismatch");
@@ -126,8 +129,8 @@ export async function verifyHostedImages(context) {
         manifestDigest: row.digest, configDigest: row.configDigest,
         signatureSha256: seals.signature, attestationSha256: seals.provenance });
     }
-    assert.equal(images.length, context.catalog.images.length, "complete hosted candidate plan required");
-    assert.equal(new Set(images.map(({ id }) => id)).size, images.length, "duplicate hosted candidate plan");
+    assert.equal(verified, context.catalog.images.length, "complete hosted candidate plan required");
+    assert.equal(new Set(context.plan.map(({ id }) => id)).size, verified, "duplicate hosted candidate plan");
     assert.equal(sha256(await readFile(context.hostedTrustedRoot)), trustedRootSha256, "hosted trust root changed");
     return { images, trustedRootSha256 };
   } finally { await rm(temporary, { recursive: true, force: true }); }
