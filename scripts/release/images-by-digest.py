@@ -516,8 +516,9 @@ def inspect_loaded_config(reference, config_digest):
 
 
 def publish(receipt_path):
-    require(os.environ.get("GITHUB_EVENT_NAME") == "push" and os.environ.get("GITHUB_REF") == "refs/heads/main",
-            "Publication is main-push only")
+    ref = os.environ.get("GITHUB_REF")
+    require(os.environ.get("GITHUB_EVENT_NAME") == "push" and ref in {"refs/heads/dev", "refs/heads/main"},
+            "Publication requires a dev or main push")
     commit, tree = coordinates()
     receipt = json.loads(Path(receipt_path).read_text())
     require((receipt["commit"], receipt["tree"]) == (commit, tree), "Stale inspection receipt")
@@ -532,7 +533,7 @@ def publish(receipt_path):
     # The digest is checked over registry bytes by the client; never hash whitespace-normalized JSON.
     verify_manifest(json.loads(raw), receipt["inspection"]["configDigest"])
     receipt.update({"digest": digest, "configDigest": receipt["inspection"]["configDigest"],
-                    "pullReference": reference, "workflow": SOURCE + "/.github/workflows/branch-image.yml@refs/heads/main",
+                    "pullReference": reference, "workflow": SOURCE + "/.github/workflows/branch-image.yml@" + ref,
                     "workflowSha": os.environ["GITHUB_WORKFLOW_SHA"], "runId": os.environ["GITHUB_RUN_ID"],
                     "runAttempt": os.environ["GITHUB_RUN_ATTEMPT"]})
     write(receipt_path, receipt)
@@ -562,8 +563,9 @@ def publish(receipt_path):
         final = inspect_image(reference, row, commit, tree, directory, receipt["inspection"]["addonLicenses"])
     require(final == receipt["inspection"], "Published image differs from inspected image")
     # Advance the discovery alias only after signature and exact-digest reinspection.
-    run("docker", "tag", reference, repository + ":main")
-    alias_result = run("docker", "push", repository + ":main")
+    alias = repository + ":" + ref.removeprefix("refs/heads/")
+    run("docker", "tag", reference, alias)
+    alias_result = run("docker", "push", alias)
     require("digest: " + digest in alias_result, "Discovery alias digest mismatch")
     receipt["verified"] = True
     receipt["status"] = "published"
