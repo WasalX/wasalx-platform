@@ -78,7 +78,7 @@ jobs:
           driver-opts: image=moby/buildkit:v0.26.3
           cache-binary: false
       - if: steps.image.outputs.pending == 'false'
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
