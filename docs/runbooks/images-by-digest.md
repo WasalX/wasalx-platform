@@ -6,11 +6,11 @@ changed. Shared or unrecognized inputs trigger the full catalog. These
 builds run without registry login, package writes or OIDC and are covered
 by the PR and merge-queue `ci-gate` check.
 
-On a push to `main`, `ci` calls `release` in
+On a push to `dev` or `main`, `ci` calls `release` in
 `.github/workflows/branch-image.yml` to build, inspect, publish, sign and
-attest the full catalog. Only the main publish lane has package-write,
+attest the full catalog. Only these publish lanes have package-write,
 OIDC and attestation-write access. DEV admission requires a successful
-main `ci` run with the `images-manifest` artifact.
+dev `ci` run with the `images-manifest` artifact; main is kept for stg/prod.
 
 The environment-attached publish jobs export one GHCR cache tag per heavy
 image, without importing layers. PR and merge-queue builds import those
@@ -21,7 +21,7 @@ warm-cache timing. GitHub build provenance supplements the existing
 Cosign signature and attestation.
 
 Each package is `ghcr.io/wasalx/<image>`, tagged with the full public commit SHA.
-The `main` discovery alias advances only after signature verification and
+The `dev` and `main` discovery aliases advance only after signature verification and
 reinspection. Resolve an alias once, then use only `@sha256:<manifest digest>`.
 The `images-manifest` artifact requires one receipt for every matrix row, all
 bound to the same commit and tree. While the add-on source is unset, 19 images
@@ -63,9 +63,11 @@ prove any of them. Preserve the previous verified manifest/config pair for rollb
 ## Signature and provenance
 
 Cosign is pinned to v3.0.6 and its Linux AMD64 SHA256 in the workflow. The
-certificate identity is exactly:
+certificate identity for DEV admission is exactly:
 
-`https://github.com/WasalX/wasalx-platform/.github/workflows/branch-image.yml@refs/heads/main`
+`https://github.com/WasalX/wasalx-platform/.github/workflows/branch-image.yml@refs/heads/dev`
+
+Images published from `main` carry the same identity ending in `@refs/heads/main`.
 
 The OIDC issuer is `https://token.actions.githubusercontent.com`. Verify both the
 signature and `slsaprovenance` attestation for the selected digest, then validate
