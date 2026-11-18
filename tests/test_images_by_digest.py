@@ -110,6 +110,44 @@ class ImagePublicationTests(unittest.TestCase):
         self.assertNotIn("Dockerfile.production-secret-sidecar", paths)
         self.assertNotIn("zammad-package", (ROOT / ".dockerignore").read_text().splitlines())
 
+    def test_static_publish_matrix_matches_catalog(self):
+        workflow = (ROOT / ".github/workflows/branch-image.yml").read_text()
+        publish = workflow.split("        image:\n", 1)[1].split("    steps:\n", 1)[0]
+        catalog = [row["image"] for row in images.matrix()["include"]]
+        self.assertEqual(re.findall(r"(?m)^          - ([a-z-]+)$", publish), catalog)
+
+    def test_pull_request_matrix_selects_literal_context_inputs_and_falls_back_to_all(self):
+        rows = images.matrix()["include"]
+        narrow = {
+            "Dockerfile.foundation-postgres": "foundation-postgres",
+            "app/page.tsx": "portal",
+            "services/invitation-mailer/src/removed.ts": "invitation-mailer",
+            "scripts/release/patch-keycloak-jackson.py": "foundation-keycloak",
+            "tools/dev-secret-sidecar.mjs": "secret-sidecar",
+            "tests/zammad-redis-tls.test.rb": "zammad",
+            "zammad-package/product.rb": "workspace-configurator",
+        }
+        for path, image in narrow.items():
+            with self.subTest(path=path):
+                self.assertEqual(images.matrix([path])["include"], [row for row in rows if row["image"] == image])
+        self.assertEqual([row["image"] for row in images.matrix(["app/page.tsx", "Dockerfile.foundation-postgres",
+                                                               "docs/image.md"])["include"]],
+                         ["portal", "foundation-postgres"])
+        self.assertEqual(images.matrix(["README.md", "docs/guide/intro.md", ".github/dependabot.yml"]), {"include": []})
+        for path in ["pnpm-lock.yaml", "packages/core/src/index.ts", "zammad-addon.json", ".dockerignore",
+                     ".github/workflows/ci.yml", ".github/workflows/branch-image.yml", "unmapped/new-file"]:
+            with self.subTest(path=path):
+                self.assertEqual(images.matrix([path])["include"], rows)
+
+    def test_context_map_handles_copy_continuations_and_refuses_unknown_context_syntax(self):
+        self.assertEqual(images.context_sources("COPY\t./a//b \\\n  # Comment\n  local/ /app/\n"
+                                                "ADD https://example.invalid/source /source\n"
+                                                "COPY --from=build /src /dst\n"), {"a/b", "local"})
+        for instruction in ["COPY . /app", "COPY src/*.ts /app/", 'COPY ["src", "/app"]',
+                            "RUN --mount=target=/src true", "ONBUILD COPY src /app"]:
+            with self.subTest(instruction=instruction):
+                self.assertIsNone(images.context_sources(instruction))
+
     def test_all_metadata_contracts_have_exact_source_identity_and_pinned_bases(self):
         for row in images.catalog():
             with self.subTest(image=row["image"]):

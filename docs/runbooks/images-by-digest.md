@@ -1,12 +1,16 @@
 # Published product images
 
 The `ci` workflow builds and inspects all 21 catalog images on merge-queue
-runs and image-affecting PRs, without registry login, package writes or OIDC.
+runs. Pull requests build images whose Dockerfiles or local build inputs
+changed. Shared or unrecognized inputs trigger the full catalog. These
+builds run without registry login, package writes or OIDC and are covered
+by the PR and merge-queue `ci-gate` check.
+
 On a push to `main`, `ci` calls `release` in
 `.github/workflows/branch-image.yml` to build, inspect, publish, sign and
-attest the same catalog. The signing job stays in that file. Only the
-main-only publish lane has package-write, OIDC and attestation-write access.
-The `ci-gate` check includes the applicable image lane.
+attest the full catalog. Only the main publish lane has package-write,
+OIDC and attestation-write access. DEV admission requires a successful
+main `ci` run with the `images-manifest` artifact.
 
 The environment-attached publish jobs export one GHCR cache tag per heavy
 image, without importing layers. PR and merge-queue builds import those
