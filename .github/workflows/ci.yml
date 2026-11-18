@@ -22,49 +22,32 @@ env:
 
 jobs:
   changes:
+    if: github.event_name != 'push'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
-      images: ${{ steps.changes.outputs.images }}
-      dependency_review: ${{ steps.changes.outputs.dependency_review }}
+      images: ${{ steps.matrix.outputs.images }}
       matrix: ${{ steps.matrix.outputs.matrix }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           fetch-depth: ${{ github.event_name == 'pull_request' && 2 || 1 }}
           persist-credentials: false
-      - id: changes
+      - id: matrix
         env:
           EVENT: ${{ github.event_name }}
         run: |
-          images=true
-          dependency_review=false
+          args=()
           if [ "$EVENT" = pull_request ]; then
-            dependency_review=true
-            if bash scripts/hosted-image-changes.sh; then
-              images=false
-            else
-              status=$?
-              test "$status" = 1
-            fi
+            args+=(--pull-request)
           fi
-          echo "images=$images" >> "$GITHUB_OUTPUT"
-          echo "dependency_review=$dependency_review" >> "$GITHUB_OUTPUT"
-      - name: Check image publication contracts
-        if: steps.changes.outputs.images == 'true'
-        run: |
-          python3 -B -m unittest discover -s tests -p 'test_images_by_digest.py' -v
-          node --test tests/fetch-zammad-addon.test.mjs
-          ruby tests/zammad-database-entrypoint.test.rb
-      - id: matrix
-        if: steps.changes.outputs.images == 'true'
-        run: |
-          matrix=$(python3 scripts/release/images-by-digest.py matrix)
+          matrix=$(python3 scripts/release/images-by-digest.py matrix "${args[@]}")
+          images=$(jq '.include | length > 0' <<< "$matrix")
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          echo "images=$images" >> "$GITHUB_OUTPUT"
 
   dependency-review:
-    needs: changes
-    if: needs.changes.outputs.dependency_review == 'true'
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -93,6 +76,12 @@ jobs:
         with:
           node-version: '24.13.1'
           package-manager-cache: false
+      - name: Check image publication contracts
+        if: matrix.mode == 'lint'
+        run: |
+          python3 -B -m unittest discover -s tests -p 'test_images_by_digest.py' -v
+          node --test tests/fetch-zammad-addon.test.mjs
+          ruby tests/zammad-database-entrypoint.test.rb
       - name: Enable pinned pnpm
         run: |
           corepack enable
@@ -203,8 +192,7 @@ jobs:
           if-no-files-found: error
 
   publish:
-    needs: changes
-    if: needs.changes.outputs.images == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'WasalX/wasalx-platform'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'WasalX/wasalx-platform'
     concurrency:
       group: release-main
       cancel-in-progress: false
@@ -214,12 +202,10 @@ jobs:
       id-token: write
       attestations: write
     uses: ./.github/workflows/branch-image.yml
-    with:
-      matrix: ${{ needs.changes.outputs.matrix }}
 
   ci-gate:
-    if: always()
-    needs: [changes, dependency-review, checks, images, publish]
+    if: always() && (github.event_name == 'pull_request' || github.event_name == 'merge_group')
+    needs: [changes, dependency-review, checks, images]
     runs-on: ubuntu-slim
     timeout-minutes: 2
     permissions: {}
@@ -229,32 +215,12 @@ jobs:
           EVENT: ${{ github.event_name }}
           CHANGES: ${{ needs.changes.result }}
           CHECKS: ${{ needs.checks.result }}
-          REVIEW_NEEDED: ${{ needs.changes.outputs.dependency_review }}
           REVIEW: ${{ needs.dependency-review.result }}
           IMAGES_NEEDED: ${{ needs.changes.outputs.images }}
           IMAGES: ${{ needs.images.result }}
-          PUBLISH: ${{ needs.publish.result }}
-          MANIFEST: ${{ needs.publish.outputs.complete }}
         run: |
           test "$CHANGES" = success && test "$CHECKS" = success || exit 1
-          case "$EVENT:$REVIEW_NEEDED:$REVIEW" in
-            pull_request:true:success|merge_group:false:skipped|push:false:skipped) ;;
+          case "$EVENT:$REVIEW:$IMAGES_NEEDED:$IMAGES" in
+            pull_request:success:false:skipped|pull_request:success:true:success|merge_group:skipped:true:success) ;;
             *) exit 1 ;;
           esac
-          case "$EVENT:$IMAGES_NEEDED:$IMAGES:$PUBLISH:$MANIFEST" in
-            pull_request:false:skipped:skipped:|pull_request:true:success:skipped:|merge_group:true:success:skipped:|push:true:skipped:success:true) ;;
-            *) exit 1 ;;
-          esac
-
-  legacy-status:
-    # The current main ruleset still requires this context during the cutover.
-    name: CI result
-    if: always() && github.event_name == 'pull_request'
-    needs: ci-gate
-    runs-on: ubuntu-slim
-    timeout-minutes: 2
-    permissions: {}
-    steps:
-      - env:
-          GATE: ${{ needs.ci-gate.result }}
-        run: test "$GATE" = success

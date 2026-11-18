@@ -3,6 +3,7 @@ import argparse
 import hashlib
 import json
 import io
+from fnmatch import fnmatchcase
 import os
 from pathlib import Path, PurePosixPath
 import re
@@ -98,10 +99,13 @@ def public_addon_source(raw=None):
     return source
 
 
-def matrix():
-    source = public_addon_source()
+def matrix(changed_paths=None):
+    rows = catalog()
+    if changed_paths is not None:
+        rows = changed_images(rows, changed_paths)
+    source = public_addon_source() if rows else None
     return {"include": [{**row, "pending": row["image"] in ADDON_IMAGES and source is None,
-                          "addonSource": source if row["image"] in ADDON_IMAGES else None} for row in catalog()]}
+                          "addonSource": source if row["image"] in ADDON_IMAGES else None} for row in rows]}
 
 
 def coordinates():
@@ -115,6 +119,71 @@ def coordinates():
 
 def instructions(text):
     return re.sub(r"\\\n", " ", text).splitlines()
+
+
+def context_sources(text):
+    # shortcut: map literal default-context sources, build all for other context syntax.
+    if re.search(r"(?im)^\s*#\s*escape\s*=", text):
+        return None
+    paths = set()
+    text = re.sub(r"(?m)^[ \t]*(?:#[^\n]*)?\n", "", text)
+    for line in re.sub(r"\\[ \t]*\n", "", text).splitlines():
+        fields = line.split(maxsplit=1)
+        if len(fields) != 2:
+            continue
+        instruction, arguments = fields
+        instruction = instruction.upper()
+        if instruction == "ONBUILD" or (instruction == "RUN" and
+                re.search(r"(?:^|\s)--mount(?:\s|=)(?!type=cache(?:,|\s|$))", arguments)):
+            return None
+        if instruction not in {"COPY", "ADD"}:
+            continue
+        fields = arguments.split()
+        options = []
+        while fields and fields[0].startswith("--"):
+            options.append(fields.pop(0))
+        if len(fields) < 2 or any(not re.fullmatch(r"--(?:from|chmod|chown|checksum)=[\w:./@+-]+", flag)
+                                  for flag in options):
+            return None
+        if any(flag.startswith("--from=") for flag in options):
+            continue
+        for source in fields[:-1]:
+            if instruction == "ADD" and source.startswith("https://"):
+                continue
+            path = PurePosixPath(source).as_posix().lstrip("/")
+            if not re.fullmatch(r"[\w./+-]+", source) or not path or path == "." or ".." in path.split("/"):
+                return None
+            paths.add(path)
+    return paths
+
+
+def changed_images(rows, paths):
+    inputs = {}
+    for row in rows:
+        dockerfile = row["dockerfile"]
+        sources = context_sources((ROOT / dockerfile).read_text())
+        if sources is None:
+            return rows
+        inputs[row["image"]] = sources | {dockerfile}
+
+    ignored = ("README.md", "docs/*", ".github/workflows/deploy.yml", ".github/dependabot.yml",
+               "scripts/hosted-ci*.mjs", "scripts/hosted-ci*.json", "scripts/test-unit.mjs", "tests/hosted-ci.test.mjs")
+    selected = set()
+    for path in paths:
+        matches = {image for image, sources in inputs.items()
+                   if any(path == source or path.startswith(source + "/") for source in sources)}
+        if len(matches) == 1:
+            selected.update(matches)
+        elif matches or not any(fnmatchcase(path, pattern) for pattern in ignored):
+            return rows
+    return [row for row in rows if row["image"] in selected]
+
+
+def pull_request_paths():
+    # The checkout is GitHub's test merge. Compare with its base, including both sides of renames.
+    raw = subprocess.check_output(
+        ["git", "diff", "--name-only", "-z", "--no-ext-diff", "--no-renames", "HEAD^1", "HEAD", "--"], cwd=ROOT)
+    return [os.fsdecode(path) for path in raw.split(b"\0") if path]
 
 
 def expand(text, values):
@@ -527,6 +596,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=["matrix", "build", "pending", "publish", "assemble", "loaded-config"])
     parser.add_argument("--image")
+    parser.add_argument("--pull-request", action="store_true")
     parser.add_argument("--cache", choices=["off", "read", "write"], default="off")
     parser.add_argument("--config-digest")
     parser.add_argument("--output", default="images-manifest.json")
@@ -538,7 +608,7 @@ if __name__ == "__main__":
         except Exception:
             sys.exit("Loaded image config verification failed")
     elif args.command == "matrix":
-        print(json.dumps(matrix(), separators=(",", ":")))
+        print(json.dumps(matrix(pull_request_paths() if args.pull_request else None), separators=(",", ":")))
     elif args.command == "build":
         build(args.image, args.output, args.cache)
     elif args.command == "publish":
