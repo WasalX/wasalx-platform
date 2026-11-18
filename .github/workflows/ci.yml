@@ -61,6 +61,7 @@ jobs:
     timeout-minutes: 10
     strategy:
       fail-fast: false
+      max-parallel: 5
       matrix:
         include:
           - {name: Lint, mode: lint}
@@ -153,6 +154,7 @@ jobs:
     timeout-minutes: 15
     strategy:
       fail-fast: false
+      max-parallel: 10
       matrix: ${{ fromJSON(needs.changes.outputs.matrix) }}
     steps:
       - name: Require GitHub-hosted execution
