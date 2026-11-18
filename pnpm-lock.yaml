@@ -5,6 +5,7 @@ settings:
   excludeLinksFromLockfile: false
 
 overrides:
+  vinext>image-size: 2.0.3
   source-map-js@1.2.1: 1.2.2
   '@grpc/grpc-js@1.14.4': 1.14.5
   undici@7.29.0: 7.30.1
@@ -20,7 +21,6 @@ overrides:
 
 patchedDependencies:
   braces@3.0.3: cecdb90ea3f216ffb13f31d757e9e26239b040179ba9235326e1a6041cb3b055
-  image-size@2.0.2: 7c89ec6d1c08d3b56283f29cafff78710fc3b86b0623eb3f1112f4df4d2b7c66
   storybook@10.6.2: 9656e522a94b4d34bdac1420288c473bf19757edec6a0d2201df92b48d210886
 
 importers:
@@ -3469,10 +3469,9 @@ packages:
     resolution: {integrity: sha512-BAg6QkE8W+TuQLrrw0Ugr7HegXduRuuj8/ti2kSOc+jz1dmx8/WNcjr6XGnq5YpDWxFwwaavqD0+jIUOKelTsw==}
     engines: {node: '>= 4'}
 
-  image-size@2.0.2:
-    resolution: {integrity: sha512-IRqXKlaXwgSMAMtpNzZa1ZAe8m+Sa1770Dhk8VkSsP9LS+iHD62Zd8FQKs8fbPiagBE7BzoFX23cxFnwshpV6w==}
-    engines: {node: '>=16.x'}
-    deprecated: Use latest 2.x please
+  image-size@2.0.3:
+    resolution: {integrity: sha512-9BJAtVCBth+76NwqnEfWr3PiRnYhbquk6K/USuQ1GQajz5NgLzO7tNsnoNjHfO7LuftgkBf+CCH6j28hjMbIYQ==}
+    engines: {node: '>=18'}
     hasBin: true
 
   import-fresh@3.3.1:
@@ -8165,7 +8164,7 @@ snapshots:
 
   ignore@7.0.6: {}
 
-  image-size@2.0.2(patch_hash=7c89ec6d1c08d3b56283f29cafff78710fc3b86b0623eb3f1112f4df4d2b7c66): {}
+  image-size@2.0.3: {}
 
   import-fresh@3.3.1:
     dependencies:
@@ -9531,7 +9530,7 @@ snapshots:
       '@vercel/og': 0.8.6
       '@vinext/types': 1.0.0-beta.2
       '@vitejs/plugin-react': 6.0.2(vite@8.2.4(@types/node@22.19.19)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.49.2)(tsx@4.23.11)(yaml@2.9.0))
-      image-size: 2.0.2(patch_hash=7c89ec6d1c08d3b56283f29cafff78710fc3b86b0623eb3f1112f4df4d2b7c66)
+      image-size: 2.0.3
       ipaddr.js: 2.5.0
       magic-string: 0.30.21
       react: 19.2.9

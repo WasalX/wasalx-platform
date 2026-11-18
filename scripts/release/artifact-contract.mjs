@@ -18,11 +18,7 @@ const buildkitBuildType = "https://github.com/moby/buildkit/blob/master/docs/att
 const releasePlatforms = ["linux/amd64"];
 const expectedImageIds = JSON.parse(await readFile(new URL("./product-images.json", import.meta.url), "utf8")).map(image => image.image);
 const expectedDependencyIds = ["nginx", "redis", "memcached"];
-const approvedPortalVulnerabilities = [
-  new Set(["GHSA-w3rx-r6r6-pgpr", "CVE-2025-71330"]),
-  new Set(["GHSA-5p2g-fcmc-qvqq", "CVE-2025-71329"]),
-];
-const approvedImageSizeIds = new Set([
+const approvedBracesImageIds = new Set([
   "portal",
   "control-api",
   "connector-worker",
@@ -307,7 +303,7 @@ const validateBuildkitProvenance = async (path, sourceRevision, sourceTree, dock
 const validateBracesProof = async (report, imageId, { proofPath, imageReference, platform } = {}) => {
   const matches = [...report.matches, ...(report.ignoredMatches ?? [])].filter(match => match.artifact?.name === "braces");
   if (!matches.length && !proofPath) return;
-  if (!approvedImageSizeIds.has(imageId) || !proofPath || platform !== "linux/amd64" ||
+  if (!approvedBracesImageIds.has(imageId) || !proofPath || platform !== "linux/amd64" ||
       !new RegExp(`^ghcr\\.io/[a-z0-9._-]+/[a-z0-9._-]+/${imageId}@sha256:[0-9a-f]{64}$`, "u").test(imageReference ?? "")) {
     fail(`${imageId} lacks image-bound braces patch proof`);
   }
@@ -354,19 +350,12 @@ const validateVulnerabilityScan = async (path, imageId, bracesProof) => {
   if (blocking.length) fail(`${path} contains an unsuppressed high or critical vulnerability`);
   await validateBracesProof(report, imageId, bracesProof);
   if (!ignoredMatches.length) return report;
-  const coveredPortal = new Set();
   const coveredZlib = new Set();
   let coveredGlibc = false;
   for (const match of ignoredMatches) {
     const ids = new Set([match.vulnerability?.id, ...(match.relatedVulnerabilities ?? []).map(({ id }) => id)].filter(Boolean));
     let justification;
-    if (approvedImageSizeIds.has(imageId) && match.artifact?.name === "image-size" && match.artifact?.version === "2.0.2") {
-      const approvedIndex = approvedPortalVulnerabilities.findIndex((allowed) =>
-        ids.size === allowed.size && [...ids].every((id) => allowed.has(id)));
-      if (approvedIndex < 0) fail(`${path} suppresses an unapproved vulnerability`);
-      coveredPortal.add(approvedIndex);
-      justification = "inline_mitigations_already_exist";
-    } else if (approvedImageSizeIds.has(imageId) && match.artifact?.name === "braces" && match.artifact?.version === "3.0.3" &&
+    if (approvedBracesImageIds.has(imageId) && match.artifact?.name === "braces" && match.artifact?.version === "3.0.3" &&
         ids.size === 2 && ids.has("GHSA-vfj7-8cjw-p6xm") && ids.has("CVE-2026-93687")) {
       justification = "inline_mitigations_already_exist";
     } else if (match.artifact?.name === "zlib" && match.artifact?.version === "1.3.1-r51" &&
@@ -386,9 +375,6 @@ const validateVulnerabilityScan = async (path, imageId, bracesProof) => {
           rule["vex-justification"] === justification)) {
       fail(`${path} lacks the approved applied VEX reason`);
     }
-  }
-  if (coveredPortal.size > 0 && coveredPortal.size !== approvedPortalVulnerabilities.length) {
-    fail(`${path} does not bind both approved image-size VEX statements`);
   }
   if (coveredZlib.size > 0 && coveredZlib.size !== approvedZlibVulnerabilities.size) {
     fail(`${path} does not bind both approved zlib advisory aliases`);
