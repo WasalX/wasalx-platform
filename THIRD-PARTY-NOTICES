@@ -579,7 +579,7 @@ Exact installed Windows x64 package inventory (unchanged frozen lockfile):
 - ieee754@1.2.1: BSD-3-Clause
 - ignore@5.3.2: MIT
 - ignore@7.0.6: MIT
-- image-size@2.0.2: MIT
+- image-size@2.0.3: MIT
 - import-fresh@3.3.1: MIT
 - import-in-the-middle@3.3.3: Apache-2.0
 - imurmurhash@0.1.4: MIT
@@ -944,4 +944,4 @@ Exact installed Windows x64 package inventory (unchanged frozen lockfile):
 - zod-validation-error@4.0.2: MIT
 - zustand@4.5.7: MIT
 
-Dependency patches: patches/braces@3.0.3.patch and patches/image-size@2.0.2.patch contain modifications and context from the respective MIT-licensed upstream npm packages; full notices are LICENSES/braces-MIT.txt and LICENSES/image-size-MIT.txt. patches/storybook@10.6.2.patch modifies storybook@10.6.2, upstream https://github.com/storybookjs/storybook/tree/v10.6.2, under MIT, Copyright (c) 2024 Storybook; retain the full notice in LICENSES/storybook-10.6.2-MIT.txt. That patch also backports launch-editor@2.14.2 Windows launch guards, upstream https://github.com/vitejs/launch-editor, under MIT, Copyright (c) 2017-present, Yuxi (Evan) You; retain its full notice in LICENSES/launch-editor-2.14.2-MIT.txt. WasalX adaptations resolve editor file paths, reject Windows UNC paths, and reject editor arguments containing line breaks or percent signs.
+Dependency patches: patches/braces@3.0.3.patch contains modifications and context from the MIT-licensed upstream npm package; its full notice is LICENSES/braces-MIT.txt. The image-size notice is LICENSES/image-size-MIT.txt. patches/storybook@10.6.2.patch modifies storybook@10.6.2, upstream https://github.com/storybookjs/storybook/tree/v10.6.2, under MIT, Copyright (c) 2024 Storybook; retain the full notice in LICENSES/storybook-10.6.2-MIT.txt. That patch also backports launch-editor@2.14.2 Windows launch guards, upstream https://github.com/vitejs/launch-editor, under MIT, Copyright (c) 2017-present, Yuxi (Evan) You; retain its full notice in LICENSES/launch-editor-2.14.2-MIT.txt. WasalX adaptations resolve editor file paths, reject Windows UNC paths, and reject editor arguments containing line breaks or percent signs.

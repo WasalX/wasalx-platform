@@ -935,7 +935,7 @@ test("Docker dependency stages coalesce safely and keep pnpm trust checks enable
 
   const workspace = await read("pnpm-workspace.yaml");
   assert.match(workspace, /allowBuilds:/);
-  assert.match(workspace, /image-size@2\.0\.2: patches\/image-size@2\.0\.2\.patch/);
+  assert.match(workspace, /^ {2}'vinext>image-size': 2\.0\.3$/m);
 });
 
 test("Docker smoke may reuse only a complete, explicitly verified local image set", async () => {
