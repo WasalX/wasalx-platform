@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { sha256 } from "./installer-artifacts.mjs";
 
-export const hostedPublisher = "https://github.com/WasalX/wasalx-platform/.github/workflows/branch-image.yml@refs/heads/main";
+export const hostedPublisher = "https://github.com/WasalX/wasalx-platform/.github/workflows/branch-image.yml@refs/heads/dev";
 export const hostedIssuer = "https://token.actions.githubusercontent.com";
 const source = "https://github.com/WasalX/wasalx-platform";
 const digest = /^sha256:[0-9a-f]{64}$/u;

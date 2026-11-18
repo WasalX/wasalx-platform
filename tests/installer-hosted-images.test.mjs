@@ -1,15 +1,19 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { hostedPublisher, hostedIssuer, verifyHostedImages } from "../scripts/release/installer-hosted-images.mjs";
+import { fileURLToPath } from "node:url";
+import { hostedIssuer, verifyHostedImages } from "../scripts/release/installer-hosted-images.mjs";
 import { artifactPath, preimagePath, preserveReplacement, readBoundArtifacts, sha256 } from "../scripts/release/installer-artifacts.mjs";
 import { createCandidatePlan, executeStage } from "../scripts/release/installer-stages.mjs";
 
 const catalog = JSON.parse(await readFile(new URL("../release/installer-images.json", import.meta.url)));
 const candidateSha = "a".repeat(40), candidateTree = "b".repeat(40);
 const source = "https://github.com/WasalX/wasalx-platform";
+const devPublisher = `${source}/.github/workflows/branch-image.yml@refs/heads/dev`;
+const mainPublisher = `${source}/.github/workflows/branch-image.yml@refs/heads/main`;
 
 async function fixture(t) {
   const root = await mkdtemp(join(tmpdir(), "hosted-admission-"));
@@ -35,7 +39,7 @@ async function fixture(t) {
     const raw = JSON.stringify({ schemaVersion: 2, mediaType: "application/vnd.oci.image.manifest.v1+json", config: { digest: configDigest } });
     const digest = `sha256:${sha256(raw)}`;
     const row = { image: image.id, commit: candidateSha, tree: candidateTree, platform: "linux/amd64",
-      digest, configDigest, pullReference: `ghcr.io/wasalx/${image.id}@${digest}`, workflow: hostedPublisher,
+      digest, configDigest, pullReference: `ghcr.io/wasalx/${image.id}@${digest}`, workflow: devPublisher,
       inspection: { configDigest }, status: "published", verified: true };
     inventory.images[image.id] = row;
     const path = join(root, image.id, "manifest.json");
@@ -43,10 +47,10 @@ async function fixture(t) {
     manifests[image.id] = { path, raw };
     details[image.reference] = { Id: digest, Config: config.config };
     signatures[image.id] = { mediaType: "application/vnd.dev.sigstore.bundle.v0.3+json",
-      verificationMaterial: { certificate: { Subject: hostedPublisher, Issuer: hostedIssuer } },
+      verificationMaterial: { certificate: { Subject: devPublisher, Issuer: hostedIssuer } },
       dsseEnvelope: { payloadType: "application/vnd.in-toto+json", payload: Buffer.from(JSON.stringify({ predicateType: "https://sigstore.dev/cosign/sign/v1", subject: [{ digest: { sha256: digest.slice(7) } }] })).toString("base64") } };
     statements[image.id] = { predicateType: "https://slsa.dev/provenance/v0.2", subject: [{ name: `ghcr.io/wasalx/${image.id}`, digest: { sha256: digest.slice(7) } }],
-      predicate: { builder: { id: hostedPublisher }, buildType: `${source}/image-build/v1`,
+      predicate: { builder: { id: devPublisher }, buildType: `${source}/image-build/v1`,
         materials: [{ uri: `git+${source}`, digest: { sha1: candidateSha, gitTree: candidateTree } }],
         invocation: { configSource: { uri: `git+${source}`, digest: { sha1: candidateSha }, entryPoint: ".github/workflows/branch-image.yml" },
           parameters: { image: image.id, tree: candidateTree, configDigest } } } };
@@ -67,11 +71,12 @@ async function fixture(t) {
       if (args[0] === "version") return JSON.stringify({ gitVersion: "v3.1.4" });
       assert.equal(args[0], "verify-blob-attestation");
       assert.ok(args.includes("--offline") && args.includes("--trusted-root"));
-      assert.equal(args[args.indexOf("--certificate-identity") + 1], hostedPublisher);
+      const identity = args[args.indexOf("--certificate-identity") + 1];
+      assert.equal(identity, devPublisher);
       assert.equal(args[args.indexOf("--certificate-oidc-issuer") + 1], hostedIssuer);
       assert.ok(!args.some(arg => arg.includes("regexp") || arg.includes("insecure")));
       const bundle = JSON.parse(await readFile(args[args.indexOf("--bundle") + 1]));
-      assert.equal(bundle.verificationMaterial.certificate.Subject, hostedPublisher, "cosign certificate identity rejected");
+      assert.equal(bundle.verificationMaterial.certificate.Subject, identity, "cosign certificate identity rejected");
       assert.equal(bundle.verificationMaterial.certificate.Issuer, hostedIssuer, "cosign certificate issuer rejected");
       return "";
     }
@@ -97,11 +102,12 @@ async function fixture(t) {
   return { context, inventory, configs, manifests, statements, signatures, details, calls, save };
 }
 
-test("hosted main identity is admitted with containerd manifest IDs and a distinct bound receipt", async t => {
+test("hosted dev identity is admitted with containerd manifest IDs and a distinct bound receipt", async t => {
   const f = await fixture(t);
   assert.equal(await executeStage("admit-hosted", f.context), 0);
   const { manifest, snapshot } = await readBoundArtifacts(f.context);
   assert.equal(manifest.kind, "compose-hosted-image-admission");
+  assert.equal(manifest.publisher, devPublisher);
   assert.ok(manifest.images.every(image => image.state === "ADMITTED" && image.imageId === image.manifestDigest));
   assert.equal(manifest.buildContextAlgorithm, undefined); assert.equal(manifest.buildContextSha256, undefined);
   assert.equal(manifest.preimage.transactionId, snapshot.transactionId);
@@ -117,12 +123,14 @@ test("hosted main identity is admitted with containerd manifest IDs and a distin
 });
 
 const refusals = {
-  "wrong identity": f => { f.signatures.zammad.verificationMaterial.certificate.Subject = hostedPublisher.replace("main", "other"); },
+  "main certificate": f => { f.signatures.zammad.verificationMaterial.certificate.Subject = mainPublisher; },
+  "main inventory publisher": f => { f.inventory.images.zammad.workflow = mainPublisher; },
+  "main provenance builder": f => { f.statements.zammad.predicate.builder.id = mainPublisher; },
   "missing identity": f => { delete f.signatures.zammad.verificationMaterial.certificate.Subject; },
   "wrong issuer": f => { f.signatures.zammad.verificationMaterial.certificate.Issuer = "https://example.invalid"; },
   "missing issuer": f => { delete f.signatures.zammad.verificationMaterial.certificate.Issuer; },
-  "tag only": f => { f.inventory.images.zammad.pullReference = "ghcr.io/wasalx/zammad:main"; },
-  "tag plus digest": f => { f.inventory.images.zammad.pullReference = f.inventory.images.zammad.pullReference.replace("@", ":main@"); },
+  "tag only": f => { f.inventory.images.zammad.pullReference = "ghcr.io/wasalx/zammad:dev"; },
+  "tag plus digest": f => { f.inventory.images.zammad.pullReference = f.inventory.images.zammad.pullReference.replace("@", ":dev@"); },
   "wrong catalog name": f => { f.inventory.images.zammad.image = "portal"; },
   "partial coverage": f => { delete f.inventory.images.portal; },
   "signed config mismatch": f => { f.statements.zammad.predicate.invocation.parameters.configDigest = `sha256:${"c".repeat(64)}`; },
@@ -142,6 +150,19 @@ for (const [reason, mutate] of Object.entries(refusals)) test(`hosted ${reason} 
     assert.ok(f.calls.every(({ name, args }) => name !== "docker" || args[0] === "image" && args[1] === "inspect"));
     await assert.rejects(readFile(artifactPath(f.context)), { code: "ENOENT" });
   }
+});
+
+test("hosted installer CLI refuses an unknown install profile before host checks", () => {
+  const script = fileURLToPath(new URL("../scripts/release/installer-stages.mjs", import.meta.url));
+  const path = fileURLToPath(new URL("./missing-installer-env", import.meta.url));
+  const env = { ...process.env, WASALX_INSTALL_EXPECTED_HOSTNAME: "" };
+  const result = spawnSync(process.execPath, ["--", script, "verify-hosted",
+    "--env-file", path, "--project-name", "fixture", "--hosted-images", path,
+    "--hosted-images-sha256", "a".repeat(64), "--hosted-trusted-root", path, "--install-profile", "unknown"],
+  { env, encoding: "utf8", timeout: 10_000, windowsHide: true });
+  assert.equal(result.error, undefined);
+  assert.equal(result.status, 1);
+  assert.equal(result.stderr, "remote full qualification failed\nremote full qualification reason: Error\n");
 });
 
 test("verify-only checks the complete catalog without Docker, preimages or an admission receipt", async t => {
@@ -189,6 +210,8 @@ test("hosted receipt rejects changed bindings and never accepts BUILT as admissi
     const changed = { ...original, [field]: "changed" }; await writeFile(artifactPath(f.context), JSON.stringify(changed));
     await assert.rejects(readBoundArtifacts(f.context));
   }
+  await writeFile(artifactPath(f.context), JSON.stringify({ ...original, publisher: mainPublisher }));
+  await assert.rejects(readBoundArtifacts(f.context), { code: "ERR_ASSERTION" });
   for (const mutate of [m => { m.images[0].state = "BUILT"; }, m => { m.preimage.transactionId = "changed"; }, m => { m.preimage.sha256 = "changed"; }]) {
     const changed = structuredClone(original); mutate(changed); await writeFile(artifactPath(f.context), JSON.stringify(changed));
     await assert.rejects(readBoundArtifacts(f.context));
