@@ -186,7 +186,7 @@ jobs:
           IMAGE: ${{ matrix.image }}
           PUBLIC_ADDON_SOURCE: ${{ toJSON(matrix.addonSource) }}
         run: python3 scripts/release/images-by-digest.py pending --image "$IMAGE" --output "records/$IMAGE.json"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           overwrite: true
           name: image-build-${{ matrix.image }}
