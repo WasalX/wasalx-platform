@@ -2,9 +2,11 @@ name: ci
 
 on:
   pull_request:
+    # edited: a base change (retarget to main) must rerun the main-entry guard.
+    types: [opened, synchronize, reopened, edited]
   merge_group:
   push:
-    branches: [main]
+    branches: [dev, main]
 
 permissions:
   contents: read
@@ -101,7 +103,7 @@ jobs:
           restore-keys: pnpm-${{ runner.os }}-${{ runner.arch }}-
       - run: pnpm install --frozen-lockfile --fetch-retries=2
       - uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
-        if: matrix.mode == 'lint' && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.pnpm-cache.outputs.cache-hit != 'true'
+        if: matrix.mode == 'lint' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev') && steps.pnpm-cache.outputs.cache-hit != 'true'
         with:
           path: ${{ env.PNPM_STORE_PATH }}
           key: ${{ steps.pnpm-cache.outputs.cache-primary-key }}
@@ -130,7 +132,7 @@ jobs:
         if: matrix.mode == 'lint'
         run: node scripts/hosted-ci.mjs lint
       - uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
-        if: matrix.mode == 'lint' && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.eslint-cache.outputs.cache-hit != 'true'
+        if: matrix.mode == 'lint' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev') && steps.eslint-cache.outputs.cache-hit != 'true'
         with:
           path: .git/hosted-eslint-cache
           key: ${{ steps.eslint-cache.outputs.cache-primary-key }}
@@ -194,9 +196,9 @@ jobs:
           if-no-files-found: error
 
   publish:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'WasalX/wasalx-platform'
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev') && github.repository == 'WasalX/wasalx-platform'
     concurrency:
-      group: release-main
+      group: release-${{ github.ref_name }}
       cancel-in-progress: false
     permissions:
       contents: read
@@ -212,6 +214,17 @@ jobs:
     timeout-minutes: 2
     permissions: {}
     steps:
+      - name: Restrict pull requests into main
+        if: github.event_name == 'pull_request' && github.base_ref == 'main'
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        run: |
+          test "$HEAD_REPO" = "$GITHUB_REPOSITORY" || { echo "::error::Pull requests into main must come from this repository."; exit 1; }
+          case "$HEAD_REF" in
+            dev|hotfix/*) ;;
+            *) echo "::error::Pull requests into main must come from dev or hotfix/*."; exit 1 ;;
+          esac
       - name: Require checks and the applicable image lane
         env:
           EVENT: ${{ github.event_name }}
