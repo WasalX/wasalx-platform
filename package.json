@@ -57,7 +57,7 @@
     "@wasalx/observability": "workspace:*",
     "@xyflow/react": "12.12.1",
     "drizzle-orm": "0.45.4",
-    "ioredis": "5.11.1",
+    "ioredis": "6.0.0",
     "jose": "6.2.17",
     "re2-wasm": "1.0.2",
     "react": "19.3.1",
