@@ -27,8 +27,9 @@ port=int(sys.argv[1]);ca=sys.argv[2];context=ssl.create_default_context(cafile=c
 def connect(): return smtplib.SMTP_SSL('127.0.0.1',port,context=context,timeout=3)
 with connect() as s:
  assert s.mail('${sender}')[0]==530
- try: s.login('${sender}','wrong-password'); raise AssertionError('bad auth accepted')
- except smtplib.SMTPAuthenticationError: pass
+ for password in ('synthetic-password-2','synthetic-password-1-extra','x'*4097):
+  try: s.login('${sender}',password); raise AssertionError('bad auth accepted')
+  except smtplib.SMTPAuthenticationError: pass
  s.login('${sender}','synthetic-password-1')
  assert s.mail('other@alpha.invalid')[0]==553
  raw=bytes([13,10]).join([b'Message-ID: <tls@alpha.invalid>',b'',b'AUTH is body text',b''])

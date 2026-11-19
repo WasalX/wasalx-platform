@@ -27,6 +27,15 @@ test('incumbent simulator on real Graph hostname produces only SIMULATED approva
  const result=simulationRuntimeRegistration(actual());assert.equal(result.mode,'SIMULATED');assert.equal(result.workerImageDigest,digest);assert.equal(result.transportBindingSha256,'1'.repeat(64));
  assert.equal(Object.hasOwn(result,'hostname'),false);assert.equal(Object.hasOwn(result,'NODE_ENV'),false);
 });
+test('host readback requires the exact Graph hostname as an address alias',()=>{
+ const input=actual();
+ for(const hostname of ['graph.facebook.com.example.test','example.test.graph.facebook.com','https://graph.facebook.com']){
+  input.hosts=`192.0.2.1 ${hostname}\n`;input.transport.projection.hostsSha256=sha(input.hosts);
+  assert.throws(()=>simulationRuntimeRegistration(input));
+ }
+ input.hosts='192.0.2.1 local.example.test graph.facebook.com # exact alias\n';input.transport.projection.hostsSha256=sha(input.hosts);
+ assert.equal(simulationRuntimeRegistration(input).mode,'SIMULATED');
+});
 test('source/image/route/TLS/version/expiry drift cannot create runtime approval',()=>{
  const mutations=[v=>{v.image.Config.Labels['io.wasalx.source.tree']='0'.repeat(40);},v=>{v.worker.Image='sha256:'+'0'.repeat(64);},
   v=>{v.worker.Mounts[0].RW=true;},v=>{v.image.RepoDigests=[];},v=>{v.simulatorSourceSha256='0'.repeat(64);},v=>{v.simulator.Config.Cmd=['node','another-server.mjs'];},

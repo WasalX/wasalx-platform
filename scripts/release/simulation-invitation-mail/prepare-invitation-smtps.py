@@ -35,7 +35,8 @@ assert count==0,'Existing invitation effects must be reconciled before enabling 
 reference=mailer['environment']['INVITATION_EMAIL_PROVIDER_SECRET_REFERENCE'];assert reference.startswith('secret://')
 js="const e=process.env;const r=await fetch(e.SECRET_SIDECAR_URL+'/v1/resolve',{method:'POST',headers:{authorization:'Bearer '+e.SECRET_SIDECAR_TOKEN,'content-type':'application/json'},body:JSON.stringify({reference:"+json.dumps(reference)+"}),signal:AbortSignal.timeout(5000)});if(!r.ok)throw Error('private resolution failed');const s=await r.json();const p=s.apiKey??s.token??s.value;if(typeof p!=='string'||p.length<8||p.length>4096)throw Error('private credential invalid');process.stdout.write(JSON.stringify({password:p}));"
 # stdout below remains only in this trusted process; no secret-bearing subprocess logging.
-secret=json.loads(command(['docker','exec',control['Id'],'node','--input-type=module','-e',js]))
+try:secret=json.loads(command(['docker','exec',control['Id'],'node','--input-type=module','-e',js]))
+except subprocess.CalledProcessError:raise RuntimeError('Invitation SMTP credential resolution failed') from None
 def bind_smtp_parent(overlay,mailer):
  parent=mailer.get('cgroup_parent')
  if parent is None:return
@@ -83,6 +84,6 @@ if (private/'preparation.json').exists():
 start=full+[item for profile in profiles for item in ['--profile',profile]]
 for service in ['alpha-smtps','invitation-mailer']:
  command(start+['--dry-run','up','-d','--no-build','--pull','never','--no-deps',service])
-receipt={'prepared':True,'at':__import__('datetime').datetime.now(__import__('datetime').timezone.utc).isoformat(),'project':project,'candidate':{'sha':head,'tree':tree},'mailerImage':image['Id'],'smtpImage':node['Image'],'queueBefore':count,'credentialSource':reference,'credentialReused':True,'recipient':recipient,'recipients':allowed,'sender':sender,'portalOrigin':portal,'syntheticTls':prepared['syntheticTls'],'overlayPaths':[str(private/'compose.simulation-smtps.yaml'),str(overlay_path)],'startSinkCommand':start+['up','-d','--no-build','--pull','never','--no-deps','alpha-smtps'],'startMailerCommand':start+['up','-d','--no-build','--pull','never','--no-deps','invitation-mailer'],'startModelDryRunPassed':True,'noRuntimeMutation':True}
+receipt={'prepared':True,'at':__import__('datetime').datetime.now(__import__('datetime').timezone.utc).isoformat(),'project':project,'candidate':{'sha':head,'tree':tree},'mailerImage':image['Id'],'smtpImage':node['Image'],'queueBefore':count,'credentialSource':'secret-sidecar','credentialReused':True,'recipient':recipient,'recipients':allowed,'sender':sender,'portalOrigin':portal,'syntheticTls':prepared['syntheticTls'],'overlayPaths':[str(private/'compose.simulation-smtps.yaml'),str(overlay_path)],'startSinkCommand':start+['up','-d','--no-build','--pull','never','--no-deps','alpha-smtps'],'startMailerCommand':start+['up','-d','--no-build','--pull','never','--no-deps','invitation-mailer'],'startModelDryRunPassed':True,'noRuntimeMutation':True}
 with open(private/'invitation-smtps-preparation.json','x') as f:os.chmod(f.name,0o600);json.dump(receipt,f,indent=2)
-print(json.dumps(receipt))
+print('{"prepared":true}')

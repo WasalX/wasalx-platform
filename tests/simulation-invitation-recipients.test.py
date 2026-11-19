@@ -1,7 +1,15 @@
-import ast,pathlib,unittest
+import ast,io,json,pathlib,unittest
+from contextlib import redirect_stdout
 source=(pathlib.Path(__file__).resolve().parents[1]/'scripts/release/simulation-invitation-mail/prepare-invitation-smtps.py').read_text()
 nodes=[n for n in ast.parse(source).body if isinstance(n,ast.FunctionDef) and n.name in ['controlled_recipients','validate_checkout_boundary','bind_smtp_parent']];ns={'pathlib':pathlib};exec(compile(ast.Module(body=nodes,type_ignores=[]),'guard','exec'),ns)
 class Tests(unittest.TestCase):
+ def test_preparation_stdout_is_status_only(self):
+  stdout=io.StringIO()
+  statement=ast.parse(source).body[-1]
+  receipt={'prepared':True,'credentialSource':'secret://synthetic/invitation-provider','password':'synthetic-fixture-value'}
+  with redirect_stdout(stdout):
+   exec(compile(ast.Module(body=[statement],type_ignores=[]),'status','exec'),{'json':json,'receipt':receipt})
+  self.assertEqual(json.loads(stdout.getvalue()),{'prepared':True})
  def test_single(self):self.assertEqual(ns['controlled_recipients']({'recipient':'synthetic@example.test'}),['synthetic@example.test'])
  def test_pair(self):self.assertEqual(len(ns['controlled_recipients']({'recipient':'synthetic@example.test','recipients':['synthetic@example.test','synthetic-isolation@example.test']})),2)
  def test_other(self):
