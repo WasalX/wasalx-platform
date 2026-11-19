@@ -22,6 +22,9 @@ updates:
       # The 0.3xx experimental line pulls the 3.x stable packages; move to it in one PR.
       - dependency-name: "@opentelemetry/*"
         versions: [">=0.300.0 <1.0.0"]
+      # 0.83.x pulls the 3.x / 0.301 line transitively; hold until that coordinated PR.
+      - dependency-name: "@opentelemetry/auto-instrumentations-node"
+        versions: [">0.80.0"]
       # Keep Vinext pinned until newer versions pass the portal image regression.
       - dependency-name: "vinext"
         versions: [">1.0.0-beta.5"]
