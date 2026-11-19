@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.7
-FROM cgr.dev/chainguard/postgres:latest@sha256:f4b066118f70efeb519d2aac94507f898698f4a145ecb43dd8fd4076f21b1124
+FROM cgr.dev/chainguard/postgres:latest@sha256:9cc085289d7ef0174f35f2ff1e514624c3305c4a26215d8e89e3e277e3377d03
 ARG WASALX_CANDIDATE_SHA=unfrozen
 ARG WASALX_CANDIDATE_TREE=unfrozen
 LABEL org.opencontainers.image.revision="${WASALX_CANDIDATE_SHA}" \
