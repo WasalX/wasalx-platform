@@ -145,6 +145,8 @@ jobs:
   lint-on-push:
     name: Lint on push
     if: github.event_name == 'push'
+    # Cache warm-up only; PRs and the queue gate lint, so a failure here must not make a published trunk commit unusable.
+    continue-on-error: true
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:

@@ -64,15 +64,19 @@ def run(*args, cwd=None):
     return subprocess.check_output(args, cwd=cwd, text=True).strip()
 
 
-def run_retry(*args):
+def retry(action):
     # shortcut: retry command failures with fixed backoff until error classes are needed.
     for attempt in range(1, 4):
         try:
-            return run(*args)
+            return action()
         except subprocess.CalledProcessError:
             if attempt == 3:
                 raise
             time.sleep(10 * attempt)
+
+
+def run_retry(*args):
+    return retry(lambda: run(*args))
 
 
 def write(path, value):
@@ -461,7 +465,7 @@ def build(image, output, cache="off"):
                     for name in ["LICENSE", "COPYING", "THIRD-PARTY-NOTICES"]} if addon else {}
         dockerfile_digest = sha256((context / row["dockerfile"]).read_bytes())
         # Publication exports a cache but never imports one. No host context or secret/SSH mounts.
-        subprocess.run(["docker", "buildx", "build", "--platform", "linux/amd64",
+        retry(lambda: subprocess.run(["docker", "buildx", "build", "--platform", "linux/amd64",
                         "--output", "type=docker,rewrite-timestamp=true",
                         "--provenance=false", "--sbom=false", *cache_args, "--file", str(context / row["dockerfile"]),
                         "--tag", reference, "--build-arg", "WASALX_CANDIDATE_SHA=" + commit,
@@ -469,7 +473,7 @@ def build(image, output, cache="off"):
                         "--build-arg", "COMMIT_SHA=" + commit, "--build-arg", "WASALX_CANDIDATE_TREE=" + tree,
                         "--label", "org.opencontainers.image.source=" + SOURCE,
                         "--label", "org.opencontainers.image.revision=" + commit,
-                        "--label", "io.wasalx.source.tree=" + tree, str(context)], check=True)
+                        "--label", "io.wasalx.source.tree=" + tree, str(context)], check=True))
         inspection = inspect_image(reference, row, commit, tree, directory, licenses)
     write(output, {"image": image, "reference": reference, "commit": commit, "tree": tree, "status": "built",
                    "platform": "linux/amd64", "sourceArchiveDigest": archive_digest, "addonSource": addon,
@@ -543,7 +547,7 @@ def publish(receipt_path):
     require(len(set(matches)) == 1, "Missing unique published digest")
     digest = matches[0]
     reference = repository + "@" + digest
-    raw = run("docker", "buildx", "imagetools", "inspect", "--raw", reference)
+    raw = run_retry("docker", "buildx", "imagetools", "inspect", "--raw", reference)
     # The digest is checked over registry bytes by the client; never hash whitespace-normalized JSON.
     verify_manifest(json.loads(raw), receipt["inspection"]["configDigest"])
     receipt.update({"digest": digest, "configDigest": receipt["inspection"]["configDigest"],
@@ -569,8 +573,8 @@ def publish(receipt_path):
     run_retry("cosign", "attest", "--yes", "--type", "slsaprovenance", "--predicate", predicate_path, reference)
     identity = receipt["workflow"]
     common = ["--certificate-identity", identity, "--certificate-oidc-issuer", "https://token.actions.githubusercontent.com"]
-    run("cosign", "verify", *common, reference)
-    run("cosign", "verify-attestation", *common, "--type", "slsaprovenance", reference)
+    run_retry("cosign", "verify", *common, reference)
+    run_retry("cosign", "verify-attestation", *common, "--type", "slsaprovenance", reference)
     pull(reference)
     row = next(r for r in catalog() if r["image"] == receipt["image"])
     with tempfile.TemporaryDirectory() as directory:
