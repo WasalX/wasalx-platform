@@ -81,7 +81,7 @@ export class PortalWorkspaceController {
         client => requirePrivilegedAuthentication(client, request.principal, "changing service access"));
       if (Object.keys(body.input).some(key => key.startsWith("configured_"))) throw new BadRequestException("Invalid workspace request");
     }
-    const actor = identity ? await this.identityActor(request.principal) : await this.actor(request.principal);
+    const actor = identity ? await this.identityActor(request.principal) : await this.serviceActor(request.principal);
     const purpose = identity ? IDENTITY_PURPOSE : PURPOSE;
     const path = identity ? IDENTITY_PATH : PATH;
     const credentials = await this.secrets.resolveCredentials(actor.service_secret_reference,
@@ -337,6 +337,18 @@ export class PortalWorkspaceController {
     if (!row || !/^[1-9][0-9]{0,15}$/u.test(row.native_user_id) || !Number.isSafeInteger(Number(row.revision)) || Number(row.revision) < 1)
       throw new ForbiddenException("Workspace account access is unavailable");
     return row;
+  }
+
+  // A held or stopped case workspace is a service outage, not a missing grant: report 503 instead of blaming member access.
+  private async serviceActor(principal: Principal): Promise<Actor> {
+    try { return await this.actor(principal); }
+    catch (error) {
+      if (!(error instanceof ForbiddenException)) throw error;
+      const [service] = await this.database.rows<{ working: boolean }>(principal.tenantId, `SELECT EXISTS(SELECT 1 FROM tenants t
+        JOIN zammad_instances z ON z.tenant_id=t.id WHERE t.id=$1 AND t.state='ACTIVE' AND z.state='WORKING') AS working`, [principal.tenantId]);
+      if (!service?.working) throw new ServiceUnavailableException("Workspace service is unavailable");
+      throw error;
+    }
   }
 }
 

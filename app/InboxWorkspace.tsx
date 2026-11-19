@@ -5,11 +5,11 @@ import { GroupInbox } from "./GroupInbox";
 import { useI18n } from "./I18nProvider";
 
 export function InboxWorkspace({ mode, selectedGroup, selectedMessage = null, selectedTicket, selectGroup, selectTicket, selectMode,
-  mutationHeaders, canWrite, scope, recoveryScope }: {
+  mutationHeaders, canWrite, scope, recoveryScope, owner = false }: {
   mode: "tickets" | "groups"; selectedGroup: string | null; selectedTicket: string | null;
   selectedMessage?: string | null; selectGroup: (id: string | null, messageId?: string) => void; selectTicket: (number: string | null) => void;
   selectMode: (mode: "tickets" | "groups") => void; mutationHeaders: Record<string, string>;
-  canWrite: boolean; scope: string; recoveryScope: string;
+  canWrite: boolean; scope: string; recoveryScope: string; owner?: boolean;
 }) {
   const { t } = useI18n();
   return <section aria-label={t("inbox.title")}>
@@ -19,7 +19,7 @@ export function InboxWorkspace({ mode, selectedGroup, selectedMessage = null, se
     </nav>
     <div hidden={mode !== "tickets"}>
       <Inbox mutationHeaders={mutationHeaders} targetTicketNumber={selectedTicket} selectTicket={selectTicket}
-        canWrite={canWrite} scope={scope} recoveryScope={recoveryScope} active={mode === "tickets"}
+        canWrite={canWrite} scope={scope} recoveryScope={recoveryScope} active={mode === "tickets"} isOwner={owner}
         selectSource={source => selectGroup(source.group_id, source.message_id)} />
     </div>
     <div hidden={mode !== "groups"}>

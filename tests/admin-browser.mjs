@@ -214,7 +214,7 @@ async function teamsJourney(locale) {
     await expect(page.getByLabel(t("teamsAdmin.name"), { exact: true })).toHaveCount(0);
     await expect(page.getByText("agent@example.invalid", { exact: true })).toHaveCount(0);
     assert.ok(!(await page.locator("body").innerText()).includes("SYNTHETIC_INTERNAL_FAILURE_MUST_NOT_RENDER"));
-    fixture.control.denied = false; await button("inbox.reload").click(); await expect(page.getByRole("button", { name: /Synthetic customer support/u })).toBeVisible();
+    fixture.control.denied = false; await button("common.actions.retry").click(); await expect(page.getByRole("button", { name: /Synthetic customer support/u })).toBeVisible();
     // Corrupt metadata remains present and blocks another UUID instead of being silently erased.
     await page.evaluate(key => sessionStorage.setItem(key, "{"), storageKey); await page.reload({ waitUntil: "networkidle" });
     await expect(button("teamsAdmin.createTeam")).toBeDisabled(); assert.equal(await page.evaluate(key => sessionStorage.getItem(key), storageKey), "{");
@@ -310,7 +310,7 @@ async function mailboxJourney(surface, locale) {
     await expect(page.getByText("Synthetic legacy signature", { exact: true })).toHaveCount(0);
     for (const secret of Object.values(syntheticCredentials)) assert.ok(!(await page.locator("body").innerText()).includes(secret));
     assert.ok(!(await page.locator("body").innerText()).includes("SYNTHETIC_INTERNAL_FAILURE_MUST_NOT_RENDER"));
-    fixture.control.denied = false; await button("inbox.reload").first().click(); await expect(mailboxButton("support@example.invalid")).toBeVisible();
+    fixture.control.denied = false; await button("common.actions.retry").first().click(); await expect(mailboxButton("support@example.invalid")).toBeVisible();
     await page.evaluate(key => sessionStorage.setItem(key, "{"), storageKey); await page.reload({ waitUntil: "networkidle" });
     await expect(button("mailboxes.create")).toBeDisabled(); assert.equal(await page.evaluate(key => sessionStorage.getItem(key), storageKey), "{");
     results.push({ surface, locale, mode: "simulated_bridge", evidence_scope: "exploratory_ui", status: "passed", writes: fixture.writes });

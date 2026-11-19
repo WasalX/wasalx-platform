@@ -628,8 +628,7 @@ function passkeyAssertionFromUnknown(value: unknown): PasskeyAssertionPayload {
   };
 }
 
-function Status({ value }: { value: unknown }) {
-  const { t } = useI18n();
+function statusPresentation(value: unknown) {
   const normalized = String(value).toLowerCase();
   const parts = new Set(normalized.split(/[^a-z]+/u).filter(Boolean));
   const presentation = [
@@ -671,6 +670,12 @@ function Status({ value }: { value: unknown }) {
     [["unchanged"], "tenant.status.unchanged", "neutral"],
   ].find(([tokens]) => (tokens as string[]).some((token) => normalized === token || parts.has(token))) as [string[], string, string] | undefined;
   const [, label = "tenant.status.unknown", tone = "neutral"] = presentation ?? [];
+  return [label, tone] as const;
+}
+
+function Status({ value }: { value: unknown }) {
+  const { t } = useI18n();
+  const [label, tone] = statusPresentation(value);
   return (
     <span className={`status status-${tone}`}>
       <i />
@@ -1724,7 +1729,7 @@ function TenantWasalXApp({
                   selectGroup={(group, message) => navigate("inbox", { workspace: "groups", ...(group ? { group, message } : {}) })}
                   selectMode={mode => navigate("inbox", mode === "groups" ? { workspace: "groups", ...(targetGroupId ? { group: targetGroupId, message: targetGroupMessageId ?? undefined } : {}) } : targetTicketNumber ? { ticket: targetTicketNumber } : {})}
                   selectTicket={ticket => navigate("inbox", ticket ? { ticket } : {})}
-                  canWrite={can(role, "ticket:write")} scope={inboxScope} recoveryScope={inboxRecoveryScope} />
+                  canWrite={can(role, "ticket:write")} scope={inboxScope} recoveryScope={inboxRecoveryScope} owner={role === "tenant_owner"} />
               </Suspense>
             )}
             {view === "cases" && (
@@ -1853,6 +1858,7 @@ function Overview({
 }) {
   const { t, locale } = useI18n();
   const working = data.connections.filter((connection) => connectionIsReady(connection)).length;
+  const noneWorking = data.connections.length > 0 && working === 0;
   const activeGroups = data.groups.filter((g) => Boolean(g.enabled)).length;
   const failed = data.deliveries.filter((d) =>
     String(d.state).includes("FAILED"),
@@ -1885,7 +1891,7 @@ function Overview({
             <small> / {formatNumber(data.connections.length, locale)}</small>
           </strong>
           <footer>
-            <b className={connectionIssues?"warning-text":"positive"}>{connectionIssues?t("tenant.overview.requireAction", { count: formatNumber(connectionIssues, locale) }):t("tenant.overview.healthy")}</b>
+            <b className={connectionIssues||noneWorking?"warning-text":"positive"}>{connectionIssues?t("tenant.overview.requireAction", { count: formatNumber(connectionIssues, locale) }):noneWorking?t("tenant.health.noWorkingConnections"):t("tenant.overview.healthy")}</b>
             <span>{t("tenant.actions.viewAll")} →</span>
           </footer>
         </button>
@@ -1944,7 +1950,7 @@ function Overview({
             <Health name={t("tenant.health.incomingActivity")} value={duration(inboxHealth.queue_age_seconds, locale)} detail={t("tenant.health.oldestAcceptedMessage")} warn={Number(inboxHealth.queue_age_seconds??0)>60}/>
             <Health name={t("tenant.health.caseWorkspace")} value={zammadIssue?t("tenant.status.needsAttention"):t("tenant.status.working")} detail={zammadHealth.last_healthy_at?<><span>{t("tenant.health.lastHealthy")} </span><RelativeTime value={zammadHealth.last_healthy_at} pastOnly/></>:t("tenant.health.noRecentUpdate")} warn={zammadIssue}/>
             <Health name={t("tenant.health.pendingDeliveries")} value={duration(deliveryHealth.queue_age_seconds, locale)} detail={t("tenant.overview.oldestPendingDelivery")} warn={Number(deliveryHealth.queue_age_seconds??0)>60}/>
-            <Health name={t("tenant.health.whatsAppConnections")} value={`${formatNumber(working, locale)} / ${formatNumber(data.connections.length, locale)}`} detail={connectionIssues?t("tenant.health.requireRecovery",{count:formatNumber(connectionIssues,locale)}):t("tenant.health.noConnectionIncidents")} warn={connectionIssues>0}/>
+            <Health name={t("tenant.health.whatsAppConnections")} value={`${formatNumber(working, locale)} / ${formatNumber(data.connections.length, locale)}`} detail={connectionIssues?t("tenant.health.requireRecovery",{count:formatNumber(connectionIssues,locale)}):noneWorking?t("tenant.health.noWorkingConnections"):t("tenant.health.noConnectionIncidents")} warn={connectionIssues>0||noneWorking}/>
           </div>
         </section>
       </div>
@@ -2075,7 +2081,7 @@ function Connections({
           placeholder={t("tenant.connections.search")}
         >
           <label className="filter-control"><span className="sr-only">{t("tenant.connections.filterMethod")}</span><select className="filter-button" value={activeProvider} onChange={(event) => setProvider(event.target.value)}><option value="ALL">{t("tenant.connections.allMethods")}</option>{providers.map((value) => <option key={value} value={value}>{String(value).toLowerCase()==="meta"?t("tenant.connections.officialWhatsApp"):t("tenant.connections.linkedDevice")}</option>)}</select></label>
-          <label className="filter-control"><span className="sr-only">{t("tenant.connections.filterState")}</span><select className="filter-button" value={activeState} onChange={(event) => setState(event.target.value)}><option value="ALL">{t("tenant.connections.allStates")}</option>{states.map((value) => <option key={value} value={value}>{connectionStateText(value, t)}</option>)}</select></label>
+          <label className="filter-control"><span className="sr-only">{t("tenant.connections.filterState")}</span><select className="filter-button" value={activeState} onChange={(event) => setState(event.target.value)}><option value="ALL">{t("tenant.connections.allStates")}</option>{states.map((value) => <option key={value} value={value}>{t(statusPresentation(value)[0])}</option>)}</select></label>
         </Toolbar>
         {filtered.length ? (
           <WideTable>
@@ -5038,7 +5044,7 @@ function Rules({
                 </div>
                 <small className="rule-matcher-summary">{t(`tenant.rules.matcher.${rule.matcherType}`)}</small>
                 <small>
-                  {t("tenant.rules.versionShort")}<bdi>{formatNumber(rule.version, locale)}</bdi> · <bdi>{formatNumber(rule.matchCount, locale)}</bdi> {t("tenant.rules.matches")}
+                  {t("tenant.rules.versionShort")}<bdi>{formatNumber(rule.version, locale)}</bdi> · <bdi>{formatNumber(rule.matchCount, locale)}</bdi> {t(rule.matchCount === 1 ? "tenant.rules.matches.one" : "tenant.rules.matches")}
                 </small>
               </div>
               <button className="more" aria-label={t("tenant.rules.inspectNamed", { name: rule.name })} onClick={() => setSelectedRule(rule)}>•••</button>
@@ -6236,13 +6242,11 @@ function Audit({ rows, showDiagnostics, canExport }: { rows: RecordRow[]; showDi
       <ol className="timeline" role="list">
         {filteredEntries.map((row) => {
           const { action, actor, detail, target } = presentation(row);
+          // Only a named person gets initials; generic WasalX actors share one product mark.
+          const person = String(row.actor_type ?? "") === "USER" ? String(row.actor_display_name ?? row.actor ?? "").trim() : "";
           return <li className="audit-row" key={String(row.id)}>
             <span className="avatar small" aria-hidden="true">
-              {actor
-                .split(" ")
-                .map((s) => s[0])
-                .join("")
-                .slice(0, 2)}
+              {person && !isOpaqueIdentifier(person) ? person.split(/\s+/u).map((part) => Array.from(part)[0] ?? "").join("").slice(0, 2).toLocaleUpperCase(locale) : "WX"}
             </span>
             <span className="audit-line" aria-hidden="true" />
             <div>
@@ -6967,7 +6971,7 @@ function TeamAccess({ role, currentUserId, canManage, mutationHeaders }: { role:
     </section>
     <section className="panel table-panel team-panel">
       <div className="panel-heading"><div><h2>{t("tenant.team.invitations.title")}</h2><p>{t("tenant.team.invitations.body")}</p></div></div>
-      {data.capabilities.can_invite ? data.invitations.length ? <div className="team-invitations">{data.invitations.map((invitation) => <article key={invitation.id}><span className="team-invite-icon">↗</span><div><b><bdi>{invitation.display_name || invitation.email}</bdi></b><small dir={invitation.display_name ? "ltr" : undefined}><bdi>{invitation.display_name ? invitation.email : t(`tenant.role.${invitation.role}`)}</bdi></small><p><Status value={invitation.state} /> <span className="tag">{t(`tenant.role.${invitation.role}`)}</span> <span className="team-delivery">{t("tenant.team.invitations.emailState")} <Status value={invitation.delivery_state ?? "UNKNOWN"} /></span></p>{invitationDeliveryUnknown(invitation) ? <em>{t("tenant.team.errors.deliveryUnknown")}</em> : invitation.delivery_state === "SENDING" ? <em>{t("tenant.team.invitations.deliveryInProgress")}</em> : invitation.delivery_error ? <em>{t("tenant.team.errors.delivery")}</em> : null}</div><div className="team-invite-meta"><small>{t("tenant.team.invitations.expires")} <RelativeTime value={invitation.expires_at} /></small>{invitation.state !== "ACCEPTED" && invitation.state !== "REVOKED" && !(role === "tenant_admin" && invitation.role === "tenant_owner") ? <span><button className="button small secondary" disabled={busyId !== null || invitation.delivery_state === "SENDING"} onClick={(event) => { if (invitationDeliveryUnknown(invitation)) { resendTrigger.current=event.currentTarget; setResendText(""); setResendConfirmation(invitation); } else void mutateInvitation(invitation,"resend"); }}>{t(busyId === `resend:${invitation.id}` ? "tenant.team.actions.scheduling" : invitationDeliveryUnknown(invitation) ? "tenant.team.actions.reviewResend" : invitation.delivery_state === "SENDING" ? "tenant.team.actions.sending" : "tenant.team.actions.resend")}</button><button className="text-button danger-text" disabled={busyId !== null || invitation.delivery_state === "SENDING"} onClick={() => void mutateInvitation(invitation,"revoke")}>{t(busyId === `revoke:${invitation.id}` ? "tenant.team.actions.revoking" : "tenant.team.actions.revoke")}</button></span> : null}</div></article>)}</div> : <Empty title={t("tenant.team.invitations.emptyTitle")} body={t("tenant.team.invitations.emptyBody")} /> : <div className="team-readonly-invitations"><span>◉</span><p><b>{t("tenant.team.invitations.restrictedTitle")}</b><small>{t("tenant.team.invitations.restrictedBody")}</small></p></div>}
+      {data.capabilities.can_invite ? data.invitations.length ? <div className="team-invitations">{data.invitations.map((invitation) => <article key={invitation.id}><span className="team-invite-icon">↗</span><div><b><bdi>{invitation.display_name || invitation.email}</bdi></b><small dir={invitation.display_name ? "ltr" : undefined}><bdi>{invitation.display_name ? invitation.email : t(`tenant.role.${invitation.role}`)}</bdi></small><p><Status value={invitation.state} /> <span className="tag">{t(`tenant.role.${invitation.role}`)}</span> <span className="team-delivery">{t("tenant.team.invitations.emailState")} <Status value={invitation.delivery_state ?? "UNKNOWN"} /></span></p>{invitationDeliveryUnknown(invitation) ? <em>{t("tenant.team.errors.deliveryUnknown")}</em> : invitation.delivery_state === "SENDING" ? <em>{t("tenant.team.invitations.deliveryInProgress")}</em> : invitation.delivery_error ? <em>{t("tenant.team.errors.delivery")}</em> : null}</div><div className="team-invite-meta">{invitation.state === "PENDING" ? <small>{t("tenant.team.invitations.expires")} <RelativeTime value={invitation.expires_at} /></small> : null}{invitation.state !== "ACCEPTED" && invitation.state !== "REVOKED" && !(role === "tenant_admin" && invitation.role === "tenant_owner") ? <span><button className="button small secondary" disabled={busyId !== null || invitation.delivery_state === "SENDING"} onClick={(event) => { if (invitationDeliveryUnknown(invitation)) { resendTrigger.current=event.currentTarget; setResendText(""); setResendConfirmation(invitation); } else void mutateInvitation(invitation,"resend"); }}>{t(busyId === `resend:${invitation.id}` ? "tenant.team.actions.scheduling" : invitationDeliveryUnknown(invitation) ? "tenant.team.actions.reviewResend" : invitation.delivery_state === "SENDING" ? "tenant.team.actions.sending" : "tenant.team.actions.resend")}</button><button className="text-button danger-text" disabled={busyId !== null || invitation.delivery_state === "SENDING"} onClick={() => void mutateInvitation(invitation,"revoke")}>{t(busyId === `revoke:${invitation.id}` ? "tenant.team.actions.revoking" : "tenant.team.actions.revoke")}</button></span> : null}</div></article>)}</div> : <Empty title={t("tenant.team.invitations.emptyTitle")} body={t("tenant.team.invitations.emptyBody")} /> : <div className="team-readonly-invitations"><span>◉</span><p><b>{t("tenant.team.invitations.restrictedTitle")}</b><small>{t("tenant.team.invitations.restrictedBody")}</small></p></div>}
     </section>
     {resendConfirmation ? <InlineConfirmation className="team-remove-confirm" aria-labelledby="invitation-resend-title" cancel={closeResendConfirmation}><div><b id="invitation-resend-title">{t("tenant.team.resendConfirmation.title")}</b><p>{t("tenant.team.resendConfirmation.body")}</p><label htmlFor="invitation-resend-confirmation">{t("tenant.team.resendConfirmation.type")} <code dir="ltr">{t("tenant.team.resendConfirmation.token")}</code><input id="invitation-resend-confirmation" data-inline-confirm-initial-focus dir="ltr" required pattern="RESEND" maxLength={6} autoComplete="off" spellCheck={false} value={resendText} onChange={(event)=>setResendText(event.target.value)} /></label><span><button className="button secondary" onClick={closeResendConfirmation}>{t("tenant.team.actions.cancel")}</button><button className="button connection-detail-danger-button" disabled={resendText!=="RESEND"} onClick={()=>{const invitation=resendConfirmation;setResendConfirmation(null);setResendText("");void mutateInvitation(invitation,"resend",true)}}>{t("tenant.team.actions.verifiedResend")}</button></span></div></InlineConfirmation> : null}
     {inviteOpen ? <InviteMemberDialog role={role} mutationHeaders={mutationHeaders} idempotencyKey={inviteKey} close={() => setInviteOpen(false)} complete={async () => { setInviteKey(crypto.randomUUID()); setInviteOpen(false); setNotice(t("tenant.team.notice.scheduled")); await load(); }} /> : null}

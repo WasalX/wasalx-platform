@@ -94,7 +94,7 @@ test("operator data refreshes automatically while visible and preserves manual r
   assert.match(shell, /stored !== "privacy" \|\| canReadPrivacy/u);
   assert.match(shell, /function InviteMemberDialog[\s\S]*?useDialogCloseGuard\(close,saving\)[\s\S]*?onChangeCapture=\{closeGuard\.markDirty\}/u);
   assert.match(shell, /function MemberAccessDialog[\s\S]*?useDialogCloseGuard\(close,saving\)[\s\S]*?onChangeCapture=\{closeGuard\.markDirty\}/u);
-  assert.match(shell, /states\.map\(\(value\) => <option key=\{value\} value=\{value\}>\{connectionStateText\(value, t\)\}/u);
+  assert.match(shell, /states\.map\(\(value\) => <option key=\{value\} value=\{value\}>\{t\(statusPresentation\(value\)\[0\]\)\}/u);
   assert.match(platform, /useVisibleRefresh\(async \(signal\) =>/u);
   assertLocalizedCopy(platform, english, "platform.feedback.refreshFailed", "Background refresh failed. WasalX will retry automatically.");
   assert.match(arabic, /"platform\.feedback\.refreshFailed":/u);

@@ -77,7 +77,7 @@ try {
     const open = () => page.goto(`${base}/iframe.html?id=product-service-access--${locale === "ar" ? "arabic" : "english"}`, { waitUntil: "networkidle" });
     const dialog = page.getByRole("dialog");
     const approve = async () => { await dialog.getByRole("checkbox", { name: t("serviceAccess.confirm"), exact: true }).check(); await dialog.getByRole("button", { name: t("serviceAccess.apply"), exact: true }).click(); };
-    const reload = async () => { const response = page.waitForResponse(response => response.request().postDataJSON()?.operation === "IDENTITY_STATUS"); await button("inbox.reload").click(); await response; };
+    const reload = async () => { const response = page.waitForResponse(response => response.request().postDataJSON()?.operation === "IDENTITY_STATUS"); await button("common.actions.refresh").click(); await response; };
     try {
       await open(); await expect(page.getByText(t("serviceAccess.notGranted"), { exact: true })).toBeVisible(); await expect(page.getByText("Synthetic earlier service", { exact: true })).toBeVisible(); assert.equal(writes.length, 0);
       for(const [size,width,height] of [["desktop",1440,1000],["mobile",390,844],["zoom-equivalent",720,500]]) {
@@ -122,7 +122,7 @@ try {
         await expect(page.locator(".settings-summary")).toHaveCount(0);
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false);
         const audit = await new AxeBuilder({ page }).include("main").withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze(); assert.deepEqual(audit.violations, []);
-        await button("inbox.reload").focus(); await page.keyboard.press("Tab"); assert.equal(await page.evaluate(() => document.activeElement.matches(":focus-visible")), true);
+        await button("common.actions.refresh").focus(); await page.keyboard.press("Tab"); assert.equal(await page.evaluate(() => document.activeElement.matches(":focus-visible")), true);
       }
       denied = true; await reload(); await expect(button("serviceAccess.reviewGrant")).toHaveCount(0); assert.ok(!(await page.locator("body").innerText()).includes("SYNTHETIC_PRIVATE_ERROR"));
       denied = false; await reload();

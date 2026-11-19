@@ -96,8 +96,7 @@ export function NativeRoutingSync({ canWrite, mutationHeaders, refreshKey, catal
     </div>
     <div role="status" aria-live="polite" aria-busy={loading || busy}>
       <b>{t(displayState ? `nativeRouting.state.${displayState}` : loading || busy ? "nativeRouting.loading" : "nativeRouting.unavailable")}</b>
-      {status ? <p>{t("nativeRouting.revisions", { desired: formatNumber(status.desiredRevision, locale), applied: formatNumber(status.appliedRevision, locale) })}<br />
-        {status.lastCheckedAt ? t("nativeRouting.checked", { time: formatDateTime(status.lastCheckedAt, locale) }) : t("nativeRouting.notChecked")}</p> : null}
+      {status?.lastCheckedAt ? <p>{t("nativeRouting.checked", { time: formatDateTime(status.lastCheckedAt, locale) })}</p> : null}
       {displayState && ["DRIFT", "FAILED", "OUTCOME_UNKNOWN"].includes(displayState) ? <p>{t(`nativeRouting.help.${displayState}`)}</p> : null}
     </div>
     {error ? <p className="bot-inline-error" role="alert">{error}</p> : null}

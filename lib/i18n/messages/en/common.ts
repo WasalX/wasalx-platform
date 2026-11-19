@@ -11,6 +11,7 @@ export const englishCommonMessages = {
   "common.actions.close": "Close",
   "common.actions.continue": "Continue",
   "common.actions.retry": "Try again",
+  "common.actions.refresh": "Refresh",
   "common.actions.remove": "Remove",
   "common.actions.signIn": "Sign in",
   "common.actions.goHome": "Go to home page",
