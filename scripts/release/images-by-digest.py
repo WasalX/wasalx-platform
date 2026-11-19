@@ -535,8 +535,8 @@ def inspect_loaded_config(reference, config_digest):
 
 def publish(receipt_path):
     ref = os.environ.get("GITHUB_REF")
-    require(os.environ.get("GITHUB_EVENT_NAME") == "push" and ref in {"refs/heads/dev", "refs/heads/main"},
-            "Publication requires a dev or main push")
+    require(os.environ.get("GITHUB_EVENT_NAME") == "push" and ref == "refs/heads/main",
+            "Publication requires a main push")
     commit, tree = coordinates()
     receipt = json.loads(Path(receipt_path).read_text())
     require((receipt["commit"], receipt["tree"]) == (commit, tree), "Stale inspection receipt")

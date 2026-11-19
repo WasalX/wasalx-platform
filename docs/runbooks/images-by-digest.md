@@ -5,11 +5,11 @@ merge-queue runs. Shared or unrecognized inputs and unavailable diffs trigger
 all 21 catalog images. The PR and merge-queue `ci-gate` checks cover these
 builds, which run without registry login, package writes or OIDC.
 
-On a push to `dev` or `main`, `ci` calls `release` in
+On a push to `main`, `ci` calls `release` in
 `.github/workflows/branch-image.yml` to build, inspect, publish, sign and
 attest the full catalog. Only the publish lanes have package-write and OIDC
-access. DEV admission requires a successful dev `ci` run with the
-`images-manifest` artifact. The main branch publishes for stg/prod.
+access. DEV admission requires a successful main `ci` run with the
+`images-manifest` artifact.
 
 The publish jobs on `main` export one GHCR cache tag per heavy
 image, without importing layers. PR and merge-queue builds import those
@@ -20,8 +20,8 @@ warm-cache timing. Cosign produces the signature and SLSA attestation.
 Image pushes, signing, and attestation allow up to three attempts.
 
 Each package is `ghcr.io/wasalx/<image>`, tagged with the full public commit SHA.
-The `dev` and `main` discovery aliases advance only after signature verification and
-reinspection. Resolve an alias once, then use only `@sha256:<manifest digest>`.
+The `main` discovery alias advances after signature verification and reinspection.
+Resolve it once, then use only `@sha256:<manifest digest>`.
 The `images-manifest` artifact requires one receipt for every matrix row, all
 bound to the same commit and tree. While the add-on source is unset, 19 images
 are published and the two dependent images appear under `pending`, explicitly
@@ -62,11 +62,9 @@ prove any of them. Preserve the previous verified manifest/config pair for rollb
 ## Signature and provenance
 
 Cosign is pinned to v3.0.6 and its Linux AMD64 SHA256 in the workflow. The
-certificate identity for DEV admission is exactly:
+installer requires this exact certificate identity for hosted admission.
 
-`https://github.com/WasalX/wasalx-platform/.github/workflows/branch-image.yml@refs/heads/dev`
-
-Images published from `main` carry the same identity ending in `@refs/heads/main`.
+`https://github.com/WasalX/wasalx-platform/.github/workflows/branch-image.yml@refs/heads/main`
 
 The OIDC issuer is `https://token.actions.githubusercontent.com`. Verify both the
 signature and `slsaprovenance` attestation for the selected digest, then validate

@@ -235,8 +235,8 @@ const validateReleaseCoordinates = ({ releaseTag, sourceRevision, sourceTree, so
   }
   if (!shaPattern.test(sourceRevision)) fail(`invalid source revision: ${sourceRevision}`);
   if (sourceRef !== undefined && sourceRef !== `refs/tags/${releaseTag}`) {
-    if (!["refs/heads/dev", "refs/heads/main"].includes(sourceRef) || profile !== "production") {
-      fail("candidate source ref must be protected dev/main with the production artifact profile");
+    if (sourceRef !== "refs/heads/main" || profile !== "production") {
+      fail("candidate source ref must be protected main with the production artifact profile");
     }
     // A branch candidate has an immutable version label, not a fabricated Git tag.
     if (releaseTag !== `v0.0.0-${sourceRef.split("/").at(-1)}.sha${sourceRevision}`) {

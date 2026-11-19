@@ -5,7 +5,7 @@ on:
     types: [opened, synchronize, reopened]
   merge_group:
   push:
-    branches: [dev, main]
+    branches: [main]
 
 permissions:
   contents: read
@@ -242,7 +242,7 @@ jobs:
 
   publish:
     needs: lint-on-push
-    if: ${{ !cancelled() && github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev') && github.repository == 'WasalX/wasalx-platform' }}
+    if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'WasalX/wasalx-platform' }}
     concurrency:
       group: release-${{ github.ref_name }}
       cancel-in-progress: false
