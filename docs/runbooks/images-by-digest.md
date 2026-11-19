@@ -8,8 +8,8 @@ builds, which run without registry login, package writes or OIDC.
 On a push to `main`, `ci` calls `release` in
 `.github/workflows/branch-image.yml` to build, inspect, publish, sign and
 attest the full catalog. Only the publish lanes have package-write and OIDC
-access. DEV admission requires a successful main `ci` run with the
-`images-manifest` artifact.
+access. Admission to the DEV environment requires a successful `ci` run on the
+`main` branch with the `images-manifest` artifact.
 
 The publish jobs on `main` export one GHCR cache tag per heavy
 image, without importing layers. PR and merge-queue builds import those
