@@ -471,6 +471,8 @@ services:
       HOME: /tmp/keycloak-bootstrap
     volumes:
       - ./infra/docker/full/keycloak/bootstrap-user.mjs:/bootstrap/bootstrap-user.mjs:ro
+      - ./infra/docker/full/keycloak/admin-rest.mjs:/bootstrap/admin-rest.mjs:ro
+      - ./infra/docker/full/keycloak/provision-invitee.mjs:/bootstrap/provision-invitee.mjs:ro
     depends_on:
       keycloak: { condition: service_healthy }
     # Share the Keycloak network namespace so kcadm uses the canonical
