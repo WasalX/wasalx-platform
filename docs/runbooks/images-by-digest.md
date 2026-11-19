@@ -1,24 +1,23 @@
 # Published product images
 
-The `ci` workflow builds and inspects all 21 catalog images on merge-queue
-runs. Pull requests build images whose Dockerfiles or local build inputs
-changed. Shared or unrecognized inputs trigger the full catalog. These
-builds run without registry login, package writes or OIDC and are covered
-by the PR and merge-queue `ci-gate` check.
+The `ci` workflow builds and inspects affected images for pull requests and
+merge-queue runs. Shared or unrecognized inputs and unavailable diffs trigger
+all 21 catalog images. The PR and merge-queue `ci-gate` checks cover these
+builds, which run without registry login, package writes or OIDC.
 
 On a push to `dev` or `main`, `ci` calls `release` in
 `.github/workflows/branch-image.yml` to build, inspect, publish, sign and
-attest the full catalog. Only these publish lanes have package-write,
-OIDC and attestation-write access. DEV admission requires a successful
-dev `ci` run with the `images-manifest` artifact; main is kept for stg/prod.
+attest the full catalog. Only the publish lanes have package-write and OIDC
+access. DEV admission requires a successful dev `ci` run with the
+`images-manifest` artifact. The main branch publishes for stg/prod.
 
-The environment-attached publish jobs export one GHCR cache tag per heavy
+The publish jobs on `main` export one GHCR cache tag per heavy
 image, without importing layers. PR and merge-queue builds import those
 layers anonymously and run the same image inspection. The cache package
 must be public for anonymous cache hits. The first publish creates the
 package and seeds the cache. Check the anonymous access before claiming a
-warm-cache timing. GitHub build provenance supplements the existing
-Cosign signature and attestation.
+warm-cache timing. Cosign produces the signature and SLSA attestation.
+Image pushes, signing, and attestation allow up to three attempts.
 
 Each package is `ghcr.io/wasalx/<image>`, tagged with the full public commit SHA.
 The `dev` and `main` discovery aliases advance only after signature verification and
