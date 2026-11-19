@@ -17,7 +17,7 @@ import { metaDirectIdentityChangeEvidence, metaDirectTransitionEvidence } from "
 
 test("Meta verification rejects repeated query values and only echoes a decimal challenge as plain text", async (t) => {
   const previous = process.env.META_VERIFY_TOKEN;
-  const token = "synthetic-verification-token";
+  const token = "synthetic,verification-token";
   process.env.META_VERIFY_TOKEN = token;
   t.after(() => {
     if (previous === undefined) delete process.env.META_VERIFY_TOKEN;
@@ -47,6 +47,17 @@ test("Meta verification rejects repeated query values and only echoes a decimal 
     query.append(key, value);
     assert.equal((await verify(query)).statusCode, 400, key);
   }
+  // String coercion would turn the two query values into the configured token.
+  const splitToken = new URLSearchParams(fields);
+  splitToken.delete("hub.verify_token");
+  for (const part of token.split(",")) splitToken.append("hub.verify_token", part);
+  const rejected = await verify(splitToken);
+  assert.equal(rejected.statusCode, 400);
+  assert.equal(rejected.json().message, "Meta verification parameters are invalid");
+
+  const missingToken = new URLSearchParams(fields);
+  missingToken.delete("hub.verify_token");
+  assert.equal((await verify(missingToken)).statusCode, 401);
   assert.equal((await verify(new URLSearchParams({ ...fields, "hub.verify_token": "wrong-token" }))).statusCode, 401);
   assert.equal((await verify(new URLSearchParams({ ...fields, "hub.challenge": "<b>verification</b>" }))).statusCode, 400);
 });

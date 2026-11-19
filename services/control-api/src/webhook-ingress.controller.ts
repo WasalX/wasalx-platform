@@ -55,12 +55,17 @@ export class WebhookIngressController{
   @Get("meta")
   @Header("Content-Type","text/plain; charset=utf-8")
   @Header("X-Content-Type-Options","nosniff")
-  verifyMeta(@Query("hub.mode")mode?:unknown,@Query("hub.verify_token")token?:unknown,@Query("hub.challenge")challenge?:unknown){
+  verifyMeta(
+    @Query("hub.mode") mode: unknown = "",
+    @Query("hub.verify_token") token: unknown = "",
+    @Query("hub.challenge") challenge: unknown = "",
+  ){
     const expected=process.env.META_VERIFY_TOKEN;
     if(!expected)throw new ServiceUnavailableException("Meta verification is unavailable");
-    if((mode!==undefined&&typeof mode!=="string")||(token!==undefined&&typeof token!=="string")||
-      (challenge!==undefined&&typeof challenge!=="string"))throw new BadRequestException("Meta verification parameters are invalid");
-    if(mode!=="subscribe"||!constantTimeEqual(token??"",expected)||!challenge)throw new UnauthorizedException("Meta verification failed");
+    if(!(typeof mode==="string"&&typeof token==="string"&&typeof challenge==="string")){
+      throw new BadRequestException("Meta verification parameters are invalid");
+    }
+    if(mode!=="subscribe"||!constantTimeEqual(token,expected)||!challenge)throw new UnauthorizedException("Meta verification failed");
     if(!/^-?[0-9]+$/u.test(challenge))throw new BadRequestException("Meta verification challenge is invalid");
     return challenge;
   }
@@ -355,7 +360,7 @@ function assertMetaEventFresh(value:Record<string,unknown>){const item=(Array.is
 function boundedIdentifier(value:unknown,maximum=512){const result=stringValue(value);return result&&result.length<=maximum&&/^[A-Za-z0-9._:=+@-]+$/u.test(result)?result:undefined}
 function boundedSecret(value:string|undefined){return value&&value.length>=16&&value.length<=4096&&!Array.from(value).some(character=>{const code=character.codePointAt(0)??0;return code<32||code===127})?value:undefined}
 function isRecord(value:unknown):value is Record<string,unknown>{return Boolean(value)&&typeof value==="object"&&!Array.isArray(value)}
-function constantTimeEqual(left:string,right:string){
-  return left.length===right.length&&timingSafeEqual(Buffer.from(left,"utf16le"),Buffer.from(right,"utf16le"));
+function constantTimeEqual(left:unknown,right:string){
+  return typeof left==="string"&&left.length===right.length&&timingSafeEqual(Buffer.from(left,"utf16le"),Buffer.from(right,"utf16le"));
 }
 function rejectWaha(reason:"route"|"algorithm"|"timestamp"|"stale"|"signature"|"ownership"|"event",error:Error):never{recordWebhook("waha","rejected",reason);throw error}

@@ -24,9 +24,12 @@ test("outbound text handles breaks, malformed tags, and one layer of entities", 
   const render = text => renderOutboundText({ text, contentType: "text/html" });
   assert.equal(render("<p>Hello&nbsp;there<BR  /><em>friend</em></P >"), "Hello there\nfriend\n");
   assert.equal(render("&AMP;&lt;&gt;&quot;&#39; &amp;lt; &amp;quot;"), "&<>\"' &lt; &quot;");
-  assert.equal(render("Message<unfinished"), "Message");
-  assert.equal(render("Message<br" + "\t".repeat(30_000)), "Message");
-  assert.equal(render("Message" + "<".repeat(30_000)), "Message");
+  assert.equal(render("Price < 5 today"), "Price < 5 today");
+  assert.equal(render("<p>Price < 5 &amp; rising"), "Price < 5 & rising");
+  const unfinishedBreak = "Message<br" + "\t".repeat(30_000);
+  assert.equal(render(unfinishedBreak), unfinishedBreak);
+  const unmatched = "Message" + "<".repeat(30_000);
+  assert.equal(render(unmatched), unmatched);
 });
 
 test("Zammad outbound preflight rejects repeated destination query values", async () => {
