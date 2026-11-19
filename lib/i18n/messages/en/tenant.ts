@@ -776,7 +776,6 @@ export const englishTenantMessages = {
   "tenant.health.requireRecovery": "{count} require recovery",
   "tenant.health.noConnectionIncidents": "No connection incidents",
   "tenant.health.noWorkingConnections": "No connection is working",
-  "tenant.health.notRecentlyChecked": "Not checked recently",
   "tenant.status.working": "Working",
   "tenant.status.needsAttention": "Needs attention",
   "tenant.status.actionRequired": "Action required",

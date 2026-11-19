@@ -779,7 +779,6 @@ export const arabicTenantMessages = {
   "tenant.health.requireRecovery": "تتطلب الاستعادة: {count}",
   "tenant.health.noConnectionIncidents": "لا توجد مشكلات اتصال",
   "tenant.health.noWorkingConnections": "لا يعمل أي اتصال",
-  "tenant.health.notRecentlyChecked": "لم يُتحقق منها مؤخرًا",
   "tenant.status.working": "يعمل",
   "tenant.status.needsAttention": "يتطلب الانتباه",
   "tenant.status.actionRequired": "الإجراء مطلوب",

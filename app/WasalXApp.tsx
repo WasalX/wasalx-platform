@@ -1857,7 +1857,6 @@ function Overview({
   canReadCases: boolean;
 }) {
   const { t, locale } = useI18n();
-  const now = useRelativeClock();
   const working = data.connections.filter((connection) => connectionIsReady(connection)).length;
   const noneWorking = data.connections.length > 0 && working === 0;
   const activeGroups = data.groups.filter((g) => Boolean(g.enabled)).length;
@@ -1868,7 +1867,7 @@ function Overview({
   const successful=data.deliveries.filter((d)=>["SENT","DELIVERED","READ"].includes(String(d.state))).length;
   const success=data.deliveries.length?Math.round(successful/data.deliveries.length*1000)/10:null;
   const health=data.health??{};const deliveryHealth=(health.deliveries as RecordRow|undefined)??{};const inboxHealth=(health.inbox as RecordRow|undefined)??{};const zammadHealth=(health.zammad as RecordRow|undefined)??{};
-  const reviewIssues=unmatchedReviews(data).length;const connectionIssues=data.connections.filter(row=>connectionNeedsAttention(row)&&!isDuplicateIdentityRejection(row.action_reason)).length;const zammadState=String(zammadHealth.state??"").toUpperCase();const zammadIssue=Boolean(zammadState)&&zammadState!=="WORKING";const zammadStale=!zammadIssue&&!(now-Date.parse(String(zammadHealth.last_healthy_at??""))<86_400_000);const attention=deliveryIssues+reviewIssues+connectionIssues+(zammadIssue?1:0);
+  const reviewIssues=unmatchedReviews(data).length;const connectionIssues=data.connections.filter(row=>connectionNeedsAttention(row)&&!isDuplicateIdentityRejection(row.action_reason)).length;const zammadState=String(zammadHealth.state??"").toUpperCase();const zammadIssue=Boolean(zammadState)&&zammadState!=="WORKING";const attention=deliveryIssues+reviewIssues+connectionIssues+(zammadIssue?1:0);
   const openAttention = () => {
     const delivery = data.deliveries.find((row) => String(row.state).includes("FAILED") || String(row.state) === "OUTCOME_UNKNOWN");
     const connection = data.connections.find((row) => connectionNeedsAttention(row) && !isDuplicateIdentityRejection(row.action_reason));
@@ -1949,7 +1948,7 @@ function Overview({
           </div>
           <div className="health-list">
             <Health name={t("tenant.health.incomingActivity")} value={duration(inboxHealth.queue_age_seconds, locale)} detail={t("tenant.health.oldestAcceptedMessage")} warn={Number(inboxHealth.queue_age_seconds??0)>60}/>
-            <Health name={t("tenant.health.caseWorkspace")} value={zammadIssue?t("tenant.status.needsAttention"):zammadStale?t("tenant.health.notRecentlyChecked"):t("tenant.status.working")} detail={zammadHealth.last_healthy_at?<><span>{t("tenant.health.lastHealthy")} </span><RelativeTime value={zammadHealth.last_healthy_at} pastOnly/></>:t("tenant.health.noRecentUpdate")} warn={zammadIssue||zammadStale}/>
+            <Health name={t("tenant.health.caseWorkspace")} value={zammadIssue?t("tenant.status.needsAttention"):t("tenant.status.working")} detail={zammadHealth.last_healthy_at?<><span>{t("tenant.health.lastHealthy")} </span><RelativeTime value={zammadHealth.last_healthy_at} pastOnly/></>:t("tenant.health.noRecentUpdate")} warn={zammadIssue}/>
             <Health name={t("tenant.health.pendingDeliveries")} value={duration(deliveryHealth.queue_age_seconds, locale)} detail={t("tenant.overview.oldestPendingDelivery")} warn={Number(deliveryHealth.queue_age_seconds??0)>60}/>
             <Health name={t("tenant.health.whatsAppConnections")} value={`${formatNumber(working, locale)} / ${formatNumber(data.connections.length, locale)}`} detail={connectionIssues?t("tenant.health.requireRecovery",{count:formatNumber(connectionIssues,locale)}):noneWorking?t("tenant.health.noWorkingConnections"):t("tenant.health.noConnectionIncidents")} warn={connectionIssues>0||noneWorking}/>
           </div>

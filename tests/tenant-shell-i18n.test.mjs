@@ -225,12 +225,10 @@ test("owner-facing health, access and settings states stay truthful and consiste
   const read = path => readFile(new URL(`../${path}`, import.meta.url), "utf8");
   const [source, inbox, mailboxes, mailboxAdmin, serviceAccess, routing] = await Promise.all(["app/WasalXApp.tsx", "app/Inbox.tsx",
     "app/MailboxSettings.tsx", "app/MailboxAdministration.tsx", "app/ServiceAccess.tsx", "app/NativeRoutingSync.tsx"].map(read));
-  // Zero working connections is never reported as healthy, and a stale case-workspace check is never "Working".
+  // Zero working connections is never reported as healthy.
   assert.match(source, /const noneWorking = data\.connections\.length > 0 && working === 0;/u);
   assert.match(source, /noneWorking\?t\("tenant\.health\.noWorkingConnections"\):t\("tenant\.overview\.healthy"\)/u);
   assert.match(source, /warn=\{connectionIssues>0\|\|noneWorking\}/u);
-  assert.match(source, /zammadStale\?t\("tenant\.health\.notRecentlyChecked"\):t\("tenant\.status\.working"\)/u);
-  assert.match(source, /warn=\{zammadIssue\|\|zammadStale\}/u);
   // Only pending invitations show an expiry; generic audit actors share one mark.
   assert.match(source, /invitation\.state === "PENDING" \? <small>\{t\("tenant.[a-z]+.invitations.expires"\)\}/u);
   assert.match(source, /: "WX"\}\s*<\/span>\s*<span className="audit-line"/u);
@@ -244,7 +242,7 @@ test("owner-facing health, access and settings states stay truthful and consiste
   // Ticket routing shows one state without internal revision counters.
   assert.doesNotMatch(routing, /desiredRevision, locale|nativeRouting\.(?:revisions|notChecked)/u);
   for (const dictionary of [englishTenantMessages, arabicTenantMessages]) {
-    for (const key of ["tenant.health.noWorkingConnections", "tenant.health.notRecentlyChecked", "tenant.rules.matches.one"]) assert.ok(dictionary[key], key);
+    for (const key of ["tenant.health.noWorkingConnections", "tenant.rules.matches.one"]) assert.ok(dictionary[key], key);
     assert.doesNotMatch(dictionary["tenant.rules.governedVersion"], /Governed|المحكوم/u);
   }
 });
