@@ -1,6 +1,0 @@
-{
-  "name": "wasalx-ci-pnpm",
-  "private": true,
-  "version": "1.0.0",
-  "dependencies": { "pnpm": "11.16.0" }
-}

@@ -139,6 +139,16 @@ class ImagePublicationTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertEqual(images.matrix([path])["include"], rows)
 
+    def test_merge_group_diff_uses_the_event_base_and_falls_back_to_all_images(self):
+        base = "a" * 40
+        command = ["git", "diff", "--name-only", "-z", "--no-ext-diff", "--no-renames", base, "HEAD", "--"]
+        with patch.object(subprocess, "check_output", return_value=b"app/page.tsx\0") as git:
+            selected = images.matrix(images.changed_paths(base))["include"]
+            self.assertEqual([row["image"] for row in selected], ["portal"])
+            git.assert_called_once_with(command, cwd=ROOT)
+        with patch.object(subprocess, "check_output", side_effect=subprocess.CalledProcessError(128, command)):
+            self.assertEqual(images.matrix(images.changed_paths(base)), images.matrix())
+
     def test_context_map_handles_copy_continuations_and_refuses_unknown_context_syntax(self):
         self.assertEqual(images.context_sources("COPY\t./a//b \\\n  # Comment\n  local/ /app/\n"
                                                 "ADD https://example.invalid/source /source\n"
@@ -298,6 +308,15 @@ class ImagePublicationTests(unittest.TestCase):
                 images.pull("base")
             self.assertEqual(run.call_count, 3)
 
+    def test_publication_retry_succeeds_after_two_command_failures(self):
+        command = ("docker", "push", "image")
+        failure = subprocess.CalledProcessError(1, command)
+        with patch.object(images, "run", side_effect=[failure, failure, "published"]) as run, \
+                patch.object(images.time, "sleep") as sleep:
+            self.assertEqual(images.run_retry(*command), "published")
+        self.assertEqual(run.call_args_list, [mock.call(*command)] * 3)
+        self.assertEqual(sleep.call_args_list, [mock.call(10), mock.call(20)])
+
     def test_publication_uses_the_push_branch_alias_and_signing_identity(self):
         commit, tree, digest = "a" * 40, "b" * 40, "sha256:" + "1" * 64
         repository = "ghcr.io/wasalx/portal"
@@ -340,7 +359,7 @@ class ImagePublicationTests(unittest.TestCase):
         self.assertNotIn("pull_request_target", text)
         self.assertEqual(text.count("packages: write"), 1)
         self.assertEqual(text.count("id-token: write"), 1)
-        self.assertEqual(text.count("attestations: write"), 1)
+        self.assertNotIn("attestations: write", text)
         jobs = re.split(r"(?m)^  (\w+):\n", text.split("jobs:\n", 1)[1])
         bodies = dict(zip(jobs[1::2], jobs[2::2]))
         for name, body in bodies.items():
@@ -350,19 +369,17 @@ class ImagePublicationTests(unittest.TestCase):
             if name != "publish":
                 self.assertNotIn("packages: write", body)
                 self.assertNotIn("id-token: write", body)
-                self.assertNotIn("attestations: write", body)
                 self.assertNotIn("secrets.GITHUB_TOKEN", body)
         guard = ("github.event_name == 'push' && github.ref == 'refs/heads/main'"
                  " && github.repository == 'WasalX/wasalx-platform'")
         self.assertIn(guard, bodies["publish"])
         self.assertIn(guard, bodies["manifest"])
-        self.assertIn("name: ${{ github.ref_name == 'main' && 'stg' || 'dev' }}", bodies["publish"])
+        self.assertNotRegex(bodies["publish"], r"(?m)^    environment:")
         self.assertIn("BUILD_CACHE: ${{ github.ref_name == 'main' && 'write' || 'off' }}", bodies["publish"])
-        self.assertRegex(bodies["publish"], r"uses: actions/attest-build-provenance@[a-f0-9]{40}[^\n]*\n        continue-on-error: true\n")
+        self.assertNotIn("actions/attest-build-provenance@", text)
         self.assertNotIn("url:", text)
         allowed = {"actions/checkout", "actions/setup-node", "actions/upload-artifact", "actions/download-artifact",
-                   "docker/setup-buildx-action", "docker/login-action", "sigstore/cosign-installer",
-                   "actions/attest-build-provenance"}
+                   "docker/setup-buildx-action", "docker/login-action", "sigstore/cosign-installer"}
         for action in re.findall(r"uses: (\S+)", text):
             name, sha = action.split("@")
             self.assertIn(name, allowed)
