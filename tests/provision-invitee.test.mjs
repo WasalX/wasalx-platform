@@ -83,7 +83,7 @@ for (const scenario of ["success", "email", "username", "output exists", "bad re
     assert.equal(stdout, success ? "PASS\n" : "");
     const failedStage = {
       email: "user already exists", username: "user already exists", "output exists": "output file",
-      "bad readback": "user verification", "invalid input": "input",
+      "bad readback": "user verification; account may exist, inspect before retry", "invalid input": "input",
     }[scenario];
     assert.equal(stderr, success ? "" : `FAIL: ${failedStage}\n`);
 

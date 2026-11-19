@@ -5,6 +5,7 @@ import { adminBaseUrl, adminRequest, findUsers, login, readJson, required } from
 const realm = "wasalx";
 const requiredActions = ["UPDATE_PASSWORD", "CONFIGURE_TOTP"];
 let stage = "input";
+let sent = false;
 let outputPath;
 let output;
 
@@ -51,6 +52,7 @@ try {
 
   stage = "user creation";
   const password = `Aa1!${randomBytes(24).toString("base64url")}`;
+  sent = true;
   const created = await request("/users", "POST", {
     username: email, email, emailVerified: true, enabled: true, requiredActions, groups: [],
     credentials: [{ type: "password", value: password, temporary: true }],
@@ -90,10 +92,12 @@ try {
   await output.close();
   console.log("PASS");
 } catch {
+  let cleanup = "";
   if (output) {
     await output.close().catch(() => {});
-    await unlink(outputPath).catch(() => { stage = "output cleanup"; });
+    await unlink(outputPath).catch(() => { cleanup = "; output cleanup failed"; });
   }
-  console.error(`FAIL: ${stage}`);
+  // After the create request the account may exist with a password nobody holds.
+  console.error(`FAIL: ${stage}${sent ? "; account may exist, inspect before retry" : ""}${cleanup}`);
   process.exitCode = 1;
 }
