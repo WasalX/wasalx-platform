@@ -1,8 +1,4 @@
-const required = name => {
-  const value = process.env[name];
-  if (!value) throw new Error(`${name} is required`);
-  return value;
-};
+import { adminBaseUrl, findUsers, login, readJson, required } from "./admin-rest.mjs";
 
 const adminUsername = required("KEYCLOAK_ADMIN");
 const adminPassword = required("KEYCLOAK_ADMIN_PASSWORD");
@@ -18,8 +14,7 @@ const smtp = {
   user: (process.env.WASALX_KEYCLOAK_SMTP_USER ?? "").trim(),
   password: process.env.WASALX_KEYCLOAK_SMTP_PASSWORD ?? "",
 };
-const baseUrl = (process.env.KEYCLOAK_BASE_URL ?? "http://127.0.0.1:8080").replace(/\/$/u, "");
-if (!/^https?:\/\/[^/?#]+(?::\d+)?(?:\/identity)?$/u.test(baseUrl)) throw new Error("KEYCLOAK_BASE_URL is invalid");
+const baseUrl = adminBaseUrl();
 const publicOrigin = (name, fallback) => {
   const value = (process.env[name] ?? fallback).replace(/\/$/u, "");
   const url = new URL(value);
@@ -34,7 +29,6 @@ const zammadOrigin = publicOrigin("WASALX_ZAMMAD_PUBLIC_ORIGIN", "http://127.0.0
 // Browser loopback belongs to the host; logout originates in Keycloak's network.
 const zammadBackchannelOrigin = new URL(zammadOrigin).hostname === "127.0.0.1"
   ? "http://zammad-nginx:8080" : zammadOrigin;
-const maxResponseBytes = 64 * 1024;
 const smtpConfigured = Object.values(smtp).every(Boolean);
 const routableEmail = value => {
   const domain = value.slice(value.lastIndexOf("@") + 1).toLowerCase();
@@ -65,55 +59,9 @@ if (isolationOwnerEmail) {
   }
 }
 
-const sleep = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
-
-async function readJson(response) {
-  const declared = Number(response.headers.get("content-length") ?? "0");
-  if (declared > maxResponseBytes) throw new Error("Keycloak response exceeded the bounded size");
-  const text = await response.text();
-  if (Buffer.byteLength(text) > maxResponseBytes) throw new Error("Keycloak response exceeded the bounded size");
-  return JSON.parse(text);
-}
-
-async function login() {
-  const body = new URLSearchParams({
-    grant_type: "password",
-    client_id: "admin-cli",
-    username: adminUsername,
-    password: adminPassword,
-  });
-  for (let attempt = 1; attempt <= 12; attempt += 1) {
-    try {
-      const response = await fetch(`${baseUrl}/realms/master/protocol/openid-connect/token`, {
-        method: "POST",
-        headers: { "content-type": "application/x-www-form-urlencoded" },
-        body,
-        signal: AbortSignal.timeout(10_000),
-      });
-      if (response.ok) {
-        const payload = await readJson(response);
-        if (typeof payload.access_token === "string" && payload.access_token.length > 32) {
-          return payload.access_token;
-        }
-      }
-    } catch {
-      // Keycloak can report healthy just before the admin token endpoint is
-      // ready after an initial realm import. Retry without logging credentials.
-    }
-    if (attempt < 12) await sleep(5_000);
-  }
-  throw new Error("Keycloak administrator authentication was not ready after bounded retries");
-}
-
 async function findUser(token, realm, username) {
   stage = `${realm} user lookup`;
-  const query = new URLSearchParams({ username, exact: "true", max: "2" });
-  const usersResponse = await fetch(`${baseUrl}/admin/realms/${encodeURIComponent(realm)}/users?${query}`, {
-    headers: { authorization: `Bearer ${token}` },
-    signal: AbortSignal.timeout(10_000),
-  });
-  if (!usersResponse.ok) throw new Error(`Keycloak user lookup failed for ${realm}`);
-  const users = await readJson(usersResponse);
+  const users = await findUsers(baseUrl, token, realm, { username });
   if (!Array.isArray(users) || users.length !== 1 || typeof users[0]?.id !== "string") {
     throw new Error(`Keycloak user lookup was not unique for ${realm}`);
   }
@@ -132,12 +80,7 @@ async function reconcileUser(token, realm, desired) {
     if (lookup.status === 404) throw new Error(`Keycloak seeded user is missing for ${realm}`);
     if (lookup.ok) existingId = desired.id;
   } else {
-    const query = new URLSearchParams({ username: desired.username, exact: "true", max: "2" });
-    const lookup = await fetch(`${baseUrl}/admin/realms/${encodeURIComponent(realm)}/users?${query}`, {
-      headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(10_000),
-    });
-    if (!lookup.ok) throw new Error(`Keycloak user lookup failed for ${realm}`);
-    const matches = await readJson(lookup);
+    const matches = await findUsers(baseUrl, token, realm, { username: desired.username });
     if (!Array.isArray(matches) || matches.length > 1) throw new Error(`Keycloak user lookup was ambiguous for ${realm}`);
     existingId = matches[0]?.id;
   }
@@ -280,7 +223,7 @@ async function reconcilePublicClient(token, realm, desired) {
 
 let stage = "administrator authentication";
 try {
-  const token = await login();
+  const token = await login(baseUrl, { username: adminUsername, password: adminPassword }, 12);
   await reconcileRealmPresentation(token, "wasalx");
   await reconcileRealmPresentation(token, "wasalx-platform");
   await reconcileUser(token, "wasalx", {

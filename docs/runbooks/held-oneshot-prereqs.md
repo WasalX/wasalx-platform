@@ -63,3 +63,14 @@ Release ends the selected sender's stopped hold. Historical held-stack smoke
 does not describe its new running state. Source-input equivalence does not
 relax exact SHA, tree, Dockerfile, build-context or package identity checks.
 Runtime install/release and provider acceptance require separate evidence.
+
+## Provision a full-stack invitee
+
+Before accepting an invitation, the invitee needs an email-verified account in the `wasalx` realm. Confirm control of the invitation address before provisioning.
+On the full-stack host, set `private_dir` to a directory outside the checkout owned by UID 1000 with mode `0700`. Set `email_file` to a private file containing the address on one line.
+Set `project` and `full_env` to the running stack's Compose project and private environment. The output filename must be new.
+```sh
+docker compose --env-file "$full_env" -p "$project" -f compose.yaml -f compose.full.yaml --profile full run --rm --no-deps -T \
+  -v "$private_dir:/out" -e WASALX_INVITEE_OUTPUT_FILE=/out/invitee.json --entrypoint "node /bootstrap/provision-invitee.mjs" keycloak-bootstrap < "$email_file"
+```
+After `PASS`, share `invitee.json` privately with the verified recipient and remove the operator copy. Have the invitee change the temporary password and enroll TOTP at first sign-in, then open the invitation. If provisioning fails during or after creation, inspect the account in Keycloak before trying again.
