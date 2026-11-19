@@ -135,7 +135,7 @@ export class BotFlowsService {
       }));
   }
 
-  async flowCatalog(principal:Principal,input:{cursor?:string;limit?:string}={}){
+  async flowCatalog(principal:Principal,input:{cursor?:unknown;limit?:string}={}){
     const limit=catalogPageLimit(input.limit);const cursor=catalogCursor(input.cursor,principal.tenantId,"FLOW");
     const rows=await this.database.rows<Record<string,unknown>&{flow_version_id:string;pagination_sort:string}>(principal.tenantId,`SELECT family.id AS family_id,COALESCE(NULLIF(version.definition->>'name',''),family.name) AS name,version.id AS flow_version_id,
       version.version,version.state,version.revision,version.snapshot_sha256,version.created_at,version.activated_at,version.retired_at,
@@ -216,7 +216,7 @@ export class BotFlowsService {
     return visible.map(row=>({...row,endpoint_url:redactEndpointQuery(row.endpoint_url),secret_reference:null,headers:{}}));
   }
 
-  async actionCatalog(principal:Principal,input:{cursor?:string;limit?:string}={}){
+  async actionCatalog(principal:Principal,input:{cursor?:unknown;limit?:string}={}){
     const limit=catalogPageLimit(input.limit);const cursor=catalogCursor(input.cursor,principal.tenantId,"ACTION");
     const rows=await this.database.rows<Record<string,unknown>&{id:string;name:string}>(principal.tenantId,`SELECT id,action_key,name,kind,http_method,state,revision,
       active_revision_id,revision AS active_action_revision,created_at,updated_at
@@ -306,7 +306,7 @@ export class BotFlowsService {
       WHERE assignment.tenant_id=$1 ORDER BY connection.name,assignment.created_at`,[principal.tenantId]);
   }
 
-  async listConversations(principal:Principal,input:{cursor?:string;limit?:string}={}){
+  async listConversations(principal:Principal,input:{cursor?:unknown;limit?:string}={}){
     const paginated=input.limit!==undefined;
     if(input.cursor!==undefined&&!paginated)throw new BadRequestException("Conversation page limit is required with a cursor");
     const limit=paginated?conversationPageLimit(input.limit!):LEGACY_CONVERSATION_LIMIT;
@@ -350,7 +350,7 @@ export class BotFlowsService {
     return{items,next_cursor:rows.length>limit?encodeConversationCursor(principal.tenantId,pageRows.at(-1)!):null};
   }
 
-  async listConversationEvents(principal:Principal,targetId:string,input:{cursor?:string;limit?:string}={}){
+  async listConversationEvents(principal:Principal,targetId:string,input:{cursor?:unknown;limit?:string}={}){
     const conversationId=uuid(targetId,"Bot conversation ID");
     const limit=conversationPageLimit(input.limit??String(CONVERSATION_PAGE_MAX));
     const cursor=conversationEventCursor(input.cursor,principal.tenantId,conversationId);
@@ -389,7 +389,7 @@ export class BotFlowsService {
     return rows.map(row=>({...row,definition:redactRoutingSecrets(row.definition)}));
   }
 
-  async routingCatalog(principal:Principal,input:{cursor?:string;limit?:string}={}){
+  async routingCatalog(principal:Principal,input:{cursor?:unknown;limit?:string}={}){
     const limit=catalogPageLimit(input.limit);const cursor=catalogCursor(input.cursor,principal.tenantId,"ROUTING");
     const rows=await this.database.rows<Record<string,unknown>&{id:string;version:number|string}>(principal.tenantId,`SELECT id,version,state,revision,snapshot_sha256,
       created_at,activated_at,retired_at FROM client_routing_versions WHERE tenant_id=$1
@@ -1275,12 +1275,17 @@ function catalogPageLimit(value:string|undefined){
   return Number(value);
 }
 
-function catalogCursor(value:string|undefined,tenantId:string,kind:CatalogKind):CatalogCursor|null{
+function decodeCursor(value:unknown):unknown{
+  if(typeof value!=="string"||value.length>1024||!/^[-_A-Za-z0-9]+$/u.test(value))throw new Error("invalid encoding");
+  const bytes=Buffer.from(value,"base64url");
+  if(bytes.toString("base64url")!==value)throw new Error("non-canonical encoding");
+  return JSON.parse(new TextDecoder("utf-8",{fatal:true}).decode(bytes));
+}
+
+function catalogCursor(value:unknown,tenantId:string,kind:CatalogKind):CatalogCursor|null{
   if(value===undefined)return null;
   try{
-    if(value.length>1024||!/^[-_A-Za-z0-9]+$/u.test(value))throw new Error("invalid encoding");
-    const bytes=Buffer.from(value,"base64url");if(bytes.toString("base64url")!==value)throw new Error("non-canonical encoding");
-    const parsed=JSON.parse(new TextDecoder("utf-8",{fatal:true}).decode(bytes)) as Partial<CatalogCursor>;
+    const parsed=decodeCursor(value) as Partial<CatalogCursor>;
     if(!parsed||typeof parsed!=="object"||Array.isArray(parsed)||Object.keys(parsed).sort().join(",")!=="id,kind,sort,tenant,v"
       ||parsed.v!==1||parsed.tenant!==tenantId||parsed.kind!==kind||typeof parsed.sort!=="string"||parsed.sort.length<1||parsed.sort.length>256||typeof parsed.id!=="string")throw new Error("invalid payload");
     uuid(parsed.id,"Catalog cursor ID");
@@ -1297,13 +1302,10 @@ function catalogPage<T extends Record<string,unknown>>(rows:T[],limit:number,ten
   return{items,next_cursor};
 }
 
-function conversationCursor(value:string|undefined,tenantId:string):ConversationCursor|null{
+function conversationCursor(value:unknown,tenantId:string):ConversationCursor|null{
   if(value===undefined)return null;
   try{
-    if(value.length>1024||!/^[-_A-Za-z0-9]+$/u.test(value))throw new Error("invalid encoding");
-    const bytes=Buffer.from(value,"base64url");
-    if(bytes.toString("base64url")!==value)throw new Error("non-canonical encoding");
-    const parsed=JSON.parse(new TextDecoder("utf-8",{fatal:true}).decode(bytes)) as unknown;
+    const parsed=decodeCursor(value);
     if(!parsed||typeof parsed!=="object"||Array.isArray(parsed))throw new Error("invalid payload");
     const cursor=parsed as Partial<ConversationCursor>;
     if(Object.keys(cursor).sort().join(",")!=="at,id,tenant,v"||cursor.v!==1||cursor.tenant!==tenantId||typeof cursor.at!=="string"||typeof cursor.id!=="string")throw new Error("invalid payload");
@@ -1321,13 +1323,10 @@ function encodeConversationCursor(tenantId:string,row:ConversationRow){
   return Buffer.from(JSON.stringify(cursor),"utf8").toString("base64url");
 }
 
-function conversationEventCursor(value:string|undefined,tenantId:string,conversationId:string):ConversationEventCursor|null{
+function conversationEventCursor(value:unknown,tenantId:string,conversationId:string):ConversationEventCursor|null{
   if(value===undefined)return null;
   try{
-    if(value.length>1024||!/^[-_A-Za-z0-9]+$/u.test(value))throw new Error("invalid encoding");
-    const bytes=Buffer.from(value,"base64url");
-    if(bytes.toString("base64url")!==value)throw new Error("non-canonical encoding");
-    const parsed=JSON.parse(new TextDecoder("utf-8",{fatal:true}).decode(bytes)) as unknown;
+    const parsed=decodeCursor(value);
     if(!parsed||typeof parsed!=="object"||Array.isArray(parsed))throw new Error("invalid payload");
     const cursor=parsed as Partial<ConversationEventCursor>;
     if(Object.keys(cursor).sort().join(",")!=="at,conversation,id,tenant,v"||cursor.v!==1||cursor.tenant!==tenantId||cursor.conversation!==conversationId||typeof cursor.at!=="string"||typeof cursor.id!=="string")throw new Error("invalid payload");

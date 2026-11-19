@@ -46,6 +46,14 @@ const gatedDefinitions = ["send_template", "whatsapp_flow"].map((type) => ({
     : [{ id: "blocked", type, flowId: "12345", prompt: "Confirm", buttonLabel: "Open", data: {}, next: "done" }, { id: "done", type: "end" }],
 }));
 
+test("bot pagination rejects repeated cursor values before accessing storage",async()=>{
+  const service=new BotFlowsService({});
+  const cursor=["duplicate"];
+  await assert.rejects(service.flowCatalog(principal,{cursor}),{status:400,message:"Catalog cursor is invalid"});
+  await assert.rejects(service.listConversations(principal,{cursor,limit:"50"}),{status:400,message:"Conversation cursor is invalid"});
+  await assert.rejects(service.listConversationEvents(principal,versionId,{cursor}),{status:400,message:"Conversation event cursor is invalid"});
+});
+
 test("flow and action catalogs are bounded summaries with tenant-bound keyset cursors and separate details",async()=>{
   const flowRows=[1,2,3].map(version=>({family_id:familyId,name:"Support",flow_version_id:`42000000-0000-4000-8000-00000000000${version}`,
     version:4-version,state:"DRAFT",revision:1,snapshot_sha256:"a".repeat(64),pagination_sort:"Support"}));

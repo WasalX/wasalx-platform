@@ -1,6 +1,16 @@
+const HTML_ENTITIES: Record<string, string> = {
+  nbsp: " ", amp: "&", lt: "<", gt: ">", quot: '"', "#39": "'",
+};
+
 /** One rendering rule for native preview and provider delivery. */
 export function renderOutboundText(input:{text:string;contentType:string;agentDisplayName?:string|null;agentPrefix?:string|null;agentIdentityPlacement?:"HEADER"|"FOOTER"|"OFF"|null}) {
-  const body=input.contentType==="text/html"?input.text.replace(/<br\s*\/?\s*>/gi,"\n").replace(/<\/p\s*>/gi,"\n").replace(/<[^>]*>/g,"").replace(/&nbsp;/gi," ").replace(/&amp;/gi,"&").replace(/&lt;/gi,"<").replace(/&gt;/gi,">").replace(/&quot;/gi,'"').replace(/&#39;/gi,"'"):input.text;
+  // Consume unfinished tags too and decode entities once for plain-text delivery.
+  const body=input.contentType==="text/html"
+    ? input.text.replace(/<([^>]*)(?:>|$)|&(nbsp|amp|lt|gt|quot|#39);/giu, (match, tag: string | undefined, entity: string | undefined) => {
+      if(entity!==undefined)return HTML_ENTITIES[entity.toLowerCase()]!;
+      return match.endsWith(">")&&tag!==undefined&&/^(?:br\s*(?:\/\s*)?|\/p\s*)$/iu.test(tag)?"\n":"";
+    })
+    : input.text;
   if(!input.agentDisplayName||input.agentIdentityPlacement==="OFF")return body;
   const identity=`${input.agentPrefix?.trim()??"Agent:"} ${input.agentDisplayName}`.trim();
   return !body.trim()?identity:input.agentIdentityPlacement==="FOOTER"?`${body}\n${identity}`:`${identity}\n${body}`;

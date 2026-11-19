@@ -305,11 +305,11 @@ async quotedCommandAdmission(@Headers('authorization') authorization:string|unde
 
 
   @Get("outbound/preflight")async outboundPreflight(@Headers("authorization")authorization:string|undefined,
-    @Query("connection_id")connectionId:string|undefined,@Query("group_id")groupId:string|undefined,
-    @Query("ticket_id")ticketIdValue:string|undefined,@Req()request?:ZammadServiceRequest){
+    @Query("connection_id")connectionId:unknown,@Query("group_id")groupId:unknown,
+    @Query("ticket_id")ticketIdValue:unknown,@Req()request?:ZammadServiceRequest){
     const claims=await this.claims(authorization,"zammad:outbound",request);
     if(!claims.userId)throw new UnauthorizedException("A Zammad agent identity is required");
-    if(!connectionId||!UUID.test(connectionId)||!groupId||groupId.length>512||hasControl(groupId))throw new BadRequestException("WhatsApp destination is invalid");
+    if(typeof connectionId!=="string"||!UUID.test(connectionId)||typeof groupId!=="string"||!groupId||groupId.length>512||hasControl(groupId))throw new BadRequestException("WhatsApp destination is invalid");
     const ticketId=String(positiveIdentifier(ticketIdValue,"Ticket ID"));
     const allowed=await this.database.withTenant(claims.tenantId,async client=>{await assertTicketCommandBarrier(client,{tenantId:claims.tenantId,ticketId});const routeAllowed=(await client.query<{allowed:boolean}>(`SELECT EXISTS (
       SELECT 1 FROM connections c JOIN whatsapp_groups g ON g.tenant_id=c.tenant_id AND g.connection_id=c.id
