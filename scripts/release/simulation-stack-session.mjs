@@ -2,13 +2,9 @@
 // node THIS_FILE <checkout> <private-model-directory> <run-id>
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
-import {execFile as execFileCallback} from 'node:child_process';
-import {promisify} from 'node:util';
-import {createRequire} from 'node:module';
-import {pathToFileURL} from 'node:url';
 import {resolve,join,relative,isAbsolute} from 'node:path';
-import {readFile,mkdir,appendFile,writeFile,stat,open,lstat,realpath} from 'node:fs/promises';
-const execFile=promisify(execFileCallback);
+import {readFile,lstat} from 'node:fs/promises';
+
 export async function inspectComposeService(run,project,service){
 assert.match(project,/^[A-Za-z0-9][A-Za-z0-9_.-]*$/);assert.match(service,/^[A-Za-z0-9][A-Za-z0-9_.-]*$/);
 const ids=(await run('docker',['ps','-q','--filter','label=com.docker.compose.project='+project,'--filter','label=com.docker.compose.service='+service])).trim().split(/\s+/).filter(Boolean);assert.equal(ids.length,1,'Expected one running '+service+' container');

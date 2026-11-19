@@ -1,12 +1,4 @@
 import assert from 'node:assert/strict';
-import {readFile,open} from 'node:fs/promises';
-import {join,resolve} from 'node:path';
-import {createHash} from 'node:crypto';
-import {createRequire} from 'node:module';
-import {pathToFileURL} from 'node:url';
-import {execFile as callback} from 'node:child_process';
-import {promisify} from 'node:util';
-import {createLifecycleWorkerAudit,readSimulationOperatorSubject} from './simulation-lifecycle-worker-audit.mjs';
 export function assertBootstrapIdle(census,worker){
  for(const key of ['connections','sessions','operations','effects','leases'])assert.equal(Number(census[key]),0,'Fresh bootstrap requires zero '+key);
  assert.equal(worker.workerKey,'simulation-lifecycle-gows');assert.equal(worker.engine,'GOWS');assert.equal(worker.assignedSessions,0);assert.equal(worker.lifecycleState,'ACTIVE');assert.equal(worker.rolloutMode,'STABLE');assert.equal(worker.healthState,'HEALTHY');

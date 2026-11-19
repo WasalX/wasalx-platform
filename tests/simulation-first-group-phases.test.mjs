@@ -1,8 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,readFile,rm,realpath} from 'node:fs/promises';
-import {tmpdir} from 'node:os';
-import {join} from 'node:path';
+import {readFile} from 'node:fs/promises';
 import {seedSyntheticGroup,bindPreparedSyntheticGroup} from '../scripts/release/seed-simulation-group.mjs';
 import {findPortalSupportTeam,assertPortalFixtureMachineTarget} from '../scripts/release/simulation-portal-groups.mjs';
 import {assertTeamFixture} from '../scripts/release/simulation-team-stages.mjs';
@@ -42,14 +40,7 @@ function bindingFixture({stale=false,authorized=true,existing=false,unknown=fals
  }};
  return{calls,rows,options:{page,origin,runId:namespace,prepared,nativeGroupId:'7',assertIsolatedRuntime:async()=>{},checkpoint:async row=>rows.push(row)}};
 }
-async function ownedTemp(run){const dir=await mkdtemp(join(tmpdir(),'wasalx-first-group-'));try{return await run(dir);}finally{assert.equal(await realpath(dir),dir);await rm(dir,{recursive:true});}}
 function access(){return{surface:'portal',namespace,tenantId,nativeGroupId:'7',machineGrant:{surface:'portal',enabled:true,teamId:'7',kind:'IDENTITY_GRANT',requestId:'00000000-0000-4000-8000-000000000004',state:'APPLIED',terminal:true}};}
-function stageFixture(dir){
- const prefix={evidenceMode:'simulated',preparationOnly:true,namespace,tenantId,connectionId,groupId,groupRef:prepared.groupRef,nativeGroupName:'Operations',prepared:structuredClone(prepared),fixtureDisposition:'retain-run-owned'};
- const inputs={groupPreparation:prefix,portalTeamAccess:access(),nativeAccountAccess:{namespace,tenantId},teamAccess:{namespace,tenantId}};
- const checkpoints=[],s={operatorSurface:'portal',model:{name:'wasalx-simulation-unit'},tenantId,ownerId:'owner',privateDir:dir,output:dir,ownerPage:{url:()=>origin+'/app',evaluate:async()=>({binding_id:'binding',binding_state:'ACTIVE',rule_set_id:ruleSetId,zammad_group_id:7,binding_revision:'1'})},portalOrigin:origin,containers:{'waha-gows':{}},verifyOwner:async()=>({userMatched:true,workspaceMatched:true}),ensurePrivilegedOwner:async()=>{},scoped:async()=>[],checkpoint:async row=>checkpoints.push(row)};
- return{s,inputs,prefix,checkpoints};
-}
 
 test('preparation settles connection discovery and active rule without native catalog binding or inbound effects',async()=>{
  const f=seedFixture(),result=await seedSyntheticGroup(f.options);assert.equal(result.preparationOnly,true);assert.equal(result.ruleRevision,2);assert.equal(result.nativeGroupName,'Operations');assert.equal(result.groupRef,prepared.groupRef);
@@ -75,12 +66,6 @@ test('current Team3 require preparation, while retained callers preserve their c
  assert.equal(assertTeamFixture(s,namespace,{groupPreparation:prefix}),prefix);assert.throws(()=>assertTeamFixture(s,namespace,{group:prefix}));assert.equal(assertTeamFixture({...s,operatorSurface:undefined},namespace,{group:prefix}),prefix);
 });
 
-function driverFixture(dir,{unknown=false,duplicateDrift=false,configureFailure=false}={}){
- let sent=0,disposed=0,configured=0;const inputs=[],inboxId='00000000-0000-4000-8000-000000000005',hash='a'.repeat(64);
- const db={query:async sql=>{let rows=[];if(sent&&sql.includes('FROM normalized_messages'))rows=[{id:'message',processing_status:'COMPLETE'}];if(sent&&sql.includes('FROM message_links'))rows=[{id:'link',zammad_ticket_id:'71'}];if(sent&&sql.includes('FROM event_inbox'))rows=[{id:inboxId,status:'PROCESSED',attempts:duplicateDrift&&sent>1?2:1,lease_id:null,processed_at:'2026-10-18T00:00:00Z',payload_sha256:hash}];return{rows};}};
- const options={ownerPage:{},db,tenantId,socketPath:'/owned/sim.sock',candidate:{sha:'a'.repeat(40),tree:'b'.repeat(40)},seed:{runId:namespace,externalGroupId:prepared.groupRef,participant:'12025550106@c.us'},checkpoint:async()=>{},evidencePath:join(dir,'driver.json'),assertIsolatedRuntime:async()=>{},auth:{restoreFactor:async()=>({status:'verified',dispose(){disposed++;}})},configure:async()=>{configured++;if(configureFailure)throw Error('Binding outcome unknown');return{evidenceMode:'simulated',connectionId,groupId,ruleSetId,bindingId:'binding'};},control:async command=>{sent++;inputs.push(command);if(unknown)throw Error('Inbound response lost');return{bodySha256:hash,results:[{status:200,receipt:{accepted:true,duplicate:sent>1,event_id:inboxId}}]};},nativeRead:async()=>({ticketId:71,number:'4401',markerArticleIds:[72]}),renderNativeProof:async()=>null};
- return{options,counts:()=>({sent,disposed,configured}),inputs};
-}
 
 test('Meta current target admission rejects ungranted or different destinations before ingress; legacy runtime binding is preserved',()=>{
  const b={project:'wasalx-simulation-unit',tenantId,connectionId,phoneId:'10001',wabaId:'10002',graphContainerId:'container',graphImageDigest:'sha256:'+'a'.repeat(64),graphSourceSha256:'b'.repeat(64),controlSocket:'/private/meta.sock'},f={runtimeBinding:b,connectionId},h={binding:b,cfg:{zammadGroupId:'7',binding:{phoneId:b.phoneId,wabaId:b.wabaId}},nativeTeamAccess:access()},s={model:{name:b.project},tenantId,operatorSurface:'portal'};

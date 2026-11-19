@@ -2,10 +2,7 @@
 import {pathToFileURL as manualDriverFileUrl} from "node:url";
 if ((process.env.CI === "true" || process.env.GITHUB_ACTIONS === "true") && process.argv[1] && import.meta.url === manualDriverFileUrl(process.argv[1]).href) throw new Error("Live provider drivers must never run in hosted CI");
 
-import {request as httpRequest} from 'node:http';
-import {parseRailsJson} from './simulation-rails-json.mjs';
-import {need,sha,uuid,hex} from './meta-cost-dev-contract.mjs';
-const env=c=>Object.fromEntries(c.Config.Env.map(s=>{const n=s.indexOf('=');return[s.slice(0,n),s.slice(n+1)];}));
+import {need,uuid} from './meta-cost-dev-contract.mjs';
 const nativeId=x=>typeof x==='string'&&/^[1-9][0-9]{0,18}$/u.test(x);
 export function validatePrivacyReadset(r,m){
  need(r?.tenantId===m.tenantId&&r.connectionId===m.p10.connectionId&&uuid(r.instanceId)&&r.instanceId===m.p10.nativeInstanceId,'PRIVACY_READ_SCOPE');

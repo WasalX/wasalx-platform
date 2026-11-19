@@ -1,10 +1,7 @@
 // Inert companion to the existing P02/P05 DEV guest/browser adapter. Root composes
 // its finite action cases only after both packets are reviewed. No work on import.
 import assert from 'node:assert/strict';
-import {createHash,createHmac} from 'node:crypto';
-import {readFile} from 'node:fs/promises';
-import {pathToFileURL} from 'node:url';
-import {posix} from 'node:path';
+import {createHash} from 'node:crypto';
 const hash=b=>createHash('sha256').update(b).digest('hex');
 const uuid=v=>typeof v==='string'&&/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(v);
 export const routingActions=Object.freeze(['routing-current','routing-admit','routing-claim','routing-observe','routing-provider-read','routing-primary','routing-fault']);

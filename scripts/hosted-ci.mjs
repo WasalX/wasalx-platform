@@ -1,12 +1,12 @@
 import "../tests/helpers/operator-input-fixtures.mjs";
 import assert from "node:assert/strict";
 import { execFile, execFileSync, spawnSync } from "node:child_process";
-import { appendFileSync, readFileSync, rmSync } from "node:fs";
+import { appendFileSync, readFileSync } from "node:fs";
 import { matchesGlob, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { unitFiles, unitFileTimings } from "./test-unit.mjs";
-import { addonSkips, lintRatchet, skipPattern } from "./hosted-ci-policy.mjs";
+import { addonSkips, skipPattern } from "./hosted-ci-policy.mjs";
 
 const config = JSON.parse(readFileSync(new URL("./hosted-ci-config.json", import.meta.url)));
 const timings = JSON.parse(readFileSync(new URL("./hosted-ci-timings.json", import.meta.url)));
@@ -54,23 +54,7 @@ export async function collectFile(file, timeout = 45_000) {
 
 async function main() {
   const [mode, shard, total] = process.argv.slice(2);
-  assert(["lint", "unit", "collection"].includes(mode), "Expected lint, unit or collection");
-  if (mode === "lint") {
-    const report = ".git/hosted-lint.json";
-    rmSync(report, { force: true });
-    const result = spawnSync("pnpm", ["run", "lint", "--cache", "--cache-strategy", "content",
-      "--cache-location", ".git/hosted-eslint-cache", "--format", "json", "--output-file", report], { stdio: "inherit", windowsHide: true });
-    if (result.error) throw result.error;
-    assert(result.status === 0 || result.status === 1, "ESLint failed to execute");
-    const current = lintRatchet(JSON.parse(readFileSync(report, "utf8")));
-    assert.equal(result.status, current.count ? 1 : 0, "Lint exit status disagrees with its report");
-    const lines = [`Lint errors: ${current.count}; recorded: ${current.recorded}`, ...current.regressions];
-    if (current.decreased) lines.push("Lint improved: lower the recorded numbers in scripts/hosted-ci-baseline.mjs to the current file/rule counts.");
-    console.log(lines.join("\n"));
-    if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, lines.join("  \n") + "\n");
-    process.exitCode = current.regressions.length ? 1 : 0;
-    return;
-  }
+  assert(["unit", "collection"].includes(mode), "Expected unit or collection");
   const tracked = execFileSync("git", ["ls-files", "-z", "tests"], { encoding: "utf8" }).split("\0").filter(Boolean);
   const files = mode === "collection" ? collectionFiles(tracked) : inventory(tracked);
   assert(files.length > 0 && files.every(file => file.startsWith("tests/") && !file.includes("..")));

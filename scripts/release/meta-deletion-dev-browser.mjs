@@ -3,11 +3,8 @@ import {pathToFileURL as manualDriverFileUrl} from "node:url";
 if ((process.env.CI === "true" || process.env.GITHUB_ACTIONS === "true") && process.argv[1] && import.meta.url === manualDriverFileUrl(process.argv[1]).href) throw new Error("Live provider drivers must never run in hosted CI");
 // Installed DEV composition. Root supplies its existing separately signed-in
 // platform Page and an owned cookie-free public Page; no sign-in or launcher.
-import {readFile,mkdir,writeFile,realpath,lstat} from 'node:fs/promises';
-import {resolve,relative,isAbsolute} from 'node:path';
-import {pathToFileURL,fileURLToPath} from 'node:url';
 import {isDeepStrictEqual} from 'node:util';
-import {deletionRequire as need,deletionSafe,deletionSha as sha} from './meta-deletion-dev-fixture.mjs';
+import {deletionRequire as need,deletionSafe} from './meta-deletion-dev-fixture.mjs';
 import {runMetaDeletionDevJourney} from './meta-deletion-journey.mjs';
 
 export async function verifyDeletionPlatformPage(page,m,relay){return deletionSafe(async()=>{

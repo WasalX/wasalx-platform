@@ -15,18 +15,6 @@ export function generateBaseline(log) {
     if (!jobs.has(job)) jobs.set(job, []);
     jobs.get(job).push(text);
   }
-  const lint = { count: 0, files: {} };
-  let file;
-  for (const line of jobs.get("Lint") ?? []) {
-    if (line.startsWith(root)) file = line.slice(root.length);
-    if (!/^##\[error\]\s+\d+:\d+\s+error\s/u.test(line)) continue;
-    assert(file, "Lint diagnostic has no file");
-    const rule = line.trim().split(/\s+/u).at(-1);
-    lint.files[file] ??= {};
-    lint.files[file][rule] = (lint.files[file][rule] ?? 0) + 1;
-    lint.count++;
-  }
-  assert.equal(lint.count, 222, "Expected the approved corrected run's 222 lint errors");
   const tests = [];
   for (const [job, lines] of jobs) {
     if (!job.startsWith("Unit ")) continue;
@@ -50,7 +38,6 @@ export function generateBaseline(log) {
     sourceRun: "https://github.com/WasalX/wasalx-platform/actions/runs/44043107820",
     sourceHead: "8e07a88bfecd2163a79a8b73f1d2b3c52e033172",
     logSha256: createHash("sha256").update(log).digest("hex"),
-    lint,
     tests,
   };
 }

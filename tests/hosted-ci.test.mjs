@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
 import { collectFile, collectionFiles, inventory, shardFiles } from "../scripts/hosted-ci.mjs";
-import { addonSkips, lintRatchet, skipPattern } from "../scripts/hosted-ci-policy.mjs";
+import { addonSkips, skipPattern } from "../scripts/hosted-ci-policy.mjs";
 import { generateBaseline } from "../scripts/generate-hosted-ci-baseline.mjs";
 import baseline from "../scripts/hosted-ci-baseline.mjs";
 
@@ -48,28 +48,9 @@ test("collection skips test bodies, reports import errors and kills hanging impo
   assert.equal(timeout.diagnostic, "Collection import timed out");
 });
 
-test("lint ratchet rejects increases, new files and new rules even when the total falls", () => {
-  const allowed = { count: 2, files: { "known.mjs": { "no-unused-vars": 2 } } };
-  const report = (file = "known.mjs", count = 2, ruleId = "no-unused-vars") => [{
-    filePath: join(process.cwd(), file), errorCount: count, fatalErrorCount: 0,
-    messages: Array.from({ length: count }, () => ({ severity: 2, ruleId })),
-  }];
-  assert.deepEqual(lintRatchet(report(), allowed).regressions, []);
-  assert.equal(lintRatchet(report(), allowed).decreased, false);
-  assert.equal(lintRatchet(report("known.mjs", 1), allowed).decreased, true);
-  assert.deepEqual(lintRatchet([], allowed).regressions, []);
-  for (const results of [report("known.mjs", 3), report("new.mjs", 1), report("known.mjs", 1, "new-rule")]) {
-    assert(lintRatchet(results, allowed).regressions.length > 0);
-  }
-  assert.throws(() => lintRatchet([{ ...report()[0], fatalErrorCount: 1 }], allowed));
-  assert.throws(() => lintRatchet([{ ...report()[0], errorCount: 3 }], allowed));
-});
-
 test("add-on exceptions bind exact entrypoints and names and disappear as inputs arrive", async t => {
   assert.equal(baseline.tests.length, 10);
   assert.equal(new Set(baseline.tests.map(entry => entry.file + "::" + entry.name)).size, 9);
-  assert(Number.isSafeInteger(baseline.lint.count) && baseline.lint.count >= 0);
-  assert.equal(Object.values(baseline.lint.files).flatMap(Object.values).reduce((sum, count) => sum + count, 0), baseline.lint.count);
   assert.deepEqual(addonSkips("tests/unlisted.test.mjs", () => false), []);
   for (const entry of baseline.tests) {
     assert.equal(entry.reason, "needs the add-on source");
@@ -103,12 +84,9 @@ test("baseline generation retains every logged failure and rejects unclassified 
     line("Unit 1/6", `✖ case ${i} (0.1ms)`),
     line("Unit 1/6", `  Error: ENOENT: no such file or directory, open '${root}zammad-package/file-${i}.rb'`),
   ]).flat();
-  const log = [line("Lint", root + "known.mjs"), ...Array.from({ length: 222 }, () =>
-    line("Lint", "##[error]  1:1  error  unused  no-unused-vars")), ...failures].join("\n");
+  const log = failures.join("\n");
   const generated = generateBaseline(log);
-  assert.equal(generated.lint.files["known.mjs"]["no-unused-vars"], 222);
   assert.equal(generated.tests[9].name, "case 9");
   assert.equal(generated.tests[9].input, "zammad-package/file-9.rb");
   assert.throws(() => generateBaseline(log.replace("open '", "unexpected '")));
-  assert.throws(() => generateBaseline(log.replace("##[error]  1:1", "unparsed 1:1")));
 });

@@ -1,9 +1,6 @@
 // Isolated simulated-provider scenario; not live qualification evidence.
 import assert from 'node:assert/strict';
-import {writeFile} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
-import {seedSyntheticGroup} from './seed-simulation-group.mjs';
-import {callSimulationControl} from '../contracts/waha-simulation-control.mjs';
 
 export function simulationEventId(runId) {
   const alphabet='0123456789abcdefghjkmnpqrstvwxyz';

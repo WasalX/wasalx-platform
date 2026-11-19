@@ -2,13 +2,7 @@
 import {pathToFileURL as manualDriverFileUrl} from "node:url";
 if ((process.env.CI === "true" || process.env.GITHUB_ACTIONS === "true") && process.argv[1] && import.meta.url === manualDriverFileUrl(process.argv[1]).href) throw new Error("Live provider drivers must never run in hosted CI");
 // Reuses admitted fixed guest/network/TLS/socket/source authority. Never launches a stack.
-import {readFile,lstat,realpath} from 'node:fs/promises';
-import {posix} from 'node:path';
-import {fileURLToPath,pathToFileURL} from 'node:url';
-import {createHmac} from 'node:crypto';
-import {isDeepStrictEqual} from 'node:util';
-import {sha,hex,uuid,requireTransition as need,assertCommittedTarget,assertSourceReadback} from "./meta-transition-dev-contract.mjs";
-const {join}=posix,env=c=>Object.fromEntries(c.Config.Env.map(s=>{const i=s.indexOf('=');return[s.slice(0,i),s.slice(i+1)];}));
+
 export const transitionReadSql=`SELECT json_build_object('tenantId',c.tenant_id,'phoneId',$3,'appId',$4,
  'connection',json_build_object('id',c.id,'provider',c.provider,'state',c.state),
  'deliveryCount',(SELECT count(*) FROM public.delivery_outbox d WHERE d.tenant_id=c.tenant_id AND d.connection_id=c.id),
@@ -22,5 +16,3 @@ export const callbackReadSql=`SELECT i.id AS inbox_id,i.status,i.lease_id,n.id A
  FROM public.event_inbox i JOIN public.normalized_messages n ON n.tenant_id=i.tenant_id AND n.event_inbox_id=i.id
  JOIN public.message_links l ON l.tenant_id=n.tenant_id AND l.connection_id=n.connection_id AND l.external_message_id=n.external_message_id
  WHERE i.tenant_id=$1 AND i.connection_id=$2 AND i.provider_event_id_sha256=app.webhook_event_id_sha256(i.tenant_id,i.connection_id,'META',$3)`;
-async function control(m,bound,method,path,body){const{signupControl}=await import(pathToFileURL(join(m.candidate.root,'scripts/release/simulation-meta-signup-stage.mjs')));return signupControl(bound.cfg.controlSocket,method,path,body,'transition');}
-async function claim(m,digest){const path=join(m.fixture.privateDir,m.p09.namespace+'.claim.json'),s=await lstat(path);need(s.isFile()&&!s.isSymbolicLink()&&s.uid===process.getuid()&&(s.mode&0o077)===0&&await realpath(path)===path,'CLAIM');const x=JSON.parse(await readFile(path));need(x.manifestSha256===digest&&uuid(x.connectionId),'CLAIM_SCOPE');return x;}

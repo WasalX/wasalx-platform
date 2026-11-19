@@ -1,4 +1,4 @@
-const channelNames = ["slack", "whatsapp", "x", "tiktok", "instagram"] as const;
+type ChannelName = "slack" | "whatsapp" | "x" | "tiktok" | "instagram";
 // WasalX-authored generic channel placeholder.
 const channelPath = "M4 5h16v14H4ZM8 9h8M8 13h5";
 
@@ -27,6 +27,6 @@ const paths = {
   link: "M10 13a5 5 0 0 0 7 .1l3-3a5 5 0 0 0-7-7l-2 2M14 11a5 5 0 0 0-7-.1l-3 3a5 5 0 0 0 7 7l2-2",
 } as const;
 
-export function MarketingIcon({ name }: { name: keyof typeof paths | (typeof channelNames)[number] }) {
+export function MarketingIcon({ name }: { name: keyof typeof paths | ChannelName }) {
   return <svg className={`marketing-icon marketing-icon-${name}`} width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={name in paths ? paths[name as keyof typeof paths] : channelPath} /></svg>;
 }

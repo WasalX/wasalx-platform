@@ -2,14 +2,10 @@
 import {pathToFileURL as manualDriverFileUrl} from "node:url";
 if ((process.env.CI === "true" || process.env.GITHUB_ACTIONS === "true") && process.argv[1] && import.meta.url === manualDriverFileUrl(process.argv[1]).href) throw new Error("Live provider drivers must never run in hosted CI");
 // Fixed P11 extension of the existing admitted DEV guest. No work on import.
-import {readFile,lstat,realpath} from 'node:fs/promises';
-import {posix} from 'node:path';
-import {fileURLToPath} from 'node:url';
-import {isDeepStrictEqual} from 'node:util';
 import {request} from 'node:http';
 import {execFile} from 'node:child_process';
-import {deletionSha as sha,deletionRequire as need,deletionSafe,metaDeletionWireInventory,validateDeletionReceipt,deletionKinds,metaDeletionDevReceiptSql} from './meta-deletion-dev-fixture.mjs';
-const {join,dirname}=posix,hex=x=>typeof x==='string'&&/^[0-9a-f]{64}$/u.test(x);
+import {deletionRequire as need,deletionSafe} from './meta-deletion-dev-fixture.mjs';
+const hex=x=>typeof x==='string'&&/^[0-9a-f]{64}$/u.test(x);
 const env=c=>Object.fromEntries(c.Config.Env.map(s=>{const i=s.indexOf('=');return[s.slice(0,i),s.slice(i+1)];}));
 // Exact root-reviewed composed bytes; original private SQL remains provenance.
 export function validateDeletionMigrationBinding(migration,sourceFiles){
@@ -26,12 +22,7 @@ export const metaDeletionPreservationSql=`SELECT json_build_object('count',count
  'maintenance_eligible',coalesce(bool_or(state='REFUSED' AND ((minimized_at IS NULL AND expires_at<=to_timestamp($3/1000.0)) OR replay_until<=to_timestamp($3/1000.0))),false))
  FROM (SELECT to_jsonb(r) value,state,minimized_at,expires_at,replay_until FROM public.meta_deletion_receipts r
  WHERE NOT (r.app_id=$1 AND r.payload_sha256=$2) ORDER BY r.id LIMIT 2001) q`;
-async function checkedClaim(m,manifestSha256){
- const path=join(m.fixture.privateDir,'p11-'+m.runId+'.claim.json'),s=await lstat(path);
- need(s.isFile()&&!s.isSymbolicLink()&&s.uid===process.getuid()&&(s.mode&0o077)===0&&await realpath(path)===path,'CLAIM_FILE');
- const value=JSON.parse(await readFile(path));need(value.manifestSha256===manifestSha256&&value.namespace===m.p11.namespace,'CLAIM_BINDING');return value;
-}
-const tenantTables=['connections','provider_sessions','event_inbox','normalized_messages','delivery_outbox','audit_events','privacy_jobs','secret_cleanup_outbox','meta_signup_attempts','bot_conversations','bot_action_jobs','bot_handoff_jobs','direct_native_reply_intents','direct_customer_close_commands'];
+
 export function deletionPublicReceipt(row){if(!row)return null;const out={};for(const key of ['id','app_id','payload_sha256','locator','state','version','received_at','expires_at','replay_until','minimized_at','refusal_policy_url','operation_count','review_audit_count'])out[key]=row[key];return out;}
 export async function postDeletionCallback(ip,wire,validUntil,requestFn=request){return deletionSafe(()=>new Promise((resolveResult,reject)=>{
  const end=Date.parse(validUntil),remaining=end-Date.now();need(Number.isSafeInteger(end)&&remaining>0,'CALLBACK_ADMISSION');

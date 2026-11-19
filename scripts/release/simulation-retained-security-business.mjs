@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import {retainedFixtureStage} from './simulation-retained-fixture.mjs';
 import {restrictedExecutionResults} from './simulation-direct-derived.mjs';
 
 const allowed=new Set(['passed','failed','blocked','unknown']);

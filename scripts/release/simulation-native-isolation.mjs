@@ -1,15 +1,9 @@
 import assert from 'node:assert/strict';
-import {createHash} from 'node:crypto';
-import {readFile,lstat,open} from 'node:fs/promises';
-import {join,resolve} from 'node:path';
-import {parseRailsJson} from './simulation-rails-json.mjs';
-import {privateNativeRead,ensurePortalOperator} from './simulation-portal-operator.mjs';
-import {admitSecondaryPortalOwner,assertNativeIsolationReadback} from './simulation-portal-isolation.mjs';
 const originals='zammad-postgresql zammad-redis zammad-memcached zammad-elasticsearch zammad-init zammad-package zammad-runtime-bootstrap zammad-railsserver zammad-scheduler'.split(' ');
 const alias=name=>name.replace('zammad-','zammad-isolation-');
 const once=new Set(['zammad-init','zammad-package','zammad-runtime-bootstrap']);
-const sha=value=>createHash('sha256').update(value).digest('hex');
-const uuid=/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/iu,id=/^[1-9][0-9]{0,15}$/u;
+
+const uuid=/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/iu;
 export function assertNativeIsolationModel(model,fixture){
  assert(model.name.startsWith('wasalx-simulation-'));assert.match(fixture.tenantId,uuid);assert.match(fixture.instanceId,uuid);
  assert.equal(fixture.tenantId,'00000000-0000-4000-8000-000000000011');assert.equal(fixture.status,'READY_NATIVE_ONLY');
@@ -58,22 +52,5 @@ export function assertNativeIsolationContainers(model,prepared,rows,network){
  // Actual volume names and host paths must also be disjoint, independently of model keys.
  const writable=name=>(found[name].Mounts??[]).filter(value=>value.RW).flatMap(value=>[value.Source,...(value.Type==='volume'?[value.Name]:[])]),primary=new Set(originals.flatMap(writable));assert(originals.flatMap(name=>writable(alias(name))).every(value=>!primary.has(value)),'Actual native storage overlaps');
  return found;
-}
-async function inspectNative(s,prepared){
- const ids=(await s.run('docker',['ps','-aq','--filter','label=com.docker.compose.project='+s.model.name])).trim().split(/\s+/u).filter(Boolean);assert(ids.length&&ids.every(value=>/^[a-f0-9]{64}$/u.test(value)));
- const rows=JSON.parse(await s.run('docker',['inspect',...ids]));const [network]=JSON.parse(await s.run('docker',['network','inspect',s.model.networks[prepared.nativeIsolation.network].name]));
- const found=assertNativeIsolationContainers(s.model,prepared,rows,network);Object.assign(s.containers,found);return found;
-}
-async function admittedSource(s,container){
- const [image]=JSON.parse(await s.run('docker',['image','inspect',container.Image]));assert.equal(image.Id,container.Image);const labels=image.Config?.Labels??{};
- const result={candidate_commit_sha:labels['org.opencontainers.image.revision'],candidate_tree_sha:labels['io.wasalx.source.tree'],native_package_sha256:labels['com.wasalx.zammad.package.sha256']};assert.equal(result.candidate_commit_sha,s.candidate.sha);assert.equal(result.candidate_tree_sha,s.candidate.tree);assert.match(result.native_package_sha256??'',/^[a-f0-9]{64}$/u);return result;
-}
-async function fixedFixture(s,view,input){
- const service=view.nativeReadService??'zammad-railsserver';assert(['zammad-railsserver','zammad-isolation-railsserver'].includes(service));const container=view.containers[service];assert(container);
- const source=await admittedSource(s,container),payload={project:s.model.name,namespace:input.namespace,tenantId:view.tenantId,instanceId:view.model.services[service].environment.WASALX_ZAMMAD_INSTANCE_ID,source,...input};
- const ruby=await readFile(join(s.driverRoot,'scripts/release/simulation-native-isolation-fixture.rb'),'utf8');const output=await s.run('docker',['exec','-e','WASALX_NATIVE_ISOLATION_INPUT='+Buffer.from(JSON.stringify(payload)).toString('base64url'),container.Id,'bundle','exec','rails','runner',ruby]);const result=parseRailsJson(output).nativeIsolation;assert(result);assert.equal(result.tenantId,view.tenantId);assert.equal(result.instanceId,payload.instanceId);assertInstalledIsolationSource(result.source,source);return result;
-}
-async function registry(s,tenantId){
- await s.db.query('BEGIN READ ONLY');try{await s.db.query("SELECT set_config('app.tenant_id',$1,true)",[tenantId]);const rows=(await s.db.query('SELECT id,tenant_id,state,base_url,database_reference,search_namespace,storage_prefix,service_secret_reference,privacy_secret_reference FROM zammad_instances WHERE tenant_id=$1',[tenantId])).rows;assert.equal(rows.length,1);return rows[0];}finally{await s.db.query('ROLLBACK');}
 }
 export function isolationEvidenceInput(own,foreign){return{ticketId:own.ticketId,ticketNumber:own.ticketNumber,articleId:own.articleId,attachmentId:own.attachment.id,marker:own.marker,foreignTicketId:foreign.ticketId,foreignTicketNumber:foreign.ticketNumber,foreignMarker:foreign.marker};}

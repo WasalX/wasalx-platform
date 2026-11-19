@@ -13,6 +13,3 @@ test('restricted executions bind each role through verified tenant evidence, the
  assert(!source.includes('actorRef:agent.userId'));assert(!/simulation-direct-quality-contexts|simulation-native-/u.test(source),'No retired native modules');
  assert(source.includes("args.inputs.directFlow===undefined?undefined:await observeRestrictedExecutions("),'Restricted rows exist only when the declared direct input is present');
 });
-const detail=suffix=>({testId:'security/tenant-isolation::'+suffix,result:'passed',startedAt:'2026-10-29T10:00:00.000Z',finishedAt:'2026-10-29T10:00:01.000Z',proof:{containerId:'c',scope:'compiled'}});
-const page=size=>({size,viewportSize(){return this.size},async setViewportSize(value){this.size=value},evaluate:async()=>'en'});
-function ownerSession(){const ownerPage=page({width:1440,height:1000});return{tenantId:'tenant',ownerId:'owner',ownerPage,verifyOwner:async()=>({userMatched:true,workspaceMatched:true})};}

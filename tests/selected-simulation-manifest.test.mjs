@@ -11,13 +11,11 @@ import{q076NativeUnexecutedIds}from'../scripts/release/simulation-q076-native-co
 import{mergeQ081NativeResults}from'../scripts/release/simulation-q081-native-continuation.mjs';
 import{failedQ081TicketResults}from'../scripts/release/simulation-q081-native-continuation.mjs';
 import{q083RetainedNavigationTestIds,q084NavigationTestIds}from'../scripts/release/simulation-q083-navigation-continuation.mjs';
-import{mkdir,mkdtemp,writeFile,rm,cp}from'node:fs/promises';import{tmpdir}from'node:os';import{resolve,basename}from'node:path';
+import{mkdir,mkdtemp,writeFile,rm}from'node:fs/promises';import{tmpdir}from'node:os';import{resolve}from'node:path';
 import{createHash}from'node:crypto';
 import {runInNewContext} from 'node:vm';
 import {applyHandoffRetry} from '../scripts/release/build-selected-simulation-manifest.mjs';
 import {handoffRetryTestId} from '../scripts/release/simulation-handoff-fixture.mjs';
-import {directDerivedIds} from '../scripts/release/simulation-direct-derived.mjs';
-import {downstreamStageChecks} from '../scripts/release/simulation-manifest.mjs';
 
 test('handoff retry source support requires the exact explicit fresh governed selection',()=>{
  const setup=manifestFixture();assert.deepEqual(setup.direct.chatIds,['12025550104@c.us','12025550105@c.us']);
