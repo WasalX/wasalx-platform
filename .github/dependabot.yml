@@ -16,9 +16,9 @@ updates:
       # bullmq 5 accepts only ioredis 5 clients; lift together with bullmq.
       - dependency-name: "ioredis"
         update-types: ["version-update:semver-major"]
-      # Vinext >= 1.4.4 changes image-size bundling; needs the portal image regression updated.
+      # Keep Vinext pinned until newer versions pass the portal image regression.
       - dependency-name: "vinext"
-        versions: [">=1.4.4"]
+        versions: [">1.0.0-beta.5"]
       # Keep the add-ons aligned with the locally patched Storybook release.
       - dependency-name: "@storybook/addon-a11y"
         versions: [">10.6.2"]
@@ -28,9 +28,9 @@ updates:
         versions: [">10.6.2"]
       # The browser image and accessibility checks use these exact tool pins.
       - dependency-name: "@playwright/test"
-        versions: ["1.65.1"]
+        versions: [">1.62.1"]
       - dependency-name: "@axe-core/playwright"
-        versions: ["4.14.0"]
+        versions: [">4.12.1"]
     groups:
       npm-minor-and-patch:
         patterns: ['*']
