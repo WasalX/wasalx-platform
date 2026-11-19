@@ -1,9 +1,5 @@
 ﻿import assert from 'node:assert/strict';
-import {join} from 'node:path';
-import {open} from 'node:fs/promises';
-import {createHash} from 'node:crypto';
-import {seedSyntheticGroup,bindPreparedSyntheticGroup,createSyntheticRequest} from './seed-simulation-group.mjs';
-import {assertPortalFixtureMachineTarget} from './simulation-portal-groups.mjs';
+import {seedSyntheticGroup} from './seed-simulation-group.mjs';
 import {simulationEventId} from "./synthetic-first-group-driver.mjs";
 import {callSimulationControl} from '../contracts/waha-simulation-control.mjs';
 export const freshGroupCustomerParticipant='12025550106@c.us';

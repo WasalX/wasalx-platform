@@ -135,7 +135,7 @@ test('standard-library entry validates complete frozen closure before importing 
   const files=names.map(path=>({path,sha256:digest(raws.get(path))}));
   const m={guestDriverSha256:digest(entry),p11:{driverFiles:files,guestModuleSha256:digest(raws.get('meta-deletion-dev-guest.mjs'))}};
   const manifest=join(folder,'manifest.json');const persist=async()=>{const raw=JSON.stringify(m);await writeFile(manifest,raw);return digest(raw);};
-  const {verifyDeletionDriverClosure,runBrowser}=await import(pathToFileURL(join(folder,'meta-deletion-dev-entry.mjs')));
+  const {verifyDeletionDriverClosure}=await import(pathToFileURL(join(folder,'meta-deletion-dev-entry.mjs')));
   assert.deepEqual(await verifyDeletionDriverClosure(manifest,await persist()),m);
   m.p11.driverFiles=files.filter(f=>f.path!=='meta-deletion-dev-fixture.mjs');
   await assert.rejects(verifyDeletionDriverClosure(manifest,await persist()));

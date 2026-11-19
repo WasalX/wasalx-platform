@@ -2,16 +2,8 @@
 import {pathToFileURL as manualDriverFileUrl} from "node:url";
 if ((process.env.CI === "true" || process.env.GITHUB_ACTIONS === "true") && process.argv[1] && import.meta.url === manualDriverFileUrl(process.argv[1]).href) throw new Error("Live provider drivers must never run in hosted CI");
 // Fixed read-only projections and two signed synthetic input batches only.
-import {readFile,lstat,realpath} from 'node:fs/promises';
-import {posix} from 'node:path';
-import {fileURLToPath} from 'node:url';
-import {createHmac} from 'node:crypto';
-import {isDeepStrictEqual} from 'node:util';
-import {platformIdentity} from "./meta-deletion-dev-guest.mjs";
-import {need,sha,uuid,hex,validateCostManifest,assertCostAuthority,assertCostDataset,costFlow,admitCostPhase,assertRetainedCostRecord,costPhases} from './meta-cost-dev-contract.mjs';
-import {privacyOutcomeReadPlan,financialPrivacyReadPlan,localMetaOffboardingReadPlan} from './meta-privacy-outcome-readback.mjs';
-import {discoverPrivacyReadset,financeArtifactSql} from "./meta-cost-dev-privacy.mjs";
-const env=c=>Object.fromEntries(c.Config.Env.map(s=>{const i=s.indexOf('=');return[s.slice(0,i),s.slice(i+1)];}));
+import {need,uuid} from './meta-cost-dev-contract.mjs';
+
 export const costReadSql=`WITH binding AS(SELECT b.*,a.authority_revision,a.active_policy_version_id FROM public.meta_connection_account_bindings b JOIN public.meta_messaging_accounts a ON a.tenant_id=b.tenant_id AND a.id=b.account_id WHERE b.tenant_id=$1 AND b.connection_id=$2 AND b.account_id=$3 AND b.state='ACTIVE'),
  owned AS(SELECT d.*,app.resolve_meta_message_effect(d.tenant_id,d.id,d.external_message_id) AS effect FROM public.delivery_outbox d WHERE d.tenant_id=$1 AND d.connection_id=$2)
  SELECT jsonb_build_object('tenantId',$1::uuid,
@@ -27,4 +19,3 @@ export const costReadSql=`WITH binding AS(SELECT b.*,a.authority_revision,a.acti
  'retention',(SELECT jsonb_build_object('version',version,'financePolicy',finance_policy) FROM public.retention_policies WHERE tenant_id=$1),
  'privacy',coalesce((SELECT jsonb_agg(jsonb_build_object('id',id,'jobType',job_type,'scopeType',scope_type,'state',state,'stage',stage,'errorCode',error_code) ORDER BY created_at,id) FROM public.privacy_jobs WHERE tenant_id=$1),'[]'::jsonb))`;
 export function fixedPrivacyReadSql(plan){let sql=plan.text;for(let i=plan.values.length;i>=1;i--){const value=plan.values[i-1];need(Array.isArray(value)?value.length>0&&value.length<=4&&value.every(uuid):uuid(value),'FIXED_READ_IDS');const literal=Array.isArray(value)?'ARRAY['+value.map(x=>"'"+x+"'::uuid").join(',')+']':"'"+value+"'";sql=sql.replaceAll('$'+i,literal);}need(/^SELECT\b/u.test(sql.trim()),'FIXED_READ');return'SELECT coalesce(jsonb_agg(to_jsonb(result)),\'[]\'::jsonb) FROM ('+sql+') result';}
-async function retained(path,binding){const s=await lstat(path);need(s.isFile()&&!s.isSymbolicLink()&&s.uid===process.getuid()&&(s.mode&0o077)===0&&await realpath(path)===path,'PRIVATE_RECORD');return assertRetainedCostRecord(JSON.parse(await readFile(path)),binding);}

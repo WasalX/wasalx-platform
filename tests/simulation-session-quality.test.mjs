@@ -1,6 +1,5 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import { mapAnonymousSessionQuality, mapSessionQuality, tenantSessionRoles } from '../scripts/release/simulation-session-contexts.mjs';
 import {sessionQualityChecks} from "../scripts/release/simulation-session-quality-stage.mjs";
 import { definitions } from '../scripts/release/simulation-session-remaining-definitions.mjs';

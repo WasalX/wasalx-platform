@@ -9,7 +9,6 @@ import {fileURLToPath,pathToFileURL} from 'node:url';
 import {costDriverFiles} from '../scripts/release/meta-cost-dev-entry.mjs';
 import {parseBotFlow,advanceBotFlow} from '../packages/core/dist/bot-flow.js';
 import {parseMetaCostTariff,parseMetaCostSelectorEvidence,parseMetaCostStatement} from '../packages/core/dist/meta-cost.js';
-import {validatePrivacyReadset,financeArtifactSql} from "../scripts/release/meta-cost-dev-privacy.mjs";
 import {validatePlatformIdentityConfiguration,validatePlatformIdentity} from '../scripts/release/meta-deletion-dev-guest.mjs';
 const id=n=>`00000000-0000-4000-8000-${String(n).padStart(12,'0')}`,h='a'.repeat(64);
 const manifest=()=>({mode:'happy',evidenceMode:'simulated',runId:'unit',tenantId:id(1),ownerId:id(2),fixture:{signup:{wabaId:'123456'}},p10:{namespace:'p10-unit',locale:'en',width:1440,role:'tenant_owner',actorId:id(2),connectionId:id(3),accountId:id(4),termsVersionId:id(5),tenantName:'Synthetic',zammadGroupId:'42',documentReviewSha256:h,tariffSourceSha256:h,retentionBasisSha256:h,platformManifestPath:'/private/platform.json',platformManifestSha256:h,platformSubjectSha256:h,guestSha256:h,contractSha256:h,browserSha256:h,currency:'USD',minorUnits:2,unitPrice:'0.005',count:102,from:'2026-10-01T00:00:00.000Z',to:'2026-11-01T00:00:00.000Z',deliveredAt:1791500000,runtime:{accountId:id(4),receiptId:id(6),descriptorSha256:h,transportBindingSha256:h,releaseEvidenceSha256:h,workerImageDigest:'sha256:'+h},database:{id:h,image:'sha256:'+h,service:'postgres',database:'wasalx',user:'wasalx'}}});

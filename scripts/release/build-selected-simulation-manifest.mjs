@@ -44,7 +44,6 @@ import {testIds as groupRuleDerivedIds} from './simulation-group-rule-derived.mj
 import {navigationIds} from './simulation-navigation-stage.mjs';
 import {teamQualityIds} from './simulation-team-quality-admission.mjs';
 import {testIds as groupRuleQualityIds} from './simulation-group-rule-quality.mjs';
-import {securityTestIds} from './simulation-security-admission.mjs';
 import {testIds as caseLifecycleIds} from './simulation-case-lifecycle-stage.mjs';
 import {testIds as unknownReviewIds} from './simulation-unknown-review-readonly.mjs';
 import {workflowViewIds} from './simulation-workflow-views.mjs';
@@ -263,7 +262,7 @@ export async function buildSelectedManifest(setup,{root=process.cwd(),inputPath,
  add('rule-echo',base+'simulation-rule-stages.mjs','ruleEchoStage',['group','directConnection'],'ruleEcho',['group-rules/commands-triggers-and-friendly-ticket-naming::configured-team-sender-policy-controls-group-trigger-effects::echo']);
  add('rule-inputs',base+'simulation-rule-input-stage.mjs','ruleInputsStage',['group','directConnection'],'ruleInputs',['customer-match','customer-nonmatch','unknown','duplicate'].map(x=>'group-rules/commands-triggers-and-friendly-ticket-naming::configured-team-sender-policy-controls-group-trigger-effects::'+x));
  if(setup.isolationPrivateNamespace!==undefined)assert.match(setup.isolationPrivateNamespace,/^[A-Za-z0-9-]{1,40}$/);
- const isolationIdentity={...setup.identity,username:setup.identity.username+'-isolation',email:setup.identity.email.replace('@','-isolation@'),...(setup.isolationPrivateNamespace?{privateNamespace:setup.isolationPrivateNamespace}:{})};
+ assert.equal(typeof setup.identity.email,'string','Simulation identity email must be a string');
  assert(setup.namespace.length<=36,'Security fixture suffix requires namespace <=36');
  add('direct-derived',base+'simulation-direct-derived.mjs','directDerivedStage',['group','directFlow','securityBusiness'],'directDerived',directDerivedIds);
  add('sender-policy',base+'simulation-sender-stage.mjs','senderPolicyStage',['group','directConnection','ruleInputs','secondActor','teamAccess','securityBusiness'],'senderPolicy',senderPolicyTestIds,{participants:setup.direct.chatIds,conflictParticipant:setup.rules.conflictParticipant});

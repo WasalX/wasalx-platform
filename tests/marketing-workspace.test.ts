@@ -136,10 +136,10 @@ test("configurable rules validate counts and literal prefix boundaries", () => {
 test("marketing channels render an authored decorative placeholder and preserve ordinary icons", () => {
   const source = readFileSync(new URL("../app/MarketingIcon.tsx", import.meta.url), "utf8");
   const emitted = ts.transpileModule(source, { compilerOptions: { jsx: ts.JsxEmit.ReactJSX, module: ts.ModuleKind.CommonJS } });
-  const exports: Record<string, any> = {};
+  const exports = {} as { MarketingIcon: typeof import("../app/MarketingIcon").MarketingIcon };
   new Function("require", "exports", emitted.outputText)(createRequire(import.meta.url), exports);
   const paths = new Set<string>();
-  for (const name of ["slack", "whatsapp", "x", "tiktok", "instagram"]) {
+  for (const name of ["slack", "whatsapp", "x", "tiktok", "instagram"] as const) {
     const html = renderToStaticMarkup(createElement(exports.MarketingIcon, { name }));
     assert.match(html, /aria-hidden="true"/);
     assert.match(html, /width="24" height="24" viewBox="0 0 24 24"/);

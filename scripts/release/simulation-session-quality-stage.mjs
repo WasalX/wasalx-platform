@@ -1,7 +1,4 @@
-import assert from 'node:assert/strict';
 import { definitions } from './simulation-session-remaining-definitions.mjs';
-import { collectPlatformIsolationQuality } from './simulation-platform-isolation-quality.mjs';
-import { contextViewport, mapAnonymousSessionQuality, mapSessionQuality, selectSessionChecks } from './simulation-session-contexts.mjs';
 export { mapSessionQuality } from './simulation-session-contexts.mjs';
 
 // Without selected contextual checks the stage keeps its original owner-desktop obligation.

@@ -1,9 +1,5 @@
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
-import {createRequire} from 'node:module';
-import {join,resolve} from 'node:path';
-import {fileURLToPath} from 'node:url';
-import {lstat,mkdir,readFile,open} from 'node:fs/promises';
 export function platformProxyPath(path){
  assert.equal(typeof path,'string');
  const tail=path.replace(/^\/platform\/v1\//,'').replace(/^\/api\/platform-console\//,'').replace(/^\//,'');

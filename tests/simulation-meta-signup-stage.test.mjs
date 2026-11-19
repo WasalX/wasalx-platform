@@ -260,11 +260,8 @@ const finiteControlCalls=[
 test('all existing admitted guest control calls reach only their exact finite simulator family',async()=>{
  const f=await privateControlFixture();
  for(const[scope,method,path,body]of finiteControlCalls){const count=f.calls.length;assert.equal((await f.control('/owned/private/control.sock',method,path,body,scope)).observed,true);assert.equal(f.calls.length,count+1);const call=f.calls.at(-1);assert.equal(call.socketPath,'/owned/private/control.sock');assert.equal(call.method,method);assert.equal(call.path,path);assert.equal(call.timeout,10000);assert.equal(call.bytes,body===undefined?undefined:JSON.stringify(body));}
- // Default callers keep signup only; guest wrappers select their explicit family.
+ // Default callers keep signup only.
  assert.equal((await f.control('/owned/private/control.sock','GET','/signup')).observed,true);
- for(const[name,scope]of [['meta-transition-dev-guest.mjs','transition'],['meta-template-dev-guest.mjs','templates']]){
-  const source=await readFile(new URL('../scripts/release/'+name,import.meta.url),'utf8');assert(source.includes(".cfg.controlSocket,method,path,body,'"+scope+"')"));
- }
 });
 test('private control rejects cross-family, query, extra-field and invented mutation requests before transport',async()=>{
  const f=await privateControlFixture();

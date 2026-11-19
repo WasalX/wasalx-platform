@@ -2,11 +2,7 @@
 import {pathToFileURL as manualDriverFileUrl} from "node:url";
 if ((process.env.CI === "true" || process.env.GITHUB_ACTIONS === "true") && process.argv[1] && import.meta.url === manualDriverFileUrl(process.argv[1]).href) throw new Error("Live provider drivers must never run in hosted CI");
 // Actual installed portal/BFF/API/worker requests. No route.fulfill, fake API or SDK.
-import {readFile} from 'node:fs/promises';
-import {resolve} from 'node:path';
-import {pathToFileURL} from 'node:url';
-import {isDeepStrictEqual} from 'node:util';
-import {need,sha,uuid,validateTemplateManifest,assertTemplateSetup,assertOriginalTemplateCopy,assertTemplateHistory,assertTemplateIntent} from './meta-template-dev-contract.mjs';
+import {need,uuid} from './meta-template-dev-contract.mjs';
 export async function verifyTemplateActor(page,m){
  need(new URL(page.url()).origin===m.origin,'BROWSER_ORIGIN');const p=m.p05b;
  const result=await page.evaluate(async({actorId,tenantId,role})=>{
@@ -19,12 +15,6 @@ export async function verifyTemplateActor(page,m){
   const b=new Uint8Array(parts.reduce((n,v)=>n+v.length,0));let offset=0;for(const part of parts){b.set(part,offset);offset+=part.length;}
   return new TextDecoder('utf8',{fatal:true}).decode(b).includes(`"userId":"${actorId}"`)&&rows.some(v=>v.id===tenantId&&v.current&&v.role===role);
  },{actorId:p.actorId,tenantId:m.tenantId,role:p.role});need(result===true,'ACTOR_WORKSPACE_ROLE');
-}
-async function readView(page,m,planId){
- return page.evaluate(async({base,actor,tenant,planId})=>{
-  const r=await fetch(base+(planId?'/'+planId:''),{cache:'no-store',headers:{'x-wasalx-template-actor':encodeURIComponent(actor),'x-wasalx-template-workspace':encodeURIComponent(tenant)},signal:AbortSignal.timeout(15000)});
-  if(r.status!==200)throw Error('Template read unavailable');return r.json();
- },{base:'/api/connections/'+m.p05b.sourceConnectionId+'/meta/template-preparations',actor:m.p05b.actorId,tenant:m.tenantId,planId});
 }
 // One intercepted original request; response is obtained from the actual BFF before loss.
 // The handler is exact-path, request-time actor/lease bound, finite and removed in finally.

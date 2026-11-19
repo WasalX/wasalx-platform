@@ -1,4 +1,4 @@
-import test from 'node:test';import assert from'node:assert/strict';import {assertRuntimeImageSources,validateSessionActor,withRollbackFixture,nativeBootstrapContext} from "../scripts/release/simulation-stack-session.mjs";import { normalizeGroupFixture } from '../scripts/release/simulation-fresh-group.mjs';
+import test from 'node:test';import assert from'node:assert/strict';import {assertRuntimeImageSources,withRollbackFixture,nativeBootstrapContext} from "../scripts/release/simulation-stack-session.mjs";import { normalizeGroupFixture } from '../scripts/release/simulation-fresh-group.mjs';
 import {readFile} from 'node:fs/promises';
 
 

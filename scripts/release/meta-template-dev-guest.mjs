@@ -2,13 +2,7 @@
 import {pathToFileURL as manualDriverFileUrl} from "node:url";
 if ((process.env.CI === "true" || process.env.GITHUB_ACTIONS === "true") && process.argv[1] && import.meta.url === manualDriverFileUrl(process.argv[1]).href) throw new Error("Live provider drivers must never run in hosted CI");
 // Fixed private guest producer; base admission rechecks runtime, source, DNS/TLS and lease.
-import {readFile,lstat,realpath} from 'node:fs/promises';
-import {posix} from 'node:path';
-import {fileURLToPath,pathToFileURL} from 'node:url';
-import {createHmac} from 'node:crypto';
-import {isDeepStrictEqual} from 'node:util';
-import {need,sha,hex,uuid,validateTemplateManifest,assertTemplateSetup,templateResponseMode} from './meta-template-dev-contract.mjs';
-const env=c=>Object.fromEntries(c.Config.Env.map(s=>{const i=s.indexOf('=');return[s.slice(0,i),s.slice(i+1)];}));
+
 export const templateReadSql=`SELECT jsonb_build_object('tenantId',$1::uuid,
  'source',(SELECT jsonb_build_object('id',c.id,'provider',c.provider,'state',c.state,'bindings',coalesce((SELECT jsonb_agg(jsonb_build_object('id',b.id,'accountId',b.account_id,'state',b.state,'wabaId',a.provider_account_id,'businessId',a.observed_owner_business_id,'phoneId',b.phone_number_id,'revision',b.revision,'sessionOwnership',s.ownership_state) ORDER BY b.id) FROM public.meta_connection_account_bindings b JOIN public.meta_messaging_accounts a ON a.tenant_id=b.tenant_id AND a.id=b.account_id JOIN public.provider_sessions s ON s.tenant_id=b.tenant_id AND s.id=b.provider_session_id WHERE b.tenant_id=c.tenant_id AND b.connection_id=c.id AND b.state='ACTIVE'),'[]'::jsonb)) FROM public.connections c WHERE c.tenant_id=$1 AND c.id=$2),
  'target',(SELECT jsonb_build_object('id',c.id,'provider',c.provider,'state',c.state,'bindings',coalesce((SELECT jsonb_agg(jsonb_build_object('id',b.id,'accountId',b.account_id,'state',b.state,'wabaId',a.provider_account_id,'businessId',a.observed_owner_business_id,'phoneId',b.phone_number_id,'revision',b.revision,'sessionOwnership',s.ownership_state) ORDER BY b.id) FROM public.meta_connection_account_bindings b JOIN public.meta_messaging_accounts a ON a.tenant_id=b.tenant_id AND a.id=b.account_id JOIN public.provider_sessions s ON s.tenant_id=b.tenant_id AND s.id=b.provider_session_id WHERE b.tenant_id=c.tenant_id AND b.connection_id=c.id AND b.state='ACTIVE'),'[]'::jsonb)) FROM public.connections c WHERE c.tenant_id=$1 AND c.id=$3),
@@ -20,5 +14,3 @@ export const templateReadSql=`SELECT jsonb_build_object('tenantId',$1::uuid,
  'checkpoints',coalesce((SELECT jsonb_agg(jsonb_build_object('id',e.id,'stage',e.stage,'outcome',e.outcome,'operationId',e.original_operation_id,'requestSha256',e.request_sha256,'resultSha256',e.result_sha256) ORDER BY e.id) FROM public.meta_provider_effect_checkpoints e WHERE e.tenant_id=$1 AND e.owner_kind='ACCOUNT_TRANSITION' AND e.owner_id=$4),'[]'::jsonb),
  'privacy',coalesce((SELECT jsonb_agg(jsonb_build_object('id',j.id,'state',j.state,'stage',j.stage,'errorCode',j.error_code) ORDER BY j.created_at,j.id) FROM public.privacy_jobs j WHERE j.tenant_id=$1 AND j.job_type='DELETE' AND j.scope_type='TENANT' AND j.scope_value=$1::text),'[]'::jsonb),
  'safety',coalesce((SELECT jsonb_agg(jsonb_build_object('accountId',a.id,'revision',app.meta_template_safety_revision(a.id)) ORDER BY a.id) FROM public.meta_messaging_accounts a WHERE a.tenant_id=$1 AND a.id IN(SELECT b.account_id FROM public.meta_connection_account_bindings b WHERE b.tenant_id=$1 AND b.connection_id IN($2,$3) AND b.state='ACTIVE')),'[]'::jsonb))`;
-async function control(m,b,method,path,body){const {signupControl}=await import(pathToFileURL(posix.join(m.candidate.root,'scripts/release/simulation-meta-signup-stage.mjs')));return signupControl(b.cfg.controlSocket,method,path,body,'templates');}
-async function original(m,digest){const path=posix.join(m.fixture.privateDir,m.p05b.namespace+'.claim.json'),s=await lstat(path);need(s.isFile()&&!s.isSymbolicLink()&&s.uid===process.getuid()&&(s.mode&0o077)===0&&await realpath(path)===path,'CLAIM_FILE');const x=JSON.parse(await readFile(path));need(x.manifestSha256===digest,'CLAIM');return x;}

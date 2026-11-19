@@ -3,9 +3,6 @@ import assert from 'node:assert/strict';
 import {runSessionRotationPacket,safeNavigationDiagnostics} from '../scripts/release/simulation-session-rotation-packet.mjs';
 import {withAuthenticatedSimulationOwnerPage} from "../scripts/release/simulation-session-rotation.mjs";
 import {authenticateSimulationFactor} from '../scripts/release/simulation-stack-session.mjs';
-import {mkdtemp,mkdir,writeFile,rm} from 'node:fs/promises';
-import {join,dirname,resolve,basename} from 'node:path';
-import {tmpdir} from 'node:os';
 test('rotation packet binds Redis deletion and closes only its stale context',async()=>{
   const origin='http://127.0.0.1:3000',keycloakOrigin='http://127.0.0.1:8080';
   let cookie='old',url=origin+'/app',closed=0;const sessions=new Set(['old']),checkpoints=[];
