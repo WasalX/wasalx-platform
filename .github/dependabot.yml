@@ -46,6 +46,9 @@ updates:
         versions: [">1.62.1"]
       - dependency-name: "@axe-core/playwright"
         versions: [">4.12.1"]
+      # React Flow 13 changes node change sets, color mode and CSS layers; upgrade with a browser check.
+      - dependency-name: "@xyflow/*"
+        update-types: ["version-update:semver-major"]
     groups:
       npm-minor-and-patch:
         patterns: ['*']
@@ -79,6 +82,8 @@ updates:
     ignore:
       - dependency-name: "node"
         update-types: ["version-update:semver-major"]
+      # Keycloak is upgraded by hand: its Dockerfile pins versioned CLI and library jars.
+      - dependency-name: "keycloak/keycloak"
     groups:
       docker-minor-and-patch:
         patterns: ['*']
