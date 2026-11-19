@@ -2,8 +2,7 @@ name: ci
 
 on:
   pull_request:
-    # edited: a base change (retarget to main) must rerun the main-entry guard.
-    types: [opened, synchronize, reopened, edited]
+    types: [opened, synchronize, reopened]
   merge_group:
   push:
     branches: [dev, main]
@@ -214,17 +213,6 @@ jobs:
     timeout-minutes: 2
     permissions: {}
     steps:
-      - name: Restrict pull requests into main
-        if: github.event_name == 'pull_request' && github.base_ref == 'main'
-        env:
-          HEAD_REF: ${{ github.head_ref }}
-          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
-        run: |
-          test "$HEAD_REPO" = "$GITHUB_REPOSITORY" || { echo "::error::Pull requests into main must come from this repository."; exit 1; }
-          case "$HEAD_REF" in
-            dev|hotfix/*) ;;
-            *) echo "::error::Pull requests into main must come from dev or hotfix/*."; exit 1 ;;
-          esac
       - name: Require checks and the applicable image lane
         env:
           EVENT: ${{ github.event_name }}

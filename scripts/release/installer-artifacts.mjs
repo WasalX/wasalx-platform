@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { isAbsolute, relative, resolve } from "node:path";
 import { devContainerPreimage, devValueDigest } from "./installer-stack.mjs";
 import { assertRollbackInventory, observeRollbackState, produceRollbackSafety, readOptionalState, rollbackStatePath } from "./installer-rollback-state.mjs";
-import { hostedPublisher, hostedIssuer, readHostedInventory } from "./installer-hosted-images.mjs";
+import { hostedIssuer, readHostedInventory } from "./installer-hosted-images.mjs";
 
 export const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 async function fileDigest(path) {
@@ -279,7 +279,7 @@ export async function readBoundArtifacts(context, { allowPartial = false } = {})
   assert.deepEqual(manifest.plan, context.plan, "candidate plan changed");
   if (hosted) {
     assert.equal(manifest.state, "PASS");
-    assert.equal(manifest.publisher, hostedPublisher); assert.equal(manifest.issuer, hostedIssuer);
+    assert.equal(manifest.publisher, hosted.publisher); assert.equal(manifest.issuer, hostedIssuer);
     assert.equal(manifest.trustedRootSha256, sha256(await readFile(context.hostedTrustedRoot)), "hosted trust root changed");
     assert.equal(manifest.buildContextAlgorithm, undefined, "hosted admission is not a local build receipt");
   } else assert.equal(manifest.buildContextAlgorithm, "sha256-git-archive-tar-v1");

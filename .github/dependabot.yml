@@ -2,7 +2,6 @@ version: 2
 updates:
   - package-ecosystem: npm
     directories: [/, /services/workspace-configurator, /.github/actions/setup-pnpm]
-    target-branch: dev
     open-pull-requests-limit: 2
     schedule:
       interval: weekly
@@ -55,7 +54,6 @@ updates:
         patterns: ['*']
   - package-ecosystem: github-actions
     directory: /
-    target-branch: dev
     open-pull-requests-limit: 2
     schedule:
       interval: weekly
@@ -70,7 +68,6 @@ updates:
         patterns: ['*']
   - package-ecosystem: docker
     directories: [/, /infra/docker]
-    target-branch: dev
     open-pull-requests-limit: 2
     schedule:
       interval: weekly

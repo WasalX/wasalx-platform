@@ -4,9 +4,12 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { sha256 } from "./installer-artifacts.mjs";
 
-export const hostedPublisher = "https://github.com/WasalX/wasalx-platform/.github/workflows/branch-image.yml@refs/heads/dev";
-export const hostedIssuer = "https://token.actions.githubusercontent.com";
 const source = "https://github.com/WasalX/wasalx-platform";
+const hostedPublishers = [
+  source + "/.github/workflows/branch-image.yml@refs/heads/main",
+  source + "/.github/workflows/branch-image.yml@refs/heads/dev",
+];
+export const hostedIssuer = "https://token.actions.githubusercontent.com";
 const digest = /^sha256:[0-9a-f]{64}$/u;
 
 function uniqueJson(bytes) {
@@ -37,6 +40,8 @@ export async function readHostedInventory(context) {
   assert.equal(inventory.publicationComplete, true, "incomplete hosted publication");
   assert.deepEqual(inventory.pending, {});
   assert.deepEqual(Object.keys(inventory.images).sort(), context.catalog.images.map(({ id }) => id).sort(), "complete unique hosted catalog required");
+  const publisher = Object.values(inventory.images)[0]?.workflow;
+  assert.ok(hostedPublishers.includes(publisher), "hosted publisher identity mismatch");
   const refs = new Set();
   for (const { id } of context.catalog.images) {
     const row = inventory.images[id];
@@ -46,11 +51,11 @@ export async function readHostedInventory(context) {
     assert.equal(row.status, "published"); assert.equal(row.verified, true);
     assert.match(row.digest ?? "", digest); assert.match(row.configDigest ?? "", digest);
     assert.equal(row.pullReference, `ghcr.io/wasalx/${id}@${row.digest}`, "exact hosted digest reference required");
-    assert.equal(row.workflow, hostedPublisher, "hosted publisher identity mismatch");
+    assert.equal(row.workflow, publisher, "mixed hosted publisher identities");
     assert.equal(row.inspection?.configDigest, row.configDigest, "hosted inventory config mismatch");
     assert.ok(!refs.has(row.pullReference), "duplicate hosted reference"); refs.add(row.pullReference);
   }
-  return inventory;
+  return { ...inventory, publisher };
 }
 
 export function assertHostedStatement(statement, row) {
@@ -59,7 +64,7 @@ export function assertHostedStatement(statement, row) {
   assert.equal(statement.subject[0].name, `ghcr.io/wasalx/${row.image}`, "signed hosted image name mismatch");
   assert.equal(statement.subject[0].digest?.sha256, row.digest.slice(7), "hosted attestation manifest mismatch");
   const predicate = statement.predicate;
-  assert.equal(predicate?.builder?.id, hostedPublisher, "hosted attestation publisher mismatch");
+  assert.equal(predicate?.builder?.id, row.workflow, "hosted attestation publisher mismatch");
   assert.equal(predicate.buildType, `${source}/image-build/v1`);
   assert.deepEqual(predicate.materials, [{ uri: `git+${source}`, digest: { sha1: row.commit, gitTree: row.tree } }]);
   assert.deepEqual(predicate.invocation?.configSource, { uri: `git+${source}`, digest: { sha1: row.commit }, entryPoint: ".github/workflows/branch-image.yml" });
@@ -79,7 +84,7 @@ export async function verifyHostedImages(context, { verifyOnly = false } = {}) {
     const root = join(temporary, "trusted-root.json");
     await writeFile(root, rootBytes, { mode: 0o600, flag: "wx" });
     const common = ["--offline", "--trusted-root", root,
-      "--certificate-identity", hostedPublisher, "--certificate-oidc-issuer", hostedIssuer];
+      "--certificate-identity", inventory.publisher, "--certificate-oidc-issuer", hostedIssuer];
     const images = [];
     let verified = 0;
     for (const image of context.plan) {
@@ -132,6 +137,6 @@ export async function verifyHostedImages(context, { verifyOnly = false } = {}) {
     assert.equal(verified, context.catalog.images.length, "complete hosted candidate plan required");
     assert.equal(new Set(context.plan.map(({ id }) => id)).size, verified, "duplicate hosted candidate plan");
     assert.equal(sha256(await readFile(context.hostedTrustedRoot)), trustedRootSha256, "hosted trust root changed");
-    return { images, trustedRootSha256 };
+    return { images, trustedRootSha256, publisher: inventory.publisher };
   } finally { await rm(temporary, { recursive: true, force: true }); }
 }
