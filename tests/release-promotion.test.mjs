@@ -24,7 +24,7 @@ test("release promotion uses existing tags and the intended environment protecti
   const releaseCommands = shell.match(/\bgh release (?:create|new)\b[^\n]*/gu) ?? [];
   assert.equal(releaseCommands.length, 1);
   assert.match(releaseCommands[0], /\s--verify-tag\s/u);
-  assert.match(script, /^  gh release upload "\$GITHUB_REF_NAME" "\$manifest" --repo "\$GITHUB_REPOSITORY" --clobber$/mu);
+  assert.match(script, /^ {2}gh release upload "\$GITHUB_REF_NAME" "\$manifest" --repo "\$GITHUB_REPOSITORY" --clobber$/mu);
 
   const lines = script.replace(/[ \t]*\\\r?\n[ \t]*/gu, " ").split(/\r?\n/u);
   assert(lines.includes('[[ "$GITHUB_REF_NAME" =~ ^v[A-Za-z0-9_.-]{0,127}$ ]]'));
