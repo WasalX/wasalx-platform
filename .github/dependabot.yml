@@ -19,6 +19,9 @@ updates:
       # The OpenTelemetry stack moves in lockstep; majors are upgraded together by hand.
       - dependency-name: "@opentelemetry/*"
         update-types: ["version-update:semver-major"]
+      # The 0.3xx experimental line pulls the 3.x stable packages; move to it in one PR.
+      - dependency-name: "@opentelemetry/*"
+        versions: [">=0.300.0 <1.0.0"]
       # Keep Vinext pinned until newer versions pass the portal image regression.
       - dependency-name: "vinext"
         versions: [">1.0.0-beta.5"]
