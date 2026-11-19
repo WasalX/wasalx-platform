@@ -15,7 +15,7 @@ const source = "https://github.com/WasalX/wasalx-platform";
 const devPublisher = `${source}/.github/workflows/branch-image.yml@refs/heads/dev`;
 const mainPublisher = `${source}/.github/workflows/branch-image.yml@refs/heads/main`;
 
-async function fixture(t) {
+async function fixture(t, publisher = devPublisher) {
   const root = await mkdtemp(join(tmpdir(), "hosted-admission-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const repository = join(root, "source"), directory = join(root, "evidence"), privateDirectory = join(root, "private");
@@ -39,7 +39,7 @@ async function fixture(t) {
     const raw = JSON.stringify({ schemaVersion: 2, mediaType: "application/vnd.oci.image.manifest.v1+json", config: { digest: configDigest } });
     const digest = `sha256:${sha256(raw)}`;
     const row = { image: image.id, commit: candidateSha, tree: candidateTree, platform: "linux/amd64",
-      digest, configDigest, pullReference: `ghcr.io/wasalx/${image.id}@${digest}`, workflow: devPublisher,
+      digest, configDigest, pullReference: `ghcr.io/wasalx/${image.id}@${digest}`, workflow: publisher,
       inspection: { configDigest }, status: "published", verified: true };
     inventory.images[image.id] = row;
     const path = join(root, image.id, "manifest.json");
@@ -47,10 +47,10 @@ async function fixture(t) {
     manifests[image.id] = { path, raw };
     details[image.reference] = { Id: digest, Config: config.config };
     signatures[image.id] = { mediaType: "application/vnd.dev.sigstore.bundle.v0.3+json",
-      verificationMaterial: { certificate: { Subject: devPublisher, Issuer: hostedIssuer } },
+      verificationMaterial: { certificate: { Subject: publisher, Issuer: hostedIssuer } },
       dsseEnvelope: { payloadType: "application/vnd.in-toto+json", payload: Buffer.from(JSON.stringify({ predicateType: "https://sigstore.dev/cosign/sign/v1", subject: [{ digest: { sha256: digest.slice(7) } }] })).toString("base64") } };
     statements[image.id] = { predicateType: "https://slsa.dev/provenance/v0.2", subject: [{ name: `ghcr.io/wasalx/${image.id}`, digest: { sha256: digest.slice(7) } }],
-      predicate: { builder: { id: devPublisher }, buildType: `${source}/image-build/v1`,
+      predicate: { builder: { id: publisher }, buildType: `${source}/image-build/v1`,
         materials: [{ uri: `git+${source}`, digest: { sha1: candidateSha, gitTree: candidateTree } }],
         invocation: { configSource: { uri: `git+${source}`, digest: { sha1: candidateSha }, entryPoint: ".github/workflows/branch-image.yml" },
           parameters: { image: image.id, tree: candidateTree, configDigest } } } };
@@ -72,7 +72,7 @@ async function fixture(t) {
       assert.equal(args[0], "verify-blob-attestation");
       assert.ok(args.includes("--offline") && args.includes("--trusted-root"));
       const identity = args[args.indexOf("--certificate-identity") + 1];
-      assert.equal(identity, devPublisher);
+      assert.equal(identity, publisher);
       assert.equal(args[args.indexOf("--certificate-oidc-issuer") + 1], hostedIssuer);
       assert.ok(!args.some(arg => arg.includes("regexp") || arg.includes("insecure")));
       const bundle = JSON.parse(await readFile(args[args.indexOf("--bundle") + 1]));
@@ -102,30 +102,42 @@ async function fixture(t) {
   return { context, inventory, configs, manifests, statements, signatures, details, calls, save };
 }
 
-test("hosted dev identity is admitted with containerd manifest IDs and a distinct bound receipt", async t => {
-  const f = await fixture(t);
-  assert.equal(await executeStage("admit-hosted", f.context), 0);
-  const { manifest, snapshot } = await readBoundArtifacts(f.context);
-  assert.equal(manifest.kind, "compose-hosted-image-admission");
-  assert.equal(manifest.publisher, devPublisher);
-  assert.ok(manifest.images.every(image => image.state === "ADMITTED" && image.imageId === image.manifestDigest));
-  assert.equal(manifest.buildContextAlgorithm, undefined); assert.equal(manifest.buildContextSha256, undefined);
-  assert.equal(manifest.preimage.transactionId, snapshot.transactionId);
-  assert.match(artifactPath(f.context), /hosted-admission-fixture.json$/u);
-  assert.deepEqual(snapshot.buildTags.map(({ reference }) => reference), f.context.plan.map(({ reference }) => reference));
-  assert.ok(f.calls.every(({ args }) => !args.includes("build") && !args.includes("pull") && !args.includes("load") && !args.includes("up")));
-  f.calls.length = 0;
-  await assert.rejects(executeStage("replace", f.context), /replace requires --drained/u);
-  assert.ok(f.calls.every(({ args }) => !args.includes("stop") && !args.includes("up")));
-  f.calls.length = 0;
-  assert.equal(await executeStage("rollback", { ...f.context, drained: true }), 0);
-  assert.ok(f.calls.every(({ name }) => name === "docker"), "rollback must not depend on candidate verification");
+for (const [branch, publisher] of Object.entries({ dev: devPublisher, main: mainPublisher })) {
+  test(`hosted ${branch} identity is admitted with containerd manifest IDs and a distinct bound receipt`, async t => {
+    const f = await fixture(t, publisher);
+    assert.equal(await executeStage("admit-hosted", f.context), 0);
+    const { manifest, snapshot } = await readBoundArtifacts(f.context);
+    assert.equal(manifest.kind, "compose-hosted-image-admission");
+    assert.equal(manifest.publisher, publisher);
+    assert.ok(manifest.images.every(image => image.state === "ADMITTED" && image.imageId === image.manifestDigest));
+    assert.equal(manifest.buildContextAlgorithm, undefined); assert.equal(manifest.buildContextSha256, undefined);
+    assert.equal(manifest.preimage.transactionId, snapshot.transactionId);
+    assert.match(artifactPath(f.context), /hosted-admission-fixture.json$/u);
+    assert.deepEqual(snapshot.buildTags.map(({ reference }) => reference), f.context.plan.map(({ reference }) => reference));
+    assert.ok(f.calls.every(({ args }) => !args.includes("build") && !args.includes("pull") && !args.includes("load") && !args.includes("up")));
+    f.calls.length = 0;
+    await assert.rejects(executeStage("replace", f.context), /replace requires --drained/u);
+    assert.ok(f.calls.every(({ args }) => !args.includes("stop") && !args.includes("up")));
+    f.calls.length = 0;
+    assert.equal(await executeStage("rollback", { ...f.context, drained: true }), 0);
+    assert.ok(f.calls.every(({ name }) => name === "docker"), "rollback must not depend on candidate verification");
+  });
+}
+
+test("a publication from any other ref is rejected before cosign", async t => {
+  for (const ref of ["refs/heads/feature", "refs/heads/main-extra", "refs/tags/dev", "refs/pull/1/merge"]) {
+    const f = await fixture(t);
+    for (const row of Object.values(f.inventory.images)) row.workflow = devPublisher.replace("refs/heads/dev", ref);
+    await f.save();
+    await assert.rejects(verifyHostedImages(f.context), /hosted publisher identity mismatch/u);
+    assert.deepEqual(f.calls, []);
+  }
 });
 
 const refusals = {
-  "main certificate": f => { f.signatures.zammad.verificationMaterial.certificate.Subject = mainPublisher; },
-  "main inventory publisher": f => { f.inventory.images.zammad.workflow = mainPublisher; },
-  "main provenance builder": f => { f.statements.zammad.predicate.builder.id = mainPublisher; },
+  "mismatched allowed certificate": f => { f.signatures.zammad.verificationMaterial.certificate.Subject = mainPublisher; },
+  "mixed allowed inventory publishers": f => { f.inventory.images.zammad.workflow = mainPublisher; },
+  "mismatched allowed provenance builder": f => { f.statements.zammad.predicate.builder.id = mainPublisher; },
   "missing identity": f => { delete f.signatures.zammad.verificationMaterial.certificate.Subject; },
   "wrong issuer": f => { f.signatures.zammad.verificationMaterial.certificate.Issuer = "https://example.invalid"; },
   "missing issuer": f => { delete f.signatures.zammad.verificationMaterial.certificate.Issuer; },

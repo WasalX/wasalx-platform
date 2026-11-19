@@ -13,7 +13,7 @@ import { sha256, preserveReplacement, readBoundArtifacts, writeArtifactState,
   assertRetainedPreimage, composeProfiles, dockerfileOf, imageServices, inspectOwned, preparePrivateDirectory, preimagePath, fenceReplacementEffects, rollbackReplacement } from "./installer-artifacts.mjs";
 import { produceRollbackSafety, readOptionalState, recordReplacementAfter } from "./installer-rollback-state.mjs";
 import { enterComposeStageLock as enterStageLock, composeStageLockConflict } from "./compose-stage-lock.mjs";
-import { hostedPublisher, hostedIssuer, verifyHostedImages } from "./installer-hosted-images.mjs";
+import { hostedIssuer, verifyHostedImages } from "./installer-hosted-images.mjs";
 
 const repository = resolve(fileURLToPath(new URL("../../", import.meta.url)));
 const preflight = fileURLToPath(new URL("./preflight-full-env.mjs", import.meta.url));
@@ -484,7 +484,7 @@ export async function executeStage(action, context) {
     await writeArtifactState(context, { schemaVersion: 1, kind: "compose-hosted-image-admission",
       candidateSha, candidateTree, project, catalogSha256: context.catalogSha256,
       hostedImagesSha256: context.hostedImagesSha256, trustedRootSha256: hosted.trustedRootSha256,
-      publisher: hostedPublisher, issuer: hostedIssuer,
+      publisher: hosted.publisher, issuer: hostedIssuer,
       modelSha256: devValueDigest(model), model, plan, state: "PASS",
       preimage: { sha256: preserved.sha256, transactionId: preserved.snapshot.transactionId },
       images: hosted.images.map(image => ({ ...image, services: imageServices(model, image.dockerfile) })) });
