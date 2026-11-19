@@ -16,6 +16,9 @@ updates:
       # bullmq 5 accepts only ioredis 5 clients; lift together with bullmq.
       - dependency-name: "ioredis"
         update-types: ["version-update:semver-major"]
+      # The OpenTelemetry stack moves in lockstep; majors are upgraded together by hand.
+      - dependency-name: "@opentelemetry/*"
+        update-types: ["version-update:semver-major"]
       # Keep Vinext pinned until newer versions pass the portal image regression.
       - dependency-name: "vinext"
         versions: [">1.0.0-beta.5"]
