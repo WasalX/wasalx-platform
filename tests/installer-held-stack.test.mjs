@@ -6,10 +6,24 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { projectStack, devHeldServices, devPreservedServices, devContainerPreimage, devValueDigest, assertInstallHostname, devReviewAuthConfiguration } from "../scripts/release/installer-stack.mjs";
 import { run, stageFailureReason } from "../scripts/release/installer-stages.mjs";
+import { repositoryDigestMatches } from "../scripts/installer-evidence.mjs";
 
 const repositoryRoot = fileURLToPath(new URL("../", import.meta.url));
 const sha = "a".repeat(40);
 const tree = "b".repeat(40);
+
+test("pinned image evidence recognizes exact Docker Hub registry aliases", () => {
+  const digest = `@sha256:${"c".repeat(64)}`;
+  assert.ok(repositoryDigestMatches(`postgres:17${digest}`, `registry-1.docker.io/library/postgres${digest}`));
+  assert.ok(repositoryDigestMatches(`index.docker.io/postgres${digest}`, `docker.io/library/postgres${digest}`));
+  const explicitPort = `index.docker.io:443/library/postgres${digest}`;
+  assert.ok(repositoryDigestMatches(explicitPort, explicitPort));
+  for (const registry of ["index.docker.io.example.test", "example.test.index.docker.io", "index.docker.io:443"]) {
+    assert.equal(repositoryDigestMatches(`postgres${digest}`, `${registry}/library/postgres${digest}`), false);
+  }
+  const malformed = `registry.example.test?invalid/library/postgres${digest}`;
+  assert.equal(repositoryDigestMatches(malformed, malformed), false);
+});
 
 function operatorEnvironment(t, name) {
   const previous = process.env[name];

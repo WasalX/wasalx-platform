@@ -12,7 +12,7 @@ function fixture(){
   alias_source_id:id(5),alias_source_sha256:sha,meta_direct_native_anchor:{participantId:id(4),payloadSha256:sha,nativeCustomerId:'41'},anchor_valid:true,
   zammad_ticket_id:'51',zammad_article_id:'61',zammad_customer_id:41,conversation_id:id(6),zammad_ticket_number:'101',ownership_source_id:id(5),source_hash:sha,
   allowed:true,claim:'OWN',epoch:'1',configuration_version:'1',review_version:'1'};
- return{row,native:{article:{id:61,ticket_id:51,body:expected.text},ticket:{id:51,customer_id:41}}};
+ return{row,native:{article:{id:61,ticket_id:51,content_type:'text/plain',body:expected.text},ticket:{id:51,customer_id:41}}};
 }
 test('actual-source reader cannot accept another tenant/message/hash or incomplete native lineage',()=>{
  const good=fixture();const result=primaryReadback(good.row,expected,good.native);assert.equal(result.nativeCompleted,true);assert.equal(result.sourceEventId,id(5));
@@ -27,6 +27,16 @@ test('actual-source reader cannot accept another tenant/message/hash or incomple
  // that message is never allowed to create or rewrite the anchor.
  const next=fixture();next.row.source_id=id(7);next.row.ownership_source_id=id(7);
  assert.equal(primaryReadback(next.row,expected,next.native).aliasSourceEventId,id(5));
+});
+test('native lineage compares the structured plain-text article body verbatim',()=>{
+ const {row,native}=fixture(),text='Synthetic <reference>';
+ row.message_text=native.article.body=text;
+ const want={...expected,text};
+ assert.equal(primaryReadback(row,want,native).nativeCompleted,true);
+ native.article.body=`<p>${text}</p>`;
+ assert.throws(()=>primaryReadback(row,want,native));
+ native.article.body=text;native.article.content_type='text/html';
+ assert.throws(()=>primaryReadback(row,want,native));
 });
 test('finite SQL plans reject arbitrary read modes and bind exact tenant/source values',()=>{
  for(const kind of ['configuration','primary','thread']){const plan=routingReadPlan(kind,{...expected,conversationId:id(6),runtime:{mode:'SIMULATED'}});

@@ -59,10 +59,12 @@ export function simulationRuntimeRegistration({releaseBytes,stackBytes,worker,im
  assert(command.includes('scripts/contracts/meta-simulation-server.mjs'),'Only the incumbent simulator is admissible');
  assert.match(expectedSimulatorSourceSha256,/^[a-f0-9]{64}$/u);assert.equal(simulatorSourceSha256,expectedSimulatorSourceSha256);
  const addresses=Object.values(simulator.NetworkSettings?.Networks??{}).map(v=>v.IPAddress).filter(Boolean);
- const graph=hosts.split(/\r?\n/u).map(v=>v.replace(/#.*/u,'').trim().split(/\s+/u)).filter(v=>v.slice(1).includes('graph.facebook.com'));
+ assert.equal(transport.projection.endpoint,'https://graph.facebook.com');
+ const graphHostname=new URL(transport.projection.endpoint).hostname;
+ const graph=hosts.split(/\r?\n/u).map(v=>v.replace(/#.*/u,'').trim().split(/\s+/u)).filter(v=>v.slice(1).some(hostname=>hostname===graphHostname));
  assert.equal(graph.length,1);assert(addresses.includes(graph[0][0]),'Graph must route to the verified simulator');
  assert.equal(transport.projection.graphVersion,graphVersion);assert.equal(transport.projection.hostsSha256,sha(hosts));
- assert.equal(transport.projection.endpoint,'https://graph.facebook.com');assert.match(transport.transportBindingSha256,/^[a-f0-9]{64}$/u);
+ assert.match(transport.transportBindingSha256,/^[a-f0-9]{64}$/u);
  assert(transport.projection.extraCaSha256,'Actual simulation TLS trust must be bound');
  assert(uuid.test(tenantId)&&uuid.test(accountId));
  assert.equal(new Date(expiresAt).toISOString(),expiresAt);assert(new Date(expiresAt)>now&&new Date(expiresAt)<=new Date(+now+24*3600_000));

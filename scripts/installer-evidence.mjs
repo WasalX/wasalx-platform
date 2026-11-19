@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 
 const repository = resolve(fileURLToPath(new URL("../", import.meta.url)));
 const digestPattern = /^sha256:[0-9a-f]{64}$/u;
+const registryPattern = /^(?:[a-z0-9-]+(?:\.[a-z0-9-]+)*|\[[0-9a-f:.]+\])(?::[0-9]+)?$/u;
 const inside = (root, path) => { const part = relative(root, path); return !part || (!part.startsWith("..") && !isAbsolute(part)); };
 
 function pinnedImage(reference) {
@@ -22,7 +23,14 @@ function pinnedImage(reference) {
   const first = parts[0];
   const qualified = first.includes(".") || first.includes(":") || first === "localhost";
   let registry = qualified ? parts.shift() : "docker.io";
-  if (["index.docker.io", "registry-1.docker.io"].includes(registry)) registry = "docker.io";
+  if (!registryPattern.test(registry)) return null;
+  try {
+    // Docker references retain explicit ports, including ports used by HTTP or HTTPS.
+    const endpoint = new URL(`docker://${registry}`);
+    if (!endpoint.port && (endpoint.hostname === "index.docker.io" || endpoint.hostname === "registry-1.docker.io")) registry = "docker.io";
+  } catch {
+    return null;
+  }
   if (registry === "docker.io" && parts.length === 1) parts.unshift("library");
   if (parts.length === 0) return null;
   return { repository: `${registry}/${parts.join("/")}`, digest };

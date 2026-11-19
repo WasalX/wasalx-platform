@@ -4,10 +4,18 @@ import fs from 'node:fs';
 import {createHash,timingSafeEqual} from 'node:crypto';
 import assert from 'node:assert/strict';
 import {pathToFileURL} from 'node:url';
+const passwordLengthLimit=4096;
+function passwordBlock(password){
+  // Compare fixed-size buffers and bind the byte length so padding cannot affect equality.
+  const block=Buffer.alloc(2+3*passwordLengthLimit);
+  block.writeUInt16BE(block.write(password,2,'utf8'));
+  return block;
+}
 export function createSmtpBoundary({journal, faults=[], tls:tlsConfig, authFile, allowedRecipients=[], allowedSenders, onAccepted}) {
   assert.equal(Boolean(tlsConfig),Boolean(authFile),'TLS and AUTH must be enabled together');
   const auth=authFile?JSON.parse(fs.readFileSync(authFile,'utf8')):null;
-  if(auth){assert.match(auth.username,/^[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+$/u);assert.equal(typeof auth.password,'string');assert(auth.password.length>=8&&auth.password.length<=4096);if(process.platform!=='win32')assert.equal(fs.statSync(authFile).mode&0o077,0);}
+  if(auth){assert.match(auth.username,/^[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+$/u);assert.equal(typeof auth.password,'string');assert(auth.password.length>=8&&auth.password.length<=passwordLengthLimit);if(process.platform!=='win32')assert.equal(fs.statSync(authFile).mode&0o077,0);}
+  const expectedPassword=auth?passwordBlock(auth.password):null;
   for(const recipient of allowedRecipients)assert.match(recipient,/^[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+$/u);
   if(auth)assert(allowedRecipients.length>0,'Authenticated sink requires explicit recipients');
   const senders=allowedSenders??(auth?[auth.username]:[]);
@@ -29,7 +37,9 @@ export function createSmtpBoundary({journal, faults=[], tls:tlsConfig, authFile,
     socket.on('data',chunk=>{buffer=Buffer.concat([buffer,chunk]);if(buffer.length>2*1024*1024){socket.destroy();return;}
       let end;while((end=buffer.indexOf('\r\n'))>=0){const bytes=buffer.subarray(0,end);buffer=buffer.subarray(end+2);const line=bytes.toString('ascii');
         const authenticate=value=>{let fields;try{assert.match(value,/^[a-zA-Z0-9+/]*={0,2}$/u);fields=Buffer.from(value,'base64').toString('utf8').split('\0');}catch{reply('535 5.7.8 Authentication rejected');return;}
-          const ok=fields.length===3&&(!fields[0]||fields[0]===auth.username)&&fields[1]===auth.username&&timingSafeEqual(createHash('sha256').update(fields[2]??'').digest(),createHash('sha256').update(auth.password).digest());authenticated=ok;reply(ok?'235 2.7.0 Authenticated':'535 5.7.8 Authentication rejected');};
+          const ok=fields.length===3&&(!fields[0]||fields[0]===auth.username)&&fields[1]===auth.username
+            &&fields[2].length<=passwordLengthLimit&&timingSafeEqual(passwordBlock(fields[2]),expectedPassword);
+          authenticated=ok;reply(ok?'235 2.7.0 Authenticated':'535 5.7.8 Authentication rejected');};
         if(authPending){authPending=false;authenticate(line);continue;}
         if(!data&&/^AUTH(?: |$)/iu.test(line)){
           if(!auth||!socket.encrypted){reply('538 Encryption required');continue;}

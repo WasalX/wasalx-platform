@@ -125,7 +125,7 @@ export function primaryReadback(row,expected,native){
  assert.equal(row.meta_direct_native_anchor.nativeCustomerId,String(row.zammad_customer_id));
  assert.equal(String(row.provider_metadata.zammad_customer_id),String(row.zammad_customer_id));
  assert.equal(String(native.article.id),String(row.zammad_article_id));assert.equal(String(native.article.ticket_id),String(row.zammad_ticket_id));
- assert.equal(String(native.article.body).replace(/<[^>]*>/gu,'').trim(),expected.text);
+ assert.equal(native.article.content_type,'text/plain');assert.equal(native.article.body,expected.text);
  assert.equal(String(native.ticket.id),String(row.zammad_ticket_id));assert.equal(String(native.ticket.customer_id),String(row.zammad_customer_id));
  assert.equal(row.ownership_source_id,row.source_id);assert.equal(row.allowed,true);assert.equal(row.claim,'OWN');
  assert.equal(Number(row.configuration_version),expected.configurationVersion);assert.equal(Number(row.review_version),expected.reviewVersion);
