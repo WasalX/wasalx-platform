@@ -31,6 +31,13 @@ jq -er '.images[].pullReference' "$manifest" | while IFS= read -r ref; do
   [[ "$actual" == "${ref#*@}" ]] || { echo "::error::Digest mismatch for $alias"; exit 1; }
 done
 
-flags=()
-if [[ "$GITHUB_REF_NAME" == v*-rc.* ]]; then flags+=(--prerelease); fi
-gh release create --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes "${flags[@]}" "$GITHUB_REF_NAME" "$manifest"
+if release=$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json tagName 2>&1); then
+  gh release upload "$GITHUB_REF_NAME" "$manifest" --repo "$GITHUB_REPOSITORY" --clobber
+elif [[ "$release" == 'release not found' ]]; then
+  flags=()
+  if [[ "$GITHUB_REF_NAME" == v*-rc.* ]]; then flags+=(--prerelease); fi
+  gh release create --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes "${flags[@]}" "$GITHUB_REF_NAME" "$manifest"
+else
+  printf '%s\n' "$release" >&2
+  exit 1
+fi

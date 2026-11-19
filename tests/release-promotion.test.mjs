@@ -24,7 +24,14 @@ test("release promotion uses existing tags and the intended environment protecti
   const releaseCommands = shell.match(/\bgh release (?:create|new)\b[^\n]*/gu) ?? [];
   assert.equal(releaseCommands.length, 1);
   assert.match(releaseCommands[0], /\s--verify-tag\s/u);
-  assert.match(workflow.jobs.stg.if, /contains\(github\.ref_name, '-rc\.'\)/u);
+  assert.match(script, /^  gh release upload "\$GITHUB_REF_NAME" "\$manifest" --repo "\$GITHUB_REPOSITORY" --clobber$/mu);
+
+  const lines = script.replace(/[ \t]*\\\r?\n[ \t]*/gu, " ").split(/\r?\n/u);
+  assert(lines.includes('[[ "$GITHUB_REF_NAME" =~ ^v[A-Za-z0-9_.-]{0,127}$ ]]'));
+  assert(lines.includes(`run=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --branch main --event push --commit "$commit" --status success --limit 1 --json databaseId --jq '.[0].databaseId // empty')`));
+  assert(lines.includes('  if [[ "$GITHUB_REF_NAME" == v*-rc.* ]]; then flags+=(--prerelease); fi'));
+  assert.equal(workflow.jobs.stg.if, "${{ github.repository == 'WasalX/wasalx-platform' && contains(github.ref_name, '-rc.') }}");
+  assert.equal(workflow.jobs.stg.steps[0].run, '[[ "$GITHUB_REF_NAME" == v*-rc.* ]]');
   assert.equal(workflow.jobs.prod.if, "${{ !contains(github.ref_name, '-rc.') }}");
-  assert.match(workflow.jobs.prod.steps[0].run, /\[\[ "\$\{GITHUB_REF_NAME,,\}" != \*-rc\.\* \]\][^\n]*exit 1/u);
+  assert.match(workflow.jobs.prod.steps[0].run, /^\[\[ "\$\{GITHUB_REF_NAME,,\}" != \*-rc\.\* \]\] \|\| \{ [^\n]*; exit 1; \}$/mu);
 });
