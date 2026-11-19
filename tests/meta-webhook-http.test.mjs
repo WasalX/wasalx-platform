@@ -3,7 +3,7 @@ import { createHash, createHmac } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { connect } from "node:net";
-import { ConflictException, Controller, Get, Module, RequestMethod } from "../services/control-api/node_modules/@nestjs/common/index.js";
+import { ConflictException, Controller, Get, Module, RequestMethod, ValidationPipe } from "../services/control-api/node_modules/@nestjs/common/index.js";
 import { NestFactory } from "../services/control-api/node_modules/@nestjs/core/index.js";
 import { FastifyAdapter } from "../services/control-api/node_modules/@nestjs/platform-fastify/index.js";
 import { WebhookIngressController } from "../services/control-api/dist/webhook-ingress.controller.js";
@@ -14,6 +14,53 @@ import { RoutingConnectorsConfig } from "../services/control-api/dist/routing-co
 import { SecretProvisioningService } from "../services/control-api/dist/secret-provisioning.service.js";
 import { META_WEBHOOK_MAX_BYTES } from "../services/control-api/dist/webhook-security.js";
 import { metaDirectIdentityChangeEvidence, metaDirectTransitionEvidence } from "../packages/core/dist/meta-direct-identity.js";
+
+test("Meta verification rejects repeated query values and only echoes a decimal challenge as plain text", async (t) => {
+  const previous = process.env.META_VERIFY_TOKEN;
+  const token = "synthetic,verification-token";
+  process.env.META_VERIFY_TOKEN = token;
+  t.after(() => {
+    if (previous === undefined) delete process.env.META_VERIFY_TOKEN;
+    else process.env.META_VERIFY_TOKEN = previous;
+  });
+  class TestModule {}
+  Module({
+    controllers: [WebhookIngressController],
+    providers: [DatabaseService, WebhookSecretService, TenantDrainService, RoutingConnectorsConfig, SecretProvisioningService]
+      .map(provide => ({ provide, useValue: {} })),
+  })(TestModule);
+  const app = await NestFactory.create(TestModule, new FastifyAdapter(), { logger: false });
+  t.after(() => app.close());
+  app.useGlobalPipes(new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true }));
+  await app.init();
+  await app.getHttpAdapter().getInstance().ready();
+
+  const fields = { "hub.mode": "subscribe", "hub.verify_token": token, "hub.challenge": "00123" };
+  const verify = query => app.inject({ method: "GET", url: "/webhooks/meta?" + query });
+  const response = await verify(new URLSearchParams(fields));
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.body, fields["hub.challenge"]);
+  assert.equal(response.headers["content-type"], "text/plain; charset=utf-8");
+  assert.equal(response.headers["x-content-type-options"], "nosniff");
+  for (const [key, value] of Object.entries(fields)) {
+    const query = new URLSearchParams(fields);
+    query.append(key, value);
+    assert.equal((await verify(query)).statusCode, 400, key);
+  }
+  // String coercion would turn the two query values into the configured token.
+  const splitToken = new URLSearchParams(fields);
+  splitToken.delete("hub.verify_token");
+  for (const part of token.split(",")) splitToken.append("hub.verify_token", part);
+  const rejected = await verify(splitToken);
+  assert.equal(rejected.statusCode, 400);
+  assert.equal(rejected.json().message, "Meta verification parameters are invalid");
+
+  const missingToken = new URLSearchParams(fields);
+  missingToken.delete("hub.verify_token");
+  assert.equal((await verify(missingToken)).statusCode, 401);
+  assert.equal((await verify(new URLSearchParams({ ...fields, "hub.verify_token": "wrong-token" }))).statusCode, 401);
+  assert.equal((await verify(new URLSearchParams({ ...fields, "hub.challenge": "<b>verification</b>" }))).statusCode, 400);
+});
 
 test("signed Meta status corrections use canonical isolated payloads without changing routing or conflict fences",async(t)=>{
   const previous={secret:process.env.META_APP_SECRET_REFERENCE,app:process.env.META_APP_ID};

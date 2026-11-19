@@ -39,8 +39,8 @@ export class AuditController {
   @Requires("audit:read")
   async list(
     @Req() request: AuthenticatedRequest,
-    @Query("cursor") cursor?: string,
-    @Query("cursorId") cursorId?: string,
+    @Query("cursor") cursor?: unknown,
+    @Query("cursorId") cursorId?: unknown,
     @Query("routine") routineValue?: string,
   ) {
     if ((cursor === undefined) !== (cursorId === undefined)) {
@@ -86,8 +86,8 @@ export class AuditController {
   async export(
     @Req() request: AuthenticatedRequest,
     @Res() reply: FastifyReply,
-    @Query("from") from?: string,
-    @Query("to") to?: string,
+    @Query("from") from?: unknown,
+    @Query("to") to?: unknown,
     @Query("limit") rawLimit?: string,
   ) {
     const toValue = to === undefined ? new Date().toISOString() : isoTimestamp(to, "to");
@@ -235,8 +235,8 @@ function publicAuditValue(value: unknown): unknown {
   ]));
 }
 
-function isoTimestamp(value: string, label: string) {
-  if (value.length > 40 || hasControlCharacters(value)) {
+function isoTimestamp(value: unknown, label: string) {
+  if (typeof value !== "string" || value.length > 40 || hasControlCharacters(value)) {
     throw new BadRequestException(`Audit ${label} timestamp is invalid`);
   }
   const timestamp = new Date(value);
@@ -254,8 +254,8 @@ function auditRoutine(value: string | undefined) {
   return value;
 }
 
-function uuid(value: string, label: string) {
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(value)) {
+function uuid(value: unknown, label: string) {
+  if (typeof value !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(value)) {
     throw new BadRequestException(`Audit ${label} is invalid`);
   }
   return value.toLowerCase();

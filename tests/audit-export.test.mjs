@@ -195,6 +195,23 @@ test("audit export rejects abusive limits, invalid timestamps, and excessive ran
   );
 });
 
+test("audit queries reject repeated timestamps and cursor IDs before accessing storage", async () => {
+  const controller = new AuditController({});
+  const timestamp = "2026-08-09T09:00:00.000Z";
+  await assert.rejects(controller.list(request, [timestamp], tenantId), {
+    status: 400,
+    message: "Audit cursor timestamp is invalid",
+  });
+  await assert.rejects(controller.list(request, timestamp, [tenantId]), {
+    status: 400,
+    message: "Audit cursor ID is invalid",
+  });
+  await assert.rejects(controller.export(request, {}, undefined, [timestamp]), {
+    status: 400,
+    message: "Audit to timestamp is invalid",
+  });
+});
+
 test("audit activity uses a complete cursor and excludes routine no-op checks before its limit", async () => {
   const calls = [];
   const controller = new AuditController({

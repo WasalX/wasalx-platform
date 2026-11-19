@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { WahaAdapter } from "../services/connector-worker/dist/packages/connectors/src/waha.js";
+import { renderOutboundText } from "../packages/core/dist/outbound-text.js";
 import { groupWorkspaceMediaCapabilities } from "../packages/core/dist/provider-media-capabilities.js";
 import { signServiceJwt } from "../services/connector-worker/dist/packages/core/src/service-auth.js";
 import { DefaultBotMediaUploadPipeline, DefaultOutboundMediaPipeline, MediaRuntimeError, S3MediaStorage } from "../services/connector-worker/dist/services/connector-worker/src/media-runtime.js";
@@ -18,6 +19,33 @@ const serviceSecret="outbound-media-service-secret-at-least-32-bytes";
 const serviceSecretReference=`secret://tenants/${tenantId}/zammad/service`;
 const png=Uint8Array.from([137,80,78,71,13,10,26,10,0,0,0,0]);
 const wahaAssignment={providerBaseUrl:"http://waha-gows.internal:3000/",wahaWorkerId:"30000000-0000-4000-8000-000000000001",wahaAssignmentFencingToken:7,wahaAssignmentLeaseExpiresAt:"2026-08-09T23:59:59.000Z"};
+
+test("outbound text handles breaks, malformed tags, and one layer of entities", () => {
+  const render = text => renderOutboundText({ text, contentType: "text/html" });
+  assert.equal(render("<p>Hello&nbsp;there<BR  /><em>friend</em></P >"), "Hello there\nfriend\n");
+  assert.equal(render("&AMP;&lt;&gt;&quot;&#39; &amp;lt; &amp;quot;"), "&<>\"' &lt; &quot;");
+  assert.equal(render("Price < 5 today"), "Price < 5 today");
+  assert.equal(render("<p>Price < 5 &amp; rising"), "Price < 5 & rising");
+  const unfinishedBreak = "Message<br" + "\t".repeat(30_000);
+  assert.equal(render(unfinishedBreak), unfinishedBreak);
+  const unmatched = "Message" + "<".repeat(30_000);
+  assert.equal(render(unmatched), unmatched);
+});
+
+test("Zammad outbound preflight rejects repeated destination query values", async () => {
+  const controller = new ZammadInternalController(
+    { rows: async () => [{ id: instanceId }] },
+    { verify: async () => ({ tenantId, instanceId, userId: "agent" }) },
+  );
+  const group = "447700900005@g.us";
+  for (const [connectionId, groupId, ticketId, message] of [
+    [[instanceId], group, "42", "WhatsApp destination is invalid"],
+    [instanceId, [group], "42", "WhatsApp destination is invalid"],
+    [instanceId, group, ["42"], "Ticket ID is invalid"],
+  ]) {
+    await assert.rejects(controller.outboundPreflight(undefined, connectionId, groupId, ticketId), { status: 400, message });
+  }
+});
 
 test("nonmedia bot and ticket-event history respect lease fences and exclude human replies",async()=>{
   for(const scenario of ["send-denied","lease-lost","ticket-event-lease-lost","human","choices-send-denied","choices-lease-lost"]){

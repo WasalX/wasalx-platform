@@ -23,7 +23,7 @@ export class BotFlowsController {
 
   @Get("catalog")
   @Requires("bot:read")
-  flowCatalog(@Req() request:AuthenticatedRequest,@Query("cursor") cursor?:string,@Query("limit") limit?:string){return this.flows.flowCatalog(request.principal,{cursor,limit})}
+  flowCatalog(@Req() request:AuthenticatedRequest,@Query("cursor") cursor?:unknown,@Query("limit") limit?:string){return this.flows.flowCatalog(request.principal,{cursor,limit})}
 
   @Get("actions")
   @Requires("bot:read")
@@ -31,7 +31,7 @@ export class BotFlowsController {
 
   @Get("actions/catalog")
   @Requires("bot:read")
-  actionCatalog(@Req() request:AuthenticatedRequest,@Query("cursor") cursor?:string,@Query("limit") limit?:string){return this.flows.actionCatalog(request.principal,{cursor,limit})}
+  actionCatalog(@Req() request:AuthenticatedRequest,@Query("cursor") cursor?:unknown,@Query("limit") limit?:string){return this.flows.actionCatalog(request.principal,{cursor,limit})}
 
   @Get("assignments")
   @Requires("bot:read")
@@ -49,7 +49,7 @@ export class BotFlowsController {
   @Requires("bot:read")
   listConversations(
     @Req() request: AuthenticatedRequest,
-    @Query("cursor") cursor?: string,
+    @Query("cursor") cursor?: unknown,
     @Query("limit") limit?: string,
   ) {
     return this.flows.listConversations(request.principal, { cursor, limit });
@@ -60,7 +60,7 @@ export class BotFlowsController {
   listConversationEvents(
     @Req() request: AuthenticatedRequest,
     @Param("id") id: string,
-    @Query("cursor") cursor?: string,
+    @Query("cursor") cursor?: unknown,
     @Query("limit") limit?: string,
   ) {
     return this.flows.listConversationEvents(request.principal, id, { cursor, limit });
@@ -72,7 +72,7 @@ export class BotFlowsController {
 
   @Get("routing/catalog")
   @Requires("bot:read")
-  routingCatalog(@Req() request:AuthenticatedRequest,@Query("cursor") cursor?:string,@Query("limit") limit?:string){return this.flows.routingCatalog(request.principal,{cursor,limit})}
+  routingCatalog(@Req() request:AuthenticatedRequest,@Query("cursor") cursor?:unknown,@Query("limit") limit?:string){return this.flows.routingCatalog(request.principal,{cursor,limit})}
 
   @Get("routing/capabilities")
   @Requires("bot:read")
