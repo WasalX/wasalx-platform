@@ -353,6 +353,46 @@ class ImagePublicationTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "requires a main push"):
                     images.publish("unused")
 
+    def test_release_verifies_every_digest_against_the_tagged_commit(self):
+        commit, tree = "a" * 40, "b" * 40
+        config = "sha256:" + "2" * 64
+        raw = json.dumps({"mediaType": "application/vnd.oci.image.manifest.v1+json",
+                          "config": {"digest": config}}).encode()
+        digest = images.sha256(raw)
+        records = [{"image": r["image"], "commit": commit, "tree": tree, "status": "published",
+                    "digest": digest, "configDigest": config, "verified": True, "workflow": images.MAIN_PUBLISHER,
+                    "pullReference": f"ghcr.io/wasalx/{r['image']}@{digest}"} for r in images.catalog()]
+        manifest = images.assemble(records)
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(images, "coordinates", return_value=(commit, tree)), \
+                patch.object(images.subprocess, "check_output", return_value=raw) as inspect, \
+                patch.object(images, "run_retry") as cosign:
+            path = Path(directory) / "images-manifest.json"
+            path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8", newline="\n")
+            images.verify_publication(path)
+            self.assertEqual(inspect.call_count, 21)
+            common = ["--certificate-identity", images.MAIN_PUBLISHER,
+                      "--certificate-oidc-issuer", "https://token.actions.githubusercontent.com",
+                      "--certificate-github-workflow-sha", commit]
+            expected = []
+            for row in manifest["images"].values():
+                ref = row["pullReference"]
+                expected.extend([mock.call("cosign", "verify", *common, ref),
+                                 mock.call("cosign", "verify-attestation", *common, "--type", "slsaprovenance", ref)])
+            self.assertEqual(cosign.call_args_list, expected)
+            cosign.reset_mock()
+            inspect.return_value = raw + b" "
+            with self.assertRaisesRegex(ValueError, "manifest digest mismatch"):
+                images.verify_publication(path)
+            cosign.assert_not_called()
+            for key, value in [("commit", "c" * 40), ("publicationComplete", False), ("images", {})]:
+                altered = {**manifest, key: value}
+                path.write_text(json.dumps(altered, indent=2) + "\n", encoding="utf-8", newline="\n")
+                inspect.reset_mock()
+                with self.subTest(key=key), self.assertRaises(ValueError):
+                    images.verify_publication(path)
+                inspect.assert_not_called()
+
     def test_workflow_restricts_writes_and_oidc_to_main_publish(self):
         text = (ROOT / ".github/workflows/branch-image.yml").read_text()
         self.assertEqual(text.count("driver-opts: image=moby/buildkit:v0.26.3"), 1)

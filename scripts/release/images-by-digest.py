@@ -19,6 +19,7 @@ import urllib.request
 ROOT = Path(__file__).resolve().parents[2]
 REPOSITORY = "WasalX/wasalx-platform"
 SOURCE = "https://github.com/" + REPOSITORY
+MAIN_PUBLISHER = SOURCE + "/.github/workflows/branch-image.yml@refs/heads/main"
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 SHA = re.compile(r"[0-9a-f]{40}")
 ADDON_IMAGES = {"zammad", "workspace-configurator"}
@@ -533,6 +534,15 @@ def inspect_loaded_config(reference, config_digest):
             raise
 
 
+def verify_signatures(reference, *, commit=None):
+    common = ["--certificate-identity", MAIN_PUBLISHER,
+              "--certificate-oidc-issuer", "https://token.actions.githubusercontent.com"]
+    if commit is not None:
+        common += ["--certificate-github-workflow-sha", commit]
+    run_retry("cosign", "verify", *common, reference)
+    run_retry("cosign", "verify-attestation", *common, "--type", "slsaprovenance", reference)
+
+
 def publish(receipt_path):
     ref = os.environ.get("GITHUB_REF")
     require(os.environ.get("GITHUB_EVENT_NAME") == "push" and ref == "refs/heads/main",
@@ -551,7 +561,7 @@ def publish(receipt_path):
     # The digest is checked over registry bytes by the client; never hash whitespace-normalized JSON.
     verify_manifest(json.loads(raw), receipt["inspection"]["configDigest"])
     receipt.update({"digest": digest, "configDigest": receipt["inspection"]["configDigest"],
-                    "pullReference": reference, "workflow": SOURCE + "/.github/workflows/branch-image.yml@" + ref,
+                    "pullReference": reference, "workflow": MAIN_PUBLISHER,
                     "workflowSha": os.environ["GITHUB_WORKFLOW_SHA"], "runId": os.environ["GITHUB_RUN_ID"],
                     "runAttempt": os.environ["GITHUB_RUN_ATTEMPT"]})
     write(receipt_path, receipt)
@@ -571,10 +581,7 @@ def publish(receipt_path):
     write(predicate_path, predicate)
     run_retry("cosign", "sign", "--yes", reference)
     run_retry("cosign", "attest", "--yes", "--type", "slsaprovenance", "--predicate", predicate_path, reference)
-    identity = receipt["workflow"]
-    common = ["--certificate-identity", identity, "--certificate-oidc-issuer", "https://token.actions.githubusercontent.com"]
-    run_retry("cosign", "verify", *common, reference)
-    run_retry("cosign", "verify-attestation", *common, "--type", "slsaprovenance", reference)
+    verify_signatures(reference)
     pull(reference)
     row = next(r for r in catalog() if r["image"] == receipt["image"])
     with tempfile.TemporaryDirectory() as directory:
@@ -612,9 +619,28 @@ def assemble(records):
             "pending": dict(sorted(pending_images.items()))}
 
 
+def verify_publication(manifest_path):
+    commit, tree = coordinates()
+    raw = Path(manifest_path).read_bytes()
+    manifest = json.loads(raw)
+    rows = list(manifest["images"].values())
+    assembled = assemble(rows)
+    require(assembled["publicationComplete"] and raw == (json.dumps(assembled, indent=2) + "\n").encode(),
+            "Complete, unmodified publication manifest required")
+    require((manifest["commit"], manifest["tree"]) == (commit, tree), "Publication source differs from tagged source")
+    require(all(row["status"] == "published" and row["workflow"] == MAIN_PUBLISHER for row in rows),
+            "Main workflow publication required for every image")
+    for row in rows:
+        reference = row["pullReference"]
+        registry_manifest = subprocess.check_output(["docker", "buildx", "imagetools", "inspect", "--raw", reference])
+        require(sha256(registry_manifest) == row["digest"], "Published manifest digest mismatch")
+        verify_manifest(json.loads(registry_manifest), row["configDigest"])
+        verify_signatures(reference, commit=commit)
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=["matrix", "build", "pending", "publish", "assemble", "loaded-config"])
+    parser.add_argument("command", choices=["matrix", "build", "pending", "publish", "assemble", "verify-publication", "loaded-config"])
     parser.add_argument("--image")
     diff = parser.add_mutually_exclusive_group()
     diff.add_argument("--pull-request", action="store_true")
@@ -623,6 +649,7 @@ if __name__ == "__main__":
     parser.add_argument("--config-digest")
     parser.add_argument("--output", default="images-manifest.json")
     parser.add_argument("--records", default="records")
+    parser.add_argument("--manifest", default="images-manifest.json")
     args = parser.parse_args()
     if args.command == "loaded-config":
         try:
@@ -636,6 +663,8 @@ if __name__ == "__main__":
         build(args.image, args.output, args.cache)
     elif args.command == "publish":
         publish(args.output)
+    elif args.command == "verify-publication":
+        verify_publication(args.manifest)
     elif args.command == "pending":
         pending(args.image, args.output)
     else:
