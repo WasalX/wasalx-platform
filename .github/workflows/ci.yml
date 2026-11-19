@@ -32,15 +32,18 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: ${{ github.event_name == 'pull_request' && 2 || 1 }}
+          fetch-depth: ${{ github.event_name == 'merge_group' && '0' || '2' }}
           persist-credentials: false
       - id: matrix
         env:
           EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.merge_group.base_sha }}
         run: |
           args=()
           if [ "$EVENT" = pull_request ]; then
             args+=(--pull-request)
+          elif [ "$EVENT" = merge_group ]; then
+            args+=(--base-sha "$BASE_SHA")
           fi
           matrix=$(python3 scripts/release/images-by-digest.py matrix "${args[@]}")
           images=$(jq '.include | length > 0' <<< "$matrix")
@@ -57,6 +60,7 @@ jobs:
           fail-on-severity: high
 
   checks:
+    if: github.event_name != 'push'
     name: ${{ matrix.name }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -101,11 +105,6 @@ jobs:
           key: pnpm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', 'package.json', 'patches/**') }}
           restore-keys: pnpm-${{ runner.os }}-${{ runner.arch }}-
       - run: pnpm install --frozen-lockfile --fetch-retries=2
-      - uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
-        if: matrix.mode == 'lint' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev') && steps.pnpm-cache.outputs.cache-hit != 'true'
-        with:
-          path: ${{ env.PNPM_STORE_PATH }}
-          key: ${{ steps.pnpm-cache.outputs.cache-primary-key }}
       - name: Install Ruby test prerequisites
         if: matrix.mode == 'unit' || matrix.mode == 'collection'
         run: |
@@ -130,11 +129,6 @@ jobs:
       - name: Lint
         if: matrix.mode == 'lint'
         run: node scripts/hosted-ci.mjs lint
-      - uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
-        if: matrix.mode == 'lint' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev') && steps.eslint-cache.outputs.cache-hit != 'true'
-        with:
-          path: .git/hosted-eslint-cache
-          key: ${{ steps.eslint-cache.outputs.cache-primary-key }}
       - name: Typecheck
         if: matrix.mode == 'typecheck'
         run: pnpm exec tsc --noEmit
@@ -147,15 +141,67 @@ jobs:
           SHARD: ${{ matrix.shard }}
         run: node scripts/hosted-ci.mjs unit "$SHARD" 2
 
+  lint-on-push:
+    name: Lint on push
+    if: github.event_name == 'push'
+    # Cache warm-up only; PRs and the queue gate lint, so a failure here must not make a published trunk commit unusable.
+    continue-on-error: true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.13.1'
+          package-manager-cache: false
+      - name: Enable pinned pnpm
+        run: |
+          corepack enable
+          for attempt in 1 2 3; do
+            if corepack install; then break; fi
+            test "$attempt" != 3
+            sleep "$attempt"
+          done
+          store=$(pnpm store path --silent)
+          echo "PNPM_STORE_PATH=$store" >> "$GITHUB_ENV"
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: pnpm-cache
+        with:
+          path: ${{ env.PNPM_STORE_PATH }}
+          key: pnpm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', 'package.json', 'patches/**') }}
+          restore-keys: pnpm-${{ runner.os }}-${{ runner.arch }}-
+      - run: pnpm install --frozen-lockfile --fetch-retries=2
+      - uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
+        if: steps.pnpm-cache.outputs.cache-hit != 'true'
+        with:
+          path: ${{ env.PNPM_STORE_PATH }}
+          key: ${{ steps.pnpm-cache.outputs.cache-primary-key }}
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: eslint-cache
+        with:
+          path: .git/hosted-eslint-cache
+          key: eslint-${{ runner.os }}-${{ hashFiles('eslint.config.*', 'pnpm-lock.yaml') }}-${{ github.sha }}
+          restore-keys: eslint-${{ runner.os }}-${{ hashFiles('eslint.config.*', 'pnpm-lock.yaml') }}-
+      - name: Lint
+        run: node scripts/hosted-ci.mjs lint
+      - uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
+        if: steps.eslint-cache.outputs.cache-hit != 'true'
+        with:
+          path: .git/hosted-eslint-cache
+          key: ${{ steps.eslint-cache.outputs.cache-primary-key }}
+
   images:
-    needs: changes
-    if: needs.changes.outputs.images == 'true' && github.event_name != 'push'
+    # Stage checks and builds within the eight-slot budget for this run.
+    needs: [changes, checks]
+    if: ${{ !cancelled() && needs.changes.outputs.images == 'true' }}
     name: Build ${{ matrix.image }}${{ matrix.pending && ' (pending add-on source)' || '' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     strategy:
       fail-fast: false
-      max-parallel: 10
+      max-parallel: 8
       matrix: ${{ fromJSON(needs.changes.outputs.matrix) }}
     steps:
       - name: Require GitHub-hosted execution
@@ -195,7 +241,8 @@ jobs:
           if-no-files-found: error
 
   publish:
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev') && github.repository == 'WasalX/wasalx-platform'
+    needs: lint-on-push
+    if: ${{ !cancelled() && github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev') && github.repository == 'WasalX/wasalx-platform' }}
     concurrency:
       group: release-${{ github.ref_name }}
       cancel-in-progress: false
@@ -203,7 +250,6 @@ jobs:
       contents: read
       packages: write
       id-token: write
-      attestations: write
     uses: ./.github/workflows/branch-image.yml
 
   ci-gate:
@@ -224,6 +270,7 @@ jobs:
         run: |
           test "$CHANGES" = success && test "$CHECKS" = success || exit 1
           case "$EVENT:$REVIEW:$IMAGES_NEEDED:$IMAGES" in
-            pull_request:success:false:skipped|pull_request:success:true:success|merge_group:skipped:true:success) ;;
+            pull_request:success:false:skipped|pull_request:success:true:success) ;;
+            merge_group:skipped:false:skipped|merge_group:skipped:true:success) ;;
             *) exit 1 ;;
           esac

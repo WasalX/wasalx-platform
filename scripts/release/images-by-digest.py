@@ -64,6 +64,21 @@ def run(*args, cwd=None):
     return subprocess.check_output(args, cwd=cwd, text=True).strip()
 
 
+def retry(action):
+    # shortcut: retry command failures with fixed backoff until error classes are needed.
+    for attempt in range(1, 4):
+        try:
+            return action()
+        except subprocess.CalledProcessError:
+            if attempt == 3:
+                raise
+            time.sleep(10 * attempt)
+
+
+def run_retry(*args):
+    return retry(lambda: run(*args))
+
+
 def write(path, value):
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     Path(path).write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
@@ -179,10 +194,13 @@ def changed_images(rows, paths):
     return [row for row in rows if row["image"] in selected]
 
 
-def pull_request_paths():
-    # The checkout is GitHub's test merge. Compare with its base, including both sides of renames.
-    raw = subprocess.check_output(
-        ["git", "diff", "--name-only", "-z", "--no-ext-diff", "--no-renames", "HEAD^1", "HEAD", "--"], cwd=ROOT)
+def changed_paths(base):
+    # Compare the checked-out test merge with its base, including both sides of renames.
+    try:
+        raw = subprocess.check_output(
+            ["git", "diff", "--name-only", "-z", "--no-ext-diff", "--no-renames", base, "HEAD", "--"], cwd=ROOT)
+    except subprocess.CalledProcessError:
+        return None
     return [os.fsdecode(path) for path in raw.split(b"\0") if path]
 
 
@@ -447,7 +465,7 @@ def build(image, output, cache="off"):
                     for name in ["LICENSE", "COPYING", "THIRD-PARTY-NOTICES"]} if addon else {}
         dockerfile_digest = sha256((context / row["dockerfile"]).read_bytes())
         # Publication exports a cache but never imports one. No host context or secret/SSH mounts.
-        subprocess.run(["docker", "buildx", "build", "--platform", "linux/amd64",
+        retry(lambda: subprocess.run(["docker", "buildx", "build", "--platform", "linux/amd64",
                         "--output", "type=docker,rewrite-timestamp=true",
                         "--provenance=false", "--sbom=false", *cache_args, "--file", str(context / row["dockerfile"]),
                         "--tag", reference, "--build-arg", "WASALX_CANDIDATE_SHA=" + commit,
@@ -455,7 +473,7 @@ def build(image, output, cache="off"):
                         "--build-arg", "COMMIT_SHA=" + commit, "--build-arg", "WASALX_CANDIDATE_TREE=" + tree,
                         "--label", "org.opencontainers.image.source=" + SOURCE,
                         "--label", "org.opencontainers.image.revision=" + commit,
-                        "--label", "io.wasalx.source.tree=" + tree, str(context)], check=True)
+                        "--label", "io.wasalx.source.tree=" + tree, str(context)], check=True))
         inspection = inspect_image(reference, row, commit, tree, directory, licenses)
     write(output, {"image": image, "reference": reference, "commit": commit, "tree": tree, "status": "built",
                    "platform": "linux/amd64", "sourceArchiveDigest": archive_digest, "addonSource": addon,
@@ -524,12 +542,12 @@ def publish(receipt_path):
     require((receipt["commit"], receipt["tree"]) == (commit, tree), "Stale inspection receipt")
     repository = "ghcr.io/wasalx/" + receipt["image"]
     require(receipt["reference"] == repository + ":" + commit, "Wrong publication reference")
-    result = run("docker", "push", receipt["reference"])
+    result = run_retry("docker", "push", receipt["reference"])
     matches = re.findall(r"digest: (sha256:[0-9a-f]{64})", result)
     require(len(set(matches)) == 1, "Missing unique published digest")
     digest = matches[0]
     reference = repository + "@" + digest
-    raw = run("docker", "buildx", "imagetools", "inspect", "--raw", reference)
+    raw = run_retry("docker", "buildx", "imagetools", "inspect", "--raw", reference)
     # The digest is checked over registry bytes by the client; never hash whitespace-normalized JSON.
     verify_manifest(json.loads(raw), receipt["inspection"]["configDigest"])
     receipt.update({"digest": digest, "configDigest": receipt["inspection"]["configDigest"],
@@ -551,12 +569,12 @@ def publish(receipt_path):
                  "materials": [{"uri": "git+" + SOURCE, "digest": {"sha1": commit, "gitTree": tree}}]}
     predicate_path = str(receipt_path) + ".predicate.json"
     write(predicate_path, predicate)
-    run("cosign", "sign", "--yes", reference)
-    run("cosign", "attest", "--yes", "--type", "slsaprovenance", "--predicate", predicate_path, reference)
+    run_retry("cosign", "sign", "--yes", reference)
+    run_retry("cosign", "attest", "--yes", "--type", "slsaprovenance", "--predicate", predicate_path, reference)
     identity = receipt["workflow"]
     common = ["--certificate-identity", identity, "--certificate-oidc-issuer", "https://token.actions.githubusercontent.com"]
-    run("cosign", "verify", *common, reference)
-    run("cosign", "verify-attestation", *common, "--type", "slsaprovenance", reference)
+    run_retry("cosign", "verify", *common, reference)
+    run_retry("cosign", "verify-attestation", *common, "--type", "slsaprovenance", reference)
     pull(reference)
     row = next(r for r in catalog() if r["image"] == receipt["image"])
     with tempfile.TemporaryDirectory() as directory:
@@ -565,7 +583,7 @@ def publish(receipt_path):
     # Advance the discovery alias only after signature and exact-digest reinspection.
     alias = repository + ":" + ref.removeprefix("refs/heads/")
     run("docker", "tag", reference, alias)
-    alias_result = run("docker", "push", alias)
+    alias_result = run_retry("docker", "push", alias)
     require("digest: " + digest in alias_result, "Discovery alias digest mismatch")
     receipt["verified"] = True
     receipt["status"] = "published"
@@ -598,7 +616,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=["matrix", "build", "pending", "publish", "assemble", "loaded-config"])
     parser.add_argument("--image")
-    parser.add_argument("--pull-request", action="store_true")
+    diff = parser.add_mutually_exclusive_group()
+    diff.add_argument("--pull-request", action="store_true")
+    diff.add_argument("--base-sha")
     parser.add_argument("--cache", choices=["off", "read", "write"], default="off")
     parser.add_argument("--config-digest")
     parser.add_argument("--output", default="images-manifest.json")
@@ -610,7 +630,8 @@ if __name__ == "__main__":
         except Exception:
             sys.exit("Loaded image config verification failed")
     elif args.command == "matrix":
-        print(json.dumps(matrix(pull_request_paths() if args.pull_request else None), separators=(",", ":")))
+        base = "HEAD^1" if args.pull_request else args.base_sha
+        print(json.dumps(matrix(changed_paths(base) if base is not None else None), separators=(",", ":")))
     elif args.command == "build":
         build(args.image, args.output, args.cache)
     elif args.command == "publish":
