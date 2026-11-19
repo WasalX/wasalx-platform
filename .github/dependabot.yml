@@ -13,6 +13,21 @@ updates:
         update-types: ["version-update:semver-major"]
       - dependency-name: "bullmq"
         update-types: ["version-update:semver-major"]
+      # Vinext 1.4.5 bundles image-size and needs the portal image regression updated.
+      - dependency-name: "vinext"
+        versions: ["1.4.5"]
+      # Keep the add-ons aligned with the locally patched Storybook release.
+      - dependency-name: "@storybook/addon-a11y"
+        versions: ["10.6.7"]
+      - dependency-name: "@storybook/addon-docs"
+        versions: ["10.6.7"]
+      - dependency-name: "@storybook/react-vite"
+        versions: ["10.6.7"]
+      # The browser image and accessibility checks use these exact tool pins.
+      - dependency-name: "@playwright/test"
+        versions: ["1.65.1"]
+      - dependency-name: "@axe-core/playwright"
+        versions: ["4.14.0"]
     groups:
       npm-minor-and-patch:
         patterns: ['*']
