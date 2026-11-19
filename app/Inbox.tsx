@@ -15,12 +15,19 @@ type Intent = { operation: "REPLY" | "UPDATE"; input: Record<string, unknown>; d
 type UploadBinding = { ticket_id: string } | { create_group_id: string };
 type Staged = { cache: string; files: InboxUpload[]; binding: UploadBinding };
 
-export function Inbox({ mutationHeaders, targetTicketNumber, selectTicket, canWrite, scope, recoveryScope = scope, active = true, selectSource }: {
+// Owners are never told to ask the owner; a held case workspace (503) is unavailable, not missing access.
+function inboxFailureKey(status: number | undefined, owner: boolean) {
+  if (status === 401 || status === 403) return owner ? "inbox.accessDeniedOwner" : "inbox.accessDenied";
+  return status === 503 ? "inbox.serviceUnavailable" : "inbox.failed";
+}
+
+export function Inbox({ mutationHeaders, targetTicketNumber, selectTicket, canWrite, scope, recoveryScope = scope, active = true, selectSource, isOwner = false }: {
   mutationHeaders: Record<string, string>; targetTicketNumber: string | null;
   selectSource?: (source: import("../lib/inbox-contract").InboxSourceContext) => void;
-  selectTicket: (number: string | null) => void; canWrite: boolean; scope: string; recoveryScope?: string; active?: boolean;
+  selectTicket: (number: string | null) => void; canWrite: boolean; scope: string; recoveryScope?: string; active?: boolean; isOwner?: boolean;
 }) {
   const { t, locale } = useI18n();
+  const deniedKey = inboxFailureKey(403, isOwner);
   const [rows, setRows] = useState<InboxTicket[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [query, setQuery] = useState("");
@@ -85,8 +92,8 @@ export function Inbox({ mutationHeaders, targetTicketNumber, selectTicket, canWr
     listFence.current.invalidate(); detailFence.current.invalidate();
     setDenied(true); setDetail(null); setArticles([]); setRows([]); setDrafts({}); setAssignments({}); setStaged({}); stagedRef.current = {};
     setTransferPreview(null); setReplyPreview(null); setCreateOpen(false);
-    setUnknown(value => value ? { operation: value.operation, input: { ticket_id: value.input.ticket_id, operation_id: value.input.operation_id } } : null); setError(t("inbox.accessDenied"));
-  }, [t]);
+    setUnknown(value => value ? { operation: value.operation, input: { ticket_id: value.input.ticket_id, operation_id: value.input.operation_id } } : null); setError(t(deniedKey));
+  }, [t, deniedKey]);
   const storageKey = `wasalx:inbox-operation:${recoveryScope}`;
   const recoveryReady = recoveryNamespace === storageKey, createReady = createNamespace === createStorageKey;
   const listContext = JSON.stringify([scope, filter, query.trim(), selectedNumber]);
@@ -103,10 +110,9 @@ export function Inbox({ mutationHeaders, targetTicketNumber, selectTicket, canWr
     if (response.status === 401 || response.status === 403) {
       clearPrivate();
     }
-    if (!response.ok) throw Object.assign(operatorLocalFailure(t([401, 403].includes(response.status) ? "inbox.accessDenied" :
-      response.status === 409 ? "inbox.conflict" : "inbox.failed")), { status: response.status });
+    if (!response.ok) throw Object.assign(operatorLocalFailure(t(response.status === 409 ? "inbox.conflict" : inboxFailureKey(response.status, isOwner))), { status: response.status });
     return response.json() as Promise<T>;
-  }, [clearPrivate, mutationHeaders, t]);
+  }, [clearPrivate, mutationHeaders, t, isOwner]);
 
   const loadList = useCallback(async (signal?: AbortSignal, before?: string) => {
     if (activeListContext.current !== listContext) return;
@@ -200,8 +206,7 @@ export function Inbox({ mutationHeaders, targetTicketNumber, selectTicket, canWr
     try { await request("CHECK", {}, signal); }
     catch (failure) {
       if (!signal?.aborted) {
-        const denied = [401, 403].includes((failure as { status?: number }).status ?? 0);
-        setDetail(null); setArticles([]); setRows([]); setError(t(denied ? "inbox.accessDenied" : "inbox.failed"));
+        setDetail(null); setArticles([]); setRows([]); setError(t(inboxFailureKey((failure as { status?: number }).status, isOwner)));
       }
     }
   }, active);

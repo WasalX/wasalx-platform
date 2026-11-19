@@ -45,7 +45,7 @@ export function MailboxAdministration({ execute, scope }: {
   }, [load]);
   return <>
     <MailboxSettings execute={execute} scope={scope} teams={teams} />
-    {error ? <p role="alert">{t("teamsAdmin.failed")}</p> : null}
+    {error ? <p className="settings-feedback error" role="alert">{t("mailboxes.teamsFailed")}</p> : null}
     {reauthenticate ? <a className="button secondary wx-button" href="/auth/login?step_up=privileged&return_to=%2Fapp%3Fview%3Dsettings">{t("tenant.privacy.action.reauthenticate")}</a> : null}
     {cursor || error ? <button type="button" className="button secondary" disabled={loading} onClick={() => {
       if (inFlight.current) return;
@@ -53,6 +53,6 @@ export function MailboxAdministration({ execute, scope }: {
       inFlight.current = true; setLoading(true);
       void load(error ? undefined : cursor ?? undefined).catch(() => { if (lifecycle.current.mounted && lifecycle.current.generation === generation) setError(true); })
         .finally(() => { if (lifecycle.current.mounted && lifecycle.current.generation === generation) { inFlight.current = false; setLoading(false); } });
-    }}>{t(error ? "inbox.reload" : "teamsAdmin.more")}</button> : null}
+    }}>{t(error ? "common.actions.retry" : "teamsAdmin.more")}</button> : null}
   </>;
 }

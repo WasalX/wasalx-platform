@@ -90,10 +90,14 @@ test("delegation binds exact principal, purpose, method, path and serialized req
 });
 
 test("missing mapping and mapping drift deny content without falling back to service identity", async t => {
-  const missing = controller(t, []);
+  const missing = controller(t, [null, { working: true }]);
   let calls = 0;
   t.mock.method(globalThis, "fetch", async () => { calls++; return Response.json({ body: "private" }); });
-  await assert.rejects(() => missing.instance.execute({ principal }, body), /access/);
+  await assert.rejects(() => missing.instance.execute({ principal }, body), error => error.getStatus() === 403 && /access/.test(error.message));
+  // A held case workspace is reported as a service outage, never as missing member access.
+  const held = controller(t, [null, { working: false }]);
+  await assert.rejects(() => held.instance.execute({ principal }, body), error => error.getStatus() === 503);
+  assert.match(held.queries[1].sql, /z\.state='WORKING'/u);
   assert.equal(calls, 0);
   for (const changed of [{ ...actor, revision: 5 }, { ...actor, native_user_id: "13" }, { ...actor, instance_id: "other" }]) {
     const current = controller(t, [actor, changed]);

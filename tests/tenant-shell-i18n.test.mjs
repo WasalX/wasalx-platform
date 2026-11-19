@@ -93,9 +93,11 @@ test("audit events have distinct localized actions while direct-flow events reta
 test("known uncertain and suspended states retain distinct truthful labels", async () => {
   const source=await readFile(tenantSourceUrl,"utf8");
   const parsed=ts.createSourceFile("WasalXApp.tsx",source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
-  const component=parsed.statements.find(node=>ts.isFunctionDeclaration(node)&&node.name?.text==="Status");
-  assert.ok(component);
-  const compiled=ts.transpileModule(component.getText(parsed),{compilerOptions:{jsx:ts.JsxEmit.React}}).outputText;
+  const [helper,component]=["statusPresentation","Status"].map(name=>parsed.statements.find(node=>ts.isFunctionDeclaration(node)&&node.name?.text===name));
+  assert.ok(helper&&component);
+  const compiled=ts.transpileModule(`${helper.getText(parsed)}\n${component.getText(parsed)}`,{compilerOptions:{jsx:ts.JsxEmit.React}}).outputText;
+  // The connections state filter reuses the row badge label, so a revoked row and its filter option read the same.
+  assert.match(source,/<option key=\{value\} value=\{value\}>\{t\(statusPresentation\(value\)\[0\]\)\}<\/option>/u);
   for(const dictionary of [englishTenantMessages,arabicTenantMessages]){
     const Status=new Function("useI18n","React",`${compiled};return Status;`)(()=>({t:key=>dictionary[key]}),React);
     const label=value=>Status({value}).props.children[1];
@@ -104,6 +106,7 @@ test("known uncertain and suspended states retain distinct truthful labels", asy
     assert.equal(label("SENT"),dictionary["tenant.status.sent"]);
     assert.equal(label("CONSENT_REQUIRED"),dictionary["common.status.inactive"]);
     assert.equal(label("UNRECOGNIZED_STATE"),dictionary["tenant.status.unknown"]);
+    assert.equal(label("REVOKED"),dictionary["tenant.status.revoked"]);
     assert.notEqual(label("OUTCOME_UNKNOWN"),label("SENT"));
     assert.notEqual(label("OUTCOME_UNKNOWN"),label("UNRECOGNIZED_STATE"));
   }
@@ -170,6 +173,7 @@ test("tenant routes contain no unreviewed visible English literals", async () =>
     "ROLLBACK",
     "VIP-",
     "W",
+    "WX",
     "WasalX",
     "WhatsApp",
     "· WasalX",
@@ -215,4 +219,32 @@ test("tenant routes contain no unreviewed visible English literals", async () =>
   };
   visit(file);
   assert.deepEqual(findings, [], `Unlocalized visible tenant strings:\n${findings.join("\n")}`);
+});
+
+test("owner-facing health, access and settings states stay truthful and consistent", async () => {
+  const read = path => readFile(new URL(`../${path}`, import.meta.url), "utf8");
+  const [source, inbox, mailboxes, mailboxAdmin, serviceAccess, routing] = await Promise.all(["app/WasalXApp.tsx", "app/Inbox.tsx",
+    "app/MailboxSettings.tsx", "app/MailboxAdministration.tsx", "app/ServiceAccess.tsx", "app/NativeRoutingSync.tsx"].map(read));
+  // Zero working connections is never reported as healthy, and a stale case-workspace check is never "Working".
+  assert.match(source, /const noneWorking = data\.connections\.length > 0 && working === 0;/u);
+  assert.match(source, /noneWorking\?t\("tenant\.health\.noWorkingConnections"\):t\("tenant\.overview\.healthy"\)/u);
+  assert.match(source, /warn=\{connectionIssues>0\|\|noneWorking\}/u);
+  assert.match(source, /zammadStale\?t\("tenant\.health\.notRecentlyChecked"\):t\("tenant\.status\.working"\)/u);
+  assert.match(source, /warn=\{zammadIssue\|\|zammadStale\}/u);
+  // Only pending invitations show an expiry; generic audit actors share one mark.
+  assert.match(source, /invitation\.state === "PENDING" \? <small>\{t\("tenant.[a-z]+.invitations.expires"\)\}/u);
+  assert.match(source, /: "WX"\}\s*<\/span>\s*<span className="audit-line"/u);
+  // Owners are never told to ask the owner, and a held service is not reported as missing access.
+  assert.match(inbox, /return owner \? "inbox\.accessDeniedOwner" : "inbox\.accessDenied";/u);
+  assert.match(inbox, /status === 503 \? "inbox\.serviceUnavailable"/u);
+  assert.match(source, /owner=\{role === "tenant_owner"\}/u);
+  // Settings never label a retry as reloading conversations, nor show an empty state over a load failure.
+  for (const file of [mailboxes, mailboxAdmin, serviceAccess]) assert.doesNotMatch(file, /"inbox\.reload"/u);
+  assert.match(mailboxes, /!rows\.length && !error \? <p>\{t\("mailboxes\.empty"\)\}/u);
+  // Ticket routing shows one state without internal revision counters.
+  assert.doesNotMatch(routing, /desiredRevision, locale|nativeRouting\.(?:revisions|notChecked)/u);
+  for (const dictionary of [englishTenantMessages, arabicTenantMessages]) {
+    for (const key of ["tenant.health.noWorkingConnections", "tenant.health.notRecentlyChecked", "tenant.rules.matches.one"]) assert.ok(dictionary[key], key);
+    assert.doesNotMatch(dictionary["tenant.rules.governedVersion"], /Governed|المحكوم/u);
+  }
 });

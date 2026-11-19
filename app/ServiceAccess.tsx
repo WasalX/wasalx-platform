@@ -94,7 +94,7 @@ export function ServiceAccess({ execute, scope, teamId }: { execute: IdentityExe
   const team = status?.groups.find(row => row.id === teamId);
   const close = () => { if (!busy) { setReview(null); setAcknowledged(false); } };
   return <section className="settings-section" aria-labelledby="service-access-title">
-    <div className="panel-heading"><div><h3 id="service-access-title">{t("serviceAccess.title")}</h3><p>{t("serviceAccess.body")}</p></div><button type="button" className="button secondary" disabled={busy} onClick={() => void reload()}>{t("inbox.reload")}</button></div>
+    <div className="panel-heading"><div><h3 id="service-access-title">{t("serviceAccess.title")}</h3><p>{t("serviceAccess.body")}</p></div><button type="button" className="button secondary" disabled={busy} onClick={() => void reload()}>{t("common.actions.refresh")}</button></div>
     {error ? <p role="alert" className="settings-feedback error">{t(`serviceAccess.${error}`)}</p> : null}
     {reauthenticate ? <a className="button secondary wx-button" href="/auth/login?step_up=privileged&return_to=%2Fapp%3Fview%3Dteam">{t("tenant.privacy.action.reauthenticate")}</a> : null}
     {pending && !review ? <div className="settings-validation"><p>{t("serviceAccess.unknown")}</p><button type="button" className="button secondary" disabled={busy || denied || broken} onClick={() => void reconcile(false)}>{t("serviceAccess.check")}</button><button type="button" className="button secondary" disabled={busy || denied || broken} onClick={() => void reconcile(true)}>{t("serviceAccess.cancelMissing")}</button></div> : null}

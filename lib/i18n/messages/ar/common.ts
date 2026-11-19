@@ -12,6 +12,7 @@ export const arabicCommonMessages = {
   "common.actions.close": "إغلاق",
   "common.actions.continue": "متابعة",
   "common.actions.retry": "إعادة المحاولة",
+  "common.actions.refresh": "تحديث",
   "common.actions.remove": "إزالة",
   "common.actions.signIn": "تسجيل الدخول",
   "common.actions.goHome": "الانتقال إلى الصفحة الرئيسية",

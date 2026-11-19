@@ -221,7 +221,7 @@ export function SupportTeams({ execute, scope, owner = false }: { execute: <T>(o
 
   return <section className="panel" aria-labelledby="support-teams-heading" data-unsaved={dirty || undefined}>
     <div className="panel-heading"><div><h2 id="support-teams-heading">{t("teamsAdmin.title")}</h2><p>{t("teamsAdmin.body")}</p></div><button type="button" className="button primary" disabled={blocked} onClick={() => void open("new")}>{t("teamsAdmin.createTeam")}</button></div>
-    {error ? <><p role="alert" className="settings-feedback error">{error}</p><button type="button" className="button secondary" disabled={busy || !recoveryReady || recoveryCorrupt} onClick={() => void reload()}>{t("inbox.reload")}</button></> : null}
+    {error ? <><p role="alert" className="settings-feedback error">{error}</p><button type="button" className="button secondary" disabled={busy || !recoveryReady || recoveryCorrupt} onClick={() => void reload()}>{t("common.actions.retry")}</button></> : null}
     {reauthenticate ? <a className="button secondary wx-button" href="/auth/login?step_up=privileged&return_to=%2Fapp%3Fview%3Dteam">{t("tenant.privacy.action.reauthenticate")}</a> : null}
     {notice ? <p role="status" className="settings-feedback success">{notice}</p> : null}
     {pending ? <div className="settings-validation"><p>{t("teamsAdmin.unknown")}</p><button type="button" className="button secondary" disabled={busy} onClick={() => void reconcile(false)}>{t("teamsAdmin.check")}</button><button type="button" className="button secondary" disabled={busy} onClick={() => void reconcile(true)}>{t("teamsAdmin.cancelMissing")}</button></div> : null}
