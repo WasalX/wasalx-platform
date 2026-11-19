@@ -173,8 +173,9 @@ function client() {
   if (!redis) {
     const url = process.env.PORTAL_SESSION_REDIS_URL ?? process.env.REDIS_URL;
     if (!url) throw new Error("PORTAL_SESSION_REDIS_URL or REDIS_URL is required");
+    // A silently dropped socket must fail the page with a retryable 503, never hang it.
     redis = new Redis(validatedRedisUrl(url, process.env, "PORTAL_SESSION_REDIS_URL"), {
-      maxRetriesPerRequest: 2, enableReadyCheck: true, lazyConnect: false,
+      maxRetriesPerRequest: 2, enableReadyCheck: true, lazyConnect: false, commandTimeout: 5_000, socketTimeout: 5_000,
     });
   }
   return redis;

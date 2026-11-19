@@ -76,6 +76,9 @@ function client() {
       maxRetriesPerRequest: 2,
       enableReadyCheck: true,
       lazyConnect: false,
+      // A silently dropped socket must fail the request, never hang it.
+      commandTimeout: 5_000,
+      socketTimeout: 5_000,
     });
   }
   return redis;

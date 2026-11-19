@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { execFile } from "node:child_process";
+import { createServer } from "node:net";
 import { createOidcTransaction } from "../lib/oidc.ts";
 import { oidcTransactionCookieEvictions,oidcTransactionCookieName } from "../lib/oidc-transaction-cookies.ts";
 import {
@@ -78,6 +80,22 @@ test("shell identity bindings fail closed on stale tenant or role",()=>{
   assert.equal(assertPortalShellSession(new Request("https://portal.test/api/dashboard",{headers:{"x-wasalx-shell-tenant-id":"tenant-a","x-wasalx-shell-role":"agent"}}),session),session);
   assert.throws(()=>assertPortalShellSession(new Request("https://portal.test/api/dashboard",{headers:{"x-wasalx-shell-tenant-id":"tenant-b"}}),session),PortalSessionError);
   assert.throws(()=>assertPortalShellSession(new Request("https://portal.test/api/dashboard",{headers:{"x-wasalx-shell-role":"auditor"}}),session),PortalSessionError);
+});
+
+test("a silent session store fails the app bootstrap within a bounded time instead of hanging",async()=>{
+  // The listener accepts but never answers, like a dropped socket after the first fast load.
+  const sockets=new Set<import("node:net").Socket>();const server=createServer(socket=>{sockets.add(socket);socket.on("error",()=>{});});
+  await new Promise<void>(resolve=>server.listen(0,"127.0.0.1",resolve));
+  const {port}=server.address() as import("node:net").AddressInfo;
+  const script=`const started=Date.now();const {loadStoredPortalSession}=await import(${JSON.stringify(new URL("../lib/portal-session-store.ts",import.meta.url).href)});
+try{await loadStoredPortalSession("a".repeat(43));console.log("resolved")}catch(error){console.log(JSON.stringify({status:error.status,ms:Date.now()-started}))}process.exit(0)`;
+  try{
+    const output=await new Promise<string>((resolve,reject)=>execFile(process.execPath,["--experimental-strip-types","--input-type=module","-e",script],
+      {timeout:20_000,env:{...process.env,NODE_ENV:"test",PORTAL_SESSION_REDIS_URL:`redis://127.0.0.1:${port}`}},(error,stdout)=>error?reject(error):resolve(stdout)));
+    const result=JSON.parse(output.trim().split(/\r?\n/u).at(-1)!) as {status:number;ms:number};
+    assert.equal(result.status,503);
+    assert.ok(result.ms<12_000,`bootstrap waited ${result.ms}ms`);
+  }finally{for(const socket of sockets)socket.destroy();server.close();}
 });
 
 function restore(name:string,value:string|undefined){if(value===undefined)delete process.env[name];else process.env[name]=value}
