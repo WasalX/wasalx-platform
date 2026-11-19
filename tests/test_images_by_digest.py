@@ -306,36 +306,35 @@ class ImagePublicationTests(unittest.TestCase):
                    "inspection": inspection, "sourceArchiveDigest": "", "addonSource": None, "dockerfileDigest": ""}
         manifest = json.dumps({"mediaType": "application/vnd.oci.image.manifest.v1+json",
                                "config": {"digest": inspection["configDigest"]}})
-        for branch in ("dev", "main"):
-            ref = "refs/heads/" + branch
-            env = {"GITHUB_EVENT_NAME": "push", "GITHUB_REF": ref, "GITHUB_WORKFLOW_SHA": commit,
-                   "GITHUB_RUN_ID": "1", "GITHUB_RUN_ATTEMPT": "1"}
-            with self.subTest(branch=branch), tempfile.TemporaryDirectory() as directory, \
-                    patch.dict(os.environ, env, clear=True), \
-                    patch.object(images, "coordinates", return_value=(commit, tree)), \
-                    patch.object(images, "run", side_effect=[f"digest: {digest}", manifest, "", "", "", "", "",
-                                                             f"digest: {digest}"]) as run, \
-                    patch.object(images, "pull"), patch.object(images, "inspect_image", return_value=inspection):
-                path = Path(directory) / "receipt.json"
-                images.write(path, receipt)
-                images.publish(path)
-                published = json.loads(path.read_text())
-            identity = images.SOURCE + "/.github/workflows/branch-image.yml@" + ref
-            reference = repository + "@" + digest
-            alias = repository + ":" + branch
-            self.assertEqual(published["workflow"], identity)
-            self.assertTrue(published["verified"])
-            run.assert_any_call("cosign", "verify", "--certificate-identity", identity,
-                                "--certificate-oidc-issuer", "https://token.actions.githubusercontent.com", reference)
-            self.assertEqual(run.call_args_list[-2:], [mock.call("docker", "tag", reference, alias),
-                                                      mock.call("docker", "push", alias)])
+        ref = "refs/heads/main"
+        env = {"GITHUB_EVENT_NAME": "push", "GITHUB_REF": ref, "GITHUB_WORKFLOW_SHA": commit,
+               "GITHUB_RUN_ID": "1", "GITHUB_RUN_ATTEMPT": "1"}
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.dict(os.environ, env, clear=True), \
+                patch.object(images, "coordinates", return_value=(commit, tree)), \
+                patch.object(images, "run", side_effect=[f"digest: {digest}", manifest, "", "", "", "", "",
+                                                         f"digest: {digest}"]) as run, \
+                patch.object(images, "pull"), patch.object(images, "inspect_image", return_value=inspection):
+            path = Path(directory) / "receipt.json"
+            images.write(path, receipt)
+            images.publish(path)
+            published = json.loads(path.read_text())
+        identity = images.SOURCE + "/.github/workflows/branch-image.yml@" + ref
+        reference = repository + "@" + digest
+        alias = repository + ":main"
+        self.assertEqual(published["workflow"], identity)
+        self.assertTrue(published["verified"])
+        run.assert_any_call("cosign", "verify", "--certificate-identity", identity,
+                            "--certificate-oidc-issuer", "https://token.actions.githubusercontent.com", reference)
+        self.assertEqual(run.call_args_list[-2:], [mock.call("docker", "tag", reference, alias),
+                                                  mock.call("docker", "push", alias)])
 
-        for event, ref in (("push", "refs/heads/feature"), ("pull_request", "refs/heads/dev")):
+        for event, ref in (("push", "refs/heads/dev"), ("push", "refs/heads/feature"), ("pull_request", "refs/heads/main")):
             with self.subTest(event=event, ref=ref), patch.dict(os.environ, {"GITHUB_EVENT_NAME": event, "GITHUB_REF": ref}):
-                with self.assertRaisesRegex(ValueError, "requires a dev or main push"):
+                with self.assertRaisesRegex(ValueError, "requires a main push"):
                     images.publish("unused")
 
-    def test_workflow_restricts_writes_and_oidc_to_dev_and_main_publish(self):
+    def test_workflow_restricts_writes_and_oidc_to_main_publish(self):
         text = (ROOT / ".github/workflows/branch-image.yml").read_text()
         self.assertEqual(text.count("driver-opts: image=moby/buildkit:v0.26.3"), 1)
         self.assertNotIn("pull_request_target", text)
@@ -353,7 +352,7 @@ class ImagePublicationTests(unittest.TestCase):
                 self.assertNotIn("id-token: write", body)
                 self.assertNotIn("attestations: write", body)
                 self.assertNotIn("secrets.GITHUB_TOKEN", body)
-        guard = ("github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')"
+        guard = ("github.event_name == 'push' && github.ref == 'refs/heads/main'"
                  " && github.repository == 'WasalX/wasalx-platform'")
         self.assertIn(guard, bodies["publish"])
         self.assertIn(guard, bodies["manifest"])

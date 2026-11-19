@@ -171,8 +171,8 @@ export function verifyWorkflowGate(manifest, gate, dependencies, { currentRun, m
   const jobId = gate.workflow.split('#')[1];
   assert.equal(hint.job, jobId, 'UNVERIFIED: workflow job differs');
   const publishing = jobId === 'publish-manifest';
-  assert.ok(quality ? publishing ? ref === 'refs/heads/dev' : ['refs/heads/dev', 'refs/heads/main'].includes(ref)
-    : ref === 'refs/heads/main' || /^refs\/tags\/v[0-9]/u.test(ref), 'UNVERIFIED: unsupported workflow ref');
+  assert.ok(ref === 'refs/heads/main' || (!quality && /^refs\/tags\/v[0-9]/u.test(ref)),
+    'UNVERIFIED: unsupported workflow ref');
   const evidence = lookupWorkflowEvidence({ repository, runId: Number(hint.runId), runAttempt: Number(hint.runAttempt),
     headSha: manifest.candidateSha, candidateTree: manifest.candidateTree, workflowPath, refs: [ref],
     events: !publishing ? ['workflow_dispatch'] : ref.startsWith('refs/tags/') || quality ? ['push'] : ['workflow_dispatch'],
