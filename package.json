@@ -55,7 +55,7 @@
     "@vitejs/plugin-react": "6.3.0",
     "@vitejs/plugin-rsc": "0.5.39",
     "@wasalx/observability": "workspace:*",
-    "@xyflow/react": "12.12.1",
+    "@xyflow/react": "13.0.0",
     "drizzle-orm": "0.45.4",
     "ioredis": "5.11.1",
     "jose": "6.2.17",
