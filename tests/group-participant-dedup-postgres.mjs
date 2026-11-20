@@ -17,10 +17,10 @@ export async function verifyGroupParticipantDedup(client,tenantId) {
     }
     await client.query(`INSERT INTO group_workspace_participants
       (tenant_id,whatsapp_group_id,external_participant_id,display_name,normalized_phone,synchronized_at) VALUES
-      ($1,$2,'12025550108@c.us',NULL,'12025550108',now()),
-      ($1,$2,'12025550109@lid','Alias roster name','12025550108',now()),
+      ($1,$2,'12025550108@c.us',NULL,'+12025550108',now()),
+      ($1,$2,'12025550109@lid','Alias roster name','+12025550108',now()),
       ($1,$2,'12025550110@lid','Unrelated participant',NULL,now()),
-      ($1,$3,'12025550108@c.us','Foreign group alias','12025550108',now())`,[tenantId,groupId,otherGroupId]);
+      ($1,$3,'12025550108@c.us','Foreign group alias','+12025550108',now())`,[tenantId,groupId,otherGroupId]);
     await client.query("UPDATE whatsapp_groups SET participant_count=12 WHERE tenant_id=$1 AND id=$2",[tenantId,groupId]);
     assert.deepEqual((await client.query("SELECT participant_count,participant_count_known FROM whatsapp_groups WHERE tenant_id=$1 AND id=$2",[tenantId,groupId])).rows,[{participant_count:12,participant_count_known:true}],"legacy/default counts retain their normal semantics");
     const database={withTenant:async(scope,work)=>{
@@ -30,11 +30,11 @@ export async function verifyGroupParticipantDedup(client,tenantId) {
     const controller=new ZammadGroupWorkspaceController(database,{verify:async()=>claims},{});
     const portal=new GroupsController(database,{verifySelection:async()=>[]});
     const request={id:"count-provenance",principal:{tenantId,userId:"10100000-0000-4000-8000-000000000001",role:"tenant_owner"}};
-    assert.deepEqual(await controller.participants("test",groupId,"Alias roster"),[{id:"12025550108@c.us",name:"Alias roster name",phone:"12025550108"}],"an alias search returns the canonical linked PN without dropping the known alias name");
+    assert.deepEqual(await controller.participants("test",groupId,"Alias roster"),[{id:"12025550108@c.us",name:"Alias roster name",phone:"+12025550108"}],"an alias search returns the canonical linked PN without dropping the known alias name");
     await client.query("UPDATE group_workspace_participants SET display_name='Canonical PN' WHERE tenant_id=$1 AND whatsapp_group_id=$2 AND external_participant_id='12025550108@c.us'",[tenantId,groupId]);
-    assert.deepEqual(await controller.participants("test",groupId,"Alias roster"),[{id:"12025550108@c.us",name:"Canonical PN",phone:"12025550108"}],"alias search remains valid when the canonical PN has its own name");
+    assert.deepEqual(await controller.participants("test",groupId,"Alias roster"),[{id:"12025550108@c.us",name:"Canonical PN",phone:"+12025550108"}],"alias search remains valid when the canonical PN has its own name");
     assert.deepEqual(await controller.participants("test",groupId,""),[
-      {id:"12025550108@c.us",name:"Canonical PN",phone:"12025550108"},
+      {id:"12025550108@c.us",name:"Canonical PN",phone:"+12025550108"},
       {id:"12025550110@lid",name:"Unrelated participant",phone:null},
     ],"only an explicit normalized-phone link is deduplicated inside the selected group");
     const beforeParticipants=(await client.query("SELECT to_jsonb(participant) AS record FROM group_workspace_participants participant WHERE tenant_id=$1 ORDER BY whatsapp_group_id,external_participant_id",[tenantId])).rows;
