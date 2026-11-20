@@ -435,6 +435,7 @@ def cache_options(image, mode):
 def build(image, output, cache="off"):
     row = next(r for r in catalog() if r["image"] == image)
     cache_args = cache_options(image, cache)
+    portal_args = ["--build-arg", "PUBLIC_CONTACT_EMAIL"] if image == "portal" else []
     commit, tree = coordinates()
     epoch = run("git", "log", "-1", "--format=%ct", commit, cwd=ROOT)
     reference = "ghcr.io/wasalx/" + image + ":" + commit
@@ -472,6 +473,7 @@ def build(image, output, cache="off"):
                         "--tag", reference, "--build-arg", "WASALX_CANDIDATE_SHA=" + commit,
                         "--build-arg", "SOURCE_DATE_EPOCH=" + epoch,
                         "--build-arg", "COMMIT_SHA=" + commit, "--build-arg", "WASALX_CANDIDATE_TREE=" + tree,
+                        *portal_args,
                         "--label", "org.opencontainers.image.source=" + SOURCE,
                         "--label", "org.opencontainers.image.revision=" + commit,
                         "--label", "io.wasalx.source.tree=" + tree, str(context)], check=True))

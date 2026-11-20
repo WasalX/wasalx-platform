@@ -20,8 +20,21 @@ spec.loader.exec_module(images)
 
 
 class ImagePublicationTests(unittest.TestCase):
+    def test_portal_contact_email_is_passed_without_logging_commands(self):
+        dockerfile = (ROOT / "Dockerfile.portal").read_text()
+        build_stage = dockerfile.split(" AS build\n", 1)[1].split("\nFROM ", 1)[0]
+        self.assertIn("\nARG PUBLIC_CONTACT_EMAIL=\nRUN pnpm build\n", build_stage)
+        binding = "          PUBLIC_CONTACT_EMAIL: ${{ matrix.image == 'portal' && vars.PUBLIC_CONTACT_EMAIL || '' }}"
+        for name, step_name in [("ci.yml", "Build and inspect without publication"),
+                                ("branch-image.yml", "Build without cache imports, export layers and inspect")]:
+            with self.subTest(workflow=name):
+                workflow = (ROOT / ".github/workflows" / name).read_text()
+                step = workflow.split(f"      - name: {step_name}\n", 1)[1].split("\n      - ", 1)[0]
+                self.assertIn(binding, step)
+                self.assertEqual([line for line in workflow.splitlines() if "PUBLIC_CONTACT_EMAIL" in line], [binding])
+                self.assertNotRegex(step, r"\b(?:echo|printenv|set\s+-x)\b")
+
     def test_build_rewrites_layer_timestamps_using_the_source_commit_time(self):
-        row = {"image": "secret-sidecar", "dockerfile": "Dockerfile.secret-sidecar"}
         commit, tree, epoch = "a" * 40, "b" * 40, "1794938086"
 
         def invoke(args, **kwargs):
@@ -29,21 +42,26 @@ class ImagePublicationTests(unittest.TestCase):
                 with tarfile.open(args[3].removeprefix("--output="), "w") as archive:
                     archive.add(ROOT / row["dockerfile"], arcname=row["dockerfile"])
 
-        with tempfile.TemporaryDirectory() as directory, \
-                patch.object(images, "catalog", return_value=[row]), \
-                patch.object(images, "coordinates", return_value=(commit, tree)), \
-                patch.object(images, "run", return_value=epoch) as git, \
-                patch.object(images.subprocess, "run", side_effect=invoke) as execute, \
-                patch.object(images, "inspect_image", return_value={}), \
-                patch.dict(images.os.environ, {"SOURCE_DATE_EPOCH": "1"}):
-            images.build(row["image"], Path(directory) / "receipt.json")
-        git.assert_called_once_with("git", "log", "-1", "--format=%ct", commit, cwd=ROOT)
-        args = execute.call_args.args[0]
-        self.assertEqual(args[:3], ["docker", "buildx", "build"])
-        self.assertEqual(args[args.index("--output") + 1], "type=docker,rewrite-timestamp=true")
-        self.assertIn(["--build-arg", "SOURCE_DATE_EPOCH=" + epoch], [args[i:i + 2] for i in range(len(args) - 1)])
-        self.assertIn("--provenance=false", args)
-        self.assertIn("--sbom=false", args)
+        for image in ["portal", "secret-sidecar"]:
+            row = {"image": image, "dockerfile": "Dockerfile." + image}
+            with self.subTest(image=image), tempfile.TemporaryDirectory() as directory, \
+                    patch.object(images, "catalog", return_value=[row]), \
+                    patch.object(images, "coordinates", return_value=(commit, tree)), \
+                    patch.object(images, "run", return_value=epoch) as git, \
+                    patch.object(images.subprocess, "run", side_effect=invoke) as execute, \
+                    patch.object(images, "inspect_image", return_value={}), \
+                    patch.dict(images.os.environ, {"SOURCE_DATE_EPOCH": "1", "PUBLIC_CONTACT_EMAIL": "synthetic-contact"}):
+                images.build(image, Path(directory) / "receipt.json")
+            git.assert_called_once_with("git", "log", "-1", "--format=%ct", commit, cwd=ROOT)
+            args = execute.call_args.args[0]
+            build_args = [value for flag, value in zip(args, args[1:]) if flag == "--build-arg"]
+            self.assertEqual(args[:3], ["docker", "buildx", "build"])
+            self.assertEqual(args[args.index("--output") + 1], "type=docker,rewrite-timestamp=true")
+            self.assertIn("SOURCE_DATE_EPOCH=" + epoch, build_args)
+            self.assertEqual([arg for arg in build_args if arg.startswith("PUBLIC_CONTACT_EMAIL")],
+                             ["PUBLIC_CONTACT_EMAIL"] if image == "portal" else [])
+            self.assertIn("--provenance=false", args)
+            self.assertIn("--sbom=false", args)
 
     def test_loaded_config_checks_exported_bytes_and_manifest_binding(self):
         raw = b'{"os":"linux","architecture":"amd64","config":{"Labels":{}}}'
