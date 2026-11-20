@@ -194,7 +194,7 @@ jobs:
           key: ${{ steps.eslint-cache.outputs.cache-primary-key }}
 
   integration:
-    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    if: github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     permissions:
@@ -312,7 +312,7 @@ jobs:
 
   ci-gate:
     if: always() && (github.event_name == 'pull_request' || github.event_name == 'merge_group')
-    needs: [changes, dependency-review, checks, images]
+    needs: [changes, dependency-review, checks, images, integration]
     runs-on: ubuntu-slim
     timeout-minutes: 2
     permissions: {}
@@ -325,10 +325,11 @@ jobs:
           REVIEW: ${{ needs.dependency-review.result }}
           IMAGES_NEEDED: ${{ needs.changes.outputs.images }}
           IMAGES: ${{ needs.images.result }}
+          INTEGRATION: ${{ needs.integration.result }}
         run: |
           test "$CHANGES" = success && test "$CHECKS" = success || exit 1
-          case "$EVENT:$REVIEW:$IMAGES_NEEDED:$IMAGES" in
-            pull_request:success:false:skipped|pull_request:success:true:success) ;;
-            merge_group:skipped:false:skipped|merge_group:skipped:true:success) ;;
+          case "$EVENT:$REVIEW:$IMAGES_NEEDED:$IMAGES:$INTEGRATION" in
+            pull_request:success:false:skipped:skipped|pull_request:success:true:success:skipped) ;;
+            merge_group:skipped:false:skipped:success|merge_group:skipped:true:success:success) ;;
             *) exit 1 ;;
           esac
