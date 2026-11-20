@@ -116,3 +116,11 @@ test("the cold-boot image target unpacks the exact package before optional front
   assert.ok(source > 0 && verify > source && unpack > verify && assets > unpack);
   assert.ok(dockerfile.indexOf("pnpm install --frozen-lockfile", assets) > assets);
 });
+
+test("runtime bootstrap looks up the Zammad sample customer by its seeded email", async () => {
+  const bootstrap = await readFile(new URL("../infra/docker/full/zammad/bootstrap-runtime.rb", import.meta.url), "utf8");
+  const email = /^ *sample_customer = User\.find_by\(email: '([^']+)'\)$/mu.exec(bootstrap)?.[1] ?? "";
+  assert.doesNotMatch(email, /[@.]example\.test$/iu);
+  // Zammad 7.1.3, db/seeds/community_user_resources.rb.
+  assert.equal(email, "nicole.braun@zammad.org");
+});

@@ -154,7 +154,7 @@ if fresh_database
     Rails.cache.clear
     AutoWizard.setup
     Setting.set('system_init_done', true)
-    sample_customer = User.find_by(email: 'fixture-0008@example.test')
+    sample_customer = User.find_by(email: 'nicole.braun@zammad.org')
     if sample_customer
       Ticket.where(customer_id: sample_customer.id).find_each(&:destroy!)
       sample_customer.update!(active: false)
