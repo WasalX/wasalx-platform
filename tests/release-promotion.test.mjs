@@ -4,15 +4,16 @@ import test from "node:test";
 import { parse } from "yaml";
 
 test("release promotion uses existing tags and the intended environment protections", async () => {
-  const [source, script] = await Promise.all([
+  const [source, script, helper] = await Promise.all([
     readFile(new URL("../.github/workflows/release.yml", import.meta.url), "utf8"),
     readFile(new URL("../scripts/release/promote-tag.sh", import.meta.url), "utf8"),
+    readFile(new URL("../scripts/release/image-manifest.sh", import.meta.url), "utf8"),
   ]);
   const workflow = parse(source);
   assert.deepEqual(workflow.on, { push: { tags: ["v*"] } });
   assert.deepEqual(workflow.permissions, { contents: "read" });
   assert.deepEqual(Object.keys(workflow.jobs).sort(), ["prod", "stg"]);
-  const commands = [script];
+  const commands = [script, helper];
   for (const [name, job] of Object.entries(workflow.jobs)) {
     assert.equal(job.environment, name);
     assert.deepEqual(job.permissions, { actions: "read", contents: "write", packages: "write" });
@@ -28,7 +29,9 @@ test("release promotion uses existing tags and the intended environment protecti
 
   const lines = script.replace(/[ \t]*\\\r?\n[ \t]*/gu, " ").split(/\r?\n/u);
   assert(lines.includes('[[ "$GITHUB_REF_NAME" =~ ^v[A-Za-z0-9_.-]{0,127}$ ]]'));
-  assert(lines.includes(`run=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --branch main --event push --commit "$commit" --status success --limit 1 --json databaseId --jq '.[0].databaseId // empty')`));
+  assert(lines.includes("source scripts/release/image-manifest.sh"));
+  assert(lines.includes('require_tag_commit "$GITHUB_REF" "$commit"'));
+  assert(lines.includes('download_main_image_manifest "$commit" "$directory"'));
   assert(lines.includes('  if [[ "$GITHUB_REF_NAME" == v*-rc.* ]]; then flags+=(--prerelease); fi'));
   assert.equal(workflow.jobs.stg.if, "${{ github.repository == 'WasalX/wasalx-platform' && contains(github.ref_name, '-rc.') }}");
   assert.equal(workflow.jobs.stg.steps[0].run, '[[ "$GITHUB_REF_NAME" == v*-rc.* ]]');

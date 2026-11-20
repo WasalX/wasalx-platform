@@ -6,18 +6,11 @@ test "$GITHUB_EVENT_NAME" = push
 test "$GITHUB_REF" = "refs/tags/$GITHUB_REF_NAME"
 [[ "$GITHUB_REF_NAME" =~ ^v[A-Za-z0-9_.-]{0,127}$ ]]
 
+source scripts/release/image-manifest.sh
 commit=$(git rev-parse HEAD)
-refs=$(git ls-remote --exit-code origin "$GITHUB_REF" "${GITHUB_REF}^{}")
-grep -q "^$commit[[:space:]]" <<< "$refs"
-status=$(gh api "repos/$GITHUB_REPOSITORY/compare/$commit...main" --jq .status)
-[[ "$status" == ahead || "$status" == identical ]] || { echo '::error::Tagged commit is outside main'; exit 1; }
-
-run=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --branch main \
-  --event push --commit "$commit" --status success --limit 1 \
-  --json databaseId --jq '.[0].databaseId // empty')
-[[ "$run" =~ ^[0-9]+$ ]] || { echo '::error::No green main publication for the tagged commit'; exit 1; }
+require_tag_commit "$GITHUB_REF" "$commit"
 directory=$(mktemp -d "$RUNNER_TEMP/wasalx-release.XXXXXX")
-gh run download "$run" --repo "$GITHUB_REPOSITORY" --name images-manifest --dir "$directory"
+download_main_image_manifest "$commit" "$directory"
 manifest="$directory/images-manifest.json"
 
 echo 'c956e5dfcac53d52bcf058360d579472f0c1d2d9b69f55209e256fe7783f4c74  '"$(command -v cosign)" | sha256sum --check --strict
