@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, posix } from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -12,36 +12,140 @@ import { addonSkips, skipPattern } from "../scripts/hosted-ci-policy.mjs";
 import { generateBaseline } from "../scripts/generate-hosted-ci-baseline.mjs";
 import baseline from "../scripts/hosted-ci-baseline.mjs";
 
-test("tracked Node tests belong to the unit inventory or have a named runner", async () => {
-  const tracked = execFileSync("git", ["ls-files", "-z", "--", "tests", ".github/workflows"], { encoding: "utf8", windowsHide: true }).split("\0");
-  const testFiles = tracked.filter(isTestFile);
+const repository = fileURLToPath(new URL("../", import.meta.url));
+const read = file => readFile(join(repository, file), "utf8");
+const commands = text => text.split(/\n|&&|;/u).map(line => line.trim()).filter(line => line && !line.startsWith("#"));
+const words = text => Array.from(text.matchAll(/"([^"]*)"|'([^']*)'|([^\s"'()]+)/gu),
+  ([, doubleQuoted, singleQuoted, bare]) => doubleQuoted ?? singleQuoted ?? bare);
+
+function runsFile(text, file, option) {
+  return commands(text).some(command => {
+    const [exe, ...args] = words(command);
+    if (!["node", "python", "python3", "ruby", "bash"].includes(exe) || (option && !args.includes(option))) return false;
+    const paths = args.map(arg => arg.replace(/^\.\//u, ""));
+    if (args.includes("unittest") && args.includes("discover")) {
+      return paths[args.indexOf("-s") + 1] === posix.dirname(file) && paths[args.indexOf("-p") + 1] === posix.basename(file);
+    }
+    return exe === "node" && args.includes("--test") ? paths.includes(file) : paths.find(arg => !arg.startsWith("-")) === file;
+  });
+}
+
+function referencesFile(source, file) {
+  return source.includes(`"${file}"`) || source.includes(`'${file}'`);
+}
+
+const tofuFile = file => /^infra\/terraform\/tests\/[^/]+\.tftest\.(?:hcl|json)$/u.test(file);
+const postgresFile = file => /^tests\/.*(?:-postgres(?:-check)?|-real-schema-check)\.mjs$/u.test(file);
+
+test("tracked tests belong to a named CI runner or the test allowlist", async () => {
+  const tracked = execFileSync("git", ["ls-files", "-z", "--", "tests", "infra/terraform/tests", "scripts", ".github/workflows",
+    ":(glob)**/*.test.*", ":(glob)**/*.rb", ":(glob)**/*.py", ":(glob)**/*.bats",
+    ":(glob)**/test_*.sh", ":(glob)**/test-*.sh", ":(glob)**/*_test.sh", ":(glob)**/*-test.sh"], {
+    cwd: repository, encoding: "utf8", windowsHide: true,
+  }).split("\0").filter(Boolean);
+  const trackedSet = new Set(tracked);
+  const testFiles = new Set(tracked.filter(file =>
+    /(?:^|\/)[^/]+\.test\.[^/]+$/u.test(file) || tofuFile(file) || postgresFile(file)
+    || /(?:^|\/)(?:test[-_][^/]+|[^/]+[-_]test)\.(?:py|rb|sh)$|\.bats$/u.test(file)
+    || /^tests\/.*(?:\.spec\.[^/]+|(?:-native|-integration|-scenario|_spec)\.rb|-browser\.mjs)$/u.test(file)
+    || /^scripts\/test-(?:.+\.sh|postgres-integration\.mjs)$/u.test(file)));
+  // Some executable test files predate the naming conventions.
+  for (const file of tracked.filter(file => /\.(?:py|rb)$/u.test(file) && !testFiles.has(file))) {
+    if (/\bunittest\.TestCase\b|\bfrom unittest import .*\bTestCase\b|\b(?:(?:MiniTest|Minitest)::(?:Test|Spec)|Test::Unit::TestCase)\b|\brequire\s+["'](?:minitest\/autorun|test\/unit)["']/u.test(await read(file))) {
+      testFiles.add(file);
+    }
+  }
+
   const units = new Set(unitFiles);
-  const entries = Object.entries(unitAllowlist);
-  const { scripts } = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
+  const { scripts } = JSON.parse(await read("package.json"));
   const workflows = tracked.filter(file => file.startsWith(".github/workflows/") && /\.ya?ml$/u.test(file));
   const workflowJobs = new Map(await Promise.all(workflows.map(async file =>
-    [file, parse(await readFile(new URL("../" + file, import.meta.url), "utf8")).jobs])));
+    [file, parse(await read(file)).jobs])));
   const jobs = workflowJobs.get(".github/workflows/ci.yml");
   const runText = job => (job.steps ?? []).map(step => step.run ?? "").join("\n");
   const ciCommands = [...workflowJobs.values()].flatMap(workflow => Object.values(workflow).map(runText)).join("\n");
-  const ciScripts = new Set(Array.from(ciCommands.matchAll(/\bpnpm[ \t]+(?:run[ \t]+)?["']?([\w:-]+)(?=["'\s;&|]|$)/gu), match => match[1]));
-  const runsFile = (command, file) => command.split(/[\s"';&|()]+/u).some(word => word === file || word === "./" + file);
+  const ciScripts = new Set(commands(ciCommands).map(command => {
+    const [exe, action, script] = words(command);
+    return exe === "pnpm" && (action === "run" ? script : action);
+  }).filter(script => script && Object.hasOwn(scripts, script)));
+  const runnerNames = [...Object.keys(jobs), ...ciScripts];
+  const runnerText = runner => Object.hasOwn(jobs, runner) ? runText(jobs[runner])
+    : Object.hasOwn(scripts, runner) ? scripts[runner] : "";
+  assert(runsFile(runnerText("checks"), "scripts/hosted-ci.mjs", "unit"), "The unit inventory must run in CI");
 
-  const missing = testFiles.filter(file => !units.has(file) && !Object.hasOwn(unitAllowlist, file));
-  const stale = entries.map(([file]) => file).filter(file => units.has(file) || !testFiles.includes(file));
-  const invalid = entries.filter(([file, { runner, reason }]) => {
+  const unitWrappers = await Promise.all(["tests/application-e2e-harness.test.mjs", "tests/ci-phase-admission.test.mjs",
+    "tests/simulation-native-isolation.test.mjs"].filter(file => units.has(file)).map(read));
+  const postgresImports = new Set();
+  if (runsFile(runnerText("test:postgres"), "scripts/test-postgres-integration.mjs")) {
+    postgresImports.add("scripts/test-postgres-integration.mjs");
+    for (const entry of postgresImports) {
+      for (const [, relative] of (await read(entry)).matchAll(/^import\s+(?:[^;]*?\sfrom\s+)?["'](\.{1,2}\/[^"']+)["']/gmu)) {
+        const dependency = posix.join(posix.dirname(entry), relative);
+        if (dependency.startsWith("tests/") && trackedSet.has(dependency)) postgresImports.add(dependency);
+      }
+    }
+  }
+  const [validation, zammadImage, zammadBrowser, application, identity, storybook, visualHarness, storybookRunner, applicationRunner] =
+    await Promise.all(["scripts/validate-infra.sh", "infra/docker/Dockerfile.zammad", "tests/zammad-image-browser-compat.test.mjs",
+      "playwright.application.config.ts", "playwright.identity.config.ts", "playwright.storybook.config.ts",
+      "tests/visual/inbox-synthetic.spec.ts", "scripts/storybook-visual-regression.mjs", "scripts/run-application-e2e.mjs"].map(read));
+
+  function runnerRuns(runner, file) {
+    const command = runnerText(runner);
+    if (runsFile(command, file)) return true;
+    switch (runner) {
+      case "checks":
+        return file.endsWith(".py") && unitWrappers.some(source =>
+          referencesFile(source, file) || referencesFile(source, file.replace(/^tests\//u, "./")));
+      case "terraform-test":
+        return tofuFile(file) && runsFile(command, "scripts/validate-infra.sh", "--terraform-test-only")
+          && /^\s+"\$\{TOFU\[@\]\}" -chdir=infra\/terraform test -no-color$/mu.test(validation);
+      case "test:postgres":
+        return postgresImports.has(file);
+      case "images": {
+        const copiedPath = `/tmp/${posix.basename(file)}`;
+        return runsFile(command, "scripts/release/images-by-digest.py", "build")
+          && zammadImage.split(/\r?\n/u).some(line => line.startsWith("COPY ") && line.endsWith(` ${file} ${copiedPath}`))
+          && zammadImage.includes(`RUN bundle exec ruby ${copiedPath} `);
+      }
+      case "test:unit":
+        return isTestFile(file) && runsFile(command, "scripts/test-unit.mjs");
+      case "zammad:compat:browser":
+        return runsFile(command, "tests/zammad-image-browser-compat.test.mjs")
+          && (referencesFile(zammadBrowser, file)
+            || (posix.dirname(file) === "tests" && referencesFile(zammadBrowser, posix.basename(file))));
+      case "test:e2e":
+        return runsFile(command, "scripts/run-application-e2e.mjs")
+          && referencesFile(applicationRunner, "playwright.application.config.ts")
+          && referencesFile(application, "./tests/e2e")
+          && posix.dirname(file) === "tests/e2e" && referencesFile(application, posix.basename(file));
+      case "playwright.identity.config.ts":
+        return referencesFile(identity, "./tests/e2e")
+          && posix.dirname(file) === "tests/e2e" && referencesFile(identity, posix.basename(file));
+      case "test:visual":
+        return runsFile(command, "scripts/storybook-visual-regression.mjs")
+          && referencesFile(storybookRunner, "playwright.storybook.config.ts")
+          && referencesFile(storybook, "./tests/visual")
+          && ((posix.dirname(file) === "tests/visual" && /\.spec\.[cm]?[jt]sx?$/u.test(file)) || referencesFile(visualHarness, file));
+      default:
+        return false;
+    }
+  }
+
+  const ciRuns = file => units.has(file) || runnerNames.some(runner => runnerRuns(runner, file));
+  const missing = [...testFiles].filter(file => !ciRuns(file) && !Object.hasOwn(unitAllowlist, file));
+  const stale = Object.entries(unitAllowlist).filter(([file, { reason }]) =>
+    !testFiles.has(file) || units.has(file) || (/^not run in CI:/u.test(reason) && ciRuns(file))).map(([file]) => file);
+  const invalid = Object.entries(unitAllowlist).filter(([file, { runner, reason }]) => {
     if (typeof runner !== "string" || typeof reason !== "string" || !reason.trim() || /[\r\n]/u.test(reason)) return true;
-    const hasJob = Object.hasOwn(jobs, runner);
-    const runsInCI = hasJob || ciScripts.has(runner);
-    if (runsInCI ? reason.trimStart().startsWith("not run in CI:") : !/^not run in CI: \S/u.test(reason)) return true;
-    if (hasJob) return !runsFile(runText(jobs[runner]), file);
-    return !Object.hasOwn(scripts, runner) || !runsFile(scripts[runner], runner === "test:unit" ? "scripts/test-unit.mjs" : file);
+    if (runnerNames.includes(runner)) return /^not run in CI:/u.test(reason.trimStart()) || !runnerRuns(runner, file);
+    return !/^not run in CI: \S/u.test(reason) || !(runnerRuns(runner, file) || runsFile(runner, file));
   }).map(([file]) => file);
   assert.deepEqual({ missing, stale, invalid }, { missing: [], stale: [], invalid: [] });
 });
 
-test("CI gates integration on merge groups and runs portal integration files serially", async () => {
-  const { on, jobs } = parse(await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8"));
+test("CI gates integration and OpenTofu and runs portal integration files serially", async () => {
+  const { on, jobs } = parse(await read(".github/workflows/ci.yml"));
   const { integration, "ci-gate": gate } = jobs;
   assert(Object.hasOwn(on, "workflow_dispatch"));
   assert(Object.hasOwn(on, "merge_group"));
@@ -55,15 +159,69 @@ test("CI gates integration on merge groups and runs portal integration files ser
   assert(gate.needs.includes("integration"));
   const [gateStep] = gate.steps;
   assert.equal(gateStep.env.INTEGRATION, "${{ needs.integration.result }}");
+  assert.equal(gateStep.env.TERRAFORM, "${{ needs.terraform-test.result }}");
+  assert.equal(gateStep.env.TERRAFORM_NEEDED, "${{ needs.changes.outputs.terraform }}");
   assert.equal(gateStep.run, `test "$CHANGES" = success && test "$CHECKS" = success || exit 1
 case "$EVENT:$REVIEW:$IMAGES_NEEDED:$IMAGES:$INTEGRATION" in
   pull_request:success:false:skipped:skipped|pull_request:success:true:success:skipped) ;;
   merge_group:skipped:false:skipped:success|merge_group:skipped:true:success:success) ;;
   *) exit 1 ;;
 esac
+test "$TERRAFORM" = success || {
+  test "$EVENT" = pull_request && test "$TERRAFORM_NEEDED" = false && test "$TERRAFORM" = skipped
+}
 `);
   for (const job of [jobs.changes, jobs.checks]) {
     assert.equal(job.if, "github.event_name == 'pull_request' || github.event_name == 'merge_group'");
+  }
+});
+
+test("Terraform job fails open on PR diff errors and is required on the merge queue", async t => {
+  const { jobs } = parse(await read(".github/workflows/ci.yml"));
+  const terraform = jobs["terraform-test"];
+  const gate = jobs["ci-gate"];
+  assert.equal(terraform.needs, "changes");
+  assert.equal(terraform.if, "${{ !cancelled() && (github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && (needs.changes.result != 'success' || needs.changes.outputs.terraform != 'false'))) }}");
+  assert.deepEqual(terraform.permissions, { contents: "read" });
+  assert.equal(terraform.steps.at(-1).run, "bash scripts/validate-infra.sh --terraform-test-only");
+  assert(gate.needs.includes("terraform-test"));
+  assert.equal(jobs.changes.outputs.terraform, "${{ steps.terraform.outputs.needed }}");
+  const detector = jobs.changes.steps.find(step => step.id === "terraform");
+  assert.equal(detector.if, "github.event_name == 'pull_request'");
+  const bash = process.platform === "win32" ? "C:/Program Files/Git/bin/bash.exe" : "bash";
+  const run = (script, env) => spawnSync(bash, ["--noprofile", "--norc", "-e", "-o", "pipefail", "-c", script], {
+    env: { ...process.env, ...env }, encoding: "utf8", timeout: 10_000, windowsHide: true,
+  });
+  const directory = await mkdtemp(join(tmpdir(), "wasalx-terraform-changes-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  for (const [status, needed] of [[0, false], [1, true], [128, true]]) {
+    const output = join(directory, String(status));
+    const result = run(`git() {
+  test "$*" = 'diff --quiet --no-ext-diff --no-renames HEAD^1 HEAD -- infra/terraform/ scripts/validate-infra.sh scripts/release/fetch-verified-asset.sh' || exit 99
+  return "$DIFF_STATUS"
+}
+${detector.run}`, { GITHUB_OUTPUT: output.replaceAll("\\", "/"), DIFF_STATUS: String(status) });
+    assert.equal(result.status, 0, result.error?.message ?? result.stderr);
+    assert.equal((await readFile(output, "utf8")).trim(), `needed=${needed}`);
+  }
+  for (const [event, needed, terraformResult, status] of [
+    ["pull_request", "true", "success", 0],
+    ["pull_request", "false", "skipped", 0],
+    ["pull_request", "", "skipped", 1],
+    ["pull_request", "true", "skipped", 1],
+    ["pull_request", "false", "failure", 1],
+    ["pull_request", "false", "cancelled", 1],
+    ["merge_group", "", "success", 0],
+    ["merge_group", "false", "skipped", 1],
+    ["merge_group", "", "failure", 1],
+  ]) {
+    const pr = event === "pull_request";
+    const result = run(gate.steps[0].run, {
+      EVENT: event, CHANGES: "success", CHECKS: "success", REVIEW: pr ? "success" : "skipped",
+      IMAGES_NEEDED: "false", IMAGES: "skipped", INTEGRATION: pr ? "skipped" : "success",
+      TERRAFORM_NEEDED: needed, TERRAFORM: terraformResult,
+    });
+    assert.equal(result.status, status, `${event}/${needed}/${terraformResult}: ${result.error?.message ?? result.stderr}`);
   }
 });
 
