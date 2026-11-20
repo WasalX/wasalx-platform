@@ -379,6 +379,154 @@ test("Compose connection hosts resolve in the base file, full override and merge
   assert.equal(keycloakDatabase.pathname, `/${full["keycloak-postgresql"].POSTGRES_DB}`);
 });
 
+test("full Compose exposes bootstrap identity overrides with the public fixture defaults", async () => {
+  const [full, example] = await Promise.all([readComposeEnvironments("compose.full.yaml"), read(".env.example")]);
+  const defaults = {
+    "keycloak-bootstrap": {
+      QUALIFICATION_OWNER_USERNAME: "example.owner",
+      ISOLATION_OWNER_USERNAME: "example.isolation",
+      PLATFORM_OPERATOR_USERNAME: "example.platform",
+    },
+    "zammad-runtime-bootstrap": {
+      ZAMMAD_BOOTSTRAP_EMAIL: "fixture-0003@example.test",
+      ZAMMAD_BOOTSTRAP_PREVIOUS_EMAIL: "fixture-0004@example.test",
+      ZAMMAD_AGENT_EMAIL: "fixture-0005@example.test",
+    },
+  };
+  for (const [service, identities] of Object.entries(defaults)) {
+    for (const [key, fallback] of Object.entries(identities)) {
+      assert.equal(full[service][`WASALX_${key}`], `\${WASALX_FULL_${key}:-${fallback}}`);
+      assert.ok(example.split(/\r?\n/u).includes(`# WASALX_FULL_${key}=${fallback}`));
+    }
+  }
+});
+
+test("Keycloak bootstrap validates existing usernames before writing and reconciles matching identities", async (t) => {
+  const ownerId = "10000000-0000-4000-8000-000000000001";
+  const isolationId = "isolation-id";
+  const operatorId = "operator-id";
+  const isolationEmail = "isolation@fixture.example.edu";
+  const tenantUsers = "/admin/realms/wasalx/users";
+  const platformUsers = "/admin/realms/wasalx-platform/users";
+  const ownerPath = `${tenantUsers}/${ownerId}`;
+  const isolationPath = `${tenantUsers}/${isolationId}`;
+  const operatorPath = `${platformUsers}/${operatorId}`;
+  const scenarios = [
+    { name: "the default owner matches and the missing isolation user is created" },
+    { name: "all three overrides are trimmed and used", overrides: true, existingIsolation: "custom.isolation" },
+    { name: "a seeded owner mismatch prevents every write", existingOwner: "custom.owner", error: "QUALIFICATION_OWNER" },
+    { name: "an isolation email match with a different username prevents every write", existingIsolation: "custom.isolation", error: "ISOLATION_OWNER" },
+  ];
+  for (const scenario of scenarios) {
+    await t.test(scenario.name, async (subtest) => {
+      const owner = scenario.overrides ? "custom.owner" : "example.owner";
+      const isolation = scenario.overrides ? "custom.isolation" : "example.isolation";
+      const operator = scenario.overrides ? "custom.platform" : "example.platform";
+      const env = {
+        KEYCLOAK_ADMIN: "synthetic-admin",
+        KEYCLOAK_ADMIN_PASSWORD: "synthetic-admin-password",
+        KEYCLOAK_BASE_URL: "http://127.0.0.1:8080",
+        WASALX_QUALIFICATION_OWNER_PASSWORD: "synthetic-owner-password",
+        WASALX_ISOLATION_OWNER_PASSWORD: "synthetic-isolation-password",
+        WASALX_PLATFORM_OPERATOR_PASSWORD: "synthetic-operator-password",
+        WASALX_QUALIFICATION_OWNER_EMAIL: "",
+        WASALX_ISOLATION_OWNER_EMAIL: isolationEmail,
+        WASALX_KEYCLOAK_SMTP_HOST: "",
+        WASALX_KEYCLOAK_SMTP_PORT: "",
+        WASALX_KEYCLOAK_SMTP_FROM: "",
+        WASALX_KEYCLOAK_SMTP_USER: "",
+        WASALX_KEYCLOAK_SMTP_PASSWORD: "",
+        WASALX_PORTAL_PUBLIC_ORIGIN: undefined,
+        WASALX_ZAMMAD_PUBLIC_ORIGIN: undefined,
+        WASALX_QUALIFICATION_OWNER_USERNAME: scenario.overrides ? ` ${owner} ` : undefined,
+        WASALX_ISOLATION_OWNER_USERNAME: scenario.overrides ? ` ${isolation} ` : undefined,
+        WASALX_PLATFORM_OPERATOR_USERNAME: scenario.overrides ? ` ${operator} ` : undefined,
+      };
+      for (const [key, value] of Object.entries(env)) {
+        const previous = process.env[key];
+        subtest.after(() => {
+          if (previous === undefined) delete process.env[key];
+          else process.env[key] = previous;
+        });
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      const users = new Map<string, { id: string; username: string; email?: string; requiredActions?: string[] }>([
+        [ownerPath, { id: ownerId, username: scenario.existingOwner ?? owner }],
+        [operatorPath, { id: operatorId, username: operator }],
+      ]);
+      if (scenario.existingIsolation) {
+        users.set(isolationPath, { id: isolationId, username: scenario.existingIsolation, email: isolationEmail });
+      }
+      const writes: { method: string; path: string; body: Record<string, unknown> }[] = [];
+      subtest.mock.method(globalThis, "fetch", (input: string, init?: RequestInit) => {
+        const { pathname: path, searchParams } = new URL(input);
+        const method = init?.method ?? "GET";
+        if (path === "/realms/master/protocol/openid-connect/token") {
+          return Response.json({ access_token: "synthetic-token".repeat(3) });
+        }
+        if (method !== "GET") {
+          const body = JSON.parse(String(init?.body));
+          writes.push({ method, path, body });
+          if (method === "POST" && path === tenantUsers) users.set(isolationPath, { ...body, id: isolationId });
+          return new Response(null, { status: method === "POST" ? 201 : 204 });
+        }
+        if (path.endsWith("/clients") || path.endsWith("/credentials")) return Response.json([]);
+        if (path === tenantUsers || path === platformUsers) {
+          const field = searchParams.has("email") ? "email" : "username";
+          return Response.json([...users.entries()]
+            .filter(([key, user]) => key.startsWith(`${path}/`) && user[field] === searchParams.get(field))
+            .map(([, user]) => user));
+        }
+        return users.has(path) ? Response.json(users.get(path)) : new Response(null, { status: 404 });
+      });
+      const errors: string[] = [];
+      const stderr = subtest.mock.method(process.stderr, "write", (message: string) => {
+        errors.push(message);
+        return true;
+      });
+      const script = new URL("../infra/docker/full/keycloak/bootstrap-user.mjs", import.meta.url);
+      script.searchParams.set("scenario", scenario.name);
+      const previousExitCode = process.exitCode;
+      let exitCode;
+      try {
+        await import(script.href);
+        exitCode = process.exitCode;
+      } finally {
+        stderr.mock.restore();
+        process.exitCode = previousExitCode;
+      }
+      if (scenario.error) {
+        assert.equal(exitCode, 1);
+        assert.match(errors.join(""), new RegExp(`existing user has a different username.*WASALX_${scenario.error}_USERNAME`, "u"));
+        assert.deepEqual(writes, []);
+        return;
+      }
+      assert.deepEqual(errors, []);
+      assert.equal(exitCode, previousExitCode);
+      const expectedProfile = { emailVerified: true, enabled: true, lastName: "Owner" };
+      assert.deepEqual(writes.find(({ path }) => path === ownerPath), {
+        method: "PUT", path: ownerPath,
+        body: { id: ownerId, email: "fixture-0006@example.test", ...expectedProfile, firstName: "Qualification" },
+      });
+      assert.deepEqual(writes.find(({ path }) => path === (scenario.existingIsolation ? isolationPath : tenantUsers)), {
+        method: scenario.existingIsolation ? "PUT" : "POST",
+        path: scenario.existingIsolation ? isolationPath : tenantUsers,
+        body: {
+          email: isolationEmail, ...expectedProfile, firstName: "Isolation",
+          ...(scenario.existingIsolation ? {} : { username: isolation, requiredActions: ["CONFIGURE_TOTP"] }),
+        },
+      });
+      assert.deepEqual(writes.filter(({ path }) => path.endsWith("/reset-password")).map(({ path }) => path),
+        [ownerPath, isolationPath, operatorPath].map((path) => `${path}/reset-password`));
+      const totpPaths = scenario.existingIsolation ? [ownerPath, isolationPath, operatorPath] : [ownerPath, operatorPath];
+      assert.deepEqual(writes.filter(({ method, body }) => method === "PUT" && body.requiredActions), totpPaths
+        .map((path) => ({ method: "PUT", path, body: { requiredActions: ["CONFIGURE_TOTP"] } })));
+      assert.ok(writes.every(({ method, body }) => method !== "PUT" || !Object.hasOwn(body, "username")));
+    });
+  }
+});
+
 test("direct Helm production installs reject development defaults and incomplete runtime dependencies", async () => {
   const schema = JSON.parse(
     await read("infra/helm/wasalx/values.schema.json"),
