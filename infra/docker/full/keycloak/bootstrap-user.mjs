@@ -1,15 +1,16 @@
 import { adminBaseUrl, adminRequest, findUsers, login, readJson, required } from "./admin-rest.mjs";
 
 const readUsername = (name, fallback) => {
-  const value = (process.env[name] ?? fallback).trim();
+  const value = (process.env[name] ?? fallback).trim().toLowerCase();
   if (!value) throw new Error(`${name} is required`);
   return value;
 };
 const qualificationOwnerUsernameEnv = "WASALX_QUALIFICATION_OWNER_USERNAME";
 const isolationOwnerUsernameEnv = "WASALX_ISOLATION_OWNER_USERNAME";
+const platformOperatorUsernameEnv = "WASALX_PLATFORM_OPERATOR_USERNAME";
 const qualificationOwnerUsername = readUsername(qualificationOwnerUsernameEnv, "example.owner");
 const isolationOwnerUsername = readUsername(isolationOwnerUsernameEnv, "example.isolation");
-const platformOperatorUsername = readUsername("WASALX_PLATFORM_OPERATOR_USERNAME", "example.platform");
+const platformOperatorUsername = readUsername(platformOperatorUsernameEnv, "example.platform");
 const adminUsername = required("KEYCLOAK_ADMIN");
 const adminPassword = required("KEYCLOAK_ADMIN_PASSWORD");
 const qualificationOwnerPassword = required("WASALX_QUALIFICATION_OWNER_PASSWORD");
@@ -274,6 +275,10 @@ try {
   const isolationOwnerId = isolationOwnerEmail
     ? await lookupUserForReconciliation(token, "wasalx", isolationOwner, isolationOwnerUsernameEnv)
     : undefined;
+  await lookupUserForReconciliation(token, "wasalx-platform", {
+    id: "10000000-0000-4000-8000-000000000002",
+    username: platformOperatorUsername,
+  }, platformOperatorUsernameEnv);
 
   await reconcileRealmPresentation(token, "wasalx");
   await reconcileRealmPresentation(token, "wasalx-platform");

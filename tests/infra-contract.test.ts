@@ -404,7 +404,7 @@ test("full Compose exposes bootstrap identity overrides with the public fixture 
 test("Keycloak bootstrap validates existing usernames before writing and reconciles matching identities", async (t) => {
   const ownerId = "10000000-0000-4000-8000-000000000001";
   const isolationId = "isolation-id";
-  const operatorId = "operator-id";
+  const operatorId = "10000000-0000-4000-8000-000000000002";
   const isolationEmail = "isolation@fixture.example.edu";
   const tenantUsers = "/admin/realms/wasalx/users";
   const platformUsers = "/admin/realms/wasalx-platform/users";
@@ -413,9 +413,10 @@ test("Keycloak bootstrap validates existing usernames before writing and reconci
   const operatorPath = `${platformUsers}/${operatorId}`;
   const scenarios = [
     { name: "the default owner matches and the missing isolation user is created" },
-    { name: "all three overrides are trimmed and used", overrides: true, existingIsolation: "custom.isolation" },
+    { name: "all three overrides are trimmed, lowercased, and used", overrides: true, existingIsolation: "custom.isolation" },
     { name: "a seeded owner mismatch prevents every write", existingOwner: "custom.owner", error: "QUALIFICATION_OWNER" },
     { name: "an isolation email match with a different username prevents every write", existingIsolation: "custom.isolation", error: "ISOLATION_OWNER" },
+    { name: "platform mismatch prevents every write", existingOperator: "custom.platform", error: "PLATFORM_OPERATOR" },
   ];
   for (const scenario of scenarios) {
     await t.test(scenario.name, async (subtest) => {
@@ -438,9 +439,9 @@ test("Keycloak bootstrap validates existing usernames before writing and reconci
         WASALX_KEYCLOAK_SMTP_PASSWORD: "",
         WASALX_PORTAL_PUBLIC_ORIGIN: undefined,
         WASALX_ZAMMAD_PUBLIC_ORIGIN: undefined,
-        WASALX_QUALIFICATION_OWNER_USERNAME: scenario.overrides ? ` ${owner} ` : undefined,
-        WASALX_ISOLATION_OWNER_USERNAME: scenario.overrides ? ` ${isolation} ` : undefined,
-        WASALX_PLATFORM_OPERATOR_USERNAME: scenario.overrides ? ` ${operator} ` : undefined,
+        WASALX_QUALIFICATION_OWNER_USERNAME: scenario.overrides ? ` ${owner.toUpperCase()} ` : undefined,
+        WASALX_ISOLATION_OWNER_USERNAME: scenario.overrides ? ` ${isolation.toUpperCase()} ` : undefined,
+        WASALX_PLATFORM_OPERATOR_USERNAME: scenario.overrides ? ` ${operator.toUpperCase()} ` : undefined,
       };
       for (const [key, value] of Object.entries(env)) {
         const previous = process.env[key];
@@ -453,12 +454,13 @@ test("Keycloak bootstrap validates existing usernames before writing and reconci
       }
       const users = new Map<string, { id: string; username: string; email?: string; requiredActions?: string[] }>([
         [ownerPath, { id: ownerId, username: scenario.existingOwner ?? owner }],
-        [operatorPath, { id: operatorId, username: operator }],
+        [operatorPath, { id: operatorId, username: scenario.existingOperator ?? operator }],
       ]);
       if (scenario.existingIsolation) {
         users.set(isolationPath, { id: isolationId, username: scenario.existingIsolation, email: isolationEmail });
       }
       const writes: { method: string; path: string; body: Record<string, unknown> }[] = [];
+      const lookedUpUsernames = new Set<string>();
       subtest.mock.method(globalThis, "fetch", (input: string, init?: RequestInit) => {
         const { pathname: path, searchParams } = new URL(input);
         const method = init?.method ?? "GET";
@@ -474,8 +476,10 @@ test("Keycloak bootstrap validates existing usernames before writing and reconci
         if (path.endsWith("/clients") || path.endsWith("/credentials")) return Response.json([]);
         if (path === tenantUsers || path === platformUsers) {
           const field = searchParams.has("email") ? "email" : "username";
+          const value = searchParams.get(field);
+          if (field === "username" && value !== null) lookedUpUsernames.add(value);
           return Response.json([...users.entries()]
-            .filter(([key, user]) => key.startsWith(`${path}/`) && user[field] === searchParams.get(field))
+            .filter(([key, user]) => key.startsWith(`${path}/`) && user[field] === value)
             .map(([, user]) => user));
         }
         return users.has(path) ? Response.json(users.get(path)) : new Response(null, { status: 404 });
@@ -504,6 +508,7 @@ test("Keycloak bootstrap validates existing usernames before writing and reconci
       }
       assert.deepEqual(errors, []);
       assert.equal(exitCode, previousExitCode);
+      assert.deepEqual(lookedUpUsernames, new Set([owner, isolation, operator]));
       const expectedProfile = { emailVerified: true, enabled: true, lastName: "Owner" };
       assert.deepEqual(writes.find(({ path }) => path === ownerPath), {
         method: "PUT", path: ownerPath,
