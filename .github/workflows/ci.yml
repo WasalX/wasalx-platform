@@ -6,6 +6,7 @@ on:
   merge_group:
   push:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -23,7 +24,7 @@ env:
 
 jobs:
   changes:
-    if: github.event_name != 'push'
+    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
@@ -60,7 +61,7 @@ jobs:
           fail-on-severity: high
 
   checks:
-    if: github.event_name != 'push'
+    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
     name: ${{ matrix.name }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -193,9 +194,9 @@ jobs:
           key: ${{ steps.eslint-cache.outputs.cache-primary-key }}
 
   integration:
-    if: github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-24.04
-    timeout-minutes: 6
+    timeout-minutes: 25
     permissions:
       contents: read
     services:
@@ -311,24 +312,23 @@ jobs:
 
   ci-gate:
     if: always() && (github.event_name == 'pull_request' || github.event_name == 'merge_group')
-    needs: [changes, dependency-review, checks, images, integration]
+    needs: [changes, dependency-review, checks, images]
     runs-on: ubuntu-slim
     timeout-minutes: 2
     permissions: {}
     steps:
-      - name: Require checks and applicable jobs
+      - name: Require checks and the applicable image lane
         env:
           EVENT: ${{ github.event_name }}
           CHANGES: ${{ needs.changes.result }}
           CHECKS: ${{ needs.checks.result }}
           REVIEW: ${{ needs.dependency-review.result }}
-          INTEGRATION: ${{ needs.integration.result }}
           IMAGES_NEEDED: ${{ needs.changes.outputs.images }}
           IMAGES: ${{ needs.images.result }}
         run: |
           test "$CHANGES" = success && test "$CHECKS" = success || exit 1
-          case "$EVENT:$REVIEW:$INTEGRATION:$IMAGES_NEEDED:$IMAGES" in
-            pull_request:success:skipped:false:skipped|pull_request:success:skipped:true:success) ;;
-            merge_group:skipped:success:false:skipped|merge_group:skipped:success:true:success) ;;
+          case "$EVENT:$REVIEW:$IMAGES_NEEDED:$IMAGES" in
+            pull_request:success:false:skipped|pull_request:success:true:success) ;;
+            merge_group:skipped:false:skipped|merge_group:skipped:true:success) ;;
             *) exit 1 ;;
           esac

@@ -10,18 +10,19 @@ import { addonSkips, skipPattern } from "../scripts/hosted-ci-policy.mjs";
 import { generateBaseline } from "../scripts/generate-hosted-ci-baseline.mjs";
 import baseline from "../scripts/hosted-ci-baseline.mjs";
 
-test("integration runs for merge groups and main pushes and gates merge groups", async () => {
+test("integration runs on main pushes and manual dispatches outside the merge gate", async () => {
   const { on, jobs } = parse(await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8"));
   const { integration, "ci-gate": gate } = jobs;
-  assert(Object.hasOwn(on, "merge_group"));
+  assert(Object.hasOwn(on, "workflow_dispatch"));
   assert.deepEqual(on.push.branches, ["main"]);
-  assert.equal(integration.if, "github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main')");
+  assert.equal(integration.if, "github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')");
+  assert.equal(integration["timeout-minutes"], 25);
+  assert.deepEqual(integration.permissions, { contents: "read" });
   assert.match(integration.services.postgres.image, /^postgres:[^@]+@sha256:[a-f0-9]{64}$/u);
-  assert(gate.needs.includes("integration"));
-  assert.equal(gate.steps[0].env.INTEGRATION, "${{ needs.integration.result }}");
-  assert.match(gate.steps[0].run, /case "\$EVENT:\$REVIEW:\$INTEGRATION:\$IMAGES_NEEDED:\$IMAGES" in/u);
-  assert.match(gate.steps[0].run, /pull_request:success:skipped:false:skipped\|pull_request:success:skipped:true:success/u);
-  assert.match(gate.steps[0].run, /merge_group:skipped:success:false:skipped\|merge_group:skipped:success:true:success/u);
+  assert(!gate.needs.includes("integration"));
+  for (const job of [jobs.changes, jobs.checks]) {
+    assert.equal(job.if, "github.event_name == 'pull_request' || github.event_name == 'merge_group'");
+  }
 });
 
 test("shards cover each file once regardless of inventory order or duplicates", () => {
