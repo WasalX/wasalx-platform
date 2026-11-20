@@ -34,7 +34,7 @@ class ImagePublicationTests(unittest.TestCase):
                 self.assertEqual([line for line in workflow.splitlines() if "PUBLIC_CONTACT_EMAIL" in line], [binding])
                 self.assertNotRegex(step, r"\b(?:echo|printenv|set\s+-x)\b")
 
-    def test_build_rewrites_layer_timestamps_using_the_source_commit_time(self):
+    def test_build_records_the_portal_contact_input_and_rewrites_layer_timestamps(self):
         commit, tree, epoch = "a" * 40, "b" * 40, "1794938086"
 
         def invoke(args, **kwargs):
@@ -42,26 +42,35 @@ class ImagePublicationTests(unittest.TestCase):
                 with tarfile.open(args[3].removeprefix("--output="), "w") as archive:
                     archive.add(ROOT / row["dockerfile"], arcname=row["dockerfile"])
 
-        for image in ["portal", "secret-sidecar"]:
+        for image, contact_email in [("portal", " synthetic-contact "), ("portal", ""),
+                                     ("secret-sidecar", " synthetic-contact ")]:
             row = {"image": image, "dockerfile": "Dockerfile." + image}
-            with self.subTest(image=image), tempfile.TemporaryDirectory() as directory, \
+            with self.subTest(image=image, empty=not contact_email), tempfile.TemporaryDirectory() as directory, \
                     patch.object(images, "catalog", return_value=[row]), \
                     patch.object(images, "coordinates", return_value=(commit, tree)), \
                     patch.object(images, "run", return_value=epoch) as git, \
                     patch.object(images.subprocess, "run", side_effect=invoke) as execute, \
                     patch.object(images, "inspect_image", return_value={}), \
-                    patch.dict(images.os.environ, {"SOURCE_DATE_EPOCH": "1", "PUBLIC_CONTACT_EMAIL": "synthetic-contact"}):
-                images.build(image, Path(directory) / "receipt.json")
-            git.assert_called_once_with("git", "log", "-1", "--format=%ct", commit, cwd=ROOT)
-            args = execute.call_args.args[0]
-            build_args = [value for flag, value in zip(args, args[1:]) if flag == "--build-arg"]
-            self.assertEqual(args[:3], ["docker", "buildx", "build"])
-            self.assertEqual(args[args.index("--output") + 1], "type=docker,rewrite-timestamp=true")
-            self.assertIn("SOURCE_DATE_EPOCH=" + epoch, build_args)
-            self.assertEqual([arg for arg in build_args if arg.startswith("PUBLIC_CONTACT_EMAIL")],
-                             ["PUBLIC_CONTACT_EMAIL"] if image == "portal" else [])
-            self.assertIn("--provenance=false", args)
-            self.assertIn("--sbom=false", args)
+                    patch.dict(images.os.environ, {"SOURCE_DATE_EPOCH": "1", "PUBLIC_CONTACT_EMAIL": contact_email}):
+                path = Path(directory) / "receipt.json"
+                images.build(image, path)
+                raw_receipt = path.read_text()
+                git.assert_called_once_with("git", "log", "-1", "--format=%ct", commit, cwd=ROOT)
+                args = execute.call_args.args[0]
+                build_args = [value for flag, value in zip(args, args[1:]) if flag == "--build-arg"]
+                self.assertEqual(args[:3], ["docker", "buildx", "build"])
+                self.assertEqual(args[args.index("--output") + 1], "type=docker,rewrite-timestamp=true")
+                self.assertIn("SOURCE_DATE_EPOCH=" + epoch, build_args)
+                self.assertEqual([arg for arg in build_args if arg.startswith("PUBLIC_CONTACT_EMAIL")],
+                                 ["PUBLIC_CONTACT_EMAIL"] if image == "portal" else [])
+                self.assertIn("--provenance=false", args)
+                self.assertIn("--sbom=false", args)
+                receipt = json.loads(raw_receipt)
+                if image == "portal":
+                    self.assertEqual(receipt["contactEmailSha256"], images.sha256(contact_email.encode()))
+                else:
+                    self.assertNotIn("contactEmailSha256", receipt)
+                self.assertNotIn("synthetic-contact", raw_receipt)
 
     def test_loaded_config_checks_exported_bytes_and_manifest_binding(self):
         raw = b'{"os":"linux","architecture":"amd64","config":{"Labels":{}}}'
@@ -337,34 +346,49 @@ class ImagePublicationTests(unittest.TestCase):
 
     def test_publication_uses_the_push_branch_alias_and_signing_identity(self):
         commit, tree, digest = "a" * 40, "b" * 40, "sha256:" + "1" * 64
-        repository = "ghcr.io/wasalx/portal"
         inspection = {"configDigest": "sha256:" + "2" * 64, "addonLicenses": {}}
-        receipt = {"image": "portal", "commit": commit, "tree": tree, "reference": repository + ":" + commit,
-                   "inspection": inspection, "sourceArchiveDigest": "", "addonSource": None, "dockerfileDigest": ""}
         manifest = json.dumps({"mediaType": "application/vnd.oci.image.manifest.v1+json",
                                "config": {"digest": inspection["configDigest"]}})
         ref = "refs/heads/main"
         env = {"GITHUB_EVENT_NAME": "push", "GITHUB_REF": ref, "GITHUB_WORKFLOW_SHA": commit,
-               "GITHUB_RUN_ID": "1", "GITHUB_RUN_ATTEMPT": "1"}
-        with tempfile.TemporaryDirectory() as directory, \
-                patch.dict(os.environ, env, clear=True), \
-                patch.object(images, "coordinates", return_value=(commit, tree)), \
-                patch.object(images, "run", side_effect=[f"digest: {digest}", manifest, "", "", "", "", "",
-                                                         f"digest: {digest}"]) as run, \
-                patch.object(images, "pull"), patch.object(images, "inspect_image", return_value=inspection):
-            path = Path(directory) / "receipt.json"
-            images.write(path, receipt)
-            images.publish(path)
-            published = json.loads(path.read_text())
+               "GITHUB_RUN_ID": "1", "GITHUB_RUN_ATTEMPT": "1", "PUBLIC_CONTACT_EMAIL": "changed-after-build"}
+        contact_digest = images.sha256(b"synthetic-contact")
         identity = images.SOURCE + "/.github/workflows/branch-image.yml@" + ref
-        reference = repository + "@" + digest
-        alias = repository + ":main"
-        self.assertEqual(published["workflow"], identity)
-        self.assertTrue(published["verified"])
-        run.assert_any_call("cosign", "verify", "--certificate-identity", identity,
-                            "--certificate-oidc-issuer", "https://token.actions.githubusercontent.com", reference)
-        self.assertEqual(run.call_args_list[-2:], [mock.call("docker", "tag", reference, alias),
-                                                  mock.call("docker", "push", alias)])
+        for image in ["portal", "secret-sidecar"]:
+            repository = "ghcr.io/wasalx/" + image
+            receipt = {"image": image, "commit": commit, "tree": tree, "reference": repository + ":" + commit,
+                       "inspection": inspection, "sourceArchiveDigest": "", "addonSource": None, "dockerfileDigest": ""}
+            with self.subTest(image=image), tempfile.TemporaryDirectory() as directory, \
+                    patch.dict(os.environ, env, clear=True), \
+                    patch.object(images, "coordinates", return_value=(commit, tree)), \
+                    patch.object(images, "run", side_effect=[f"digest: {digest}", manifest, "", "", "", "", "",
+                                                             f"digest: {digest}"]) as run, \
+                    patch.object(images, "pull"), patch.object(images, "inspect_image", return_value=inspection):
+                path = Path(directory) / "receipt.json"
+                if image == "portal":
+                    images.write(path, receipt)
+                    with self.assertRaisesRegex(ValueError, "Invalid portal contact email digest"):
+                        images.publish(path)
+                    run.assert_not_called()
+                    receipt["contactEmailSha256"] = contact_digest
+                images.write(path, receipt)
+                images.publish(path)
+                published = json.loads(path.read_text())
+                parameters = json.loads(path.with_suffix(".json.predicate.json").read_text())["invocation"]["parameters"]
+                if image == "portal":
+                    self.assertEqual(published["contactEmailSha256"], contact_digest)
+                    self.assertEqual(parameters["contactEmailSha256"], contact_digest)
+                else:
+                    self.assertNotIn("contactEmailSha256", published)
+                    self.assertNotIn("contactEmailSha256", parameters)
+                reference = repository + "@" + digest
+                alias = repository + ":main"
+                self.assertEqual(published["workflow"], identity)
+                self.assertTrue(published["verified"])
+                run.assert_any_call("cosign", "verify", "--certificate-identity", identity,
+                                    "--certificate-oidc-issuer", "https://token.actions.githubusercontent.com", reference)
+                self.assertEqual(run.call_args_list[-2:], [mock.call("docker", "tag", reference, alias),
+                                                          mock.call("docker", "push", alias)])
 
         for event, ref in (("push", "refs/heads/dev"), ("push", "refs/heads/feature"), ("pull_request", "refs/heads/main")):
             with self.subTest(event=event, ref=ref), patch.dict(os.environ, {"GITHUB_EVENT_NAME": event, "GITHUB_REF": ref}):

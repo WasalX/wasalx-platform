@@ -23,10 +23,10 @@ Each package is `ghcr.io/wasalx/<image>`, tagged with the full public commit SHA
 The `main` discovery alias advances after signature verification and reinspection.
 Resolve it once, then use only `@sha256:<manifest digest>`.
 The `images-manifest` artifact requires one receipt for every matrix row, all
-bound to the same commit and tree. While the add-on source is unset, 19 images
-are published and the two dependent images appear under `pending`, explicitly
-without digests; `publicationComplete` is false. Green CI does not claim those
-two images built. Its `images` mapping contains, per published image:
+bound to the same commit and tree. When the plan marks both add-on images
+pending, the artifact lists 19 published images and two `pending` entries
+without digests and sets `publicationComplete` to false. The `images` mapping
+describes each published image.
 
 - `digest`: the registry's single-platform manifest digest;
 - `configDigest`: the SHA256 of the exact exported image configuration bytes;
@@ -149,20 +149,25 @@ historical evidence contracts are unchanged.
 
 ## Public build inputs and inspection
 
-The single repository variable **`PUBLIC_ADDON_SOURCE`** enables the two dependent
-images. It must be JSON with exactly `repository` (an anonymously readable public
-GitHub HTTPS repository URL) and `commit` (a full 40-character lowercase commit
-SHA). For example, its shape is
+The add-on build input **`PUBLIC_ADDON_SOURCE`** supplies the source for Zammad and
+workspace-configurator. The workflow resolves it from `zammad-addon.json` and
+passes JSON with exactly `repository` (an anonymously readable public GitHub
+HTTPS repository URL) and `commit` (a full 40-character lowercase commit SHA).
+For example, its shape is
 `{"repository":"https://github.com/<owner>/<repository>","commit":"<full commit SHA>"}`.
-No source is approved by this workflow. Unset means **pending add-on source** for
-Zammad and workspace-configurator; all other images still build and publish.
-Malformed nonempty values fail the plan instead of silently skipping. The plan
-captures this source in the matrix so later variable changes cannot substitute
-a different dependency during that run. The supplied revision must provide
+The plan captures the pinned source in the matrix. A malformed value or one
+that differs from the pin fails validation. The supplied revision must provide
 `zammad-package`, `build/zammad`, Ruby contracts under `tests/`, and `tests/fixtures`,
-matching the existing package version/hash in `zammad-addon.json`. No secret,
-deploy key or token is supplied to reach the add-on. The owner controls this
-variable; the workflow does not modify repository or organization settings.
+matching the existing package version/hash in `zammad-addon.json`.
+
+The public repository Actions variable **`PUBLIC_CONTACT_EMAIL`** applies only
+to the portal build. The build receipt and signed provenance record
+`contactEmailSha256` as `sha256:<hex>` over the exact UTF-8 input. An unset or
+empty value records the SHA-256 of the empty string and uses the portal fallback.
+Changing the variable can change the portal digest even when the commit is the
+same. The next successful publication of that commit, including a rerun of main
+publication, updates `ghcr.io/wasalx/portal:<commit>` to the resulting digest.
+Use digest references to retain the previous image for rollback.
 
 The two dependent images carry `LICENSE`, `COPYING` and `THIRD-PARTY-NOTICES`
 from that exact source under `/usr/share/licenses/wasalx-zammad-addon/`. The
@@ -194,7 +199,8 @@ for credential material and prohibited configuration paths. Base layers inherit
 trust from the pinned public base. Public-source input custody is the primary
 privacy boundary; the additional credential scan is not a proof that arbitrary
 candidate code or a compromised public dependency cannot disclose information.
-Any metadata mismatch, scan finding or digest change fails publication/admission.
+Any metadata mismatch, scan finding or mismatch between inspected and published
+digests fails publication/admission.
 The workflow never connects to or changes a consuming machine.
 
 The content contract admits one publicly distributed demo private key in Cloudflared's

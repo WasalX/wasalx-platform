@@ -478,9 +478,12 @@ def build(image, output, cache="off"):
                         "--label", "org.opencontainers.image.revision=" + commit,
                         "--label", "io.wasalx.source.tree=" + tree, str(context)], check=True))
         inspection = inspect_image(reference, row, commit, tree, directory, licenses)
-    write(output, {"image": image, "reference": reference, "commit": commit, "tree": tree, "status": "built",
-                   "platform": "linux/amd64", "sourceArchiveDigest": archive_digest, "addonSource": addon,
-                   "dockerfileDigest": dockerfile_digest, "inspection": inspection})
+    receipt = {"image": image, "reference": reference, "commit": commit, "tree": tree, "status": "built",
+               "platform": "linux/amd64", "sourceArchiveDigest": archive_digest, "addonSource": addon,
+               "dockerfileDigest": dockerfile_digest, "inspection": inspection}
+    if image == "portal":
+        receipt["contactEmailSha256"] = sha256(os.environ.get("PUBLIC_CONTACT_EMAIL", "").encode())
+    write(output, receipt)
 
 
 def pending(image, output):
@@ -554,6 +557,11 @@ def publish(receipt_path):
     require((receipt["commit"], receipt["tree"]) == (commit, tree), "Stale inspection receipt")
     repository = "ghcr.io/wasalx/" + receipt["image"]
     require(receipt["reference"] == repository + ":" + commit, "Wrong publication reference")
+    contact_input = {}
+    if receipt["image"] == "portal":
+        contact_digest = receipt.get("contactEmailSha256")
+        require(isinstance(contact_digest, str) and DIGEST.fullmatch(contact_digest), "Invalid portal contact email digest")
+        contact_input["contactEmailSha256"] = contact_digest
     result = run_retry("docker", "push", receipt["reference"])
     matches = re.findall(r"digest: (sha256:[0-9a-f]{64})", result)
     require(len(set(matches)) == 1, "Missing unique published digest")
@@ -575,7 +583,7 @@ def publish(receipt_path):
                                    "sourceArchiveDigest": receipt["sourceArchiveDigest"],
                                    "addonSource": receipt["addonSource"], "dockerfileDigest": receipt["dockerfileDigest"],
                                    "inspectionSha256": sha256(json.dumps(receipt["inspection"], sort_keys=True).encode()),
-                                   "workflowSha": receipt["workflowSha"]}},
+                                   "workflowSha": receipt["workflowSha"], **contact_input}},
                  "metadata": {"buildInvocationId": SOURCE + "/actions/runs/" + receipt["runId"] +
                               "/attempts/" + receipt["runAttempt"]},
                  "materials": [{"uri": "git+" + SOURCE, "digest": {"sha1": commit, "gitTree": tree}}]}
