@@ -70,6 +70,8 @@ import {verifyWahaRenewal} from '../tests/waha-renewal-postgres.mjs';
 import {verifyRoutingReconnect} from '../tests/routing-reconnect-postgres.mjs';
 
 const adminUrl=required("DATABASE_ADMIN_URL");const appUrl=required("DATABASE_APP_URL");
+// Synthetic provider fixtures exercise normal admission; scoped scenarios set their own allowlist.
+process.env.WASALX_TEST_RECIPIENT_ALLOWLIST="*";
 const connectorWorkerUrl=runtimeUrl("wasalx_connector_worker_runtime","wasalx-test-connector-worker");
 const connectorWorkerConfig={connectionString:connectorWorkerUrl.toString(),options:"-c role=wasalx_connector_worker"};
 const cleanupUrl=runtimeUrl("wasalx_secret_cleanup_runtime","wasalx-test-cleanup");
@@ -593,7 +595,7 @@ try{
   });
   await withFixtureTenant(admin,'20000000-0000-4000-8000-000000000002',()=>admin.query("INSERT INTO provider_sessions(tenant_id,connection_id,opaque_session_id,state,session_storage_reference) VALUES ('20000000-0000-4000-8000-000000000002','23000000-0000-4000-8000-000000000002','session-b','WORKING','storage://b')"));
   await admin.query(`
-    INSERT INTO whatsapp_groups (id,tenant_id,connection_id,external_group_id,display_name) VALUES ('13000000-0000-4000-8000-000000000001','10000000-0000-4000-8000-000000000001','12000000-0000-4000-8000-000000000001','fixture-0009@example.test','Group A');
+    INSERT INTO whatsapp_groups (id,tenant_id,connection_id,external_group_id,display_name) VALUES ('13000000-0000-4000-8000-000000000001','10000000-0000-4000-8000-000000000001','12000000-0000-4000-8000-000000000001','120363000000009@g.us','Group A');
     INSERT INTO rule_families (id,tenant_id,name,created_by) VALUES ('14100000-0000-4000-8000-000000000001','10000000-0000-4000-8000-000000000001','Default','10100000-0000-4000-8000-000000000001');
     INSERT INTO rule_sets (id,tenant_id,family_id,name,version,state,revision,snapshot_sha256,created_by,activated_by,activated_at)
       VALUES (
@@ -802,7 +804,7 @@ try{
     assert.equal((await connectorWorker.query("SELECT count(*)::integer AS count FROM message_links WHERE external_message_id='worker-link-upsert-proof'")).rows[0].count,0);
     await connectorWorker.query("ROLLBACK TO SAVEPOINT worker_link_upsert_probe");
     await connectorWorker.query("SAVEPOINT worker_participant_upsert_probe");
-    for(const [phone,name] of [["12025550113","Worker roster proof"],["12025550114",null]]){
+    for(const [phone,name] of [["+12025550113","Worker roster proof"],["+12025550114",null]]){
       const roster=await connectorWorker.query(`INSERT INTO group_workspace_participants
         (tenant_id,whatsapp_group_id,external_participant_id,normalized_phone,display_name,synchronized_at)
         VALUES (app.current_tenant_id(),'13000000-0000-4000-8000-000000000001','12025550113@c.us',$1,$2,now())
@@ -2537,7 +2539,9 @@ try{
   const botRepository=new InboundRepository(new Pool(connectorWorkerConfig));
   let botCreates=0;let botAppends=0;let botReplies=0;
   const directEvent={id:"44000000-0000-4000-8000-000000000001",tenantId:"10000000-0000-4000-8000-000000000001",connectionId:"12000000-0000-4000-8000-000000000001",provider:"waha",providerEventId:"bot-direct-event-1",eventType:"message.any",payload:{},attempts:1};
-  const directMessage={provider:"waha",connectionId:directEvent.connectionId,eventId:directEvent.providerEventId,messageId:"bot-direct-message-1",chatId:"12025550116@c.us",senderId:"12025550116@c.us",senderName:"Verified customer",senderNameQuality:"VERIFIED",input:{type:"text",text:"Hello"},fromApi:false,fromMe:false,timestamp:"2026-08-15T00:00:00.000Z"};
+  // Keep the conversation inside the retention window for the later user export.
+  const directMessageAt=Date.now()-60_000;
+  const directMessage={provider:"waha",connectionId:directEvent.connectionId,eventId:directEvent.providerEventId,messageId:"bot-direct-message-1",chatId:"12025550116@c.us",senderId:"12025550116@c.us",senderName:"Verified customer",senderNameQuality:"VERIFIED",input:{type:"text",text:"Hello"},fromApi:false,fromMe:false,timestamp:new Date(directMessageAt).toISOString()};
   const directResult=await botRepository.processDirectMessage(directEvent,{assignmentId:botAssignment.assignment_id,zammadGroup:"2",zammadBaseUrl:"https://zammad.invalid",zammadSecretReference:"secret"},directMessage,{id:77,login:"opaque-customer"},{
     create:async()=>{botCreates+=1;return{id:"88",number:"90088"}},
     append:async()=>{botAppends+=1},
@@ -2558,7 +2562,7 @@ try{
   const pendingResult=await botRepository.processDirectMessage(
     {...directEvent,id:"44000000-0000-4000-8000-000000000006",providerEventId:"bot-direct-event-2"},
     {assignmentId:botAssignment.assignment_id,zammadGroup:"2",zammadBaseUrl:"https://zammad.invalid",zammadSecretReference:"secret"},
-    {...directMessage,eventId:"bot-direct-event-2",messageId:"bot-direct-message-2",senderName:"Lower quality name",senderNameQuality:"NOTIFY",input:{type:"text",text:"Any update?"},timestamp:"2026-08-15T00:00:30.000Z"},
+    {...directMessage,eventId:"bot-direct-event-2",messageId:"bot-direct-message-2",senderName:"Lower quality name",senderNameQuality:"NOTIFY",input:{type:"text",text:"Any update?"},timestamp:new Date(directMessageAt+30_000).toISOString()},
     {id:77,login:"opaque-customer"},
     {create:async()=>{throw new Error("action-pending message created a ticket")},append:async()=>{botAppends+=1},reply:async()=>{throw new Error("action-pending message emitted a bot reply")}},
   );
@@ -2574,7 +2578,7 @@ try{
   const manualDeviceResult=await botRepository.processDirectMessage(
     {...directEvent,id:"44000000-0000-4000-8000-000000000007",providerEventId:"bot-manual-device-event"},
     {assignmentId:botAssignment.assignment_id,zammadGroup:"2",zammadBaseUrl:"https://zammad.invalid",zammadSecretReference:"secret"},
-    {...directMessage,eventId:"bot-manual-device-event",messageId:"bot-manual-device-message",input:{type:"text",text:"Sent from the linked device"},fromMe:true,timestamp:"2026-08-15T00:00:45.000Z"},
+    {...directMessage,eventId:"bot-manual-device-event",messageId:"bot-manual-device-message",input:{type:"text",text:"Sent from the linked device"},fromMe:true,timestamp:new Date(directMessageAt+45_000).toISOString()},
     {id:77,login:"opaque-customer"},
     {create:async()=>{throw new Error("manual-device message created a second ticket")},append:async()=>{manualDeviceAppends+=1;return"90124"},reply:async()=>{throw new Error("manual-device message advanced the bot")}},
   );
@@ -3037,11 +3041,11 @@ try{
     INSERT INTO group_workspace_participants
       (tenant_id,whatsapp_group_id,external_participant_id,display_name,normalized_phone)
     VALUES
-      (app.current_tenant_id(),'13100000-0000-4000-8000-000000000001','12025550120@c.us','Privacy user','12025550120'),
-      (app.current_tenant_id(),'13100000-0000-4000-8000-000000000001','12025550119@c.us','Delete subject','12025550119')`));
+      (app.current_tenant_id(),'13100000-0000-4000-8000-000000000001','12025550120@c.us','Privacy user','+12025550120'),
+      (app.current_tenant_id(),'13100000-0000-4000-8000-000000000001','12025550119@c.us','Delete subject','+12025550119')`));
   await tenant("20000000-0000-4000-8000-000000000002",()=>app.query(`INSERT INTO group_workspace_participants
       (tenant_id,whatsapp_group_id,external_participant_id,display_name,normalized_phone)
-    VALUES (app.current_tenant_id(),'25000000-0000-4000-8000-000000000002','12025550120@c.us','Tenant B privacy user','12025550120')`));
+    VALUES (app.current_tenant_id(),'25000000-0000-4000-8000-000000000002','12025550120@c.us','Tenant B privacy user','+12025550120')`));
   assert.equal((await tenant(botPrincipal.tenantId,()=>app.query(
     "SELECT count(*)::integer AS count FROM group_workspace_participants WHERE external_participant_id='12025550120@c.us'",
   ))).rows[0].count,1);
@@ -4046,10 +4050,10 @@ try{
   const visible=await tenant("10000000-0000-4000-8000-000000000001",()=>app.query("SELECT id FROM connections ORDER BY id"));assert.deepEqual(visible.rows.map(row=>row.id),["12000000-0000-4000-8000-000000000001","12100000-0000-4000-8000-000000000002"]);
   await assert.rejects(()=>tenant("10000000-0000-4000-8000-000000000001",()=>app.query("INSERT INTO connections (tenant_id,name,provider,engine,state,secret_reference) VALUES ('10000000-0000-4000-8000-000000000001','Invalid engine','WAHA','CLOUD_API','PAUSED','secret://invalid/engine')")),error=>error.code==="23514");
   await assert.rejects(()=>tenant("10000000-0000-4000-8000-000000000001",()=>app.query("UPDATE connections SET engine='NOWEB' WHERE id='12000000-0000-4000-8000-000000000001'")),error=>error.code==="P0001"&&/immutable/u.test(error.message));
-  await tenant("10000000-0000-4000-8000-000000000001",()=>app.query("UPDATE connections SET phone_e164='12025550124' WHERE id='12000000-0000-4000-8000-000000000001'"));
+  await tenant("10000000-0000-4000-8000-000000000001",()=>app.query("UPDATE connections SET phone_e164='+12025550124' WHERE id='12000000-0000-4000-8000-000000000001'"));
   await tenant("10000000-0000-4000-8000-000000000001",()=>app.query("INSERT INTO connections (id,tenant_id,name,provider,engine,state,secret_reference) VALUES ('12000000-0000-4000-8000-000000000002','10000000-0000-4000-8000-000000000001','Duplicate identity candidate','WAHA','GOWS','PROVISIONING','secret://a/duplicate')"));
   await assert.rejects(
-    ()=>tenant("10000000-0000-4000-8000-000000000001",()=>app.query("UPDATE connections SET phone_e164='12025550124' WHERE id='12000000-0000-4000-8000-000000000002'")),
+    ()=>tenant("10000000-0000-4000-8000-000000000001",()=>app.query("UPDATE connections SET phone_e164='+12025550124' WHERE id='12000000-0000-4000-8000-000000000002'")),
     error=>error.code==="23505"&&error.constraint==="connections_active_waha_identity_unique",
   );
   await tenant("10000000-0000-4000-8000-000000000001",()=>app.query(`INSERT INTO provider_sessions
@@ -4081,7 +4085,7 @@ try{
     const sessionLease=await lifecycleRepository.acquireProviderSessionLease(jobs[0],operationLeaseId,"postgres-duplicate-worker",120);
     const persisted=await lifecycleRepository.complete(jobs[0],operationLeaseId,sessionLease,{
       connectionState:"WORKING",providerState:"WORKING",providerStateData:{status:"WORKING"},
-      phoneE164:"12025550124",engine:"GOWS",webhookState:"ACTIVE",result:{provisioned:true},
+      phoneE164:"+12025550124",engine:"GOWS",webhookState:"ACTIVE",result:{provisioned:true},
     });
     assert.equal(persisted?.connectionState,"ACTION_REQUIRED");
     assert.equal(persisted?.result.rejected,"DUPLICATE_IDENTITY");
@@ -4091,7 +4095,7 @@ try{
     const observedAt=new Date().toISOString();
     const event={id:"50000000-0000-4000-8000-000000000040",tenantId:"10000000-0000-4000-8000-000000000001",connectionId:"12000000-0000-4000-8000-000000000002",provider:"waha",providerEventId:"duplicate-status",eventType:"session.status",payload:{},attempts:1};
     const observation={opaqueSessionId:"duplicate-session",observedAt,providerState:"WORKING",connectionState:"WORKING"};
-    const identity={phoneE164:"12025550124",pinnedWahaWorkerId:duplicateAssignment.workerId};
+    const identity={phoneE164:"+12025550124",pinnedWahaWorkerId:duplicateAssignment.workerId};
     await tenant(event.tenantId,()=>app.query(`UPDATE connection_operations
       SET state='FAILED_TERMINAL',completed_at=now(),updated_at=now()
       WHERE connection_id=$1 AND idempotency_key='duplicate-identity:'||$2`,[event.connectionId,"52000000-0000-4000-8000-000000000040"]));
@@ -4253,7 +4257,7 @@ try{
       FROM whatsapp_groups WHERE tenant_id=$1 AND connection_id=$2 ORDER BY id`,[syncJob.tenantId,syncJob.connectionId])).rows.map(group=>({
       id:group.external_group_id,name:group.display_name,participants:Number(group.participant_count??0),
       ...(group.id==="13000000-0000-4000-8000-000000000001"?{participantRoster:[{
-        id:"12025550125@c.us",normalizedPhone:"12025550125",displayName:"Roster synchronization proof",
+        id:"12025550125@c.us",normalizedPhone:"+12025550125",displayName:"Roster synchronization proof",
       }]}:{}),
     }));
     await synchronizeGroups(app,syncJob,synchronizedProviderGroups);
@@ -4857,9 +4861,9 @@ try{
         AND ownership_state='ACTIVE'),
       'GOWS',interval '5 minutes'
     )`));
-  const inboundPayload={id:"evt_e2e",event:"message",payload:{id:"message-e2e",chatId:"fixture-0009@example.test",participant:"12025550102@c.us",body:"Shipment ١٢٣٤٥٦٧٨٩٠",source:"app",fromMe:false,timestamp:Math.floor(Date.now()/1000)}};
+  const inboundPayload={id:"evt_e2e",event:"message",payload:{id:"message-e2e",chatId:"120363000000009@g.us",participant:"12025550102@c.us",body:"Shipment ١٢٣٤٥٦٧٨٩٠",source:"app",fromMe:false,timestamp:Math.floor(Date.now()/1000)}};
   await tenant("10000000-0000-4000-8000-000000000001",()=>app.query("INSERT INTO event_inbox (tenant_id,connection_id,provider,provider_event_id,event_type,payload,payload_sha256,status) VALUES ($1,$2,'WAHA','evt-e2e','message',$3,'e2e-hash','ACCEPTED')",["10000000-0000-4000-8000-000000000001","12000000-0000-4000-8000-000000000001",inboundPayload]));
-  const inboundRepository=new InboundRepository(new Pool({...connectorWorkerConfig,max:2}));const originalFetch=globalThis.fetch;globalThis.fetch=async(input,init)=>{const url=String(input);if(url.includes("/users/search"))return new Response(JSON.stringify([]),{status:200});if(url.endsWith("/api/v1/users")&&init?.method==="POST"){const body=JSON.parse(String(init.body));return new Response(JSON.stringify({id:77,login:body.login,firstname:body.firstname,lastname:"",email:""}),{status:201})}if(url.includes("/tickets/search"))return new Response(JSON.stringify([]),{status:200});if(url.endsWith("/api/v1/tickets")&&init?.method==="POST"){const body=JSON.parse(String(init.body));assert.equal(body.customer_id,77);assert.equal(body.title,"Group A — Ten digits: 1234567890");assert.equal(body.priority,"2 normal");assert.equal(body.owner_id,undefined);assert.equal(body.wasalx_default_priority,"normal");assert.equal(body.wasalx_assignment_mode,"zammad_auto");assert.equal(body.wasalx_business_hours_mode,"ALWAYS");assert.deepEqual(body.article.preferences,{wasalx_origin:"provider",wasalx_external_message_id:"message-e2e",wasalx_sender_phone:"12025550102"});return new Response(JSON.stringify({id:501,number:"10501",state:"open",group:"Operations",title:"Case"}),{status:201})}if(url.endsWith("/api/v1/ticket_articles/by_ticket/501"))return new Response(JSON.stringify([{id:901,preferences:{wasalx_external_message_id:"message-e2e"}}]),{status:200});throw new Error(`Unexpected Zammad request ${url}`)};
+  const inboundRepository=new InboundRepository(new Pool({...connectorWorkerConfig,max:2}));const originalFetch=globalThis.fetch;globalThis.fetch=async(input,init)=>{const url=String(input);if(url.includes("/users/search"))return new Response(JSON.stringify([]),{status:200});if(url.endsWith("/api/v1/users")&&init?.method==="POST"){const body=JSON.parse(String(init.body));return new Response(JSON.stringify({id:77,login:body.login,firstname:body.firstname,lastname:"",email:""}),{status:201})}if(url.includes("/tickets/search"))return new Response(JSON.stringify([]),{status:200});if(url.endsWith("/api/v1/tickets")&&init?.method==="POST"){const body=JSON.parse(String(init.body));assert.equal(body.customer_id,77);assert.equal(body.title,"Group A — Ten digits: 1234567890");assert.equal(body.priority,"2 normal");assert.equal(body.owner_id,undefined);assert.equal(body.wasalx_default_priority,"normal");assert.equal(body.wasalx_assignment_mode,"zammad_auto");assert.equal(body.wasalx_business_hours_mode,"ALWAYS");assert.deepEqual(body.article.preferences,{wasalx_origin:"provider",wasalx_external_message_id:"message-e2e",wasalx_sender_phone:"+12025550102"});return new Response(JSON.stringify({id:501,number:"10501",state:"open",group:"Operations",title:"Case"}),{status:201})}if(url.endsWith("/api/v1/ticket_articles/by_ticket/501"))return new Response(JSON.stringify([{id:901,preferences:{wasalx_external_message_id:"message-e2e"}}]),{status:200});throw new Error(`Unexpected Zammad request ${url}`)};
   try{const inboundProcessor=new InboundProcessor(inboundRepository,{resolve:async()=>({token:"test-zammad-token"})});assert.deepEqual(await inboundProcessor.drainTenant("10000000-0000-4000-8000-000000000001"),{events:1,acknowledgements:1})}finally{globalThis.fetch=originalFetch;await inboundRepository.close()}
   const inboundEvidence=await tenant("10000000-0000-4000-8000-000000000001",()=>app.query("SELECT (SELECT status FROM event_inbox WHERE provider_event_id='evt-e2e') AS event_status,(SELECT count(*)::int FROM normalized_messages WHERE external_message_id='message-e2e') AS normalized_count,(SELECT (provider_metadata->>'zammad_customer_id')::int FROM normalized_messages WHERE external_message_id='message-e2e') AS zammad_customer_id,(SELECT count(*)::int FROM case_correlations WHERE normalized_reference='1234567890') AS correlation_count,(SELECT count(*)::int FROM delivery_outbox delivery JOIN delivery_ticket_links link ON link.tenant_id=delivery.tenant_id AND link.delivery_id=delivery.id WHERE delivery.tenant_id=app.current_tenant_id() AND delivery.connection_id='12000000-0000-4000-8000-000000000001' AND delivery.group_binding_id='15000000-0000-4000-8000-000000000001' AND delivery.reply_to_message_id='message-e2e' AND delivery.state='QUEUED' AND delivery.idempotency_key~'^ack:[0-9a-f]{64}$' AND link.zammad_ticket_id='501') AS acknowledgement_count"));assert.deepEqual(inboundEvidence.rows[0],{event_status:"PROCESSED",normalized_count:1,zammad_customer_id:77,correlation_count:1,acknowledgement_count:1});
   // Same provider message in a distinct inbox event must not repeat downstream effects.
@@ -4886,24 +4890,24 @@ try{
       VALUES($1::uuid,$2,$3,'WAHA',($1::uuid)::text,'quarantine.reprocess','{}','identity-regression','PROCESSED')`,[identityEvent,identityTenant,identityConnection]);
     await identityAdmin.query(`INSERT INTO quarantine_records(id,tenant_id,source_kind,reason_code,state,connection_id,group_binding_id,source_event_inbox_id,reprocess_event_id,safe_summary)
       VALUES($1,$2,'INBOUND','NON_RETRYABLE_REVIEW','REPROCESS_QUEUED',$3,'15000000-0000-4000-8000-000000000001',$4,$5,'Identity regression')`,[identityReview,identityTenant,identityConnection,identitySource.event_inbox_id,identityEvent]);
-    const original=await identityRepository.originalReprocessParticipant(identityRequest,"fixture-0009@example.test");
+    const original=await identityRepository.originalReprocessParticipant(identityRequest,"120363000000009@g.us");
     assert.deepEqual(original,{replyToMessageId:"message-e2e",participantId:"12025550102@c.us",participantName:undefined,fromMe:false,fromApi:false});
     for(const changed of [{tenantId:"20000000-0000-4000-8000-000000000002"},{connectionId:crypto.randomUUID()},{id:crypto.randomUUID()},{payload:{quarantineId:crypto.randomUUID()}}]){
-      assert.equal(await identityRepository.originalReprocessParticipant({...identityRequest,...changed},"fixture-0009@example.test"),null);
+      assert.equal(await identityRepository.originalReprocessParticipant({...identityRequest,...changed},"120363000000009@g.us"),null);
     }
     assert.equal(await identityRepository.originalReprocessParticipant(identityRequest,"fixture-0018@example.test"),null);
     await identityAdmin.query("UPDATE quarantine_records SET state='OPEN' WHERE id=$1",[identityReview]);
-    assert.equal(await identityRepository.originalReprocessParticipant(identityRequest,"fixture-0009@example.test"),null);
+    assert.equal(await identityRepository.originalReprocessParticipant(identityRequest,"120363000000009@g.us"),null);
     await identityAdmin.query("UPDATE quarantine_records SET state='REPROCESS_QUEUED' WHERE id=$1",[identityReview]);
     for(const jobType of ["DELETE","RETENTION_SWEEP"]){
       await insertPrivacyJob(privacyJob(identityPrivacy,identityTenant,crypto.randomUUID(),jobType,"TENANT",identityTenant));
       if(jobType==="RETENTION_SWEEP")await identityAdmin.query(`INSERT INTO privacy_job_targets(tenant_id,job_id,target_type,target_id,target_sha256)
         VALUES($1,$2,'NORMALIZED_MESSAGE',$3,repeat('a',64))`,[identityTenant,identityPrivacy,identitySource.id]);
-      assert.equal(await identityRepository.originalReprocessParticipant(identityRequest,"fixture-0009@example.test"),null);
+      assert.equal(await identityRepository.originalReprocessParticipant(identityRequest,"120363000000009@g.us"),null);
       await identityAdmin.query("DELETE FROM privacy_job_targets WHERE tenant_id=$1 AND job_id=$2",[identityTenant,identityPrivacy]);
       await identityAdmin.query("DELETE FROM privacy_jobs WHERE tenant_id=$1 AND id=$2",[identityTenant,identityPrivacy]);
     }
-    assert.deepEqual(await identityRepository.originalReprocessParticipant(identityRequest,"fixture-0009@example.test"),original);
+    assert.deepEqual(await identityRepository.originalReprocessParticipant(identityRequest,"120363000000009@g.us"),original);
   }finally{
     await identityRepository.close();
     await identityAdmin.query("DELETE FROM privacy_job_targets WHERE tenant_id=$1 AND job_id=$2",[identityTenant,identityPrivacy]);
@@ -4916,12 +4920,12 @@ try{
   try{
     await tenant("10000000-0000-4000-8000-000000000001",()=>app.query("UPDATE case_correlations SET state='RESOLVED',zammad_state_id=4,zammad_state_observed_at=now()-interval '1 minute',version=version+1 WHERE normalized_reference='1234567890'"));
     const calls=[];const context={bindingId:"15000000-0000-4000-8000-000000000001"};
-    const reopened=await lifecycleCorrelationRepository.correlate({id:"reopen-event",tenantId:"10000000-0000-4000-8000-000000000001",connectionId:"12000000-0000-4000-8000-000000000001",provider:"waha",providerEventId:"reopen-event",eventType:"message",payload:{},attempts:1},context,{provider:"waha",connectionId:"12000000-0000-4000-8000-000000000001",eventId:"reopen-event",messageId:"reopen-message",groupId:"fixture-0009@example.test",participantId:"12025550102@c.us",text:"1234567890",fromApi:false,fromMe:false,timestamp:new Date().toISOString()},"1234567890",{create:async()=>{throw new Error("resolved correlation must not create")},reopen:async id=>{calls.push(`reopen:${id}`);return new Date().toISOString()},append:async id=>{calls.push(`append:${id}`)}});
+    const reopened=await lifecycleCorrelationRepository.correlate({id:"reopen-event",tenantId:"10000000-0000-4000-8000-000000000001",connectionId:"12000000-0000-4000-8000-000000000001",provider:"waha",providerEventId:"reopen-event",eventType:"message",payload:{},attempts:1},context,{provider:"waha",connectionId:"12000000-0000-4000-8000-000000000001",eventId:"reopen-event",messageId:"reopen-message",groupId:"120363000000009@g.us",participantId:"12025550102@c.us",text:"1234567890",fromApi:false,fromMe:false,timestamp:new Date().toISOString()},"1234567890",{create:async()=>{throw new Error("resolved correlation must not create")},reopen:async id=>{calls.push(`reopen:${id}`);return new Date().toISOString()},append:async id=>{calls.push(`append:${id}`)}});
     assert.deepEqual(reopened,{id:"501",number:"10501"});assert.deepEqual(calls,["reopen:501","append:501"]);
     const reopenedState=await tenant("10000000-0000-4000-8000-000000000001",()=>app.query("SELECT state,generation,zammad_state_id FROM case_correlations WHERE normalized_reference='1234567890' AND state<>'DETACHED'"));assert.deepEqual(reopenedState.rows,[{state:"OPEN",generation:1,zammad_state_id:null}]);
 
     await tenant("10000000-0000-4000-8000-000000000001",()=>app.query("UPDATE case_correlations SET state='DETACHED',detached_at=now(),detached_by='10100000-0000-4000-8000-000000000001',version=version+1,updated_at=now() WHERE normalized_reference='1234567890' AND state='OPEN'"));
-    let generationKey="";await lifecycleCorrelationRepository.correlate({id:"generation-event",tenantId:"10000000-0000-4000-8000-000000000001",connectionId:"12000000-0000-4000-8000-000000000001",provider:"waha",providerEventId:"generation-event",eventType:"message",payload:{},attempts:1},context,{provider:"waha",connectionId:"12000000-0000-4000-8000-000000000001",eventId:"generation-event",messageId:"generation-message",groupId:"fixture-0009@example.test",participantId:"12025550102@c.us",text:"1234567890",fromApi:false,fromMe:false,timestamp:new Date().toISOString()},"1234567890",{create:async key=>{generationKey=key;return{id:"502",number:"10502"}},reopen:async()=>{throw new Error("new generation must not reopen")},append:async()=>{throw new Error("new generation must not append")}});
+    let generationKey="";await lifecycleCorrelationRepository.correlate({id:"generation-event",tenantId:"10000000-0000-4000-8000-000000000001",connectionId:"12000000-0000-4000-8000-000000000001",provider:"waha",providerEventId:"generation-event",eventType:"message",payload:{},attempts:1},context,{provider:"waha",connectionId:"12000000-0000-4000-8000-000000000001",eventId:"generation-event",messageId:"generation-message",groupId:"120363000000009@g.us",participantId:"12025550102@c.us",text:"1234567890",fromApi:false,fromMe:false,timestamp:new Date().toISOString()},"1234567890",{create:async key=>{generationKey=key;return{id:"502",number:"10502"}},reopen:async()=>{throw new Error("new generation must not reopen")},append:async()=>{throw new Error("new generation must not append")}});
     assert.match(generationKey,/:generation:2$/);
     const generations=await tenant("10000000-0000-4000-8000-000000000001",()=>app.query("SELECT id,generation,state,zammad_ticket_id,predecessor_correlation_id,replaced_by_correlation_id FROM case_correlations WHERE normalized_reference='1234567890' ORDER BY generation"));assert.equal(generations.rows.length,2);assert.deepEqual(generations.rows.map(row=>({generation:row.generation,state:row.state,ticket:row.zammad_ticket_id})),[{generation:1,state:"DETACHED",ticket:"501"},{generation:2,state:"OPEN",ticket:"502"}]);assert.equal(generations.rows[0].replaced_by_correlation_id,generations.rows[1].id);assert.equal(generations.rows[1].predecessor_correlation_id,generations.rows[0].id);
     const crossTenantLifecycle=await tenant("20000000-0000-4000-8000-000000000002",()=>app.query("SELECT id FROM case_correlations WHERE normalized_reference='1234567890'"));assert.equal(crossTenantLifecycle.rowCount,0);

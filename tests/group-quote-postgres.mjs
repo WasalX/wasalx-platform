@@ -17,8 +17,9 @@ export async function verifyGroupQuoteProjection(client, tenantId) {
 
 async function verifyProviderQuote(client, tenantId, provider) {
   const groupId="13900000-0000-4000-8000-000000000099",connectionId="12900000-0000-4000-8000-000000000099";
-  const group="120363000000099@g.us",token="fake-test-key-not-a-secret-00000000000000000000000000000000000000";
-  const quote=`false_${group}_${token}_123456789@lid`,target=`true_${group}_${token}fixture-0023@example.test`;
+  const group="120363000000099@g.us",token="SyntheticQuoteStanza001";
+  const quote=`false_${group}_${token}_123456789@lid`,target=`true_${group}_${token}_12025550121@c.us`;
+  const alternate=`false_${group}_${token}_12025550122@c.us`;
   const claims={tenantId,userId:"77",groupIds:[],groupAdmin:true,instanceId:"11000000-0000-4000-8000-000000000001"};
   await client.query("BEGIN");
   try {
@@ -66,7 +67,7 @@ async function verifyProviderQuote(client, tenantId, provider) {
     await client.query("UPDATE normalized_messages SET quoted_external_message_id=$2 WHERE id=$1",[messageId,token]);
     assert.deepEqual(await projected(),[target,target],"GOWS bare replyTo stanza resolves without changing stored evidence");
     await client.query("UPDATE normalized_messages SET quoted_external_message_id=$2 WHERE id=$1",[messageId,quote]);
-    await addTarget(second,`false_${group}_${token}fixture-0024@example.test`,"2 minutes");
+    await addTarget(second,alternate,"2 minutes");
     assert.deepEqual(await projected(),[quote,quote],"off-page second identity remains ambiguous");
     await client.query("DELETE FROM delivery_outbox WHERE id=$1",[second]);
     await addTarget(second,quote);
@@ -79,7 +80,7 @@ async function verifyProviderQuote(client, tenantId, provider) {
     await client.query("UPDATE normalized_messages SET quoted_external_message_id=$2 WHERE id=$1",[messageId,quote]);
     const foreignGroup="13900000-0000-4000-8000-000000000098";
     await client.query("INSERT INTO whatsapp_groups(id,tenant_id,connection_id,external_group_id,display_name) VALUES($1,$2,$3,'120363000000098@g.us','Other group')",[foreignGroup,tenantId,connectionId]);
-    await addTarget(second,`false_${group}_${token}fixture-0024@example.test`);
+    await addTarget(second,alternate);
     await client.query("UPDATE delivery_outbox SET group_workspace_group_id=$2 WHERE id=$1",[second,foreignGroup]);
     assert.deepEqual(await projected(),[target,target],"same-token delivery from another group cannot introduce ambiguity");
     await client.query("SAVEPOINT redacted_quote_target");
@@ -211,7 +212,7 @@ export async function verifyTicketEventTargets(client, tenantId, fixture) {
     // Real SQL/RLS regression for GOWS2026.7.2: extractReplyTo returns a bare
     // stanza while send returns a serialized ID. All mutations roll back.
     await client.query('SAVEPOINT group_quote_aliases');
-    const stanza='ABCDEF1234567890123456',canonical=`true_${group}_${stanza}fixture-0023@example.test`;
+    const stanza='ABCDEF1234567890123456',canonical=`true_${group}_${stanza}_12025550121@c.us`;
     const alias=`false_${group}_${stanza}_123456789@lid`;
     const quoted=await sent('canonical','1 minute',{externalId:canonical,article:'974150'});
     assert.equal((await eventQuotes(stanza)).current,undefined,'missing exact event identity never substitutes a serialized quote alias');
@@ -231,7 +232,7 @@ export async function verifyTicketEventTargets(client, tenantId, fixture) {
     await assert.rejects(()=>associated(stanza,['DLX000000000001']),{code:'QUOTE_REFERENCE_CONFLICT'});
     const scoped=async(action)=>{await client.query('SAVEPOINT alias_case');try{await action();}finally{await client.query('ROLLBACK TO SAVEPOINT alias_case');await client.query('RELEASE SAVEPOINT alias_case');}};
     for(const ticket of [ticketId,'97402'])await scoped(async()=>{
-      const alternate=`false_${group}_${stanza}fixture-0024@example.test`;
+      const alternate=`false_${group}_${stanza}_12025550122@c.us`;
       await sent(`second-${ticket}`,'2 minutes',{externalId:alternate,ticket,article:'974151'});
       assert.deepEqual(await identity(stanza),{messageId:null,ambiguous:true},'identity ambiguity precedes ticket filtering');
       await assert.rejects(()=>target({requested:stanza}),/no longer available/);
