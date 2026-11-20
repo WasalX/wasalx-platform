@@ -84,6 +84,7 @@ jobs:
         if: steps.image.outputs.pending == 'false'
         env:
           BUILD_CACHE: ${{ github.ref_name == 'main' && 'write' || 'off' }}
+          PUBLIC_CONTACT_EMAIL: ${{ matrix.image == 'portal' && vars.PUBLIC_CONTACT_EMAIL || '' }}
         run: python3 scripts/release/images-by-digest.py build --cache "$BUILD_CACHE" --image "$IMAGE" --output "records/$IMAGE.json"
       - if: steps.image.outputs.pending == 'false'
         uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
