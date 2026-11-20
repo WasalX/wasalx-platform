@@ -66,10 +66,9 @@ test("native OpenTofu plan exercises the production root without credentials", a
     /(?:password|client_secret|api_key|access_key|private_key|database_url|session_secret)\s*=/iu,
   );
 
-  assert.match(
-    validation,
-    /-chdir=infra\/terraform init -backend=false -input=false[\s\S]*?-chdir=infra\/terraform test[\s\\]*\n\s*-filter=tests\/production_plan\.tftest\.hcl/u,
-  );
+  assert.match(validation, /-chdir=infra\/terraform init -backend=false -input=false -lockfile=readonly/u);
+  assert.match(validation, /-chdir=infra\/terraform test -no-color\n/u);
+  assert.match(validation, /if \[\[ "\$\{1:-\}" == --terraform-test-only \]\]; then\n\s+export TF_DATA_DIR=.*\n\s+prepare_tofu_providers "\$HOST_PROVIDER_TARGET"\n\s+prepare_native_tofu\n\s+init_terraform\n\s+run_terraform_tests\n/u);
 });
 
 test("production inputs fail closed without carrying secret material", async () => {

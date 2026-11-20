@@ -237,7 +237,7 @@ test("infrastructure validation routes runner-example fullruntime away from nati
 test("infrastructure validation rejects a tampered cache-hit archive before copying it", async () => {
   const script = await read("scripts/validate-infra.sh");
   const start = script.indexOf("prepare_pinned_archive() {");
-  const end = script.indexOf("\n}\n\nHELM_ARCHIVE", start);
+  const end = script.indexOf("\n}\n", start);
   assert.ok(start >= 0 && end >= 0, "validate-infra.sh must define prepare_pinned_archive");
   const prepare = script.slice(start, end + 2);
   const root = await mkdtemp(join(tmpdir(), "wasalx-infra-cache-hit-"));
