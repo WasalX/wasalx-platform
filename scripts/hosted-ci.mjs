@@ -5,7 +5,7 @@ import { appendFileSync, readFileSync } from "node:fs";
 import { matchesGlob, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
-import { unitAllowlist, unitFiles, unitFileTimings } from "./test-unit.mjs";
+import { unitFiles, unitFileTimings } from "./test-unit.mjs";
 import { addonSkips, skipPattern } from "./hosted-ci-policy.mjs";
 
 const config = JSON.parse(readFileSync(new URL("./hosted-ci-config.json", import.meta.url)));
@@ -26,17 +26,18 @@ export function shardFiles(files, shard, total, durations = unitTimings) {
   return shards[shard - 1].files;
 }
 
+export function isTestFile(file) {
+  return file.startsWith("tests/") && !file.startsWith("tests/zammad-sidebar-component/")
+    && /\.test\.(?:mjs|cjs|js|ts|mts|cts|tsx)$/u.test(file);
+}
+
 export function inventory(tracked) {
-  // Keep the existing declared inventory and collect additional Node test files.
-  const discovered = tracked.filter(file => /\.test\.(?:mjs|cjs|js|ts)$/u.test(file)
-    && !file.startsWith("tests/zammad-sidebar-component/"));
-  return [...new Set([...unitFiles, ...discovered])].sort();
+  return [...new Set([...unitFiles, ...tracked.filter(isTestFile)])].sort();
 }
 
 export function collectionFiles(tracked) {
   // Unit shards already prove their imports; collect the additional hosted scope.
   return inventory(tracked).filter(file => !unitFiles.includes(file)
-    && !Object.hasOwn(unitAllowlist, file)
     && !config.excludedPatterns.some(pattern => matchesGlob(file, pattern)));
 }
 
@@ -58,7 +59,7 @@ async function main() {
   assert(["unit", "collection"].includes(mode), "Expected unit or collection");
   const tracked = execFileSync("git", ["ls-files", "-z", "tests"], { encoding: "utf8" }).split("\0").filter(Boolean);
   const files = mode === "collection" ? collectionFiles(tracked) : inventory(tracked);
-  assert(files.length > 0 && files.every(file => file.startsWith("tests/") && !file.includes("..")));
+  assert(files.every(file => file.startsWith("tests/") && !file.includes("..")));
   if (mode === "unit") {
     const selected = shardFiles(unitFiles, Number(shard), Number(total));
     assert(selected.length > 0, "Empty unit shard");
@@ -84,6 +85,7 @@ async function main() {
   }
   // Import modules while skipping test bodies, matching the existing collection method.
   // The test runner's test timeout does not bound a hanging module import.
+  if (files.length === 0) console.log("no additional files to collect");
   const failures = [];
   for (let offset = 0; offset < files.length; offset += 4) {
     const results = await Promise.all(files.slice(offset, offset + 4).map(file => collectFile(file)));

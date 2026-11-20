@@ -606,7 +606,7 @@ function commandStderrTail(stderr, environment) {
   const source = stripVTControlCharacters(stderr);
   const values = Object.values(environment ?? process.env).filter(Boolean)
     .map(value => stripVTControlCharacters(value))
-    .filter(value => value && source.includes(value)).sort((left, right) => right.length - left.length);
+    .filter(value => value && source.includes(value));
   const patterns = [
     /(\b(?:Bearer|Basic)\s+)\S+/giu,
     /(\b[a-z][a-z0-9+.-]*:\/\/)[^/\s@]+(?=@)/giu,
@@ -614,11 +614,16 @@ function commandStderrTail(stderr, environment) {
     /((?<![\w.-])[\w.-]+[ \t]*=[ \t]*)(?:"(?:\\.|[^"\\])*"|'[^']*'|\S+)/giu,
     /()\b[\w+/-]{24,}={0,2}/gu,
   ];
-  if (values.length) patterns.push(new RegExp("()(?:" + values.map(RegExp.escape).join("|") + ")", "gu"));
   // Match against the same text so an environment value in a key cannot change how it is parsed.
   const ranges = patterns.flatMap(pattern => Array.from(source.matchAll(pattern),
-    match => [match.index + match[1].length, match.index + match[0].length]))
-    .sort(([left], [right]) => left - right);
+    match => [match.index + match[1].length, match.index + match[0].length]));
+  for (const value of new Set(values)) {
+    const escaped = value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+    for (const match of source.matchAll(new RegExp("(?=" + escaped + ")", "gu"))) {
+      ranges.push([match.index, match.index + value.length]);
+    }
+  }
+  ranges.sort(([left], [right]) => left - right);
   const parts = [];
   let end = 0;
   for (const [start, stop] of ranges) {

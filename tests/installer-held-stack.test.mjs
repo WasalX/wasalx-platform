@@ -104,7 +104,8 @@ test("installer prints a sanitized reason for a failure before the stage loop", 
 
 test("installer subprocess failures retain a bounded stderr tail with sensitive values redacted", () => {
   const token = "A1b2C3d4".repeat(6);
-  const environment = { ...process.env, INSTALLER_TEST_SECRET: "short.+ fixture secret", INSTALLER_TEST_WORKERS: "2" };
+  const environment = { ...process.env, INSTALLER_TEST_SECRET: "short.+ fixture secret", INSTALLER_TEST_WORKERS: "2",
+    INSTALLER_TEST_OVERLAP_PREFIX: "cache-a1", INSTALLER_TEST_OVERLAP_SUFFIX: "a1Xy9z" };
   const stderr = [
     "discarded start", "padding ".repeat(300), "invalid Compose interpolation for APP_PORT",
     `APP_PASSWORD="quoted password" ${environment.INSTALLER_TEST_SECRET} Bearer small-token ${token}`,
@@ -113,6 +114,7 @@ test("installer subprocess failures retain a bounded stderr tail with sensitive 
     '{"client_secret":"abc123def","DB_TOKEN": "tok999"}',
     '{"oauth_private_key_path":"fixture-pem","login_credential":"fixture-code","db_pwd_hint":"fixture-hint"}',
     'private-key-v2="fixture-assign"',
+    "overlap cache-a1Xy9z",
   ].join("\n");
   const script = `process.stderr.write(${JSON.stringify(stderr)}); process.exitCode = 1;`;
   assert.throws(() => run(process.execPath, ["-e", script], environment), error => {
@@ -120,6 +122,8 @@ test("installer subprocess failures retain a bounded stderr tail with sensitive 
     assert.ok(Buffer.byteLength(reason) <= Buffer.byteLength(`${process.execPath} failed: `) + 2048);
     assert.match(reason, /invalid Compose interpolation for APP_PORT/u);
     assert.match(reason, /APP_PASSWORD=\[redacted\]/u);
+    assert.match(reason, /private-key-v\[redacted\]=\[redacted\]/u);
+    assert.match(reason, /overlap \[redacted\]$/u);
     for (const value of ["discarded start", "quoted password", environment.INSTALLER_TEST_SECRET, "small-token", token,
       "hunter2pass", "abcd1234", "abc123def", "tok999", "fixture-pem", "fixture-code", "fixture-hint", "fixture-assign"]) {
       assert.ok(!reason.includes(value), "stderr retained an unredacted fixture value");

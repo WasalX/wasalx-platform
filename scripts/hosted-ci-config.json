@@ -1,6 +1,7 @@
 {
   "excludedPatterns": [
     "tests/zammad-sidebar-component/**",
+    "tests/zammad-image-browser-compat.test.mjs",
     "tests/visual/**",
     "tests/qualification-*",
     "scripts/contracts/*-live.mjs",
@@ -26,7 +27,7 @@
       "reason": "Starts the built portal to check HTTP response headers."
     },
     "tests/postgres-load-recovery.test.mjs": {
-      "runner": "integration",
+      "runner": "test:postgres",
       "reason": "Requires a PostgreSQL instance with separate admin and application roles."
     },
     "tests/rendered-html.test.mjs": {
@@ -35,15 +36,15 @@
     },
     "tests/storybook-static-contract.test.mjs": {
       "runner": "test:design-system",
-      "reason": "Checks the generated story index after building Storybook."
+      "reason": "not run in CI: needs a separate Storybook build to generate the story index."
     },
     "tests/zammad-image-browser-compat.test.mjs": {
       "runner": "zammad:compat:browser",
-      "reason": "Requires Chromium and a Docker Compose Zammad stack."
+      "reason": "not run in CI: requires an explicitly selected Zammad image, Chromium, and a Docker Compose stack."
     },
     "tests/zammad-sidebar-component-harness.test.mjs": {
       "runner": "test:unit",
-      "reason": "Requires the add-on checkout and its separately installed component harness dependencies."
+      "reason": "not run in CI: needs the add-on checkout and its separately installed component harness dependencies."
     }
   }
 }

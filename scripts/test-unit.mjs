@@ -21,11 +21,7 @@ export function unitRubyPrerequisite(execute = spawnSync, env = process.env) {
 }
 
 export function unitConcurrency(env = process.env) {
-  if (ciRuntime(env) === "native") {
-    const workers = env.WASALX_LOCAL_UNIT_WORKERS ?? "4";
-    assert.match(workers, /^[1-4]$/u, "Local unit workers must be an integer from 1 to 4");
-    return Number(workers);
-  }
+  if (ciRuntime(env) === "native") return 4;
   assert.equal(env.GITHUB_JOB, "repository");
   assert.match(env.CI_UNIT_WORKERS_CLOUD ?? "", /^[1-9][0-9]*$/u, "managed unit workers require the existing platform hint");
   const workers = Number(env.CI_UNIT_WORKERS_CLOUD);
@@ -122,13 +118,13 @@ const unitInventory = ["tests/operator-input.test.mjs","tests/no-agent-instructi
 export const unitFiles = unitInventory.map(entry => typeof entry === "string" ? entry : entry[0]);
 export const unitFileTimings = Object.fromEntries(unitInventory.filter(Array.isArray));
 export const { unitAllowlist } = JSON.parse(readFileSync(new URL("./hosted-ci-config.json", import.meta.url)));
+export const localUnitFiles = [...unitFiles, ...Object.keys(unitAllowlist).filter(file => unitAllowlist[file].runner === "test:unit")];
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
     console.log(`Unit Ruby prerequisite: ${unitRubyPrerequisite()} (minitest available)`);
     // Bound file workers on the shared runner; suites also spawn Ruby/Python children.
-    const localOnly = Object.keys(unitAllowlist).filter(file => unitAllowlist[file].runner === "test:unit");
-    const result = spawnSync(process.execPath, ["--experimental-strip-types", "--test", `--test-concurrency=${unitConcurrency()}`, ...unitFiles, ...localOnly], { stdio: "inherit" });
+    const result = spawnSync(process.execPath, ["--experimental-strip-types", "--test", `--test-concurrency=${unitConcurrency()}`, ...localUnitFiles], { stdio: "inherit" });
     if (result.error) console.error(result.error.message);
     process.exitCode = result.status ?? 1;
   } catch (error) {
