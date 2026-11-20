@@ -40,7 +40,7 @@ test("tracked Node tests belong to the unit inventory or have a named runner", a
   assert.deepEqual({ missing, stale, invalid }, { missing: [], stale: [], invalid: [] });
 });
 
-test("CI gates integration on merge groups and skips integration on pull requests", async () => {
+test("CI gates integration on merge groups and runs portal integration files serially", async () => {
   const { on, jobs } = parse(await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8"));
   const { integration, "ci-gate": gate } = jobs;
   assert(Object.hasOwn(on, "workflow_dispatch"));
@@ -50,6 +50,8 @@ test("CI gates integration on merge groups and skips integration on pull request
   assert.equal(integration["timeout-minutes"], 25);
   assert.deepEqual(integration.permissions, { contents: "read" });
   assert.match(integration.services.postgres.image, /^postgres:[^@]+@sha256:[a-f0-9]{64}$/u);
+  const portalIntegration = integration.steps.find(step => step.name === "Test portal and tenant integration");
+  assert.match(portalIntegration?.run, /^node --test --test-concurrency=1 /u);
   assert(gate.needs.includes("integration"));
   const [gateStep] = gate.steps;
   assert.equal(gateStep.env.INTEGRATION, "${{ needs.integration.result }}");
