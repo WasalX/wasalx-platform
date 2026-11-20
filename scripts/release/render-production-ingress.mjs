@@ -18,7 +18,10 @@ export function renderProductionIngress({ namespace }) {
         if (origin.protocol !== "https:" || origin.port !== "") throw new Error("Unexpected tenant ingress service");
         return { ...rule };
       }
-      if (!requiredOperatorInput("WASALX_INGRESS_SERVICE_HOSTS").split(",").includes(origin.hostname)) {
+      const serviceHosts = process.env.WASALX_INGRESS_SERVICE_HOSTS === undefined
+        ? ["wasalx-api", "wasalx-keycloak", "wasalx-portal"]
+        : requiredOperatorInput("WASALX_INGRESS_SERVICE_HOSTS").split(",");
+      if (!serviceHosts.includes(origin.hostname)) {
         throw new Error("Unexpected application ingress service");
       }
       origin.hostname += `.${namespace}.svc.cluster.local`;

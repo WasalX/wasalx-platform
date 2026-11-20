@@ -159,11 +159,14 @@ The plan captures the pinned source in the matrix. A malformed value or one
 that differs from the pin fails validation. The supplied revision must provide
 `zammad-package`, `build/zammad`, Ruby contracts under `tests/`, and `tests/fixtures`,
 matching the existing package version/hash in `zammad-addon.json`.
+No secret, deploy key or token is supplied to reach the add-on.
 
 The public repository Actions variable **`PUBLIC_CONTACT_EMAIL`** applies only
-to the portal build. The build receipt and signed provenance record
-`contactEmailSha256` as `sha256:<hex>` over the exact UTF-8 input. An unset or
-empty value records the SHA-256 of the empty string and uses the portal fallback.
+to the portal build. The owner controls this variable. The workflow does not
+modify repository or organization settings. The build receipt and signed
+provenance record `contactEmailSha256` as `sha256:<hex>` over the exact UTF-8
+input. An unset or empty value records the SHA-256 of the empty string and uses
+the portal fallback.
 Changing the variable can change the portal digest even when the commit is the
 same. The next successful publication of that commit, including a rerun of main
 publication, updates `ghcr.io/wasalx/portal:<commit>` to the resulting digest.

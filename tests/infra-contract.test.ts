@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { parse as parseYaml } from "yaml";
 
 const read = (path: string) =>
@@ -15,6 +15,45 @@ const bash = process.platform === "win32"
   ? [process.env.BASH, process.env.GIT_BASH, process.env.ProgramFiles && join(process.env.ProgramFiles, "Git", "bin", "bash.exe"), "bash"]
     .filter((candidate): candidate is string => Boolean(candidate)).find(existsSync) ?? "bash"
   : "bash";
+
+test("production ingress defaults to the chart services and still honors an operator allowlist", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "wasalx-ingress-"));
+  try {
+    const fragment = join(dir, "ingress.json");
+    const script = fileURLToPath(new URL("../scripts/release/render-production-ingress.mjs", import.meta.url));
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      WASALX_INGRESS_FRAGMENT: pathToFileURL(fragment).href,
+      WASALX_INGRESS_ROUTER_HOST: "router.example.test",
+    };
+    delete env.WASALX_INGRESS_SERVICE_HOSTS;
+    const run = async (hosts: string[], name: string) => {
+      const output = join(dir, `${name}.json`);
+      await writeFile(fragment, JSON.stringify({ ingress: hosts.map(host => ({ service: `http://${host}:3000` })) }));
+      return {
+        output,
+        result: spawnSync(process.execPath, [script, "fixture", output], { env, encoding: "utf8", windowsHide: true }),
+      };
+    };
+    const defaults = ["wasalx-api", "wasalx-keycloak", "wasalx-portal"];
+    const accepted = await run(defaults, "default");
+    assert.equal(accepted.result.status, 0, accepted.result.stderr);
+    const rendered = JSON.parse(await readFile(accepted.output, "utf8"));
+    assert.deepEqual(rendered.config.ingress, defaults.map(host => ({ service: `http://${host}.fixture.svc.cluster.local:3000` })));
+
+    const rejected = await run(["custom-service"], "rejected");
+    assert.equal(rejected.result.status, 1);
+    assert.match(rejected.result.stderr, /Unexpected application ingress service/u);
+    env.WASALX_INGRESS_SERVICE_HOSTS = "custom-service";
+    const overridden = await run(["custom-service"], "override");
+    assert.equal(overridden.result.status, 0, overridden.result.stderr);
+    const replaced = await run([defaults[0]], "replaced");
+    assert.equal(replaced.result.status, 1);
+    assert.match(replaced.result.stderr, /Unexpected application ingress service/u);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
 
 
 

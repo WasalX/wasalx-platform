@@ -1,6 +1,6 @@
 resource "kubernetes_namespace" "wasalx" {
   metadata {
-    name = var.application_namespace
+    name = var.application_namespace != null ? var.application_namespace : "${var.namespace}-${var.environment}"
     labels = {
       "app.kubernetes.io/part-of" = "wasalx"
       environment                 = var.environment
