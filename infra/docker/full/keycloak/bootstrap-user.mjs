@@ -1,5 +1,16 @@
-import { adminBaseUrl, findUsers, login, readJson, required } from "./admin-rest.mjs";
+import { adminBaseUrl, adminRequest, findUsers, login, readJson, required } from "./admin-rest.mjs";
 
+const readUsername = (name, fallback) => {
+  const value = (process.env[name] ?? fallback).trim().toLowerCase();
+  if (!value) throw new Error(`${name} is required`);
+  return value;
+};
+const qualificationOwnerUsernameEnv = "WASALX_QUALIFICATION_OWNER_USERNAME";
+const isolationOwnerUsernameEnv = "WASALX_ISOLATION_OWNER_USERNAME";
+const platformOperatorUsernameEnv = "WASALX_PLATFORM_OPERATOR_USERNAME";
+const qualificationOwnerUsername = readUsername(qualificationOwnerUsernameEnv, "example.owner");
+const isolationOwnerUsername = readUsername(isolationOwnerUsernameEnv, "example.isolation");
+const platformOperatorUsername = readUsername(platformOperatorUsernameEnv, "example.platform");
 const adminUsername = required("KEYCLOAK_ADMIN");
 const adminPassword = required("KEYCLOAK_ADMIN_PASSWORD");
 const qualificationOwnerPassword = required("WASALX_QUALIFICATION_OWNER_PASSWORD");
@@ -68,25 +79,42 @@ async function findUser(token, realm, username) {
   return users[0];
 }
 
-async function reconcileUser(token, realm, desired) {
-  stage = `${realm} user reconciliation`;
-  let existingId;
+class UsernameMismatchError extends Error {}
+
+async function lookupUserForReconciliation(token, realm, desired, usernameEnv) {
+  stage = `${realm} user lookup`;
+  let existing;
   if (desired.id) {
-    const lookup = await fetch(
-      `${baseUrl}/admin/realms/${encodeURIComponent(realm)}/users/${encodeURIComponent(desired.id)}`,
-      { headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(10_000) },
-    );
-    if (!lookup.ok && lookup.status !== 404) throw new Error(`Keycloak user lookup failed for ${realm}`);
+    const lookup = await adminRequest(baseUrl, token, realm, `/users/${encodeURIComponent(desired.id)}`);
     if (lookup.status === 404) throw new Error(`Keycloak seeded user is missing for ${realm}`);
-    if (lookup.ok) existingId = desired.id;
+    if (!lookup.ok) throw new Error(`Keycloak user lookup failed for ${realm}`);
+    existing = await readJson(lookup);
   } else {
-    const matches = await findUsers(baseUrl, token, realm, { username: desired.username });
-    if (!Array.isArray(matches) || matches.length > 1) throw new Error(`Keycloak user lookup was ambiguous for ${realm}`);
-    existingId = matches[0]?.id;
+    for (const filter of [{ email: desired.email }, { username: desired.username }]) {
+      const matches = await findUsers(baseUrl, token, realm, filter);
+      if (!Array.isArray(matches) || matches.length > 1) throw new Error(`Keycloak user lookup was ambiguous for ${realm}`);
+      if (matches.length === 1) {
+        existing = matches[0];
+        break;
+      }
+    }
+    if (existing === undefined) return undefined;
   }
+  if (existing?.username !== desired.username) {
+    throw new UsernameMismatchError(`Keycloak existing user has a different username in ${realm}. Set ${usernameEnv} to its current username.`);
+  }
+  if (typeof existing.id !== "string") throw new Error(`Keycloak user lookup returned no ID for ${realm}`);
+  return desired.id ?? existing.id;
+}
+
+async function reconcileUser(token, realm, desired, existingId) {
+  stage = `${realm} user reconciliation`;
   const exists = typeof existingId === "string";
   const payload = { ...desired };
-  if (exists) delete payload.requiredActions;
+  if (exists) {
+    delete payload.username;
+    delete payload.requiredActions;
+  }
   const response = await fetch(
     exists
       ? `${baseUrl}/admin/realms/${encodeURIComponent(realm)}/users/${encodeURIComponent(existingId)}`
@@ -224,36 +252,47 @@ async function reconcilePublicClient(token, realm, desired) {
 let stage = "administrator authentication";
 try {
   const token = await login(baseUrl, { username: adminUsername, password: adminPassword }, 12);
-  await reconcileRealmPresentation(token, "wasalx");
-  await reconcileRealmPresentation(token, "wasalx-platform");
-  await reconcileUser(token, "wasalx", {
+  const qualificationOwner = {
     id: "10000000-0000-4000-8000-000000000001",
-    username: "example.owner",
+    username: qualificationOwnerUsername,
     email: qualificationOwnerEmail || "fixture-0006@example.test",
     emailVerified: true,
     enabled: true,
     firstName: "Qualification",
     lastName: "Owner",
     requiredActions: ["CONFIGURE_TOTP"],
-  });
+  };
+  const isolationOwner = {
+    username: isolationOwnerUsername,
+    email: isolationOwnerEmail,
+    emailVerified: true,
+    enabled: true,
+    firstName: "Isolation",
+    lastName: "Owner",
+    requiredActions: ["CONFIGURE_TOTP"],
+  };
+  const qualificationOwnerId = await lookupUserForReconciliation(token, "wasalx", qualificationOwner, qualificationOwnerUsernameEnv);
+  const isolationOwnerId = isolationOwnerEmail
+    ? await lookupUserForReconciliation(token, "wasalx", isolationOwner, isolationOwnerUsernameEnv)
+    : undefined;
+  await lookupUserForReconciliation(token, "wasalx-platform", {
+    id: "10000000-0000-4000-8000-000000000002",
+    username: platformOperatorUsername,
+  }, platformOperatorUsernameEnv);
+
+  await reconcileRealmPresentation(token, "wasalx");
+  await reconcileRealmPresentation(token, "wasalx-platform");
+  await reconcileUser(token, "wasalx", qualificationOwner, qualificationOwnerId);
   if (isolationOwnerEmail) {
-    await reconcileUser(token, "wasalx", {
-      username: "example.isolation",
-      email: isolationOwnerEmail,
-      emailVerified: true,
-      enabled: true,
-      firstName: "Isolation",
-      lastName: "Owner",
-      requiredActions: ["CONFIGURE_TOTP"],
-    });
+    await reconcileUser(token, "wasalx", isolationOwner, isolationOwnerId);
   }
   stage = "qualification owner password reset";
-  await resetPassword(token, "wasalx", "example.owner", qualificationOwnerPassword);
-  await reconcileTotpEnrollment(token, "wasalx", "example.owner");
+  await resetPassword(token, "wasalx", qualificationOwnerUsername, qualificationOwnerPassword);
+  await reconcileTotpEnrollment(token, "wasalx", qualificationOwnerUsername);
   if (isolationOwnerEmail) {
     stage = "isolation owner password reset";
-    await resetPassword(token, "wasalx", "example.isolation", isolationOwnerPassword);
-    await reconcileTotpEnrollment(token, "wasalx", "example.isolation");
+    await resetPassword(token, "wasalx", isolationOwnerUsername, isolationOwnerPassword);
+    await reconcileTotpEnrollment(token, "wasalx", isolationOwnerUsername);
   }
   await reconcilePublicClient(token, "wasalx", {
     clientId: "wasalx-portal",
@@ -371,10 +410,12 @@ try {
     "optionalClientScopes": []
   });
   stage = "platform password reset";
-  await resetPassword(token, "wasalx-platform", "example.platform", platformPassword);
-  await reconcileTotpEnrollment(token, "wasalx-platform", "example.platform");
+  await resetPassword(token, "wasalx-platform", platformOperatorUsername, platformPassword);
+  await reconcileTotpEnrollment(token, "wasalx-platform", platformOperatorUsername);
   process.stdout.write("Keycloak local users initialized.\n");
-} catch {
-  process.stderr.write(`Keycloak local-user bootstrap failed during ${stage}.\n`);
+} catch (error) {
+  process.stderr.write(error instanceof UsernameMismatchError
+    ? `${error.message}\n`
+    : `Keycloak local-user bootstrap failed during ${stage}.\n`);
   process.exitCode = 1;
 }
