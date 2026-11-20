@@ -297,11 +297,10 @@ function composeConnectionHosts(key: string, value: string): string[] {
     if (fallback !== undefined) return hosts(fallback, expectHost);
     const endpoints = endpoint.split(/,\s*(?=(?:jdbc:)?[a-z][\w+.-]*:\/\/)/iu);
     if (endpoints.length > 1) return endpoints.flatMap((entry) => hosts(entry, expectHost));
-    const connections = /(?:jdbc:)?(?<scheme>[a-z][\w+.-]*):\/\/(?<authority>[^\s"'<>\\/?#{}()]*)|(?<variable>\0\d+\0)/giu;
+    const connections = /(?:jdbc:)?([a-z][\w+.-]*):\/\/([^\s"'<>\\/?#{}()]*)|(\0\d+\0)/giu;
     const result: string[] = [];
     let sawUrl = false;
-    for (const { groups } of endpoint.matchAll(connections)) {
-      const { scheme, authority, variable } = groups!;
+    for (const [, scheme, authority, variable] of endpoint.matchAll(connections)) {
       if (variable) {
         const embeddedDefault = defaults.get(variable);
         if (embeddedDefault !== undefined) result.push(...hosts(embeddedDefault, false));
