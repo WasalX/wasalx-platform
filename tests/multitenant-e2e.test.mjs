@@ -95,7 +95,7 @@ test("one OIDC subject switches between isolated tenant sessions fail closed", {
     const context = await resources.browser.newContext();
     const page = await context.newPage();
 
-    await waitForApplication(page, resources, `${portalOrigin}/auth/login?tenant_id=${tenantA}&return_to=/app`);
+    await waitForApplication(page, resources, () => page.goto(`${portalOrigin}/auth/login?tenant_id=${tenantA}&return_to=/app`));
     await page.getByRole("navigation", { name: "Primary navigation" }).getByRole("link", { name: /Connections/u }).click();
     await assertWorkspace(page, "Tenant Alpha", "ALPHA-ONLY-CONNECTION", "BETA-ONLY-CONNECTION");
     const sessionA = await portalSession(context, resources.redis, portalOrigin);
@@ -130,7 +130,7 @@ test("one OIDC subject switches between isolated tenant sessions fail closed", {
     assert.equal(sessionB.value.tenantId, tenantB);
     assert.equal(await resources.redis.exists(`wasalx:portal:session:${sessionA.id}`), 0);
 
-    await waitForApplication(page, resources, `${portalOrigin}/app?view=connections&connection=${connectionA}`);
+    await waitForApplication(page, resources, () => page.goto(`${portalOrigin}/app?view=connections&connection=${connectionA}`));
     await assertWorkspace(page, "Tenant Beta", "BETA-ONLY-CONNECTION", "ALPHA-ONLY-CONNECTION");
     const foreignRead = await context.request.get(`${portalOrigin}/api/connections/${connectionA}`);
     if (foreignRead.status() !== 404) {
@@ -158,14 +158,16 @@ test("one OIDC subject switches between isolated tenant sessions fail closed", {
 
     const authorizationCount=resources.identity.authorizations.length;
     const providerSession=resources.identity.authorizations.at(-1).sessionId;
-    await page.getByRole("button", { name: "Sign out" }).click();
-    await waitFor(()=>resources.identity.logouts.length===1,"identity-provider logout");
+    // Listen before the sign-out click so the fresh login's callback and workspace check are captured.
+    await waitForApplication(page, resources, async () => {
+      await page.getByRole("button", { name: "Sign out" }).click();
+      await waitFor(()=>resources.identity.logouts.length===1,"identity-provider logout");
+    });
     const logoutUrl=resources.identity.logouts[0].url;
     assert.equal(logoutUrl.searchParams.get("client_id"),"wasalx-portal");
     assert.equal(logoutUrl.searchParams.get("post_logout_redirect_uri"),`${portalOrigin}/app`);
     assert.equal(resources.identity.logouts[0].sessionId,providerSession);
     await waitFor(() => resources.redis.exists(`wasalx:portal:session:${sessionB.id}`).then((value) => value === 0), "logout deletion");
-    await waitForApplication(page, resources);
     assert.equal(resources.identity.authorizations.length,authorizationCount+1);
     assert.equal(resources.identity.authorizations.at(-1).hadSession,false);
     assert.notEqual(resources.identity.authorizations.at(-1).sessionId,providerSession);
@@ -212,28 +214,43 @@ test("one OIDC subject switches between isolated tenant sessions fail closed", {
 const diagnosedPaths = new Set(["/auth/callback", "/api/workspaces"]);
 // Query strings can carry OIDC codes or state, so diagnostics print paths and parameter names only.
 const safeUrl = value => { try { const url = new URL(value); return `${url.origin}${url.pathname}${[...url.searchParams.keys()].map(key => `[${key}]`).join("")}`; } catch { return "unparsable"; } };
-const safeText = value => value.replace(/https?:\/\/\S+/gu, safeUrl).replace(/\b(Bearer|token|code|secret|cookie)\b(?:\s*[:=]\s*|\s+)\S+/giu, "$1 [redacted]").slice(0, 300);
+const safeText = value => value
+  .replace(/https?:\/\/\S+/gu, safeUrl)
+  .replace(/eyJ[\w-]+\.[\w-]+\.[\w-]+/gu, "[jwt]")
+  .replace(/\bBearer\s+\S+/giu, "Bearer [redacted]")
+  .replace(/\b(\w*(?:token|code|secret|cookie|session|password)\w*)("?\s*[:=]\s*"?)[^\s",;&}]+/giu, "$1$2[redacted]")
+  .slice(0, 300);
+for (const leak of ["access_token=LEAK", "id_token: LEAK", '{"refresh_token":"LEAK","code":"LEAK"}', "Bearer LEAK", "eyJhbGciOi.eyJzdWIiOi.LEAK-sig", "http://x/auth/callback?code=LEAK", "cookie: wasalx_session=LEAK"])
+  assert.doesNotMatch(safeText(leak), /LEAK/u, "diagnostics must redact credentials");
 
-async function waitForApplication(page, resources, url) {
+async function waitForApplication(page, resources, start) {
   const started = Date.now();
   const events = [];
   const consoleErrors = [];
+  let transient = false;
   const onResponse = response => {
     const { pathname } = new URL(response.url());
-    if (diagnosedPaths.has(pathname)) events.push(`${response.request().method()} ${pathname} ${response.status()} at +${Date.now() - started}ms`);
+    if (!diagnosedPaths.has(pathname)) return;
+    transient ||= response.status() >= 500;
+    events.push(`${response.request().method()} ${pathname} ${response.status()} at +${Date.now() - started}ms`);
   };
   const onFailed = request => {
     const { pathname } = new URL(request.url());
-    if (diagnosedPaths.has(pathname)) events.push(`${request.method()} ${pathname} failed (${request.failure()?.errorText}) at +${Date.now() - started}ms`);
+    if (!diagnosedPaths.has(pathname)) return;
+    transient = true;
+    events.push(`${request.method()} ${pathname} failed (${request.failure()?.errorText}) at +${Date.now() - started}ms`);
   };
   const onConsole = message => { if (message.type() === "error") consoleErrors.push(safeText(message.text())); };
+  const report = extra => JSON.stringify({ url: safeUrl(page.url()), elapsedMs: Date.now() - started, ...extra, events, consoleErrors });
   page.on("response", onResponse); page.on("requestfailed", onFailed); page.on("console", onConsole);
   try {
-    if (url) await page.goto(url);
+    await start?.();
     await page.waitForSelector('[data-application-ready="true"]');
+    // A retry can rescue a transient shell check; print it anyway so the cause stays on record.
+    if (transient) process.stderr.write(`SHELL_CHECK_TRANSIENT ${report({})}\n`);
   } catch (error) {
     const shell = await page.locator("[data-shell-validation]").first().getAttribute("data-shell-validation", { timeout: 1_000 }).catch(() => "absent");
-    process.stderr.write(`${JSON.stringify({ readinessTimeout: { url: safeUrl(page.url()), shellValidation: shell, elapsedMs: Date.now() - started, events, consoleErrors } }, null, 2)}\n`);
+    process.stderr.write(`SHELL_READINESS_TIMEOUT ${report({ shellValidation: shell })}\n`);
     process.stderr.write(`control-api:\n${resources.control.logs()}\nportal:\n${resources.portal.logs()}\n`);
     throw error;
   } finally {
@@ -274,7 +291,7 @@ async function assertBackchannelBoundary(resources, original, first, origin, chi
     }
     // The shell's readiness covers its own workspace and role check; close it before the grant barriers.
     const page = await context.newPage();
-    await waitForApplication(page, resources, `${origin}/auth/login?tenant_id=${tenantA}&return_to=/app`);
+    await waitForApplication(page, resources, () => page.goto(`${origin}/auth/login?tenant_id=${tenantA}&return_to=/app`));
     await page.close();
     const stored = await portalSession(context, redis, origin);
     const workspaces = await read(context);

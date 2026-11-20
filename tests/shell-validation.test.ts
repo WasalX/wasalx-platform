@@ -202,6 +202,7 @@ test("a transient workspace-check failure retries once; 401 and a second failure
   assert.deepEqual(await run(new DOMException("deadline", "TimeoutError"), 200), { response: 200, calls: 2 });
   assert.deepEqual(await run(401, 200), { response: 401, calls: 1 }, "401 never retries");
   assert.deepEqual(await run(403, 200), { response: 403, calls: 1 });
+  assert.deepEqual(await run(404, 200), { response: 404, calls: 1 }, "a non-5xx response is a verdict, not a transient");
   assert.deepEqual(await run(503, 502), { response: 502, calls: 2 }, "two transients become failed");
   assert.deepEqual(await run(new TypeError("network"), new TypeError("network")), { response: "TypeError", calls: 2 });
 
@@ -210,6 +211,28 @@ test("a transient workspace-check failure retries once; 401 and a second failure
   const aborted = fetchAccessCheck(async signal => { calls++; caller.abort(); throw signal.reason; }, caller.signal, 0);
   await assert.rejects(aborted, { name: "AbortError" });
   assert.equal(calls, 1, "a caller abort is never retried");
+
+  const backoff = new AbortController();
+  let backoffCalls = 0;
+  const duringBackoff = fetchAccessCheck(async () => { backoffCalls++; return new Response("{}", { status: 503 }); }, backoff.signal, 50);
+  setTimeout(() => backoff.abort(), 10);
+  await assert.rejects(duringBackoff, { name: "AbortError" });
+  assert.equal(backoffCalls, 1, "an abort during the backoff ends the check without a retry");
+});
+
+test("each workspace-check attempt gets its own deadline", async () => {
+  const signals: AbortSignal[] = [];
+  const response = await fetchAccessCheck(signal => {
+    signals.push(signal);
+    // The first attempt hangs until its deadline; the second must start with a fresh one.
+    if (signals.length === 1) return new Promise<Response>((_, reject) => signal.addEventListener("abort", () => reject(signal.reason)));
+    assert.equal(signal.aborted, false);
+    return Promise.resolve(new Response("{}"));
+  }, undefined, 0, 20);
+  assert.equal(response.status, 200);
+  assert.equal(signals.length, 2);
+  assert.equal(signals[0].reason.name, "TimeoutError");
+  assert.notEqual(signals[0], signals[1]);
 });
 
 test("tenant shell wires silent re-verification, the gate and the reload on a changed workspace", async () => {
