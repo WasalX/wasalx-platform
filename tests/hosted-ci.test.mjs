@@ -1,13 +1,29 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
+import { parse } from "yaml";
 import { collectFile, collectionFiles, inventory, shardFiles } from "../scripts/hosted-ci.mjs";
 import { addonSkips, skipPattern } from "../scripts/hosted-ci-policy.mjs";
 import { generateBaseline } from "../scripts/generate-hosted-ci-baseline.mjs";
 import baseline from "../scripts/hosted-ci-baseline.mjs";
+
+test("integration runs on main pushes and manual dispatches outside the merge gate", async () => {
+  const { on, jobs } = parse(await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8"));
+  const { integration, "ci-gate": gate } = jobs;
+  assert(Object.hasOwn(on, "workflow_dispatch"));
+  assert.deepEqual(on.push.branches, ["main"]);
+  assert.equal(integration.if, "github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')");
+  assert.equal(integration["timeout-minutes"], 25);
+  assert.deepEqual(integration.permissions, { contents: "read" });
+  assert.match(integration.services.postgres.image, /^postgres:[^@]+@sha256:[a-f0-9]{64}$/u);
+  assert(!gate.needs.includes("integration"));
+  for (const job of [jobs.changes, jobs.checks]) {
+    assert.equal(job.if, "github.event_name == 'pull_request' || github.event_name == 'merge_group'");
+  }
+});
 
 test("shards cover each file once regardless of inventory order or duplicates", () => {
   const files = ["d", "a", "b", "c", "a"];
