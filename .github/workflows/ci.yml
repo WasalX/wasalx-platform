@@ -249,15 +249,16 @@ jobs:
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '0'
         run: |
           pnpm exec playwright install --no-shell chromium
-          # Preload the shared image so the parallel tests leave it in place.
+          # Keep the shared fixture image available for both browser tests.
           for attempt in 1 2 3; do
             if docker pull redis:8.4.1-alpine@sha256:e55195a3afbb812a14306909caad6583a1ab6c79f393f53490e42cb2111084a9; then break; fi
             test "$attempt" != 3
             sleep "$attempt"
           done
       - name: Test portal and tenant integration
+        # Keep Docker fixture network changes out of Chromium page loads.
         run: >-
-          node --test tests/multitenant-e2e.test.mjs tests/platform-invitation-e2e.test.mjs
+          node --test --test-concurrency=1 tests/multitenant-e2e.test.mjs tests/platform-invitation-e2e.test.mjs
           tests/portal-security-headers.test.mjs tests/rendered-html.test.mjs
 
   images:
