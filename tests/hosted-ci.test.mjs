@@ -23,9 +23,13 @@ test("CI gates integration on merge groups and skips integration on pull request
   assert(gate.needs.includes("integration"));
   const [gateStep] = gate.steps;
   assert.equal(gateStep.env.INTEGRATION, "${{ needs.integration.result }}");
-  assert.match(gateStep.run, /case "\$EVENT:\$REVIEW:\$IMAGES_NEEDED:\$IMAGES:\$INTEGRATION" in/u);
-  assert.match(gateStep.run, /pull_request:success:false:skipped:skipped\|pull_request:success:true:success:skipped\)/u);
-  assert.match(gateStep.run, /merge_group:skipped:false:skipped:success\|merge_group:skipped:true:success:success\)/u);
+  assert.equal(gateStep.run, `test "$CHANGES" = success && test "$CHECKS" = success || exit 1
+case "$EVENT:$REVIEW:$IMAGES_NEEDED:$IMAGES:$INTEGRATION" in
+  pull_request:success:false:skipped:skipped|pull_request:success:true:success:skipped) ;;
+  merge_group:skipped:false:skipped:success|merge_group:skipped:true:success:success) ;;
+  *) exit 1 ;;
+esac
+`);
   for (const job of [jobs.changes, jobs.checks]) {
     assert.equal(job.if, "github.event_name == 'pull_request' || github.event_name == 'merge_group'");
   }
