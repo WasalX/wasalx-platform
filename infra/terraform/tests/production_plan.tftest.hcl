@@ -261,3 +261,19 @@ run "reject_secret_adapter_namespace_mismatch" {
   }
   expect_failures = [helm_release.control_plane]
 }
+
+run "reject_secret_adapter_derived_namespace_mismatch" {
+  command = plan
+  plan_options { refresh = false }
+  variables {
+    namespace = "another"
+    production_secret_sidecar = {
+      image                   = "example.test/secrets@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      credentials_secret_name = "secret-adapter-credentials"
+      tls_secret_name         = "secret-adapter-tls"
+      ca_config_map_name      = "secret-adapter-ca"
+      api_server_cidrs        = ["192.0.2.1/32"]
+    }
+  }
+  expect_failures = [helm_release.control_plane]
+}
