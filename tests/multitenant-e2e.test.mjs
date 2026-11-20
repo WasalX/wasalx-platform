@@ -242,12 +242,15 @@ async function assertBackchannelBoundary(resources, original, first, origin, chi
       const cookie = (await sameProviderContext.cookies(identity.origin)).find(value => value.name === "wasalx_identity_session");
       assert.ok(cookie); await context.addCookies([cookie]);
     }
-    const page = await context.newPage();
-    await page.goto(`${origin}/auth/login?tenant_id=${tenantA}&return_to=/app`);
-    await page.waitForSelector('[data-application-ready="true"]');
-    const stored = await portalSession(context, redis, origin);
-    await page.close();
-    return { context, ...stored };
+    // These cases exercise the server-side session without starting the polling app shell.
+    const ready = await context.request.get(`${origin}/auth/login?tenant_id=${tenantA}&return_to=/api/workspaces`, {
+      maxRedirects: 3,
+    });
+    assert.ok(ready.url() === `${origin}/api/workspaces`, "OIDC login must return to the workspace API");
+    assert.equal(ready.status(), 200, "The workspace API must accept the new portal session");
+    const { data } = await ready.json();
+    assert.equal(data.find(workspace => workspace.current)?.id, tenantA);
+    return { context, ...(await portalSession(context, redis, origin)) };
   };
   const due = async (stored, expiresAt = Math.floor(Date.now() / 1_000) + 30) => {
     const value = { ...stored.value, expiresAt };
