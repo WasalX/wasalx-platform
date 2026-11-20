@@ -194,7 +194,7 @@ jobs:
           key: ${{ steps.eslint-cache.outputs.cache-primary-key }}
 
   integration:
-    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    if: github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     permissions:
@@ -222,7 +222,11 @@ jobs:
       - name: Enable pinned pnpm
         run: |
           corepack enable
-          corepack install
+          for attempt in 1 2 3; do
+            if corepack install; then break; fi
+            test "$attempt" != 3
+            sleep "$attempt"
+          done
           store=$(pnpm store path --silent)
           echo "PNPM_STORE_PATH=$store" >> "$GITHUB_ENV"
       - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -244,7 +248,11 @@ jobs:
         run: |
           pnpm exec playwright install --no-shell chromium
           # Preload the shared image so the parallel tests leave it in place.
-          docker pull redis:8.4.1-alpine@sha256:e55195a3afbb812a14306909caad6583a1ab6c79f393f53490e42cb2111084a9
+          for attempt in 1 2 3; do
+            if docker pull redis:8.4.1-alpine@sha256:e55195a3afbb812a14306909caad6583a1ab6c79f393f53490e42cb2111084a9; then break; fi
+            test "$attempt" != 3
+            sleep "$attempt"
+          done
       - name: Test portal and tenant integration
         run: >-
           node --test tests/multitenant-e2e.test.mjs tests/platform-invitation-e2e.test.mjs
@@ -312,7 +320,7 @@ jobs:
 
   ci-gate:
     if: always() && (github.event_name == 'pull_request' || github.event_name == 'merge_group')
-    needs: [changes, dependency-review, checks, images]
+    needs: [changes, dependency-review, checks, images, integration]
     runs-on: ubuntu-slim
     timeout-minutes: 2
     permissions: {}
@@ -325,10 +333,11 @@ jobs:
           REVIEW: ${{ needs.dependency-review.result }}
           IMAGES_NEEDED: ${{ needs.changes.outputs.images }}
           IMAGES: ${{ needs.images.result }}
+          INTEGRATION: ${{ needs.integration.result }}
         run: |
           test "$CHANGES" = success && test "$CHECKS" = success || exit 1
-          case "$EVENT:$REVIEW:$IMAGES_NEEDED:$IMAGES" in
-            pull_request:success:false:skipped|pull_request:success:true:success) ;;
-            merge_group:skipped:false:skipped|merge_group:skipped:true:success) ;;
+          case "$EVENT:$REVIEW:$IMAGES_NEEDED:$IMAGES:$INTEGRATION" in
+            pull_request:success:false:skipped:skipped|pull_request:success:true:success:skipped) ;;
+            merge_group:skipped:false:skipped:success|merge_group:skipped:true:success:success) ;;
             *) exit 1 ;;
           esac
