@@ -22,7 +22,7 @@ variable "production_secret_sidecar" {
 resource "kubernetes_namespace" "secret_store" {
   count = var.production_secret_sidecar == null ? 0 : 1
   metadata {
-    name   = var.secret_store_namespace
+    name   = var.secret_store_namespace != null ? var.secret_store_namespace : "${kubernetes_namespace.wasalx.metadata[0].name}-secrets"
     labels = { "pod-security.kubernetes.io/enforce" = "restricted" }
   }
   # Durable application credentials must survive application removal/replacement.

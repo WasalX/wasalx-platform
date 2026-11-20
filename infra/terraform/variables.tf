@@ -370,19 +370,21 @@ variable "tenant_provisioning" {
 }
 
 variable "application_namespace" {
-  type = string
-  description = "Operator-supplied Kubernetes namespace; never a committed deployment identity."
+  type        = string
+  description = "Override the Kubernetes application namespace derived from the namespace prefix and environment."
+  default     = null
   validation {
-    condition = can(regex("^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$", var.application_namespace))
+    condition     = var.application_namespace == null || can(regex("^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$", var.application_namespace))
     error_message = "Supply a valid Kubernetes namespace."
   }
 }
 
 variable "secret_store_namespace" {
-  type = string
-  description = "Operator-supplied Kubernetes namespace; never a committed deployment identity."
+  type        = string
+  description = "Override the Kubernetes secret-store namespace derived from the application namespace."
+  default     = null
   validation {
-    condition = can(regex("^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$", var.secret_store_namespace))
+    condition     = var.secret_store_namespace == null || can(regex("^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$", var.secret_store_namespace))
     error_message = "Supply a valid Kubernetes namespace."
   }
 }

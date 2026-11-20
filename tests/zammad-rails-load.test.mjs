@@ -124,3 +124,18 @@ test("runtime bootstrap looks up the Zammad sample customer by its seeded email"
   // Zammad 7.1.3, db/seeds/community_user_resources.rb.
   assert.equal(email, "nicole.braun@zammad.org");
 });
+
+test("fresh runtime bootstrap completes sample customer cleanup before marking setup done", async () => {
+  const bootstrap = await readFile(new URL("../infra/docker/full/zammad/bootstrap-runtime.rb", import.meta.url), "utf8");
+  const fresh = /^run_bootstrap = lambda do\r?\nif fresh_database\r?\n([\s\S]*?)^end$/mu.exec(bootstrap)?.[1];
+  assert.ok(fresh, "expected the fresh database guard");
+  const positions = [
+    "AutoWizard.setup",
+    "sample_customer = User.find_by",
+    "Ticket.where(customer_id: sample_customer.id).find_each(&:destroy!)",
+    "sample_customer.update!(active: false)",
+    "Setting.set('system_init_done', true)",
+  ].map(step => fresh.indexOf(step));
+  assert.ok(positions.every((position, index) => position > (positions[index - 1] ?? -1)),
+    "setup must stay pending if sample customer cleanup fails");
+});

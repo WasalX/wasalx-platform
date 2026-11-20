@@ -153,12 +153,12 @@ if fresh_database
     ENV['AUTOWIZARD_RELATIVE_PATH'] = wizard_relative_path
     Rails.cache.clear
     AutoWizard.setup
-    Setting.set('system_init_done', true)
     sample_customer = User.find_by(email: 'nicole.braun@zammad.org')
     if sample_customer
       Ticket.where(customer_id: sample_customer.id).find_each(&:destroy!)
       sample_customer.update!(active: false)
     end
+    Setting.set('system_init_done', true)
   ensure
     File.delete(wizard_path) if File.exist?(wizard_path)
   end

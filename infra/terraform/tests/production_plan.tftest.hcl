@@ -1,8 +1,3 @@
-variables {
-  application_namespace = "wasalx"
-  secret_store_namespace = "wasalx-secrets"
-}
-
 mock_provider "kubernetes" {}
 mock_provider "helm" {}
 
@@ -24,7 +19,7 @@ variables {
   migration_secret_name                 = "control-migration-runtime"
   secret_cleanup_secret_name            = "secret-cleanup-runtime"
 
-  allowed_origins = ["https://example.test"]
+  allowed_origins = ["https://release.home.arpa"]
 
   control_plane_egress = {
     shared            = [{ cidr = "192.0.2.1/8", ports = [443] }]
@@ -36,37 +31,37 @@ variables {
   }
 
   production_runtime = {
-    public_webhook_base_url        = "https://example.test"
-    control_api_url                = "https://example.test"
-    portal_public_origin           = "https://example.test"
+    public_webhook_base_url        = "https://release.home.arpa"
+    control_api_url                = "https://release.home.arpa"
+    portal_public_origin           = "https://release.home.arpa"
     secret_sidecar_url             = "https://secrets-agent.wasalx-production.svc.cluster.local:8443"
-    waha_base_url                  = "https://example.test"
+    waha_base_url                  = "https://release.home.arpa"
     waha_admin_secret_reference    = "secret://platform/waha/admin"
-    otlp_endpoint                  = "https://example.test:4318"
+    otlp_endpoint                  = "https://release.home.arpa:4318"
     observability_namespace        = "observability"
-    observability_runbook_base_url = "https://example.test"
-    media_s3_endpoint              = "https://example.test"
+    observability_runbook_base_url = "https://release.home.arpa"
+    media_s3_endpoint              = "https://release.home.arpa"
     media_s3_region                = "me-central-1"
     media_s3_bucket                = "wasalx-prod-media"
     media_s3_kms_key_id            = "arn:aws:kms:me-central-1:111122223333:key/wasalx-prod-media"
     clamav_host                    = "clamav.security.svc.cluster.local"
     clamav_port                    = 3310
     tenant_oidc = {
-      issuer                    = "https://example.test/realms/tenant"
+      issuer                    = "https://release.home.arpa/realms/tenant"
       audience                  = "wasalx-control-api"
-      jwks_uri                  = "https://example.test/realms/tenant/certs"
+      jwks_uri                  = "https://release.home.arpa/realms/tenant/certs"
       client_id                 = "wasalx-tenant-portal"
-      redirect_uri              = "https://example.test/auth/callback"
-      invitation_redirect_uri   = "https://example.test/invitations/callback"
+      redirect_uri              = "https://release.home.arpa/auth/callback"
+      invitation_redirect_uri   = "https://release.home.arpa/invitations/callback"
       privileged_acr_values     = "urn:wasalx:aal2"
       privileged_mfa_amr_values = "mfa,otp"
     }
     platform_operator_oidc = {
-      issuer               = "https://example.test/realms/platform"
+      issuer               = "https://release.home.arpa/realms/platform"
       audience             = "wasalx-platform-api"
-      jwks_uri             = "https://example.test/realms/platform/certs"
+      jwks_uri             = "https://release.home.arpa/realms/platform/certs"
       client_id            = "wasalx-platform-portal"
-      redirect_uri         = "https://example.test/platform/auth/callback"
+      redirect_uri         = "https://release.home.arpa/platform/auth/callback"
       max_auth_age_seconds = "300"
     }
   }
@@ -143,8 +138,8 @@ variables {
     reconciler_identity        = "system:serviceaccount:wasalx-system:tenant-workspace-controller"
     reconciler_service_account = "tenant-workspace-controller"
     reconciler_namespace       = "wasalx-system"
-    workspace_base_domain      = "example.test"
-    oidc_issuer                = "https://example.test/realms/tenant"
+    workspace_base_domain      = "release.home.arpa"
+    oidc_issuer                = "https://release.home.arpa/realms/tenant"
     provider_url               = "https://workspace-provider.wasalx.svc.cluster.local:8092"
     control_plane_url          = "https://wasalx-api.wasalx.svc.cluster.local:3001"
     ingress_class_name         = "nginx"
@@ -255,7 +250,7 @@ run "reject_secret_adapter_namespace_mismatch" {
   command = plan
   plan_options { refresh = false }
   variables {
-    namespace = "another"
+    application_namespace = "another-production"
     production_secret_sidecar = {
       image                   = "example.test/secrets@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
       credentials_secret_name = "secret-adapter-credentials"
