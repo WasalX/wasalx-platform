@@ -1,17 +1,49 @@
 {
   "excludedPatterns": [
     "tests/zammad-sidebar-component/**",
-    "tests/zammad-sidebar-component-harness.test.mjs",
     "tests/visual/**",
-    "tests/*e2e.test.mjs",
-    "tests/*postgres*.mjs",
     "tests/qualification-*",
-    "tests/zammad-image-browser-compat.test.mjs",
-    "tests/rendered-html.test.mjs",
-    "tests/portal-security-headers.test.mjs",
     "scripts/contracts/*-live.mjs",
     "scripts/release/**",
     "scripts/run-application-e2e.mjs",
     "scripts/run-selected-simulation.mjs"
-  ]
+  ],
+  "unitAllowlist": {
+    "tests/installer-preimage.test.mjs": {
+      "runner": "integration",
+      "reason": "Uses Docker Compose to render and hash native service configurations."
+    },
+    "tests/multitenant-e2e.test.mjs": {
+      "runner": "integration",
+      "reason": "Requires Chromium and a running portal, PostgreSQL, and Redis."
+    },
+    "tests/platform-invitation-e2e.test.mjs": {
+      "runner": "integration",
+      "reason": "Requires Chromium and a running portal, PostgreSQL, and Redis."
+    },
+    "tests/portal-security-headers.test.mjs": {
+      "runner": "integration",
+      "reason": "Starts the built portal to check HTTP response headers."
+    },
+    "tests/postgres-load-recovery.test.mjs": {
+      "runner": "integration",
+      "reason": "Requires a PostgreSQL instance with separate admin and application roles."
+    },
+    "tests/rendered-html.test.mjs": {
+      "runner": "integration",
+      "reason": "Starts the built portal to check server-rendered HTML."
+    },
+    "tests/storybook-static-contract.test.mjs": {
+      "runner": "test:design-system",
+      "reason": "Checks the generated story index after building Storybook."
+    },
+    "tests/zammad-image-browser-compat.test.mjs": {
+      "runner": "zammad:compat:browser",
+      "reason": "Requires Chromium and a Docker Compose Zammad stack."
+    },
+    "tests/zammad-sidebar-component-harness.test.mjs": {
+      "runner": "test:unit",
+      "reason": "Requires the add-on checkout and its separately installed component harness dependencies."
+    }
+  }
 }

@@ -104,7 +104,7 @@ test("installer prints a sanitized reason for a failure before the stage loop", 
 
 test("installer subprocess failures retain a bounded stderr tail with sensitive values redacted", () => {
   const token = "A1b2C3d4".repeat(6);
-  const environment = { ...process.env, INSTALLER_TEST_SECRET: "short.+ fixture secret" };
+  const environment = { ...process.env, INSTALLER_TEST_SECRET: "short.+ fixture secret", INSTALLER_TEST_WORKERS: "2" };
   const stderr = [
     "discarded start", "padding ".repeat(300), "invalid Compose interpolation for APP_PORT",
     `APP_PASSWORD="quoted password" ${environment.INSTALLER_TEST_SECRET} Bearer small-token ${token}`,

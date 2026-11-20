@@ -2,13 +2,37 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import test from "node:test";
 import { parse } from "yaml";
 import { collectFile, collectionFiles, inventory, shardFiles } from "../scripts/hosted-ci.mjs";
+import { unitAllowlist, unitConcurrency, unitFiles } from "../scripts/test-unit.mjs";
 import { addonSkips, skipPattern } from "../scripts/hosted-ci-policy.mjs";
 import { generateBaseline } from "../scripts/generate-hosted-ci-baseline.mjs";
 import baseline from "../scripts/hosted-ci-baseline.mjs";
+
+test("the local unit runner accepts a lower worker limit", () => {
+  assert.equal(unitConcurrency({}), 4);
+  assert.equal(unitConcurrency({ WASALX_LOCAL_UNIT_WORKERS: "1" }), 1);
+  assert.equal(unitConcurrency({ WASALX_LOCAL_UNIT_WORKERS: "2" }), 2);
+  assert.throws(() => unitConcurrency({ WASALX_LOCAL_UNIT_WORKERS: "5" }), /Local unit workers/u);
+});
+
+test("tracked top-level Node tests belong to the unit inventory or have a named runner", async () => {
+  const tracked = execFileSync("git", ["ls-files", "-z", "--", "tests"], { encoding: "utf8", windowsHide: true })
+    .split("\0").filter(file => /^tests\/[^/]+\.test\.(?:mjs|cjs|js|ts)$/u.test(file));
+  const units = new Set(unitFiles);
+  const entries = Object.entries(unitAllowlist);
+  const { jobs } = parse(await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8"));
+  const { scripts } = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
+
+  const missing = tracked.filter(file => !units.has(file) && !Object.hasOwn(unitAllowlist, file));
+  const stale = entries.map(([file]) => file).filter(file => units.has(file) || !tracked.includes(file));
+  const invalid = entries.filter(([, { runner, reason }]) =>
+    typeof runner !== "string" || !(Object.hasOwn(jobs, runner) || Object.hasOwn(scripts, runner))
+    || typeof reason !== "string" || !reason.trim() || /[\r\n]/u.test(reason)).map(([file]) => file);
+  assert.deepEqual({ missing, stale, invalid }, { missing: [], stale: [], invalid: [] });
+});
 
 test("CI gates integration on merge groups and skips integration on pull requests", async () => {
   const { on, jobs } = parse(await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8"));

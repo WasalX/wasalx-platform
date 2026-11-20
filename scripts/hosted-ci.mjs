@@ -5,7 +5,7 @@ import { appendFileSync, readFileSync } from "node:fs";
 import { matchesGlob, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
-import { unitFiles, unitFileTimings } from "./test-unit.mjs";
+import { unitAllowlist, unitFiles, unitFileTimings } from "./test-unit.mjs";
 import { addonSkips, skipPattern } from "./hosted-ci-policy.mjs";
 
 const config = JSON.parse(readFileSync(new URL("./hosted-ci-config.json", import.meta.url)));
@@ -36,6 +36,7 @@ export function inventory(tracked) {
 export function collectionFiles(tracked) {
   // Unit shards already prove their imports; collect the additional hosted scope.
   return inventory(tracked).filter(file => !unitFiles.includes(file)
+    && !Object.hasOwn(unitAllowlist, file)
     && !config.excludedPatterns.some(pattern => matchesGlob(file, pattern)));
 }
 
@@ -59,11 +60,9 @@ async function main() {
   const files = mode === "collection" ? collectionFiles(tracked) : inventory(tracked);
   assert(files.length > 0 && files.every(file => file.startsWith("tests/") && !file.includes("..")));
   if (mode === "unit") {
-    const runnable = [...unitFiles, "tests/hosted-ci.test.mjs"]
-      .filter(file => !config.excludedPatterns.some(pattern => matchesGlob(file, pattern)));
-    const selected = shardFiles(runnable, Number(shard), Number(total));
+    const selected = shardFiles(unitFiles, Number(shard), Number(total));
     assert(selected.length > 0, "Empty unit shard");
-    console.log(`Unit shard ${shard}/${total}: ${selected.length} of ${runnable.length} files`);
+    console.log(`Unit shard ${shard}/${total}: ${selected.length} of ${unitFiles.length} files`);
     const skipped = selected.map(file => ({ file, entries: addonSkips(file) })).filter(batch => batch.entries.length);
     const ordinary = selected.filter(file => !skipped.some(batch => batch.file === file));
     const batches = [{ files: ordinary, entries: [] }, ...skipped.map(batch => ({ files: [batch.file], entries: batch.entries }))];
