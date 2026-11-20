@@ -32,7 +32,7 @@ import { MetaTemplatePreparation } from "./MetaTemplatePreparation";
 import { MetaLegacyMigration } from "./MetaLegacyMigration";
 import { formatDateTime, formatDuration, formatNumber, formatPastRelativeTime, formatRelativeTime } from "../lib/i18n/format.ts";
 import { localizedUiError } from "../lib/ui-error.ts";
-import { accessCheckSignal, installShellFetch, shouldCoverOnReturn, trackAccessCheck } from "../lib/shell-validation";
+import { fetchAccessCheck, installShellFetch, shouldCoverOnReturn, trackAccessCheck } from "../lib/shell-validation";
 import { operatorFailureMessage, operatorLocalFailure, confirmUnsavedNavigation, createLatestRequestFence, shouldPauseAutomaticRefresh, unmatchedReviewItems, visibleReviewMetadata, deliveryFailureGuidance } from "../lib/operator-ui.ts";
 import { useVisibleRefresh } from "./use-visible-refresh";
 import { NativeRoutingSync } from "./NativeRoutingSync";
@@ -1085,7 +1085,8 @@ function TenantWasalXApp({
       setShellValidationState(current=>current==="ready"?current:"checking");
     }
     try {
-      const response = await fetch("/api/workspaces", { cache: "no-store", signal: accessCheckSignal(signal) });
+      // A transient failure retries once by itself: headless or unattended tabs never fire the focus re-check.
+      const response = await fetchAccessCheck(attempt => fetch("/api/workspaces", { cache: "no-store", signal: attempt }), signal);
       if (response.status === 401 || response.status === 403) throw new Error("workspace_access_changed");
       if (!response.ok) throw new Error("workspace_list_unavailable");
       const result = (await response.json()) as { data?: WorkspaceOption[] };

@@ -18,6 +18,31 @@ export function accessCheckSignal(signal?: AbortSignal, timeoutMs = ACCESS_CHECK
   return signal ? AbortSignal.any([signal, deadline]) : deadline;
 }
 
+/** Pause before the one automatic retry of a transient workspace-check failure. */
+export const ACCESS_CHECK_RETRY_MS = 1_000;
+
+/**
+ * Runs one workspace-check request under its own deadline and retries it once,
+ * after a short pause, when it fails transiently (network error, deadline or 5xx).
+ * Every other response, 401 and 403 included, and a caller abort return or throw at once.
+ */
+export async function fetchAccessCheck(
+  request: (signal: AbortSignal) => Promise<Response>,
+  signal?: AbortSignal,
+  retryMs = ACCESS_CHECK_RETRY_MS,
+  timeoutMs = ACCESS_CHECK_TIMEOUT_MS,
+): Promise<Response> {
+  try {
+    const response = await request(accessCheckSignal(signal, timeoutMs));
+    if (response.status < 500) return response;
+  } catch (error) {
+    if (signal?.aborted) throw error;
+  }
+  await new Promise(resolve => setTimeout(resolve, retryMs));
+  signal?.throwIfAborted();
+  return request(accessCheckSignal(signal, timeoutMs));
+}
+
 export function shouldCoverOnReturn(awayStartedAt: number | null, now: number) {
   return awayStartedAt !== null && now - awayStartedAt >= SHELL_COVER_AFTER_MS;
 }

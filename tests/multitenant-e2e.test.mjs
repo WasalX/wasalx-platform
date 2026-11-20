@@ -95,8 +95,7 @@ test("one OIDC subject switches between isolated tenant sessions fail closed", {
     const context = await resources.browser.newContext();
     const page = await context.newPage();
 
-    await page.goto(`${portalOrigin}/auth/login?tenant_id=${tenantA}&return_to=/app`);
-    await page.waitForSelector('[data-application-ready="true"]');
+    await waitForApplication(page, resources, `${portalOrigin}/auth/login?tenant_id=${tenantA}&return_to=/app`);
     await page.getByRole("navigation", { name: "Primary navigation" }).getByRole("link", { name: /Connections/u }).click();
     await assertWorkspace(page, "Tenant Alpha", "ALPHA-ONLY-CONNECTION", "BETA-ONLY-CONNECTION");
     const sessionA = await portalSession(context, resources.redis, portalOrigin);
@@ -131,8 +130,7 @@ test("one OIDC subject switches between isolated tenant sessions fail closed", {
     assert.equal(sessionB.value.tenantId, tenantB);
     assert.equal(await resources.redis.exists(`wasalx:portal:session:${sessionA.id}`), 0);
 
-    await page.goto(`${portalOrigin}/app?view=connections&connection=${connectionA}`);
-    await page.waitForSelector('[data-application-ready="true"]');
+    await waitForApplication(page, resources, `${portalOrigin}/app?view=connections&connection=${connectionA}`);
     await assertWorkspace(page, "Tenant Beta", "BETA-ONLY-CONNECTION", "ALPHA-ONLY-CONNECTION");
     const foreignRead = await context.request.get(`${portalOrigin}/api/connections/${connectionA}`);
     if (foreignRead.status() !== 404) {
@@ -167,7 +165,7 @@ test("one OIDC subject switches between isolated tenant sessions fail closed", {
     assert.equal(logoutUrl.searchParams.get("post_logout_redirect_uri"),`${portalOrigin}/app`);
     assert.equal(resources.identity.logouts[0].sessionId,providerSession);
     await waitFor(() => resources.redis.exists(`wasalx:portal:session:${sessionB.id}`).then((value) => value === 0), "logout deletion");
-    await page.waitForSelector('[data-application-ready="true"]');
+    await waitForApplication(page, resources);
     assert.equal(resources.identity.authorizations.length,authorizationCount+1);
     assert.equal(resources.identity.authorizations.at(-1).hadSession,false);
     assert.notEqual(resources.identity.authorizations.at(-1).sessionId,providerSession);
@@ -211,6 +209,38 @@ test("one OIDC subject switches between isolated tenant sessions fail closed", {
   }
 });
 
+const diagnosedPaths = new Set(["/auth/callback", "/api/workspaces"]);
+// Query strings can carry OIDC codes or state, so diagnostics print paths and parameter names only.
+const safeUrl = value => { try { const url = new URL(value); return `${url.origin}${url.pathname}${[...url.searchParams.keys()].map(key => `[${key}]`).join("")}`; } catch { return "unparsable"; } };
+const safeText = value => value.replace(/https?:\/\/\S+/gu, safeUrl).replace(/\b(Bearer|token|code|secret|cookie)\b(?:\s*[:=]\s*|\s+)\S+/giu, "$1 [redacted]").slice(0, 300);
+
+async function waitForApplication(page, resources, url) {
+  const started = Date.now();
+  const events = [];
+  const consoleErrors = [];
+  const onResponse = response => {
+    const { pathname } = new URL(response.url());
+    if (diagnosedPaths.has(pathname)) events.push(`${response.request().method()} ${pathname} ${response.status()} at +${Date.now() - started}ms`);
+  };
+  const onFailed = request => {
+    const { pathname } = new URL(request.url());
+    if (diagnosedPaths.has(pathname)) events.push(`${request.method()} ${pathname} failed (${request.failure()?.errorText}) at +${Date.now() - started}ms`);
+  };
+  const onConsole = message => { if (message.type() === "error") consoleErrors.push(safeText(message.text())); };
+  page.on("response", onResponse); page.on("requestfailed", onFailed); page.on("console", onConsole);
+  try {
+    if (url) await page.goto(url);
+    await page.waitForSelector('[data-application-ready="true"]');
+  } catch (error) {
+    const shell = await page.locator("[data-shell-validation]").first().getAttribute("data-shell-validation", { timeout: 1_000 }).catch(() => "absent");
+    process.stderr.write(`${JSON.stringify({ readinessTimeout: { url: safeUrl(page.url()), shellValidation: shell, elapsedMs: Date.now() - started, events, consoleErrors } }, null, 2)}\n`);
+    process.stderr.write(`control-api:\n${resources.control.logs()}\nportal:\n${resources.portal.logs()}\n`);
+    throw error;
+  } finally {
+    page.off("response", onResponse); page.off("requestfailed", onFailed); page.off("console", onConsole);
+  }
+}
+
 async function assertWorkspace(page, workspace, visible, hidden) {
   await assert.doesNotReject(() => page.getByText(workspace, { exact: true }).first().waitFor());
   await assert.doesNotReject(() => page.getByText(visible, { exact: true }).first().waitFor());
@@ -242,15 +272,18 @@ async function assertBackchannelBoundary(resources, original, first, origin, chi
       const cookie = (await sameProviderContext.cookies(identity.origin)).find(value => value.name === "wasalx_identity_session");
       assert.ok(cookie); await context.addCookies([cookie]);
     }
-    // These cases exercise the server-side session without starting the polling app shell.
-    const ready = await context.request.get(`${origin}/auth/login?tenant_id=${tenantA}&return_to=/api/workspaces`, {
-      maxRedirects: 3,
-    });
-    assert.ok(ready.url() === `${origin}/api/workspaces`, "OIDC login must return to the workspace API");
-    assert.equal(ready.status(), 200, "The workspace API must accept the new portal session");
-    const { data } = await ready.json();
-    assert.equal(data.find(workspace => workspace.current)?.id, tenantA);
-    return { context, ...(await portalSession(context, redis, origin)) };
+    // The shell's readiness covers its own workspace and role check; close it before the grant barriers.
+    const page = await context.newPage();
+    await waitForApplication(page, resources, `${origin}/auth/login?tenant_id=${tenantA}&return_to=/app`);
+    await page.close();
+    const stored = await portalSession(context, redis, origin);
+    const workspaces = await read(context);
+    assert.equal(workspaces.status(), 200, "The workspace API must accept the new portal session");
+    const current = (await workspaces.json()).data.find(workspace => workspace.current);
+    assert.equal(current?.id, tenantA);
+    assert.equal(current.role, stored.value.role, "The session role must match the workspace role");
+    assert.equal(stored.value.role, "tenant_owner");
+    return { context, ...stored };
   };
   const due = async (stored, expiresAt = Math.floor(Date.now() / 1_000) + 30) => {
     const value = { ...stored.value, expiresAt };

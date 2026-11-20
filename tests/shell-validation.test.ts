@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { accessCheckSignal, gateMutations, installShellFetch, isMutatingRequest, SHELL_COVER_AFTER_MS, shouldCoverOnReturn, StaleWorkspaceError, trackAccessCheck } from "../lib/shell-validation.ts";
+import { accessCheckSignal, fetchAccessCheck, gateMutations, installShellFetch, isMutatingRequest, SHELL_COVER_AFTER_MS, shouldCoverOnReturn, StaleWorkspaceError, trackAccessCheck } from "../lib/shell-validation.ts";
 
 test("short absences re-verify silently; five minutes away shows the cover", () => {
   const now = 1_000_000_000;
@@ -187,6 +187,31 @@ test("a caller abort under the check deadline stays an abort, not a verdict", as
   assert.equal(pending.current, null);
 });
 
+test("a transient workspace-check failure retries once; 401 and a second failure do not", async () => {
+  const run = async (...results: Array<number | Error>) => {
+    let calls = 0;
+    const response = await fetchAccessCheck(async () => {
+      const next = results[calls++];
+      if (next instanceof Error) throw next;
+      return new Response("{}", { status: next });
+    }, undefined, 0).then(value => value.status, (error: Error) => error.name);
+    return { response, calls };
+  };
+  assert.deepEqual(await run(503, 200), { response: 200, calls: 2 }, "transient then success becomes ready");
+  assert.deepEqual(await run(new TypeError("network"), 200), { response: 200, calls: 2 });
+  assert.deepEqual(await run(new DOMException("deadline", "TimeoutError"), 200), { response: 200, calls: 2 });
+  assert.deepEqual(await run(401, 200), { response: 401, calls: 1 }, "401 never retries");
+  assert.deepEqual(await run(403, 200), { response: 403, calls: 1 });
+  assert.deepEqual(await run(503, 502), { response: 502, calls: 2 }, "two transients become failed");
+  assert.deepEqual(await run(new TypeError("network"), new TypeError("network")), { response: "TypeError", calls: 2 });
+
+  const caller = new AbortController();
+  let calls = 0;
+  const aborted = fetchAccessCheck(async signal => { calls++; caller.abort(); throw signal.reason; }, caller.signal, 0);
+  await assert.rejects(aborted, { name: "AbortError" });
+  assert.equal(calls, 1, "a caller abort is never retried");
+});
+
 test("tenant shell wires silent re-verification, the gate and the reload on a changed workspace", async () => {
   const source = await readFile(new URL("../app/WasalXApp.tsx", import.meta.url), "utf8");
   assert.doesNotMatch(source, /addEventListener\("blur",maskShell\)/u, "leaving the window no longer covers the page");
@@ -200,7 +225,7 @@ test("tenant shell wires silent re-verification, the gate and the reload on a ch
   assert.match(source, /trackAccessCheck\(loadWorkspaces\(signal\),accessCheck,shellVerified,signal\)/u);
   assert.equal((source.match(/loadWorkspaces\(/gu) ?? []).length, 2, "the initial, focus, retry and background checks all use a tracked path");
   assert.match(source, /accessCheck\.current=null;shellVerified\.current=false/u);
-  assert.match(source, /fetch\("\/api\/workspaces", \{ cache: "no-store", signal: accessCheckSignal\(signal\) \}\)/u, "the workspace check has a deadline");
+  assert.match(source, /fetchAccessCheck\(attempt => fetch\("\/api\/workspaces", \{ cache: "no-store", signal: attempt \}\), signal\)/u, "the workspace check has a deadline per attempt and one transient retry");
   assert.match(source, /error\.name === "AbortError"\) \{[\s\S]{0,200}if\(workspaceLoadFence\.current\.isCurrent\(request\)\)\{[^}]*setShellValidationState\(current=>current==="checking"\?"failed":current\)\}\s*return false;/u, "an aborted check that still owns the cover leaves Retry instead of a dead end");
   assert.match(source, /if\(isCurrent\(\)\)\{setWorkspaceLoadState\("failed"\);setShellValidationState\("failed"\)\}/u, "a timeout falls through to the failed verdict with Retry");
   assert.match(source, /useEffect\(\(\)=>\{if\(shellValidationState==="failed"\)shellRetryRef\.current\?\.focus\(\{preventScroll:true\}\)\},\[shellValidationState\]\);/u, "the failed cover moves keyboard focus to Retry only when it appears");
