@@ -262,6 +262,96 @@ test("native promtool preserves its pinned version and the public alert fixture 
   assert.equal(createHash("sha256").update(c1Fixture).digest("hex"), "9fbf1d71d03626aeb3566677544f1874e0a4a1fd58eea56d9dc8a1ec85566ace");
 });
 
+type ComposeEnvironment = Record<string, string | number | boolean | null>;
+
+async function readComposeEnvironments(file: string): Promise<Record<string, ComposeEnvironment>> {
+  // Compose's !override tags in these files apply to fields outside environment.
+  const { services } = parseYaml(await read(file), { merge: true, logLevel: "error" });
+  return Object.fromEntries(Object.entries(services).map(([name, service]) => {
+    const environment = (service as { environment?: ComposeEnvironment | string[] }).environment;
+    return [name, Array.isArray(environment) ? Object.fromEntries(environment.map((entry) => {
+      const equals = entry.indexOf("=");
+      return equals === -1 ? [entry, null] : [entry.slice(0, equals), entry.slice(equals + 1)];
+    })) : environment ?? {}];
+  }));
+}
+
+function composeConnectionHosts(key: string, value: string): string[] {
+  const connectionKey = /_(?:URL|DSN|HOST)$|^(?:PGHOST|MEMCACHE_SERVERS|ZAMMAD_FQDN)$/u.test(key);
+  const supportedScheme = /^(?:https?|postgres(?:ql)?|rediss?|amqps?|mongodb(?:\+srv)?)$/iu;
+  // Keep credentials and ports opaque. Inspect literal defaults only at endpoint or host positions.
+  const defaults = new Map<string, string>();
+  const interpolation = /(?<!\$)\$\{[A-Za-z_]\w*(?:(:?[-+?])([^{}]*))?\}/gu;
+  while (interpolation.test(value)) {
+    interpolation.lastIndex = 0;
+    value = value.replace(interpolation, (_match, operator = "", fallback = "") => {
+      const token = `\0${defaults.size}\0`;
+      defaults.set(token, /[+-]$/u.test(operator) ? fallback : "");
+      return token;
+    });
+  }
+
+  function hosts(endpoint: string, expectHost: boolean): string[] {
+    endpoint = endpoint.trim();
+    if (!endpoint || (key.startsWith("ALLOW_") && /^(?:true|false)$/u.test(endpoint))) return [];
+    const fallback = defaults.get(endpoint);
+    if (fallback !== undefined) return hosts(fallback, expectHost);
+    const endpoints = endpoint.split(/,\s*(?=(?:jdbc:)?[a-z][\w+.-]*:\/\/)/iu);
+    if (endpoints.length > 1) return endpoints.flatMap((entry) => hosts(entry, expectHost));
+    const url = /^(jdbc:)?([a-z][\w+.-]*):\/\/([^/?#]*)/iu.exec(endpoint);
+    if (!expectHost && !(url && (url[1] || supportedScheme.test(url[2])))) return [];
+    const dsnHost = /(?:^|\s)host=(?:'([^']+)'|(\S+))/u.exec(endpoint);
+    const authority = url ? url[3].slice(url[3].lastIndexOf("@") + 1) : dsnHost?.[1] ?? dsnHost?.[2] ?? endpoint;
+    return authority.split(",").flatMap((entry) => {
+      const host = /^(\[[^\]]+\]|[^:\s/?#]+)(?::(?:\d+|\0\d+\0))?$/u.exec(entry.trim())?.[1];
+      if (!host) return ["(invalid or missing host)"];
+      const hostDefault = defaults.get(host);
+      return hostDefault === undefined ? [host.toLowerCase()] : hosts(hostDefault, true);
+    });
+  }
+
+  return hosts(value, connectionKey);
+}
+
+test("Compose connection hosts resolve in the base file, full override and merged stack", async () => {
+  const [base, full] = await Promise.all([readComposeEnvironments("compose.yaml"), readComposeEnvironments("compose.full.yaml")]);
+  const merged = Object.fromEntries([...new Set([...Object.keys(base), ...Object.keys(full)])]
+    .map((service) => [service, { ...base[service], ...full[service] }]));
+  const externalHosts = new Map([
+    ["localhost", "Loopback for developer browser URLs"],
+    ["127.0.0.1", "Loopback for published local services and disabled fixture integrations"],
+    ["identity.local", "Developer OIDC issuer outside Compose DNS"],
+    ["email-provider.invalid", "Fail-closed developer default until an invitation provider is supplied"],
+    ["kubernetes.default.svc", "Kubernetes API DNS in the optional provisioning profile"],
+    ["workspace-provider.platform.svc.cluster.local", "Kubernetes workspace provider DNS in the optional provisioning profile"],
+  ]);
+  const invalid: string[] = [];
+  for (const [file, environments, services] of [
+    ["compose.yaml", base, base],
+    // The installer loads the override after the base. Check its raw values against both sets of service declarations.
+    ["compose.full.yaml", full, merged],
+    ["merged Compose", merged, merged],
+  ] as const) {
+    for (const [service, environment] of Object.entries(environments)) {
+      for (const [key, value] of Object.entries(environment)) {
+        if (value === null) continue;
+        for (const host of composeConnectionHosts(key, String(value))) {
+          if (service === "jaeger" && key === "JAEGER_LISTEN_HOST" && host === "0.0.0.0") continue; // Listener bind address.
+          if (!Object.hasOwn(services, host) && !externalHosts.has(host)) invalid.push(`${file}: ${service}.${key} -> ${host}`);
+        }
+      }
+    }
+  }
+  assert.deepEqual(invalid, [], "Compose connection hosts must name a service, use an interpolation or have a documented exception");
+
+  const keycloakDatabaseUrl = full.keycloak.KC_DB_URL;
+  assert.ok(typeof keycloakDatabaseUrl === "string");
+  assert.match(keycloakDatabaseUrl, /^jdbc:postgresql:\/\//u);
+  const keycloakDatabase = new URL(keycloakDatabaseUrl.replace(/^jdbc:/u, ""));
+  assert.equal(keycloakDatabase.hostname, "keycloak-postgresql");
+  assert.equal(keycloakDatabase.pathname, `/${full["keycloak-postgresql"].POSTGRES_DB}`);
+});
+
 test("direct Helm production installs reject development defaults and incomplete runtime dependencies", async () => {
   const schema = JSON.parse(
     await read("infra/helm/wasalx/values.schema.json"),
