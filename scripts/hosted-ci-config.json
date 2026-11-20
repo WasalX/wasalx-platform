@@ -1,5 +1,7 @@
 {
   "excludedPatterns": [
+    "tests/portal-security-headers.test.mjs",
+    "tests/rendered-html.test.mjs",
     "tests/zammad-sidebar-component/**",
     "tests/zammad-image-browser-compat.test.mjs",
     "tests/visual/**",

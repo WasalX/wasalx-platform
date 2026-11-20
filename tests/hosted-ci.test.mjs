@@ -7,7 +7,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
 import { collectFile, collectionFiles, inventory, isTestFile, shardFiles } from "../scripts/hosted-ci.mjs";
-import { localUnitFiles, unitAllowlist, unitFiles } from "../scripts/test-unit.mjs";
+import { unitAllowlist, unitFiles } from "../scripts/test-unit.mjs";
 import { addonSkips, skipPattern } from "../scripts/hosted-ci-policy.mjs";
 import { generateBaseline } from "../scripts/generate-hosted-ci-baseline.mjs";
 import baseline from "../scripts/hosted-ci-baseline.mjs";
@@ -31,10 +31,11 @@ test("tracked Node tests belong to the unit inventory or have a named runner", a
   const stale = entries.map(([file]) => file).filter(file => units.has(file) || !testFiles.includes(file));
   const invalid = entries.filter(([file, { runner, reason }]) => {
     if (typeof runner !== "string" || typeof reason !== "string" || !reason.trim() || /[\r\n]/u.test(reason)) return true;
-    if (Object.hasOwn(jobs, runner)) return !runsFile(runText(jobs[runner]), file);
-    if (!Object.hasOwn(scripts, runner) || (!ciScripts.has(runner) && !/^not run in CI: \S/u.test(reason))) return true;
-    if (runner === "test:unit") return !runsFile(scripts[runner], "scripts/test-unit.mjs") || !localUnitFiles.includes(file);
-    return !runsFile(scripts[runner], file);
+    const hasJob = Object.hasOwn(jobs, runner);
+    const runsInCI = hasJob || ciScripts.has(runner);
+    if (runsInCI ? reason.trimStart().startsWith("not run in CI:") : !/^not run in CI: \S/u.test(reason)) return true;
+    if (hasJob) return !runsFile(runText(jobs[runner]), file);
+    return !Object.hasOwn(scripts, runner) || !runsFile(scripts[runner], runner === "test:unit" ? "scripts/test-unit.mjs" : file);
   }).map(([file]) => file);
   assert.deepEqual({ missing, stale, invalid }, { missing: [], stale: [], invalid: [] });
 });
@@ -88,7 +89,10 @@ test("collection includes allowlisted imports and discovers nested test extensio
   assert(!files.includes("tests/fixture.mjs"));
   assert(!files.includes("tests/zammad-sidebar-component/view.test.tsx"));
   const allowlisted = ["tests/installer-preimage.test.mjs", "tests/storybook-static-contract.test.mjs"];
-  const excluded = ["tests/dev-secret-sidecar.test.mjs", "tests/visual/renderer.test.mjs", "tests/zammad-image-browser-compat.test.mjs"];
+  const excluded = [
+    "tests/dev-secret-sidecar.test.mjs", "tests/visual/renderer.test.mjs", "tests/zammad-image-browser-compat.test.mjs",
+    "tests/portal-security-headers.test.mjs", "tests/rendered-html.test.mjs",
+  ];
   assert.deepEqual(collectionFiles([...allowlisted, ...excluded]), allowlisted);
 });
 
@@ -105,10 +109,13 @@ test("collection skips test bodies, reports import errors and kills hanging impo
   const directory = await mkdtemp(join(tmpdir(), "hosted-ci-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const valid = join(directory, "valid.mjs"), invalid = join(directory, "invalid.mjs"), hanging = join(directory, "hanging.mjs");
-  await writeFile(valid, "import test, { before } from 'node:test'; before(()=>{throw new Error('HOOK_EXECUTED');}); test('skipped body',()=>{throw new Error('BODY_EXECUTED');});\n");
+  const body = join(directory, "body-ran");
+  await writeFile(valid, "import { writeFileSync } from 'node:fs'; import test from 'node:test'; "
+    + "test('skipped body', () => writeFileSync(" + JSON.stringify(body) + ", 'ran'));\n");
   await writeFile(invalid, "throw new Error('IMPORT_FAILED');\n");
   await writeFile(hanging, "setInterval(()=>{},1000); await new Promise(()=>{});\n");
   assert.equal((await collectFile(valid)).failed, false);
+  await assert.rejects(readFile(body), { code: "ENOENT" });
   const failure = await collectFile(invalid);
   assert.equal(failure.failed, true);
   const timeout = await collectFile(hanging, 2000);

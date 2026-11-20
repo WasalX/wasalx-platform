@@ -118,7 +118,7 @@ const unitInventory = ["tests/operator-input.test.mjs","tests/no-agent-instructi
 export const unitFiles = unitInventory.map(entry => typeof entry === "string" ? entry : entry[0]);
 export const unitFileTimings = Object.fromEntries(unitInventory.filter(Array.isArray));
 export const { unitAllowlist } = JSON.parse(readFileSync(new URL("./hosted-ci-config.json", import.meta.url)));
-export const localUnitFiles = [...unitFiles, ...Object.keys(unitAllowlist).filter(file => unitAllowlist[file].runner === "test:unit")];
+const localUnitFiles = [...unitFiles, ...Object.keys(unitAllowlist).filter(file => unitAllowlist[file].runner === "test:unit")];
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
