@@ -9,13 +9,17 @@ NATIVE_INFRA=false
 if [[ "${WASALX_CI_RUNTIME-native}" == managed && "${WASALX_CI_ROUTE-fullruntime}" == cloud ]]; then
   NATIVE_INFRA=true
 fi
-for tool in curl tar ruby python3 shasum; do
+prerequisites=(curl shasum)
+if [[ "${1:-}" == --terraform-test-only ]]; then
+  prerequisites+=(unzip)
+else
+  prerequisites+=(tar ruby python3)
+  if [[ "$NATIVE_INFRA" == true ]]; then prerequisites+=(unzip); else prerequisites+=(docker); fi
+fi
+for tool in "${prerequisites[@]}"; do
   command -v "$tool" >/dev/null || { printf 'missing infrastructure prerequisite: %s\n' "$tool" >&2; exit 1; }
 done
-if [[ "$NATIVE_INFRA" == false ]]; then
-  command -v docker >/dev/null || { printf 'missing infrastructure prerequisite: docker\n' >&2; exit 1; }
-fi
-ruby -ryaml -e 'YAML.load_stream("--- {}")'
+if [[ "${1:-}" != --terraform-test-only ]]; then ruby -ryaml -e 'YAML.load_stream("--- {}")'; fi
 
 HELM_VERSION="4.2.0"
 TOFU_VERSION="1.12.1"
@@ -193,6 +197,49 @@ prepare_pinned_archive() {
   cp "$archive" "$TOOLS_DIR/$filename"
 }
 
+prepare_tofu_providers() {
+  prepare_pinned_provider kubernetes 2.38.0 "$1" "$(provider_checksum kubernetes "$1")"
+  prepare_pinned_provider helm 2.17.0 "$1" "$(provider_checksum helm "$1")"
+}
+
+prepare_native_tofu() {
+  cp -R "$CACHE_DIR/provider-mirror" "$TOOLS_DIR/provider-mirror"
+  printf '%s\n' \
+    'provider_installation {' \
+    '  filesystem_mirror {' \
+    "    path = \"$TOOLS_DIR/provider-mirror\"" \
+    '    include = ["registry.opentofu.org/hashicorp/helm", "registry.opentofu.org/hashicorp/kubernetes"]' \
+    '  }' \
+    '}' > "$TOOLS_DIR/tofurc-host"
+  local TOFU_ARCHIVE="tofu_${TOFU_VERSION}_${HOST_PROVIDER_TARGET}.zip"
+  prepare_pinned_archive \
+    "https://github.com/opentofu/opentofu/releases/download/v${TOFU_VERSION}/${TOFU_ARCHIVE}" \
+    "https://github.com/opentofu/opentofu/releases/download/v${TOFU_VERSION}/tofu_${TOFU_VERSION}_SHA256SUMS" \
+    "$TOFU_ARCHIVE" "$(tool_checksum tofu "$HOST_PROVIDER_TARGET")"
+  unzip -q "$TOOLS_DIR/$TOFU_ARCHIVE" -d "$TOOLS_DIR/tofu"
+  export TF_CLI_CONFIG_FILE="$TOOLS_DIR/tofurc-host"
+  TOFU=("$TOOLS_DIR/tofu/tofu")
+  [[ "$("${TOFU[@]}" version | head -n 1)" == "OpenTofu v${TOFU_VERSION}" ]]
+}
+
+init_terraform() {
+  "${TOFU[@]}" -chdir=infra/terraform init -backend=false -input=false -lockfile=readonly
+}
+
+run_terraform_tests() {
+  printf 'Running tofu -chdir=infra/terraform test\n'
+  "${TOFU[@]}" -chdir=infra/terraform test -no-color
+}
+
+if [[ "${1:-}" == --terraform-test-only ]]; then
+  export TF_DATA_DIR="$TOOLS_DIR/tofu-data"
+  prepare_tofu_providers "$HOST_PROVIDER_TARGET"
+  prepare_native_tofu
+  init_terraform
+  run_terraform_tests
+  exit 0
+fi
+
 HELM_ARCHIVE="helm-v${HELM_VERSION}-${HELM_TARGET}.tar.gz"
 prepare_verified_archive \
   "https://get.helm.sh/${HELM_ARCHIVE}" \
@@ -353,31 +400,11 @@ ruby scripts/validate-managed-waha-render.rb "$TOOLS_DIR/rendered-external.yaml"
 ruby scripts/validate-managed-waha-render.rb "$TOOLS_DIR/rendered-managed-waha.yaml"
 
 export TF_DATA_DIR="$TOOLS_DIR/tofu-data"
-prepare_pinned_provider kubernetes 2.38.0 "$HOST_PROVIDER_TARGET" "$(provider_checksum kubernetes "$HOST_PROVIDER_TARGET")"
-prepare_pinned_provider helm 2.17.0 "$HOST_PROVIDER_TARGET" "$(provider_checksum helm "$HOST_PROVIDER_TARGET")"
+prepare_tofu_providers "$HOST_PROVIDER_TARGET"
 if [[ "$NATIVE_INFRA" == true ]]; then
-  command -v unzip >/dev/null || { printf 'missing infrastructure prerequisite: unzip\n' >&2; exit 1; }
-  cp -R "$CACHE_DIR/provider-mirror" "$TOOLS_DIR/provider-mirror"
-  printf '%s\n' \
-    'provider_installation {' \
-    '  filesystem_mirror {' \
-    "    path = \"$TOOLS_DIR/provider-mirror\"" \
-    '    include = ["registry.opentofu.org/hashicorp/helm", "registry.opentofu.org/hashicorp/kubernetes"]' \
-    '  }' \
-    '}' > "$TOOLS_DIR/tofurc-host"
-  TOFU_ARCHIVE="tofu_${TOFU_VERSION}_${HOST_PROVIDER_TARGET}.zip"
-  prepare_pinned_archive \
-    "https://github.com/opentofu/opentofu/releases/download/v${TOFU_VERSION}/${TOFU_ARCHIVE}" \
-    "https://github.com/opentofu/opentofu/releases/download/v${TOFU_VERSION}/tofu_${TOFU_VERSION}_SHA256SUMS" \
-    "$TOFU_ARCHIVE" "$(tool_checksum tofu "$HOST_PROVIDER_TARGET")"
-  unzip -q "$TOOLS_DIR/$TOFU_ARCHIVE" -d "$TOOLS_DIR/tofu"
-  export TF_CLI_CONFIG_FILE="$TOOLS_DIR/tofurc-host"
-  TOFU=("$TOOLS_DIR/tofu/tofu")
-  [[ "$("${TOFU[@]}" version | head -n 1)" == "OpenTofu v${TOFU_VERSION}" ]]
+  prepare_native_tofu
 else
-  CONTAINER_PROVIDER_TARGET="linux_${TOOL_ARCH}"
-  prepare_pinned_provider kubernetes 2.38.0 "$CONTAINER_PROVIDER_TARGET" "$(provider_checksum kubernetes "$CONTAINER_PROVIDER_TARGET")"
-  prepare_pinned_provider helm 2.17.0 "$CONTAINER_PROVIDER_TARGET" "$(provider_checksum helm "$CONTAINER_PROVIDER_TARGET")"
+  prepare_tofu_providers "linux_${TOOL_ARCH}"
   cp -R "$CACHE_DIR/provider-mirror" "$TOOLS_DIR/provider-mirror"
   printf '%s\n' \
     'provider_installation {' \
@@ -408,8 +435,6 @@ else
     "$TOFU_IMAGE")
 fi
 "${TOFU[@]}" -chdir=infra/terraform fmt -check -recursive
-"${TOFU[@]}" -chdir=infra/terraform init -backend=false -input=false -lockfile=readonly
+init_terraform
 "${TOFU[@]}" -chdir=infra/terraform validate
-"${TOFU[@]}" -chdir=infra/terraform test \
-  -filter=tests/production_plan.tftest.hcl \
-  -no-color
+run_terraform_tests

@@ -30,11 +30,21 @@ jobs:
     outputs:
       images: ${{ steps.matrix.outputs.images }}
       matrix: ${{ steps.matrix.outputs.matrix }}
+      terraform: ${{ steps.terraform.outputs.needed }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: ${{ github.event_name == 'merge_group' && '0' || '2' }}
           persist-credentials: false
+      - id: terraform
+        if: github.event_name == 'pull_request'
+        run: |
+          # Use the same test-merge base as the image matrix. Only a clean diff can skip tests.
+          needed=true
+          if git diff --quiet --no-ext-diff --no-renames HEAD^1 HEAD -- infra/terraform/ scripts/validate-infra.sh scripts/release/fetch-verified-asset.sh; then
+            needed=false
+          fi
+          echo "needed=$needed" >> "$GITHUB_OUTPUT"
       - id: matrix
         env:
           EVENT: ${{ github.event_name }}
@@ -87,8 +97,12 @@ jobs:
         if: matrix.mode == 'lint'
         run: |
           python3 -B -m unittest discover -s tests -p 'test_images_by_digest.py' -v
+          python3 -B tests/patch-keycloak-jackson.test.py
           node --test tests/fetch-zammad-addon.test.mjs
           ruby tests/zammad-database-entrypoint.test.rb
+      - name: Check browser runner network contracts
+        if: matrix.mode == 'lint'
+        run: python3 -B tests/playwright-network-native.test.py
       - name: Enable pinned pnpm
         run: |
           corepack enable
@@ -120,6 +134,9 @@ jobs:
         run: |
           pnpm run zammad:package
           pnpm run build:services
+      - name: Check add-on session state
+        if: matrix.mode == 'unit' && matrix.shard == 1
+        run: ruby tests/fixtures/native-session-state-contract.rb
       - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         id: eslint-cache
         if: matrix.mode == 'lint'
@@ -261,6 +278,23 @@ jobs:
           node --test --test-concurrency=1 tests/multitenant-e2e.test.mjs tests/platform-invitation-e2e.test.mjs
           tests/portal-security-headers.test.mjs tests/rendered-html.test.mjs
 
+  terraform-test:
+    needs: changes
+    if: >-
+      ${{ !cancelled() && (github.event_name == 'merge_group' ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'pull_request' && (needs.changes.result != 'success' || needs.changes.outputs.terraform != 'false'))) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Run OpenTofu tests
+        run: bash scripts/validate-infra.sh --terraform-test-only
+
   images:
     # Stage checks and builds within the eight-slot budget for this run.
     needs: [changes, checks]
@@ -324,7 +358,7 @@ jobs:
 
   ci-gate:
     if: always() && (github.event_name == 'pull_request' || github.event_name == 'merge_group')
-    needs: [changes, dependency-review, checks, images, integration]
+    needs: [changes, dependency-review, checks, images, integration, terraform-test]
     runs-on: ubuntu-slim
     timeout-minutes: 2
     permissions: {}
@@ -338,6 +372,8 @@ jobs:
           IMAGES_NEEDED: ${{ needs.changes.outputs.images }}
           IMAGES: ${{ needs.images.result }}
           INTEGRATION: ${{ needs.integration.result }}
+          TERRAFORM_NEEDED: ${{ needs.changes.outputs.terraform }}
+          TERRAFORM: ${{ needs.terraform-test.result }}
         run: |
           test "$CHANGES" = success && test "$CHECKS" = success || exit 1
           case "$EVENT:$REVIEW:$IMAGES_NEEDED:$IMAGES:$INTEGRATION" in
@@ -345,3 +381,6 @@ jobs:
             merge_group:skipped:false:skipped:success|merge_group:skipped:true:success:success) ;;
             *) exit 1 ;;
           esac
+          test "$TERRAFORM" = success || {
+            test "$EVENT" = pull_request && test "$TERRAFORM_NEEDED" = false && test "$TERRAFORM" = skipped
+          }
