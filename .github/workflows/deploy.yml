@@ -2,12 +2,65 @@ name: deploy
 
 on:
   workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment to record
+        required: true
+        type: choice
+        options: [dev, stg, prod]
+      ref:
+        description: Main commit SHA for dev, or the same tag used to dispatch for stg and prod
+        required: true
+        type: string
 
-permissions: {}
+permissions: {contents: read}
 
 jobs:
-  status:
-    runs-on: ubuntu-slim
-    timeout-minutes: 2
+  record:
+    environment: ${{ inputs.environment }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {actions: read, contents: read}
     steps:
-      - run: echo 'Deployment is not configured. No environment was contacted.'
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Validate ref and record image digests
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEPLOY_ENVIRONMENT: ${{ inputs.environment }}
+          DEPLOY_REF: ${{ inputs.ref }}
+        run: |
+          source scripts/release/image-manifest.sh
+          directory=$(mktemp -d "$RUNNER_TEMP/wasalx-deploy.XXXXXX")
+          case "$DEPLOY_ENVIRONMENT" in
+            dev)
+              [[ "$DEPLOY_REF" =~ ^[0-9a-fA-F]{40}$ ]] || { echo '::error::DEV requires a 40-hex commit SHA'; exit 1; }
+              [[ "$GITHUB_REF" == refs/heads/main ]] || { echo '::error::Dispatch DEV from main'; exit 1; }
+              commit="${DEPLOY_REF,,}"
+              download_main_image_manifest "$commit" "$directory"
+              ;;
+            stg|prod)
+              [[ "$DEPLOY_REF" =~ ^v[A-Za-z0-9_.-]{0,127}$ ]] || { echo '::error::Expected a release tag'; exit 1; }
+              if [[ "$DEPLOY_ENVIRONMENT" == stg ]]; then
+                [[ "$DEPLOY_REF" == v*-rc.* ]] || { echo '::error::Staging requires a release candidate tag'; exit 1; }
+              else
+                [[ "${DEPLOY_REF,,}" != *-rc.* ]] || { echo '::error::Production refuses release candidate tags'; exit 1; }
+              fi
+              [[ "$GITHUB_REF" == "refs/tags/$DEPLOY_REF" ]] || { echo '::error::Dispatch from the requested tag'; exit 1; }
+              commit=$(git rev-parse HEAD)
+              require_tag_commit "$GITHUB_REF" "$commit"
+              gh release download "$DEPLOY_REF" --repo "$GITHUB_REPOSITORY" --pattern images-manifest.json --dir "$directory"
+              ;;
+            *) echo '::error::Unknown deployment environment'; exit 1 ;;
+          esac
+
+          digests=$(jq -er --arg commit "$commit" '
+            select(.commit == $commit) | .images | to_entries[] |
+            if (.key | test("\\A[a-z]+(?:-[a-z]+)*\\z")) and (.value.digest | test("\\Asha256:[0-9a-f]{64}\\z"))
+            then "- `\(.key)` `\(.value.digest)`"
+            else error("Invalid image digest row") end
+          ' "$directory/images-manifest.json")
+          printf '### Image digests for `%s` (%s)\n\nSource commit `%s`\n\n%s\n' \
+            "$DEPLOY_REF" "$DEPLOY_ENVIRONMENT" "$commit" "$digests" >> "$GITHUB_STEP_SUMMARY"
