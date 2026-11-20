@@ -1,17 +1,52 @@
 {
   "excludedPatterns": [
-    "tests/zammad-sidebar-component/**",
-    "tests/zammad-sidebar-component-harness.test.mjs",
-    "tests/visual/**",
-    "tests/*e2e.test.mjs",
-    "tests/*postgres*.mjs",
-    "tests/qualification-*",
-    "tests/zammad-image-browser-compat.test.mjs",
-    "tests/rendered-html.test.mjs",
     "tests/portal-security-headers.test.mjs",
+    "tests/rendered-html.test.mjs",
+    "tests/zammad-sidebar-component/**",
+    "tests/zammad-image-browser-compat.test.mjs",
+    "tests/visual/**",
+    "tests/qualification-*",
     "scripts/contracts/*-live.mjs",
     "scripts/release/**",
     "scripts/run-application-e2e.mjs",
     "scripts/run-selected-simulation.mjs"
-  ]
+  ],
+  "unitAllowlist": {
+    "tests/installer-preimage.test.mjs": {
+      "runner": "integration",
+      "reason": "Uses Docker Compose to render and hash native service configurations."
+    },
+    "tests/multitenant-e2e.test.mjs": {
+      "runner": "integration",
+      "reason": "Requires Chromium and a running portal, PostgreSQL, and Redis."
+    },
+    "tests/platform-invitation-e2e.test.mjs": {
+      "runner": "integration",
+      "reason": "Requires Chromium and a running portal, PostgreSQL, and Redis."
+    },
+    "tests/portal-security-headers.test.mjs": {
+      "runner": "integration",
+      "reason": "Starts the built portal to check HTTP response headers."
+    },
+    "tests/postgres-load-recovery.test.mjs": {
+      "runner": "test:postgres",
+      "reason": "Requires a PostgreSQL instance with separate admin and application roles."
+    },
+    "tests/rendered-html.test.mjs": {
+      "runner": "integration",
+      "reason": "Starts the built portal to check server-rendered HTML."
+    },
+    "tests/storybook-static-contract.test.mjs": {
+      "runner": "test:design-system",
+      "reason": "not run in CI: needs a separate Storybook build to generate the story index."
+    },
+    "tests/zammad-image-browser-compat.test.mjs": {
+      "runner": "zammad:compat:browser",
+      "reason": "not run in CI: requires an explicitly selected Zammad image, Chromium, and a Docker Compose stack."
+    },
+    "tests/zammad-sidebar-component-harness.test.mjs": {
+      "runner": "test:unit",
+      "reason": "not run in CI: needs the add-on checkout and its separately installed component harness dependencies."
+    }
+  }
 }

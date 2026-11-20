@@ -603,17 +603,35 @@ export function createCandidatePlan(catalog, compose) {
 
 function commandStderrTail(stderr, environment) {
   if (!stderr) return "";
-  const values = Object.values(environment ?? process.env)
-    .filter(value => value && stderr.includes(value)).sort((left, right) => right.length - left.length)
-    .map(value => value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"));
-  const safe = values.length ? stderr.replace(new RegExp(values.join("|"), "gu"), "[redacted]") : stderr;
-  const detail = stripVTControlCharacters(safe)
-    .replace(/(\b(?:Bearer|Basic)\s+)\S+/giu, "$1[redacted]")
-    .replace(/(\b[a-z][a-z0-9+.-]*:\/\/)[^/\s@]+@/giu, "$1[redacted]@")
-    .replace(/((?<![\w.-])(?=[\w.-]*(?:password|passwd|pwd|token|secret|api[_-]?key|private[_-]?key|credential))[\w.-]+["']?[ \t]*:[ \t]*)(?:"(?:\\.|[^"\\])*"(?=[ \t]*[,}])|[^\r\n]+)/giu, "$1[redacted]")
-    .replace(/((?<![\w.-])[\w.-]+[ \t]*=[ \t]*)(?:"(?:\\.|[^"\\])*"|'[^']*'|\S+)/giu, "$1[redacted]")
-    .replace(/\b[\w+/-]{24,}={0,2}/gu, "[redacted]")
-    .replace(/[\s\p{Cc}]+/gu, " ").trim();
+  const source = stripVTControlCharacters(stderr);
+  const values = Object.values(environment ?? process.env).filter(Boolean)
+    .map(value => stripVTControlCharacters(value))
+    .filter(value => value && source.includes(value));
+  const patterns = [
+    /(\b(?:Bearer|Basic)\s+)\S+/giu,
+    /(\b[a-z][a-z0-9+.-]*:\/\/)[^/\s@]+(?=@)/giu,
+    /((?<![\w.-])(?=[\w.-]*(?:password|passwd|pwd|token|secret|api[_-]?key|private[_-]?key|credential))[\w.-]+["']?[ \t]*:[ \t]*)(?:"(?:\\.|[^"\\])*"(?=[ \t]*[,}])|[^\r\n]+)/giu,
+    /((?<![\w.-])[\w.-]+[ \t]*=[ \t]*)(?:"(?:\\.|[^"\\])*"|'[^']*'|\S+)/giu,
+    /()\b[\w+/-]{24,}={0,2}/gu,
+  ];
+  // Match against the same text so an environment value in a key cannot change how it is parsed.
+  const ranges = patterns.flatMap(pattern => Array.from(source.matchAll(pattern),
+    match => [match.index + match[1].length, match.index + match[0].length]));
+  for (const value of new Set(values)) {
+    const escaped = value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+    for (const match of source.matchAll(new RegExp("(?=" + escaped + ")", "gu"))) {
+      ranges.push([match.index, match.index + value.length]);
+    }
+  }
+  ranges.sort(([left], [right]) => left - right);
+  const parts = [];
+  let end = 0;
+  for (const [start, stop] of ranges) {
+    if (start >= end) parts.push(source.slice(end, start), "[redacted]");
+    end = Math.max(end, stop);
+  }
+  parts.push(source.slice(end));
+  const detail = parts.join("").replace(/[\s\p{Cc}]+/gu, " ").trim();
   return Buffer.from(detail).subarray(-2048).toString("utf8").replace(/^\uFFFD+/u, "");
 }
 

@@ -2,13 +2,43 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
-import { collectFile, collectionFiles, inventory, shardFiles } from "../scripts/hosted-ci.mjs";
+import { collectFile, collectionFiles, inventory, isTestFile, shardFiles } from "../scripts/hosted-ci.mjs";
+import { unitAllowlist, unitFiles } from "../scripts/test-unit.mjs";
 import { addonSkips, skipPattern } from "../scripts/hosted-ci-policy.mjs";
 import { generateBaseline } from "../scripts/generate-hosted-ci-baseline.mjs";
 import baseline from "../scripts/hosted-ci-baseline.mjs";
+
+test("tracked Node tests belong to the unit inventory or have a named runner", async () => {
+  const tracked = execFileSync("git", ["ls-files", "-z", "--", "tests", ".github/workflows"], { encoding: "utf8", windowsHide: true }).split("\0");
+  const testFiles = tracked.filter(isTestFile);
+  const units = new Set(unitFiles);
+  const entries = Object.entries(unitAllowlist);
+  const { scripts } = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
+  const workflows = tracked.filter(file => file.startsWith(".github/workflows/") && /\.ya?ml$/u.test(file));
+  const workflowJobs = new Map(await Promise.all(workflows.map(async file =>
+    [file, parse(await readFile(new URL("../" + file, import.meta.url), "utf8")).jobs])));
+  const jobs = workflowJobs.get(".github/workflows/ci.yml");
+  const runText = job => (job.steps ?? []).map(step => step.run ?? "").join("\n");
+  const ciCommands = [...workflowJobs.values()].flatMap(workflow => Object.values(workflow).map(runText)).join("\n");
+  const ciScripts = new Set(Array.from(ciCommands.matchAll(/\bpnpm[ \t]+(?:run[ \t]+)?["']?([\w:-]+)(?=["'\s;&|]|$)/gu), match => match[1]));
+  const runsFile = (command, file) => command.split(/[\s"';&|()]+/u).some(word => word === file || word === "./" + file);
+
+  const missing = testFiles.filter(file => !units.has(file) && !Object.hasOwn(unitAllowlist, file));
+  const stale = entries.map(([file]) => file).filter(file => units.has(file) || !testFiles.includes(file));
+  const invalid = entries.filter(([file, { runner, reason }]) => {
+    if (typeof runner !== "string" || typeof reason !== "string" || !reason.trim() || /[\r\n]/u.test(reason)) return true;
+    const hasJob = Object.hasOwn(jobs, runner);
+    const runsInCI = hasJob || ciScripts.has(runner);
+    if (runsInCI ? reason.trimStart().startsWith("not run in CI:") : !/^not run in CI: \S/u.test(reason)) return true;
+    if (hasJob) return !runsFile(runText(jobs[runner]), file);
+    return !Object.hasOwn(scripts, runner) || !runsFile(scripts[runner], runner === "test:unit" ? "scripts/test-unit.mjs" : file);
+  }).map(([file]) => file);
+  assert.deepEqual({ missing, stale, invalid }, { missing: [], stale: [], invalid: [] });
+});
 
 test("CI gates integration on merge groups and skips integration on pull requests", async () => {
   const { on, jobs } = parse(await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8"));
@@ -52,21 +82,40 @@ test("measured sharding spreads slow files and packs the remaining work", () => 
   assert.deepEqual(shards, [["a", "f"], ["b", "e"], ["c", "d"]]);
 });
 
-test("collection covers new hosted files and leaves unit and runtime imports to their own gates", () => {
-  const files = inventory(["tests/new.test.ts", "tests/new.test.ts", "tests/fixture.mjs"]);
-  assert.equal(files.filter(file => file === "tests/new.test.ts").length, 1);
+test("collection includes allowlisted imports and discovers nested test extensions", () => {
+  const nested = ["tests/nested/new.test.mts", "tests/nested/new.test.cts", "tests/nested/new.test.tsx"];
+  const files = inventory([...nested, nested[0], "tests/fixture.mjs", "tests/zammad-sidebar-component/view.test.tsx"]);
+  assert.equal(files.filter(file => nested.includes(file)).length, nested.length);
   assert(!files.includes("tests/fixture.mjs"));
-  assert.deepEqual(collectionFiles(["tests/new.test.ts", "tests/dev-secret-sidecar.test.mjs", "tests/zammad-image-browser-compat.test.mjs"]), ["tests/new.test.ts"]);
+  assert(!files.includes("tests/zammad-sidebar-component/view.test.tsx"));
+  const allowlisted = ["tests/installer-preimage.test.mjs", "tests/storybook-static-contract.test.mjs"];
+  const excluded = [
+    "tests/dev-secret-sidecar.test.mjs", "tests/visual/renderer.test.mjs", "tests/zammad-image-browser-compat.test.mjs",
+    "tests/portal-security-headers.test.mjs", "tests/rendered-html.test.mjs",
+  ];
+  assert.deepEqual(collectionFiles([...allowlisted, ...excluded]), allowlisted);
+});
+
+test("collection succeeds when there are no additional files to collect", async t => {
+  const directory = await mkdtemp(join(tmpdir(), "hosted-empty-collection-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const options = { cwd: directory, env: { ...process.env, GITHUB_STEP_SUMMARY: "" }, encoding: "utf8", windowsHide: true };
+  execFileSync("git", ["init", "--quiet"], options);
+  const script = fileURLToPath(new URL("../scripts/hosted-ci.mjs", import.meta.url));
+  assert.match(execFileSync(process.execPath, [script, "collection"], options), /^no additional files to collect$/mu);
 });
 
 test("collection skips test bodies, reports import errors and kills hanging imports", async t => {
   const directory = await mkdtemp(join(tmpdir(), "hosted-ci-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const valid = join(directory, "valid.mjs"), invalid = join(directory, "invalid.mjs"), hanging = join(directory, "hanging.mjs");
-  await writeFile(valid, "import test from 'node:test'; test('skipped body',()=>{throw new Error('BODY_EXECUTED');});\n");
+  const body = join(directory, "body-ran");
+  await writeFile(valid, "import { writeFileSync } from 'node:fs'; import test from 'node:test'; "
+    + "test('skipped body', () => writeFileSync(" + JSON.stringify(body) + ", 'ran'));\n");
   await writeFile(invalid, "throw new Error('IMPORT_FAILED');\n");
   await writeFile(hanging, "setInterval(()=>{},1000); await new Promise(()=>{});\n");
   assert.equal((await collectFile(valid)).failed, false);
+  await assert.rejects(readFile(body), { code: "ENOENT" });
   const failure = await collectFile(invalid);
   assert.equal(failure.failed, true);
   const timeout = await collectFile(hanging, 2000);

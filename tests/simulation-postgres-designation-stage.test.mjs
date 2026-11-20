@@ -7,12 +7,13 @@ test('exact database results retain honest context boundary',()=>{const rows=val
 test('failed or incomplete gate, drift, dirty tree and false invariant rejected',()=>{for(const mutate of[e=>e.gate.exitCode=1,e=>e.gate.completed=false,e=>e.receipt.candidateSha='c'.repeat(40),e=>e.receipt.trackedWorktreeChanges=true,e=>e.receipt.sourceHashes={},e=>e.receipt.migrations=[],e=>e.receipt.results[0].proof.lockOverlap=false]){const e=structuredClone(fixture());mutate(e);assert.throws(()=>validateDesignationReceipt(e,expected));}});
 
 import{mkdtemp,writeFile,rm}from'node:fs/promises';import{tmpdir}from'node:os';import{join}from'node:path';import{createHash}from'node:crypto';import{selectExactResults}from'../scripts/release/full-suite-result-importer.mjs';
+import{realpath}from'node:fs/promises';
 const catalog=()=>({journeys:[{useCases:[{tests:designationTestIds.map(id=>({id,requiredContextIds:['tenant_owner-en-desktop']}))}]}],scope:{testDeferrals:[{id:'reviewed',releaseProfile:'first-client-alpha-live',reason:'Explicit owner-approved alpha deferral',approval:{source:'Actual independent approval',recordedAt:'2026-10-18T00:00:00Z'},testIds:[...designationTestIds]}]}});
 test('supporting designation requires both exact known explicitly approved-deferred leaves',()=>{
  assert(approvedDesignationDeferral(catalog()));for(const mutate of[c=>c.scope.testDeferrals[0].testIds.pop(),c=>delete c.scope.testDeferrals[0].approval,c=>c.scope.testDeferrals[0].approval.source='',c=>c.scope.testDeferrals[0].approval.recordedAt='invalid',c=>c.scope.testDeferrals[0].reason='',c=>c.scope.testDeferrals[0].releaseProfile='other',c=>c.journeys[0].useCases[0].tests.pop(),c=>c.scope.testDeferrals=[]]){const c=catalog();mutate(c);assert(!approvedDesignationDeferral(c));}
 });
 test('supporting designation still validates mandatory exact gate receipt and emits no behavioral PASS',async()=>{
- const dir=await mkdtemp(join(tmpdir(),'wasalx-pg-support-'));try{
+ const dir=await realpath(await mkdtemp(join(tmpdir(),'wasalx-pg-support-')));try{
   const run=async envelope=>{const bytes=JSON.stringify(envelope),events=[];await writeFile(join(dir,'receipt.json'),bytes);const result=await postgresDesignationStage({privateDir:dir,candidate:{sha:expected.sha,tree:expected.tree},checkpoint:async row=>events.push(row)},{config:{receiptPath:'receipt.json',receiptSha256:createHash('sha256').update(bytes).digest('hex'),expected,qualificationDisposition:'supporting-approved-deferral'}});return{result,events};};
   const {result,events}=await run(fixture());assert.equal(result.observations.length,2);assert.equal(result.proofs,undefined);assert(events.every(row=>row.phase==='postgres-designation-supporting'&&row.result===undefined&&row.testId===undefined));
   const bad=fixture();bad.gate.exitCode=1;await assert.rejects(run(bad));

@@ -235,6 +235,8 @@ jobs:
           key: pnpm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', 'package.json', 'patches/**') }}
           restore-keys: pnpm-${{ runner.os }}-${{ runner.arch }}-
       - run: pnpm install --frozen-lockfile --fetch-retries=2
+      - name: Test native installer preimage capture
+        run: node --experimental-strip-types --import ./tests/helpers/operator-input-fixtures.mjs --test tests/installer-preimage.test.mjs
       - name: Test PostgreSQL integration
         env:
           DATABASE_ADMIN_URL: postgresql://postgres:wasalx-ci-admin@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/wasalx_ci
