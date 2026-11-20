@@ -163,8 +163,7 @@ services:
       PORTAL_PUBLIC_ORIGIN: ${PORTAL_PUBLIC_ORIGIN:-http://localhost:3000}
       META_GRAPH_VERSION: v24.0
       META_APP_ID: ${META_APP_ID:-}
-      # The fixture stack omits WAHA. Supply a URL to use an external instance.
-      WAHA_ADMIN_BASE_URL: ${WAHA_ADMIN_BASE_URL:-http://127.0.0.1:3000}
+      WAHA_ADMIN_BASE_URL: http://waha:3000
       WAHA_ADMIN_SECRET_REFERENCE: secret://platform/waha-admin
       SECRET_CLEANUP_DATABASE_URL: postgresql://wasalx_secret_cleanup_runtime:${WASALX_SECRET_CLEANUP_DB_PASSWORD:-wasalx-local-secret-cleanup}@postgres:5432/wasalx
       PROVISIONING_DATABASE_URL: postgresql://wasalx_provisioning_runtime:${WASALX_PROVISIONING_DB_PASSWORD:-wasalx-local-provisioning}@postgres:5432/wasalx
@@ -204,7 +203,7 @@ services:
       <<: *app-environment
       DATABASE_URL: postgresql://wasalx_connector_worker_runtime:${WASALX_CONNECTOR_WORKER_DB_PASSWORD:-wasalx-local-connector-worker}@postgres:5432/wasalx
       PORT: "8080"
-      WAHA_BASE_URL: ${WAHA_BASE_URL:-http://127.0.0.1:3000}
+      WAHA_BASE_URL: http://waha:3000
       # The empty development secret store keeps provider operations closed,
       # while this opaque reference lets the monitor persist an unhealthy probe.
       WAHA_ADMIN_SECRET_REFERENCE: secret://platform/waha-admin

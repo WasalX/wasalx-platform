@@ -278,7 +278,6 @@ async function readComposeEnvironments(file: string): Promise<Record<string, Com
 
 function composeConnectionHosts(key: string, value: string): string[] {
   const connectionKey = /_(?:URL|DSN|HOST)$|^(?:PGHOST|MEMCACHE_SERVERS|ZAMMAD_FQDN)$/u.test(key);
-  const supportedScheme = /^(?:https?|postgres(?:ql)?|rediss?|amqps?|mongodb(?:\+srv)?)$/iu;
   // Keep credentials and ports opaque. Inspect literal defaults only at endpoint or host positions.
   const defaults = new Map<string, string>();
   const interpolation = /(?<!\$)\$\{[A-Za-z_]\w*(?:(:?[-+?])([^{}]*))?\}/gu;
@@ -298,10 +297,27 @@ function composeConnectionHosts(key: string, value: string): string[] {
     if (fallback !== undefined) return hosts(fallback, expectHost);
     const endpoints = endpoint.split(/,\s*(?=(?:jdbc:)?[a-z][\w+.-]*:\/\/)/iu);
     if (endpoints.length > 1) return endpoints.flatMap((entry) => hosts(entry, expectHost));
-    const url = /^(jdbc:)?([a-z][\w+.-]*):\/\/([^/?#]*)/iu.exec(endpoint);
-    if (!expectHost && !(url && (url[1] || supportedScheme.test(url[2])))) return [];
+    const connections = /(?:jdbc:)?(?<scheme>[a-z][\w+.-]*):\/\/(?<authority>[^\s"'<>\\/?#{}()]*)|(?<variable>\0\d+\0)/giu;
+    const result: string[] = [];
+    let sawUrl = false;
+    for (const { groups } of endpoint.matchAll(connections)) {
+      const { scheme, authority, variable } = groups!;
+      if (variable) {
+        const embeddedDefault = defaults.get(variable);
+        if (embeddedDefault !== undefined) result.push(...hosts(embeddedDefault, false));
+      } else {
+        sawUrl = true;
+        // Secret-store references and local file URLs have no network host.
+        if (/^secret$/iu.test(scheme) || (/^file$/iu.test(scheme) && !authority)) continue;
+        result.push(...authorityHosts(authority.slice(authority.lastIndexOf("@") + 1)));
+      }
+    }
+    if (sawUrl || !expectHost) return result;
     const dsnHost = /(?:^|\s)host=(?:'([^']+)'|(\S+))/u.exec(endpoint);
-    const authority = url ? url[3].slice(url[3].lastIndexOf("@") + 1) : dsnHost?.[1] ?? dsnHost?.[2] ?? endpoint;
+    return authorityHosts(dsnHost?.[1] ?? dsnHost?.[2] ?? endpoint);
+  }
+
+  function authorityHosts(authority: string): string[] {
     return authority.split(",").flatMap((entry) => {
       const host = /^(\[[^\]]+\]|[^:\s/?#]+)(?::(?:\d+|\0\d+\0))?$/u.exec(entry.trim())?.[1];
       if (!host) return ["(invalid or missing host)"];
@@ -313,18 +329,28 @@ function composeConnectionHosts(key: string, value: string): string[] {
   return hosts(value, connectionKey);
 }
 
+test("Compose host scanning finds URLs embedded in interpolated JSON", () => {
+  assert.deepEqual(composeConnectionHosts("WAHA_WORKERS_JSON", '${WAHA_WORKERS_JSON:-[{"baseUrl":"http://waha-gows:3000"}]}'), ["waha-gows"]);
+  assert.deepEqual(composeConnectionHosts("DEV_SECRET_STORE_JSON", '{"secret://platform/provider":{"url":"${PROVIDER_URL:-https://scrubbed.example.test/api}"}}'), ["scrubbed.example.test"]);
+  assert.deepEqual(composeConnectionHosts("DATABASE_URL", "postgresql://app:${PASSWORD:-https://dummy.example.test}@postgres/db"), ["postgres"]);
+});
+
 test("Compose connection hosts resolve in the base file, full override and merged stack", async () => {
   const [base, full] = await Promise.all([readComposeEnvironments("compose.yaml"), readComposeEnvironments("compose.full.yaml")]);
   const merged = Object.fromEntries([...new Set([...Object.keys(base), ...Object.keys(full)])]
     .map((service) => [service, { ...base[service], ...full[service] }]));
   const externalHosts = new Map([
-    ["localhost", "Loopback for developer browser URLs"],
-    ["127.0.0.1", "Loopback for published local services and disabled fixture integrations"],
     ["identity.local", "Developer OIDC issuer outside Compose DNS"],
     ["email-provider.invalid", "Fail-closed developer default until an invitation provider is supplied"],
     ["kubernetes.default.svc", "Kubernetes API DNS in the optional provisioning profile"],
     ["workspace-provider.platform.svc.cluster.local", "Kubernetes workspace provider DNS in the optional provisioning profile"],
   ]);
+  const baseOnlyHosts = new Map([
+    // fast stack has no WAHA on purpose; the full stack overrides it to waha-gows
+    ["waha", ["control-api.WAHA_ADMIN_BASE_URL", "connector-worker.WAHA_BASE_URL"]],
+  ]);
+  // The issuer, login, redirect, canonical Zammad hostname and portal link all identify public endpoints.
+  const browserKey = /_ORIGIN$|(?:^|_)PUBLIC_|^(?:KC_HOSTNAME|ALLOWED_ORIGINS|ZAMMAD_FQDN|WASALX_PORTAL_URL|IDENTITY_POLICY_ATTESTATION_ISSUER|(?:PLATFORM_OPERATOR_)?OIDC_(?:ISSUER|AUTHORIZATION_ENDPOINT|(?:INVITATION_)?REDIRECT_URI))$/u;
   const invalid: string[] = [];
   for (const [file, environments, services] of [
     ["compose.yaml", base, base],
@@ -337,6 +363,8 @@ test("Compose connection hosts resolve in the base file, full override and merge
         if (value === null) continue;
         for (const host of composeConnectionHosts(key, String(value))) {
           if (service === "jaeger" && key === "JAEGER_LISTEN_HOST" && host === "0.0.0.0") continue; // Listener bind address.
+          if (file === "compose.yaml" && baseOnlyHosts.get(host)?.includes(`${service}.${key}`)) continue;
+          if ((host === "localhost" || host === "127.0.0.1") && browserKey.test(key)) continue;
           if (!Object.hasOwn(services, host) && !externalHosts.has(host)) invalid.push(`${file}: ${service}.${key} -> ${host}`);
         }
       }
