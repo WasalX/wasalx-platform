@@ -132,6 +132,30 @@ test("a publication from any other ref is rejected before cosign", async t => {
   }
 });
 
+test("nightly verifies main signatures before pulling any digest for the PR installer", async t => {
+  const f = await fixture(t);
+  const context = { ...f.context, candidateSha: "c".repeat(40), candidateTree: "d".repeat(40),
+    imageSource: { commit: candidateSha, tree: candidateTree } };
+  const calls = [];
+  context.command = (name, args, ...rest) => {
+    calls.push({ name, args });
+    if (name === "docker") return args[0] === "pull" ? 0 : "";
+    return f.context.command(name, args, ...rest);
+  };
+
+  assert.equal(await executeStage("preload-hosted", context), 0);
+  assert.equal(calls.findIndex(({ name }) => name === "docker"), 1 + 2 * catalog.images.length);
+  assert.deepEqual(calls.filter(({ args }) => args[0] === "pull").map(({ args }) => args.at(-1)),
+    context.plan.map(({ id }) => f.inventory.images[id].pullReference));
+
+  calls.length = 0;
+  f.signatures.zammad.verificationMaterial.certificate.Subject = devPublisher;
+  await f.save();
+  await assert.rejects(executeStage("preload-hosted", { ...context, hostedImagesSha256: f.context.hostedImagesSha256 }),
+    /cosign certificate identity rejected/u);
+  assert(calls.every(({ name }) => name !== "docker"));
+});
+
 test("a dev signature is rejected even when the inventory claims main", async t => {
   const f = await fixture(t);
   f.signatures.zammad.verificationMaterial.certificate.Subject = devPublisher;

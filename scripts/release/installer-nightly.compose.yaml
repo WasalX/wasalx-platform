@@ -1,0 +1,6 @@
+services:
+  public-webhook-preflight:
+    # Exercise the same webhook probe against the installed API on the runner.
+    environment:
+      PUBLIC_WEBHOOK_BASE_URL: http://control-api:3001
+    networks: !override [core]

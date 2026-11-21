@@ -8,18 +8,19 @@ import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { stripVTControlCharacters } from "node:util";
 import { activeServiceNames, assertDevInstallPreimages, devContainerPreimage, devColdResidents, devHeldServices, devHeldPrerequisites, devPreservedServices, devValueDigest, captureDevReviewAuth, assertDevReviewAuthRows, devReviewAuthEnvironment, devReviewAuthConfiguration, assertInstallHostname } from "./installer-stack.mjs";
+import { rehearsalComposeFile, rehearsalImageSource } from "./installer-stack.mjs";
 import { parseRailsJson } from "./simulation-rails-json.mjs";
 import { sha256, preserveReplacement, readBoundArtifacts, writeArtifactState,
   assertRetainedPreimage, composeProfiles, dockerfileOf, imageServices, inspectOwned, preparePrivateDirectory, preimagePath, fenceReplacementEffects, rollbackReplacement } from "./installer-artifacts.mjs";
 import { produceRollbackSafety, readOptionalState, recordReplacementAfter } from "./installer-rollback-state.mjs";
 import { enterComposeStageLock as enterStageLock, composeStageLockConflict } from "./compose-stage-lock.mjs";
-import { hostedIssuer, verifyHostedImages } from "./installer-hosted-images.mjs";
+import { hostedIssuer, readHostedInventory, verifyHostedImages } from "./installer-hosted-images.mjs";
 
 const repository = resolve(fileURLToPath(new URL("../../", import.meta.url)));
 const preflight = fileURLToPath(new URL("./preflight-full-env.mjs", import.meta.url));
 const verifier = fileURLToPath(new URL("./installer-stack.mjs", import.meta.url));
 const shaPattern = /^[0-9a-f]{40}$/u;
-const stages = ["preflight", "build", "verify-hosted", "admit-hosted", "replace", "smoke", "qualify", "rollback", "rollback-safety", "release-held"];
+const stages = ["preflight", "build", "verify-hosted", "preload-hosted", "admit-hosted", "replace", "smoke", "qualify", "rollback", "rollback-safety", "release-held"];
 const migrationVerifierScript = `const fs=require('node:fs'),crypto=require('node:crypto');
     console.log(JSON.stringify(fs.readdirSync('/app/migrations').filter(n=>/^\\d{4}_[a-z0-9_]+\\.sql$/.test(n)).sort().map(name=>{
       const b=fs.readFileSync('/app/migrations/'+name);
@@ -418,6 +419,20 @@ export async function executeStage(action, context) {
       assert.ok(await inspectImage(reference), "dependency image missing; run build before replacement");
     }
   };
+  if (action === "preload-hosted") {
+    assert.ok(context.imageSource && context.hostedImages, "preload requires signed rehearsal inputs");
+    await readFile(preimagePath(context));
+    await verifyHostedImages(context, { verifyOnly: true });
+    const inventory = await readHostedInventory(context);
+    for (const { id, reference } of plan) {
+      const source = inventory.images[id].pullReference;
+      assert.equal(await execute("docker", ["pull", "--platform", "linux/amd64", "--quiet", source], environment, true), 0,
+        `${id} digest pull failed`);
+      await execute("docker", ["image", "tag", source, reference], environment);
+    }
+    await verifyDependencies(true);
+    return 0;
+  }
   if (action === "preflight") {
     await assertRepositoryBindMountsReadable(context);
     if (context.capturePreimage) await preserveReplacement(context);
@@ -577,8 +592,8 @@ export async function executeStage(action, context) {
   assert.equal(action, "smoke");
   return execute(process.execPath, [verifier, project, "--full", "--env-file", context.envFile,
     "--compose-file", "compose.yaml", "--compose-file", "compose.full.yaml",
+    ...(context.imageSource ? ["--compose-file", rehearsalComposeFile, "--rehearsal-main", context.imageSource.commit] : []),
     ...composeProfiles.flatMap((profile) => ["--profile", profile]),
-    "--output", `output/release-evidence/${candidateSha}/${context.devPreimagesFile ? "dev-held-stack.json" : "remote-full-stack.json"}`,
     ...(context.devPreimagesFile ? ["--dev-preimages", context.devPreimagesFile, "--dev-preimages-sha256", context.devPreimagesSha256] : []),
     ...plan.flatMap(({ id, reference }) => ["--candidate-image", `${id}=${reference}`]),
   ], environment, true);
@@ -688,6 +703,7 @@ async function main() {
   let service;
   let rollbackSafetyFile; let rollbackSafetySha256;
   let hostedImages; let hostedImagesSha256; let hostedTrustedRoot;
+  let rehearsalMain;
   for (let i = 0; i < extra.length; i += 1) {
     if (["--hosted-images", "--hosted-images-sha256", "--hosted-trusted-root"].includes(extra[i])) {
       const flag = extra[i], value = extra[++i];
@@ -698,6 +714,10 @@ async function main() {
         if (flag === "--hosted-images") { assert.equal(hostedImages, undefined); hostedImages = value; }
         else { assert.equal(hostedTrustedRoot, undefined); hostedTrustedRoot = value; }
       }
+    } else if (extra[i] === "--rehearsal-main") {
+      assert.equal(rehearsalMain, undefined);
+      rehearsalMain = extra[++i];
+      assert.match(rehearsalMain ?? "", shaPattern);
     } else if (extra[i] === "--service") {
       assert.equal(action, "release-held"); assert.equal(service, undefined);
       service = extra[++i]; assert.match(service ?? "", /^[a-z0-9][a-z0-9_.-]*$/u);
@@ -749,6 +769,10 @@ async function main() {
   }
 
   assertInstallHostname();
+  const imageSource = rehearsalMain ? rehearsalImageSource(project, rehearsalMain, args => run("git", args, process.env)) : undefined;
+  assert.ok(!imageSource || (["preflight", "preload-hosted", "admit-hosted", "replace", "smoke"].includes(action)
+    && !devPreimagesFile && !captureDevPreimagesFile && (action === "preflight" || hostedImages)), "invalid rehearsal stage");
+  assert.ok(action !== "preload-hosted" || imageSource, "preload is limited to the disposable rehearsal");
   let devRecord;
   if (devPreimagesFile) {
     const bytes = await readFile(devPreimagesFile);
@@ -809,6 +833,7 @@ async function main() {
   };
   const composeArguments = [
     "compose", "--env-file", envFile, "--file", "compose.yaml", "--file", "compose.full.yaml",
+    ...(imageSource ? ["--file", rehearsalComposeFile] : []),
     ...composeProfiles.flatMap((profile) => ["--profile", profile]), "--project-name", project,
   ];
   run("docker", [...composeArguments, "config", "--quiet"], environment);
@@ -825,7 +850,7 @@ async function main() {
     try {
       const exit = await executeStage(stage, { plan, candidateSha, candidateTree, environment, composeArguments,
         buildContext, buildContextSha256, catalog, catalogSha256: sha256(catalogBytes), rollbackSafetyFile, rollbackSafetySha256,
-        hostedImages, hostedImagesSha256, hostedTrustedRoot,
+        hostedImages, hostedImagesSha256, hostedTrustedRoot, imageSource,
         project, envFile, repository, capturePreimage: rest.includes("--capture-preimage"),
         privateDirectory: resolve(homedir(), `.local/state/wasalx-compose/${candidateSha}/${project}`),
         nativePackage: catalog.tenantProvisioning.package, model: safeCompose, directory: resolve(repository, `output/release-evidence/${candidateSha}`),

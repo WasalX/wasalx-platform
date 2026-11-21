@@ -61,7 +61,7 @@ test("tracked tests belong to a named CI runner or the test allowlist", async ()
   const workflows = tracked.filter(file => file.startsWith(".github/workflows/") && /\.ya?ml$/u.test(file));
   const workflowJobs = new Map(await Promise.all(workflows.map(async file =>
     [file, parse(await read(file)).jobs])));
-  const jobs = workflowJobs.get(".github/workflows/ci.yml");
+  const jobs = { ...workflowJobs.get(".github/workflows/ci.yml"), ...workflowJobs.get(".github/workflows/nightly-install.yml") };
   const runText = job => (job.steps ?? []).map(step => step.run ?? "").join("\n");
   const ciCommands = [...workflowJobs.values()].flatMap(workflow => Object.values(workflow).map(runText)).join("\n");
   const ciScripts = new Set(commands(ciCommands).map(command => {
@@ -144,6 +144,29 @@ test("tracked tests belong to a named CI runner or the test allowlist", async ()
     return !/^not run in CI: \S/u.test(reason) || !(runnerRuns(runner, file) || runsFile(runner, file));
   }).map(([file]) => file);
   assert.deepEqual({ missing, stale, invalid }, { missing: [], stale: [], invalid: [] });
+});
+
+test("nightly install is report-only, read-only and fails open on PR diff errors", async () => {
+  const path = ".github/workflows/nightly-install.yml";
+  const { on, permissions, jobs } = parse(await read(path));
+  const job = jobs["nightly-install"];
+  assert.deepEqual(on, {
+    schedule: [{ cron: "30 3 * * *" }],
+    workflow_dispatch: null,
+    pull_request: { branches: ["main"], types: ["opened", "synchronize", "reopened"] },
+  });
+  assert.deepEqual(permissions, { contents: "read" });
+  assert.deepEqual(job.permissions, { contents: "read", actions: "read" });
+  assert.equal(job["runs-on"], "ubuntu-24.04");
+  const actions = job.steps.filter(step => step.uses);
+  assert(actions.every(step => /@[0-9a-f]{40}$/u.test(step.uses)));
+  assert.equal(actions.find(step => step.uses.startsWith("actions/checkout@")).with["persist-credentials"], false);
+  assert(!JSON.stringify(job).includes("secrets."));
+  const changes = job.steps.find(step => step.id === "changes").run;
+  assert.match(changes, /needed=true\nif git diff --quiet[^]*; then\n {2}needed=false\nfi/u);
+  for (const input of ["scripts/release/installer-*", "compose*.yaml", path]) assert(changes.includes(input));
+  assert(job.steps.some(step => step.if?.startsWith("always()")));
+  assert(!parse(await read(".github/workflows/ci.yml")).jobs["ci-gate"].needs.includes("nightly-install"));
 });
 
 test("CI gates integration and infrastructure and runs portal integration files serially", async () => {

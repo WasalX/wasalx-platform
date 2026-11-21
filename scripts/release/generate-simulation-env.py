@@ -14,9 +14,26 @@ pub=subprocess.check_output(['openssl','pkey','-pubout'],input=key,stderr=subpro
 values['WASALX_FULL_INVITATION_PRIVATE_KEY_PEM_JSON']=json.dumps(key.decode())
 values['WASALX_INVITATION_TOKEN_PUBLIC_KEY']=pub.decode().strip()
 values['PUBLIC_WEBHOOK_BASE_URL']='https://simulation.invalid'
-for name in ['PORTAL_PORT','IDENTITY_PORT','ZAMMAD_PORT']:
- with socket.socket() as probe:
-  probe.bind(('127.0.0.1',0));values[name]=str(probe.getsockname()[1])
+rehearsal = sys.argv[4:] == ['--installer-rehearsal']
+if rehearsal:
+ # .internal is reserved for private use and does not delegate to a mail provider.
+ values.update(
+  PORTAL_PORT='3000', IDENTITY_PORT='8080', ZAMMAD_PORT='8081',
+  PUBLIC_WEBHOOK_BASE_URL='https://webhook.nightly.internal',
+  WASALX_FULL_INVITATION_EMAIL_PROVIDER_URL='https://mail.nightly.internal',
+  WASALX_FULL_INVITATION_EMAIL_FROM='invitations@nightly.internal',
+  WASALX_FULL_INVITATION_EMAIL_TEMPLATE_ID='nightly',
+  WASALX_FULL_KEYCLOAK_SMTP_HOST='mail.nightly.internal',
+  WASALX_FULL_KEYCLOAK_SMTP_PORT='587',
+  WASALX_FULL_KEYCLOAK_SMTP_FROM='identity@nightly.internal',
+  WASALX_FULL_KEYCLOAK_SMTP_USER='identity@nightly.internal',
+  WASALX_FULL_KEYCLOAK_SMTP_PASSWORD='Aa9!'+secrets.token_hex(24),
+  WASALX_FULL_QUALIFICATION_OWNER_EMAIL='owner@nightly.internal',
+ )
+else:
+ for name in ['PORTAL_PORT','IDENTITY_PORT','ZAMMAD_PORT']:
+  with socket.socket() as probe:
+   probe.bind(('127.0.0.1',0));values[name]=str(probe.getsockname()[1])
 fd=os.open(target,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
 with os.fdopen(fd,'w') as f:
  for k,v in sorted(values.items()):
