@@ -17,7 +17,7 @@ ADD --checksum=sha256:590f55ed5d68529239898a4a5c4f730b6e37f45d1cfa3fbe51f8485abe
 RUN cp /opt/keycloak/lib/lib/main/org.bouncycastle.bcprov-jdk18on-1.84.jar \
   /opt/keycloak/bin/client/lib/bcprov-jdk18on-1.84.jar
 
-FROM python@sha256:4c2cf9917bd1cbacc5e9b07320025bdb7cdf2df7b0ceaccb55e9dd7e30987419 AS jackson-patch
+FROM python@sha256:46837ed3105db0029b6d656816185c6258e3b39690532fb782428e0a5fd76182 AS jackson-patch
 COPY --from=keycloak /opt/keycloak/bin/client/keycloak-admin-cli-26.7.3.jar /tmp/keycloak-admin-cli-26.7.3.jar
 ADD --checksum=sha256:1290c2795e93e8a6861a6c4d9ff0d844d32f5ea178362cb2721edf5561e828b1 \
   https://repo.maven.apache.org/maven2/com/fasterxml/jackson/core/jackson-databind/2.21.7/jackson-databind-2.21.7.jar \
