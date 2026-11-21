@@ -680,7 +680,12 @@ test("direct Helm production installs reject development defaults and incomplete
   }
   assertProductionUrls(parseYaml(fixture));
   assert.match(script, /PRODUCTION_VALUES_FILE="infra\/helm\/wasalx\/ci\/production-values\.yaml"/u);
-  assert.match(script, /ASSISTED_ALPHA_VALUES_FILE="\$\{WASALX_ASSISTED_PROFILE_VALUES:\?Set WASALX_ASSISTED_PROFILE_VALUES\}"/u);
+  assert.match(script, /^assisted_alpha_backup_values=\(--set deploymentProfile=assisted-alpha --set workspaceProvider\.enabled=false --set provisioner\.enabled=false\)$/mu);
+  assert.match(script, /^assisted_alpha_values=\("\$\{assisted_alpha_backup_values\[@\]\}" --set controlPlaneBackup\.enabled=false\)$/mu);
+  assert.match(script, /backup_profile_args=\("\$\{assisted_alpha_backup_values\[@\]\}"\)/u);
+  assert.match(script, /^ruby scripts\/validate-migration-render\.rb "\$TOOLS_DIR\/rendered-production\.yaml" standard$/mu);
+  assert.match(script, /^ruby scripts\/validate-migration-render\.rb "\$TOOLS_DIR\/rendered-assisted-alpha\.yaml" assisted-alpha$/mu);
+  assert.doesNotMatch(script, /WASALX_(?:ASSISTED_PROFILE_VALUES|PRODUCTION_MIGRATION_CHECK)/u);
   assert.match(script, /assisted alpha unexpectedly enabled deferred component/u);
   assert.match(script, /if "\$HELM" lint infra\/helm\/wasalx --set environment=production/u);
   assert.match(script, /production Helm defaults unexpectedly passed the fail-closed schema/u);
