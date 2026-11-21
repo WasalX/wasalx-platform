@@ -132,6 +132,30 @@ test("a publication from any other ref is rejected before cosign", async t => {
   }
 });
 
+test("nightly verifies main signatures before pulling any digest for the PR installer", async t => {
+  const f = await fixture(t);
+  const context = { ...f.context, candidateSha: "c".repeat(40), candidateTree: "d".repeat(40),
+    imageSource: { commit: candidateSha, tree: candidateTree } };
+  const calls = [];
+  context.command = (name, args, ...rest) => {
+    calls.push({ name, args });
+    if (name === "docker") return args[0] === "pull" ? 0 : "";
+    return f.context.command(name, args, ...rest);
+  };
+
+  assert.equal(await executeStage("preload-hosted", context), 0);
+  assert.equal(calls.findIndex(({ name }) => name === "docker"), 1 + 2 * catalog.images.length);
+  assert.deepEqual(calls.filter(({ args }) => args[0] === "pull").map(({ args }) => args.at(-1)),
+    context.plan.map(({ id }) => f.inventory.images[id].pullReference));
+
+  calls.length = 0;
+  f.signatures.zammad.verificationMaterial.certificate.Subject = devPublisher;
+  await f.save();
+  await assert.rejects(executeStage("preload-hosted", { ...context, hostedImagesSha256: f.context.hostedImagesSha256 }),
+    /cosign certificate identity rejected/u);
+  assert(calls.every(({ name }) => name !== "docker"));
+});
+
 test("a dev signature is rejected even when the inventory claims main", async t => {
   const f = await fixture(t);
   f.signatures.zammad.verificationMaterial.certificate.Subject = devPublisher;
@@ -259,8 +283,15 @@ test("admitted hosted IDs reach replacement, smoke and held release without repe
   };
   assert.equal(await executeStage("replace", { ...f.context, drained: true }), 0);
   assert.deepEqual(replacements, [[...f.context.composeArguments, "up", "--no-build", "--pull", "never", "--wait"]]);
-  assert.equal(await executeStage("smoke", f.context), 0);
+  const envFile = join(f.context.privateDirectory, "full.env");
+  const devPreimagesFile = join(f.context.privateDirectory, "dev-preimages.json");
+  const devPreimagesSha256 = "c".repeat(64);
+  assert.equal(await executeStage("smoke", { ...f.context, envFile, devPreimagesFile, devPreimagesSha256 }), 0);
   assert.equal(smokes.length, 1);
+  assert.deepEqual(smokes[0].slice(1), ["fixture", "--full", "--env-file", envFile,
+    "--compose-file", "compose.yaml", "--compose-file", "compose.full.yaml", "--profile", "full", "--profile", "runtime-workers",
+    "--dev-preimages", devPreimagesFile, "--dev-preimages-sha256", devPreimagesSha256,
+    ...f.context.plan.flatMap(({ id, reference }) => ["--candidate-image", `${id}=${reference}`])]);
   await assert.rejects(executeStage("release-held", f.context), /held release requires bound DEV preimages/u);
 });
 

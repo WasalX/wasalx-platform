@@ -138,6 +138,19 @@ export function assertInstallHostname() {
   assert.ok(hostname() === expected, "installation hostname does not match WASALX_INSTALL_EXPECTED_HOSTNAME");
 }
 
+export const rehearsalComposeFile = "scripts/release/installer-nightly.compose.yaml";
+
+export function rehearsalImageSource(project, commit, runGit) {
+  assert.equal(process.env.GITHUB_ACTIONS, "true", "installer rehearsal requires GitHub Actions");
+  assert.equal(project, "wasalx-nightly", "installer rehearsal requires its disposable project");
+  assert.match(commit, shaPattern, "rehearsal main commit is invalid");
+  assert.ok(commit === runGit(["rev-parse", "HEAD"]) || commit === runGit(["rev-parse", "HEAD^1"]),
+    "rehearsal image source must be the checked out main commit or PR merge base");
+  const tree = runGit(["rev-parse", `${commit}^{tree}`]);
+  assert.match(tree, shaPattern, "rehearsal main tree is invalid");
+  return { commit, tree };
+}
+
 // Explicit, nonsecret DEV origin admission. No arbitrary Env, URL path or proxy trust.
 export function devReviewAuthConfiguration(origins) {
   const suffix = process.env.WASALX_DEV_REVIEW_ORIGIN_SUFFIX;
@@ -283,7 +296,7 @@ export function assertSmokePorts(compose) {
   }
 }
 
-export function projectStack({ compose, containers, imageInspections, catalog, candidateImages, candidateSha, candidateTree, activeServices: selectedServices, repositoryRoot = root, fullCatalog = false, devPreimages = null }) {
+export function projectStack({ compose, containers, imageInspections, catalog, candidateImages, candidateSha, candidateTree, imageSource, activeServices: selectedServices, repositoryRoot = root, fullCatalog = false, devPreimages = null }) {
   assert.match(candidateSha, shaPattern);
   assert.match(candidateTree, shaPattern);
   assert.ok(compose && typeof compose === "object" && !Array.isArray(compose), "Compose projection is invalid");
@@ -418,8 +431,8 @@ export function projectStack({ compose, containers, imageInspections, catalog, c
   for (const [candidateId, reference] of [...candidateById.entries()].sort()) {
     const image = imageByReference.get(reference);
     assert.ok(image, `candidate image was not inspected: ${candidateId}`);
-    assert.equal(image.Config?.Labels?.["org.opencontainers.image.revision"], candidateSha, `${candidateId} has another source revision`);
-    assert.equal(image.Config?.Labels?.["io.wasalx.source.tree"], candidateTree, `${candidateId} has another source tree`);
+    assert.equal(image.Config?.Labels?.["org.opencontainers.image.revision"], imageSource?.commit ?? candidateSha, `${candidateId} has another source revision`);
+    assert.equal(image.Config?.Labels?.["io.wasalx.source.tree"], imageSource?.tree ?? candidateTree, `${candidateId} has another source tree`);
     if (candidateId === "zammad") {
       assert.equal(image.Config?.Labels?.["com.wasalx.zammad.package.sha256"], catalog.tenantProvisioning.package.sha256,
         "zammad has another WasalX package digest");
@@ -455,6 +468,7 @@ function argumentsFrom(values) {
   let envFile;
   let full = false;
   let devPreimagesFile; let devPreimagesSha256;
+  let rehearsalMain;
   for (let index = 0; index < rest.length;) {
     const option = rest[index];
     if (option === "--full") {
@@ -484,12 +498,15 @@ function argumentsFrom(values) {
     } else if (option === "--env-file") {
       assert.equal(envFile, undefined, "--env-file can be provided only once");
       envFile = value;
+    } else if (option === "--rehearsal-main") {
+      assert.equal(rehearsalMain, undefined);
+      rehearsalMain = value;
     } else {
       assert.fail(`unknown stack verifier argument: ${option}`);
     }
     index += 2;
   }
-  return { project, candidateImages, composeFiles, profiles, output, envFile, full, devPreimagesFile, devPreimagesSha256 };
+  return { project, candidateImages, composeFiles, profiles, output, envFile, full, devPreimagesFile, devPreimagesSha256, rehearsalMain };
 }
 
 export async function verifyStack({ repositoryRoot: verificationRoot = root } = {}) {
@@ -505,10 +522,12 @@ export async function verifyStack({ repositoryRoot: verificationRoot = root } = 
   const profiles = parsed.profiles;
   const fullMode = parsed.full;
   if (fullMode) assertInstallHostname();
+  assert.ok(!parsed.rehearsalMain || (fullMode && !parsed.devPreimagesFile), "rehearsal requires the full synthetic stack");
   assert.ok(!parsed.devPreimagesFile || (fullMode && project === "wasalx-live" && JSON.stringify(profiles) === JSON.stringify(["full", "runtime-workers"])), "DEV preservation requires the exact existing DEV full profile");
   assert.equal(Boolean(parsed.devPreimagesFile), Boolean(parsed.devPreimagesSha256), "DEV preimage digest binding is required");
-  const evidenceName = parsed.devPreimagesFile ? "dev-held-stack" : fullMode ? "remote-full-stack" : "exact-stack";
-  assert.ok((fullMode && JSON.stringify(composeFiles) === JSON.stringify(["compose.yaml", "compose.full.yaml"]) &&
+  const evidenceName = parsed.rehearsalMain ? "nightly-stack" : parsed.devPreimagesFile ? "dev-held-stack" : fullMode ? "remote-full-stack" : "exact-stack";
+  const fullComposeFiles = ["compose.yaml", "compose.full.yaml", ...(parsed.rehearsalMain ? [rehearsalComposeFile] : [])];
+  assert.ok((fullMode && JSON.stringify(composeFiles) === JSON.stringify(fullComposeFiles) &&
     (JSON.stringify(profiles) === JSON.stringify(["full"]) || JSON.stringify(profiles) === JSON.stringify(["full", "runtime-workers"])) && isAbsolute(parsed.envFile ?? "")) ||
     (!fullMode && JSON.stringify(composeFiles) === JSON.stringify(["compose.yaml", "compose.smoke.yaml"]) && profiles.length === 0 && parsed.envFile === undefined),
     "stack verification supports only the smoke overlay or the exact full profile");
@@ -532,6 +551,7 @@ export async function verifyStack({ repositoryRoot: verificationRoot = root } = 
   assert.equal(run("git", ["rev-parse", "HEAD"]), candidateSha);
   assert.equal(run("git", ["rev-parse", "HEAD^{tree}"]), candidateTree);
   assert.equal(run("git", ["status", "--porcelain=v1", "--untracked-files=all"]), "", "candidate checkout is dirty");
+  const imageSource = parsed.rehearsalMain ? rehearsalImageSource(project, parsed.rehearsalMain, args => run("git", args)) : undefined;
   if (fullMode) {
     assert.equal(process.env.DOCKER_HOST ?? "", "", "DOCKER_HOST is not allowed during stack verification");
     assert.equal(process.env.DOCKER_CONTEXT ?? "", "", "DOCKER_CONTEXT is not allowed during stack verification");
@@ -578,7 +598,7 @@ export async function verifyStack({ repositoryRoot: verificationRoot = root } = 
   const catalog = JSON.parse(await readFile(resolve(root, "release/installer-images.json"), "utf8"));
   if (devPreimages) assertDevInstallPreimages(devPreimages, { candidateSha, candidateTree, project, activeServices, model: compose,
     machineIdSha256: createHash("sha256").update(await readFile("/etc/machine-id")).digest("hex") });
-  const projection = projectStack({ compose, containers, imageInspections, catalog, candidateImages, candidateSha, candidateTree, activeServices, fullCatalog: fullMode, devPreimages, repositoryRoot: root });
+  const projection = projectStack({ compose, containers, imageInspections, catalog, candidateImages, candidateSha, candidateTree, imageSource, activeServices, fullCatalog: fullMode, devPreimages, repositoryRoot: root });
   if (fullMode) {
     assert.deepEqual(projection.oneShotServices, expectedFullOneShots, "the exact full stack one-shot inventory changed");
     const portalEnvironment = environmentObject(compose.services?.portal?.environment);
@@ -602,13 +622,14 @@ export async function verifyStack({ repositoryRoot: verificationRoot = root } = 
   assert.equal(run("git", ["status", "--porcelain=v1", "--untracked-files=all"]), "", "candidate checkout changed during stack verification");
   const manifest = {
     schemaVersion: 1,
-    kind: devPreimages ? "dev-held-stack" : "exact-stack",
+    kind: imageSource ? "nightly-stack" : devPreimages ? "dev-held-stack" : "exact-stack",
     candidateSha,
     candidateTree,
     clean: true,
     generatedAt: new Date().toISOString(),
     project,
-    stackProfile: devPreimages ? "dev-held" : fullMode ? "remote-full" : "docker-smoke",
+    stackProfile: imageSource ? "nightly" : devPreimages ? "dev-held" : fullMode ? "remote-full" : "docker-smoke",
+    ...(imageSource ? { imageSource } : {}),
     profiles,
     composeFiles: composeEvidence,
     renderedCompose: { bytes: Buffer.byteLength(renderedCompose), sha256: createHash("sha256").update(renderedCompose).digest("hex") },

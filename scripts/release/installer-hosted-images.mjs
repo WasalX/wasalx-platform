@@ -32,8 +32,8 @@ export async function readHostedInventory(context) {
   assert.equal(inventory.schemaVersion, 1);
   assert.equal(inventory.repository, "WasalX/wasalx-platform");
   assert.equal(inventory.platform, "linux/amd64");
-  assert.equal(inventory.commit, context.candidateSha, "hosted source commit mismatch");
-  assert.equal(inventory.tree, context.candidateTree, "hosted source tree mismatch");
+  assert.equal(inventory.commit, context.imageSource?.commit ?? context.candidateSha, "hosted source commit mismatch");
+  assert.equal(inventory.tree, context.imageSource?.tree ?? context.candidateTree, "hosted source tree mismatch");
   assert.equal(inventory.publicationComplete, true, "incomplete hosted publication");
   assert.deepEqual(inventory.pending, {});
   assert.deepEqual(Object.keys(inventory.images).sort(), context.catalog.images.map(({ id }) => id).sort(), "complete unique hosted catalog required");
