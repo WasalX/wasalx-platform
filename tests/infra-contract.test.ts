@@ -1054,7 +1054,7 @@ test("Terraform delegates tenant workspaces to the fenced CR/controller topology
 });
 
 test("all WasalX deployables have pinned, non-root, health-checked container images", async () => {
-  const runtimeImage = "cgr.dev/chainguard/wolfi-base:latest@sha256:3754b6da0e1ccdab0fe46abfdd7bbbba994b593c28149f6659fa6597f2261aeb";
+  const runtimeImage = /^FROM[ \t]+cgr\.dev\/chainguard\/wolfi-base:latest@sha256:([a-f0-9]{64})(?:[ \t]+AS[ \t]+([\w.-]+))?[ \t]*\r?$/m;
   const releaseDockerfiles = [
     "Dockerfile.portal",
     "Dockerfile.control-api",
@@ -1077,9 +1077,13 @@ test("all WasalX deployables have pinned, non-root, health-checked container ima
     assert.match(dockerfile, /HEALTHCHECK/);
     assert.doesNotMatch(dockerfile, /FROM\s+[^\n]*:latest(?!@sha256:[a-f0-9]{64}\b)/);
   }
+  let runtimeDigest: string | undefined;
   for (const file of [...releaseDockerfiles.slice(0, 9), "Dockerfile.production-secret-sidecar"]) {
     const dockerfile = await read(file);
-    assert.ok(dockerfile.includes(`FROM ${runtimeImage}`));
+    const digest = dockerfile.match(runtimeImage)?.[1];
+    assert.ok(digest, `${file} must pin the Wolfi runtime image by SHA-256 digest`);
+    runtimeDigest ??= digest;
+    assert.equal(digest, runtimeDigest, `${file} must use the shared Wolfi runtime digest`);
     assert.match(dockerfile, /ENV PATH=\/usr\/local\/sbin:\/usr\/local\/bin:\/usr\/sbin:\/usr\/bin:\/sbin:\/bin/);
     assert.match(dockerfile, /USER 65532:65532/);
   }
@@ -1087,7 +1091,9 @@ test("all WasalX deployables have pinned, non-root, health-checked container ima
   assert.match(invitationMailer, /HEALTHCHECK --interval=20s --timeout=45s --start-period=60s --retries=3/);
   const configurator = await read("Dockerfile.workspace-configurator");
   assert.match(configurator, /FROM node:22-bookworm-slim@sha256:[a-f0-9]{64}/);
-  assert.ok(configurator.includes(`FROM ${runtimeImage} AS runtime`));
+  const configuratorRuntime = configurator.match(runtimeImage);
+  assert.equal(configuratorRuntime?.[1], runtimeDigest, "Dockerfile.workspace-configurator must use the shared Wolfi runtime digest");
+  assert.equal(configuratorRuntime?.[2], "runtime", "Dockerfile.workspace-configurator must use the runtime stage alias");
   assert.match(configurator, /libstdc\+\+=16\.2\.0-r1/);
   assert.match(configurator, /postgresql-18-client=18\.6-r2/);
   assert.match(configurator, /zlib=1\.3\.1-r51/);
