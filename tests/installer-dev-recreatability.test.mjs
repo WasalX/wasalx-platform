@@ -12,7 +12,7 @@ const fixture = name => new URL(`./fixtures/dev-live-compose/${name}`, import.me
 const expectedRefusals = ["keycloak-bootstrap.compose.config-hash", "keycloak-bootstrap.network_mode"];
 const referenceFields = ["network_mode", "ipc", "pid", "volumes_from"];
 
-test("DEV full-stage preimage replay refuses exactly the recorded Keycloak bootstrap fields", async t => {
+test("DEV preimage replay: recorded hash outcomes, modeled refusals", async t => {
   const composeFile = "compose-config.scrubbed.yaml";
   const factsFile = "container-facts.scrubbed.json";
   const [composeBytes, factsBytes, checksums] = await Promise.all([
@@ -59,8 +59,9 @@ test("DEV full-stage preimage replay refuses exactly the recorded Keycloak boots
       const name = args.at(-1);
       const input = JSON.parse(await readFile(args[args.lastIndexOf("--file") + 1], "utf8"));
       const expected = resolveComposeServiceReferences(live.services[name], rows, project).service;
+      // Any candidate-side change to these resolved references requires a recapture, even if preflight would accept it because it renders the deployed chain.
       for (const field of referenceFields) assert.deepEqual(input.services[name][field], expected[field], `${name}.${field}`);
-      // Only the bootstrap has a captured rerender hash. Hold other hashes constant to isolate new modeled refusals.
+      // shortcut: hashes are replayed from the capture, not computed (scrubbing changes hash inputs); config-hash drift on other services is not detected until a recapture records their rerendered hashes
       const hash = name === preflight.target_service ? preflight.rerendered_hash : configHash(name);
       return `${name} ${hash}`;
     } };
