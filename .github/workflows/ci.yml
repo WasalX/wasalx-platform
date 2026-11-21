@@ -100,6 +100,14 @@ jobs:
           python3 -B tests/patch-keycloak-jackson.test.py
           node --test tests/fetch-zammad-addon.test.mjs
           ruby tests/zammad-database-entrypoint.test.rb
+      - name: Check production secret adapter readiness
+        if: matrix.mode == 'lint'
+        run: |
+          manifest=$(mktemp)
+          trap 'rm -f "$manifest"' EXIT
+          bash scripts/validate-infra.sh --render-secret-adapter > "$manifest"
+          ruby scripts/validate-secret-adapter-render.rb "$manifest"
+          ruby tests/secret-adapter-readiness.test.rb "$manifest"
       - name: Check browser runner network contracts
         if: matrix.mode == 'lint'
         run: python3 -B tests/playwright-network-native.test.py

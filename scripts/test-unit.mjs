@@ -114,6 +114,11 @@ const unitInventory = ["tests/operator-input.test.mjs","tests/no-agent-instructi
   "tests/waha-simulation-worker-health.test.mjs",
   "tests/waha-test-recipient-scope.test.mjs",
   "tests/workspace-switching.test.mjs",
+  "tests/business-viewport-contract.test.mjs",
+  "tests/image-resolver-consumers.test.mjs",
+  "tests/ingress-namespace.test.mjs",
+  "tests/secret-sidecar.test.mjs",
+  "tests/alpha-applicability-review.test.mjs",
 ];
 export const unitFiles = unitInventory.map(entry => typeof entry === "string" ? entry : entry[0]);
 export const unitFileTimings = Object.fromEntries(unitInventory.filter(Array.isArray));
