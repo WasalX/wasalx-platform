@@ -4,8 +4,6 @@
 import json
 import os
 from pathlib import Path
-import signal
-import subprocess
 import sys
 
 
@@ -25,20 +23,11 @@ record([name, *args])
 if name == "ssh" and args == expected["ssh"]:
     print(expected["hostname"])
 elif name == "node" and args == expected["capture"]:
-    if (directory / "hang").exists():
-        subprocess.run(
-            ["flock", "--no-fork", str(directory / "stage.lock"), "docker", "probe-hang"],
-            check=True, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
-    else:
-        subprocess.run(["docker", *expected["compose"]], check=True, stdout=subprocess.DEVNULL)
-        Path(args[7]).write_text('{"captured": true}\n', encoding="utf-8")
+    if any(os.environ.get(key) != value for key, value in expected["probe_env"].items()):
+        raise SystemExit("probe environment does not match the fixture")
+    node = expected["real_node"]
+    os.execv(node, [node, expected["native_probe"], str(directory), *args])
 elif name == "docker" and args == expected["compose"]:
     print(json.dumps({"services": {"app": {"volumes": [{"type": "bind", "source": "mounts"}]}}}))
-elif name == "docker" and args == ["probe-hang"] and (directory / "hang").exists():
-    signal.signal(signal.SIGTERM, signal.SIG_IGN)
-    record(["lock-owner", os.getpid()])
-    while True:
-        signal.pause()
 else:
     raise SystemExit(f"unexpected fixture command: {name}")

@@ -12,10 +12,11 @@ import re
 
 TEMPLATES = Path(__file__).with_name("templates")
 SCRIPTS = ("dispatch.py", "probe.py", "receive.py")
-PATH_FIELDS = ("guest_root", "original_env", "ssh_key", "ssh_known_hosts")
+PATH_FIELDS = ("probe_home", "original_env", "ssh_key", "ssh_known_hosts")
 PATTERNS = {
-    "guest_hostname": r"[a-z0-9][a-z0-9.-]{0,252}",
+    "expected_hostname": r"[a-z0-9][a-z0-9.-]{0,252}",
     "guest_user": r"[a-z_][a-z0-9_-]{0,31}",
+    "review_origin_suffix": r"\.[a-z0-9][a-z0-9.-]{0,251}",
     "project": r"[a-z0-9][a-z0-9_.-]{0,62}",
     "portal_origin": r"https://[a-z0-9][a-z0-9.-]+(?::[0-9]+)?",
     "identity_origin": r"https://[a-z0-9][a-z0-9.-]+(?::[0-9]+)?",
@@ -50,7 +51,7 @@ def load_identity(path):
 
 def render(identity, run, bundle):
     for name, pattern in {
-        "tag": r"[a-z0-9][a-z0-9-]{0,47}",
+        "tag": r"[0-9]{8}-[a-z0-9-]{1,39}",
         "commit": r"[0-9a-f]{40}",
         "tree": r"[0-9a-f]{40}",
         "env_sha256": r"[0-9a-f]{64}",

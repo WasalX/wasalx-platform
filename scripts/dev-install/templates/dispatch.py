@@ -19,7 +19,7 @@ def main():
     hostname = subprocess.check_output(
         [*ssh, "hostname"], stdin=subprocess.DEVNULL, text=True, timeout=15,
     ).strip()
-    if hostname != identity["guest_hostname"]:
+    if hostname != identity["expected_hostname"]:
         raise SystemExit("guest hostname mismatch")
 
 

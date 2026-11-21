@@ -5,7 +5,6 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import signal
 import stat
 import subprocess
 
@@ -19,19 +18,14 @@ def verify_env(path, expected, private_umask):
 
 
 def capture(repo, argv, environment, seconds):
-    with subprocess.Popen(
-        argv, cwd=repo, env=environment, stdin=subprocess.DEVNULL, start_new_session=True,
-    ) as process:
-        try:
-            status = process.wait(timeout=seconds)
-        except subprocess.TimeoutExpired:
-            # The native entry point spawns flock, which execs the lock owner.
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            process.wait()
-            raise SystemExit("native preflight timed out") from None
+    # GNU timeout signals the process group, including the native lock owner.
+    result = subprocess.run(
+        ["timeout", "-k", "5s", f"{seconds}s", *argv],
+        cwd=repo, env=environment, stdin=subprocess.DEVNULL,
+    )
+    status = result.returncode
+    if status in (124, -9, 137):
+        raise SystemExit("native preflight timed out")
     if status:
         raise SystemExit(f"native preflight failed ({status})")
 
@@ -41,12 +35,17 @@ def main():
     identity, run = packet["identity"], packet["run"]
     private_umask = int(identity["private_umask"], 8)
     os.umask(private_umask)
-    support = Path(identity["guest_root"]) / run["tag"]
+    support = Path("/home") / identity["guest_user"] / f"dev-signed-{run['tag']}-dev"
     repo = support / "source"
     original = Path(identity["original_env"])
     verify_env(original, run["env_sha256"], private_umask)
     environment = {
         "PATH": os.environ["PATH"],
+        "HOME": identity["probe_home"],
+        "LC_ALL": "C",
+        "GIT_OPTIONAL_LOCKS": "0",
+        "WASALX_INSTALL_EXPECTED_HOSTNAME": identity["expected_hostname"],
+        "WASALX_DEV_REVIEW_ORIGIN_SUFFIX": identity["review_origin_suffix"],
         "COMMIT_SHA": run["commit"],
         "WASALX_CANDIDATE_SHA": run["commit"],
         "WASALX_CANDIDATE_TREE": run["tree"],
@@ -54,7 +53,7 @@ def main():
     capture(repo, [
         "node", "scripts/release/installer-stages.mjs", "preflight",
         "--env-file", str(original), "--project-name", identity["project"],
-        "--capture-dev-preimages", str(support / "preimages.json"),
+        "--capture-dev-preimages", str(support / "private/preimages.json"),
         "--dev-review-origin", identity["portal_origin"],
         "--dev-review-identity-origin", identity["identity_origin"],
     ], environment, identity["probe_seconds"])

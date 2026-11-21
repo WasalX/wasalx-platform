@@ -223,7 +223,8 @@ test("optional PR lanes run on diff errors and gate their applicable checks", as
   for (const [id, diffPaths] of [
     ["infra", paths],
     ["dev-install", ["scripts/dev-install/", "scripts/release/installer-stages.mjs",
-      "scripts/release/compose-stage-lock.mjs", ".github/workflows/ci.yml"].join(" ")],
+      "scripts/release/installer-stack.mjs", "scripts/release/compose-stage-lock.mjs",
+      "scripts/release/compose-stage-config.json", ".github/workflows/ci.yml"].join(" ")],
   ]) {
     const detector = changes.steps.find(step => step.id === id);
     assert.equal(detector.if, "github.event_name == 'pull_request'");

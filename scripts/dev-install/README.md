@@ -1,9 +1,9 @@
 # DEV install plumbing
 
 Run the same dry-run as CI with `python3 -I -B scripts/dev-install/test_dryrun.py --container`.
-It uses the example identity, a disposable Git bundle, and a network-disabled container.
-The native bind-mount readability check runs against the resulting checkout. The fixture
-records SSH and Compose calls and simulates a hung capture that holds the stage lock.
+It uses the example identity, a disposable Git bundle, and network-disabled dispatcher and guest containers.
+The fixture runs the native bind-mount, hostname, and review-origin checks and exercises a hung capture
+holding the native stage lock. SSH and Compose calls use recording fakes.
 
 The renderer takes an operator-owned identity file with the fields in
 `fixtures/identity.example.json`. Keep the real identity and rendered packet private.
@@ -17,7 +17,7 @@ The output directory must be fresh. Verify its `SHA256SUMS` against the sealed p
 before invoking its scripts with `python3 -I -B`.
 
 - `dispatch.py` checks the guest hostname over pinned SSH.
-- `receive.py BUNDLE` checks out the exact commit and tree from the transferred local Git bundle.
+- `receive.py` checks out the exact commit and tree from the transferred `signed-<tag>-dev-incoming-source.bundle` in the guest's home.
 - `probe.py` takes the native read-only preimage capture using the installed environment.
 
 The signed runbook owns approval, transport, and engine actions. These scripts provide the

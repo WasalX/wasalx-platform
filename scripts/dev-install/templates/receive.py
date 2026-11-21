@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Create a fresh checkout from an already transferred local Git bundle."""
 
-import argparse
 import json
 import os
 from pathlib import Path
@@ -9,19 +8,19 @@ import subprocess
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("bundle", type=Path)
-    args = parser.parse_args()
-
     packet = json.loads(Path(__file__).with_name("packet.json").read_bytes())
     identity, run = packet["identity"], packet["run"]
     os.umask(int(identity["private_umask"], 8))
-    bundle = args.bundle.resolve(strict=True)
-    if not bundle.is_file() or bundle != args.bundle.absolute():
+    home = Path("/home") / identity["guest_user"]
+    tag = run["tag"]
+    bundle = home / f"signed-{tag}-dev-incoming-source.bundle"
+    if not bundle.is_file() or bundle != bundle.resolve(strict=True):
         raise SystemExit("expected a canonical local Git bundle")
 
-    support = Path(identity["guest_root"]) / run["tag"]
-    support.mkdir(parents=True, exist_ok=False)
+    support = home / f"dev-signed-{tag}-dev"
+    support.mkdir(mode=0o700)
+    for child in ("inputs", "inputs/bin", "inputs/trust", "inputs/hosted", "private"):
+        (support / child).mkdir(mode=0o700)
     repo = support / "source"
     checkout_umask = int(identity["checkout_umask"], 8)
     git_env = {
