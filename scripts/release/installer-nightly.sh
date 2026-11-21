@@ -108,7 +108,10 @@ diff -u "$work/fresh.ids" "$work/reinstalled.ids" > "$diagnostics/reinstall.diff
 
 # Capture from a clean candidate separate from the running Compose input tree.
 preflight="$work/preflight"
-git worktree add --detach "$preflight" "$commit"
+(
+  umask 022
+  git worktree add --detach "$preflight" "$commit"
+)
 (
   cd "$preflight"
   phase native-preflight 5m sudo -H env "PATH=$PATH" GITHUB_ACTIONS=true \
