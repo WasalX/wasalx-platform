@@ -58,6 +58,28 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Require a successful release candidate for this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          source scripts/release/image-manifest.sh
+          commit=$(git rev-parse HEAD)
+          tags=$(gh api --method GET --paginate "repos/$GITHUB_REPOSITORY/actions/workflows/release.yml/runs" \
+            -f event=push -f status=success -f head_sha="$commit" -F per_page=100 \
+            --jq '.workflow_runs[].head_branch // empty') || {
+            echo '::error::Could not verify successful release candidate workflow runs'
+            exit 1
+          }
+          while IFS= read -r tag; do
+            [[ "$tag" == v*-rc.* ]] || continue
+            require_tag_commit "refs/tags/$tag" "$commit" >/dev/null || continue
+            if published=$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft,isPrerelease \
+              --jq '.isDraft == false and .isPrerelease == true') && [[ "$published" == true ]]; then
+              exit 0
+            fi
+          done <<< "$tags"
+          echo '::error::No successful published v*-rc.* release for this commit'
+          exit 1
       - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: ghcr.io
