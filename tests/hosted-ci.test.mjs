@@ -89,6 +89,7 @@ test("tracked tests belong to a named CI runner or the test allowlist", async ()
     await Promise.all(["scripts/validate-infra.sh", "infra/docker/Dockerfile.zammad", "tests/zammad-image-browser-compat.test.mjs",
       "playwright.application.config.ts", "playwright.identity.config.ts", "playwright.storybook.config.ts",
       "tests/visual/inbox-synthetic.spec.ts", "scripts/storybook-visual-regression.mjs", "scripts/run-application-e2e.mjs"].map(read));
+  const runsTofu = /^\s+"\$\{TOFU\[@\]\}" -chdir=infra\/terraform test -no-color$/mu.test(validation);
 
   function runnerRuns(runner, file) {
     const command = runnerText(runner);
@@ -98,8 +99,10 @@ test("tracked tests belong to a named CI runner or the test allowlist", async ()
         return file.endsWith(".py") && unitWrappers.some(source =>
           referencesFile(source, file) || referencesFile(source, file.replace(/^tests\//u, "./")));
       case "terraform-test":
-        return tofuFile(file) && runsFile(command, "scripts/validate-infra.sh", "--terraform-test-only")
-          && /^\s+"\$\{TOFU\[@\]\}" -chdir=infra\/terraform test -no-color$/mu.test(validation);
+        return runsTofu && tofuFile(file) && runsFile(command, "scripts/validate-infra.sh", "--terraform-test-only");
+      case "infra-validate":
+        return commands(command).includes("bash scripts/validate-infra.sh")
+          && (runsFile(validation, file) || (runsTofu && tofuFile(file)));
       case "test:postgres":
         return postgresImports.has(file);
       case "images": {
@@ -163,8 +166,6 @@ test("CI gates integration and OpenTofu and runs portal integration files serial
   assert(gate.needs.includes("integration"));
   const [gateStep] = gate.steps;
   assert.equal(gateStep.env.INTEGRATION, "${{ needs.integration.result }}");
-  assert.equal(gateStep.env.TERRAFORM, "${{ needs.terraform-test.result }}");
-  assert.equal(gateStep.env.TERRAFORM_NEEDED, "${{ needs.changes.outputs.terraform }}");
   assert.equal(gateStep.run, `test "$CHANGES" = success && test "$CHECKS" = success || exit 1
 case "$EVENT:$REVIEW:$IMAGES_NEEDED:$IMAGES:$INTEGRATION" in
   pull_request:success:false:skipped:skipped|pull_request:success:true:success:skipped) ;;
@@ -173,6 +174,9 @@ case "$EVENT:$REVIEW:$IMAGES_NEEDED:$IMAGES:$INTEGRATION" in
 esac
 test "$TERRAFORM" = success || {
   test "$EVENT" = pull_request && test "$TERRAFORM_NEEDED" = false && test "$TERRAFORM" = skipped
+} || exit 1
+test "$INFRA" = success || {
+  test "$EVENT" = pull_request && test "$INFRA_NEEDED" = false && test "$INFRA" = skipped
 }
 `);
   for (const job of [jobs.changes, jobs.checks]) {
@@ -180,54 +184,64 @@ test "$TERRAFORM" = success || {
   }
 });
 
-test("Terraform job fails open on PR diff errors and is required on the merge queue", async t => {
-  const { jobs } = parse(await read(".github/workflows/ci.yml"));
-  const terraform = jobs["terraform-test"];
-  const gate = jobs["ci-gate"];
-  assert.equal(terraform.needs, "changes");
-  assert.equal(terraform.if, "${{ !cancelled() && (github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && (needs.changes.result != 'success' || needs.changes.outputs.terraform != 'false'))) }}");
-  assert.deepEqual(terraform.permissions, { contents: "read" });
-  assert.equal(terraform.steps.at(-1).run, "bash scripts/validate-infra.sh --terraform-test-only");
-  assert(gate.needs.includes("terraform-test"));
-  assert.equal(jobs.changes.outputs.terraform, "${{ steps.terraform.outputs.needed }}");
-  const detector = jobs.changes.steps.find(step => step.id === "terraform");
-  assert.equal(detector.if, "github.event_name == 'pull_request'");
-  const bash = process.platform === "win32" ? "C:/Program Files/Git/bin/bash.exe" : "bash";
-  const run = (script, env) => spawnSync(bash, ["--noprofile", "--norc", "-e", "-o", "pipefail", "-c", script], {
-    env: { ...process.env, ...env }, encoding: "utf8", timeout: 10_000, windowsHide: true,
-  });
-  const directory = await mkdtemp(join(tmpdir(), "wasalx-terraform-changes-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
-  for (const [status, needed] of [[0, false], [1, true], [128, true]]) {
-    const output = join(directory, String(status));
-    const result = run(`git() {
-  test "$*" = 'diff --quiet --no-ext-diff --no-renames HEAD^1 HEAD -- infra/terraform/ scripts/validate-infra.sh scripts/release/fetch-verified-asset.sh .github/workflows/ci.yml' || exit 99
+for (const [name, output, envName, paths, command] of [
+  ["terraform-test", "terraform", "TERRAFORM",
+    "infra/terraform/ scripts/validate-infra.sh scripts/release/fetch-verified-asset.sh .github/workflows/ci.yml", "bash scripts/validate-infra.sh --terraform-test-only"],
+  ["infra-validate", "infra", "INFRA",
+    "infra/helm/ infra/terraform/ :(glob)scripts/validate-* scripts/release/fetch-verified-asset.sh .github/workflows/ci.yml", "bash scripts/validate-infra.sh"],
+]) {
+  test(`${name} fails open on PR diff errors and is required on the merge queue`, async t => {
+    const { jobs } = parse(await read(".github/workflows/ci.yml"));
+    const job = jobs[name];
+    const gate = jobs["ci-gate"];
+    const [gateStep] = gate.steps;
+    assert.equal(job.needs, "changes");
+    assert.equal(job.if, `\${{ !cancelled() && (github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && (needs.changes.result != 'success' || needs.changes.outputs.${output} != 'false'))) }}`);
+    assert.deepEqual(job.permissions, { contents: "read" });
+    assert.equal(job.steps.at(-1).run, command);
+    assert(gate.needs.includes(name));
+    assert.equal(gateStep.env[envName], `\${{ needs.${name}.result }}`);
+    assert.equal(gateStep.env[`${envName}_NEEDED`], `\${{ needs.changes.outputs.${output} }}`);
+    assert.equal(jobs.changes.outputs[output], `\${{ steps.${output}.outputs.needed }}`);
+    const detector = jobs.changes.steps.find(step => step.id === output);
+    assert.equal(detector.if, "github.event_name == 'pull_request'");
+    const bash = process.platform === "win32" ? "C:/Program Files/Git/bin/bash.exe" : "bash";
+    const run = (script, env) => spawnSync(bash, ["--noprofile", "--norc", "-e", "-o", "pipefail", "-c", script], {
+      env: { ...process.env, ...env }, encoding: "utf8", timeout: 10_000, windowsHide: true,
+    });
+    const directory = await mkdtemp(join(tmpdir(), `wasalx-${name}-changes-`));
+    t.after(() => rm(directory, { recursive: true, force: true }));
+    for (const [status, needed] of [[0, false], [1, true], [128, true]]) {
+      const outputFile = join(directory, String(status));
+      const result = run(`git() {
+  test "$*" = "diff --quiet --no-ext-diff --no-renames HEAD^1 HEAD -- $DIFF_PATHS" || exit 99
   return "$DIFF_STATUS"
 }
-${detector.run}`, { GITHUB_OUTPUT: output.replaceAll("\\", "/"), DIFF_STATUS: String(status) });
-    assert.equal(result.status, 0, result.error?.message ?? result.stderr);
-    assert.equal((await readFile(output, "utf8")).trim(), `needed=${needed}`);
-  }
-  for (const [event, needed, terraformResult, status] of [
-    ["pull_request", "true", "success", 0],
-    ["pull_request", "false", "skipped", 0],
-    ["pull_request", "", "skipped", 1],
-    ["pull_request", "true", "skipped", 1],
-    ["pull_request", "false", "failure", 1],
-    ["pull_request", "false", "cancelled", 1],
-    ["merge_group", "", "success", 0],
-    ["merge_group", "false", "skipped", 1],
-    ["merge_group", "", "failure", 1],
-  ]) {
-    const pr = event === "pull_request";
-    const result = run(gate.steps[0].run, {
-      EVENT: event, CHANGES: "success", CHECKS: "success", REVIEW: pr ? "success" : "skipped",
-      IMAGES_NEEDED: "false", IMAGES: "skipped", INTEGRATION: pr ? "skipped" : "success",
-      TERRAFORM_NEEDED: needed, TERRAFORM: terraformResult,
-    });
-    assert.equal(result.status, status, `${event}/${needed}/${terraformResult}: ${result.error?.message ?? result.stderr}`);
-  }
-});
+${detector.run}`, { GITHUB_OUTPUT: outputFile.replaceAll("\\", "/"), DIFF_PATHS: paths, DIFF_STATUS: String(status) });
+      assert.equal(result.status, 0, result.error?.message ?? result.stderr);
+      assert.equal((await readFile(outputFile, "utf8")).trim(), `needed=${needed}`);
+    }
+    for (const [event, needed, jobResult, status] of [
+      ["pull_request", "true", "success", 0],
+      ["pull_request", "false", "skipped", 0],
+      ["pull_request", "", "skipped", 1],
+      ["pull_request", "true", "skipped", 1],
+      ["pull_request", "false", "failure", 1],
+      ["pull_request", "false", "cancelled", 1],
+      ["merge_group", "", "success", 0],
+      ["merge_group", "false", "skipped", 1],
+      ["merge_group", "", "failure", 1],
+    ]) {
+      const pr = event === "pull_request";
+      const result = run(gateStep.run, {
+        EVENT: event, CHANGES: "success", CHECKS: "success", REVIEW: pr ? "success" : "skipped",
+        IMAGES_NEEDED: "false", IMAGES: "skipped", INTEGRATION: pr ? "skipped" : "success",
+        TERRAFORM: "success", INFRA: "success", [`${envName}_NEEDED`]: needed, [envName]: jobResult,
+      });
+      assert.equal(result.status, status, `${event}/${needed}/${jobResult}: ${result.error?.message ?? result.stderr}`);
+    }
+  });
+}
 
 test("shards cover each file once regardless of inventory order or duplicates", () => {
   const files = ["d", "a", "b", "c", "a"];
