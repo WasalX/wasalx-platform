@@ -680,7 +680,8 @@ test("direct Helm production installs reject development defaults and incomplete
   }
   assertProductionUrls(parseYaml(fixture));
   assert.match(script, /PRODUCTION_VALUES_FILE="infra\/helm\/wasalx\/ci\/production-values\.yaml"/u);
-  assert.match(script, /ASSISTED_ALPHA_VALUES_FILE="\$\{WASALX_ASSISTED_PROFILE_VALUES:\?Set WASALX_ASSISTED_PROFILE_VALUES\}"/u);
+  assert.match(script, /assisted_alpha_values=\(--set deploymentProfile=assisted-alpha --set workspaceProvider\.enabled=false --set provisioner\.enabled=false\)/u);
+  assert.doesNotMatch(script, /WASALX_(?:ASSISTED_PROFILE_VALUES|PRODUCTION_MIGRATION_CHECK)/u);
   assert.match(script, /assisted alpha unexpectedly enabled deferred component/u);
   assert.match(script, /if "\$HELM" lint infra\/helm\/wasalx --set environment=production/u);
   assert.match(script, /production Helm defaults unexpectedly passed the fail-closed schema/u);
