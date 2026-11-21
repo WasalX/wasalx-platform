@@ -8,6 +8,7 @@
 /scripts/release/installer-*                 @WasalX/maintainers
 /scripts/release/ci-*                        @WasalX/maintainers
 /scripts/installer-*                         @WasalX/maintainers
+/scripts/dev-install/                        @WasalX/maintainers
 /scripts/hosted-ci*                         @WasalX/maintainers
 /scripts/test-unit.mjs                      @WasalX/maintainers
 /release/                                   @WasalX/maintainers
