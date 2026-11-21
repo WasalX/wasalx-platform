@@ -41,6 +41,20 @@ test("Dependabot skips standalone updates of the patched Storybook package", asy
   assert.deepEqual(npm.ignore.find(rule => rule["dependency-name"] === "storybook"), { "dependency-name": "storybook" });
 });
 
+test("Dependabot groups all Docker and GitHub Actions version updates by ecosystem", async () => {
+  const dependabot = parse(await read(".github/dependabot.yml"));
+  const docker = dependabot.updates.filter(update => update["package-ecosystem"] === "docker");
+  const actions = dependabot.updates.filter(update => update["package-ecosystem"] === "github-actions");
+  assert.deepEqual(docker.map(update => update.directories), [["/", "/infra/docker"]]);
+  assert.deepEqual(actions.map(update => update.directory), ["/"]);
+  for (const [ecosystem, [update]] of [["docker", docker], ["github-actions", actions]]) {
+    assert.deepEqual(update.groups, {
+      [`${ecosystem}-version-updates`]: { patterns: ["*"] },
+      [`${ecosystem}-security`]: { "applies-to": "security-updates", patterns: ["*"] },
+    });
+  }
+});
+
 test("production and Storybook share the pinned local Geist assets", async () => {
   const fonts = new Map([
     ["app/fonts/Geist-Variable.woff2", "a369fcf5628ea2aa4e1b9e2ec6a5b3624e365bda588e1f0f2f12b564f728fbb8"],

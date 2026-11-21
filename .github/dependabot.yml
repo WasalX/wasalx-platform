@@ -65,9 +65,8 @@ updates:
     cooldown:
       default-days: 3
     groups:
-      github-actions-minor-and-patch:
+      github-actions-version-updates:
         patterns: ['*']
-        update-types: [minor, patch]
       github-actions-security:
         applies-to: security-updates
         patterns: ['*']
@@ -84,9 +83,8 @@ updates:
       # Keycloak is upgraded by hand: its Dockerfile pins versioned CLI and library jars.
       - dependency-name: "keycloak/keycloak"
     groups:
-      docker-minor-and-patch:
+      docker-version-updates:
         patterns: ['*']
-        update-types: [minor, patch]
       docker-security:
         applies-to: security-updates
         patterns: ['*']
