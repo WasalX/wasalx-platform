@@ -44,12 +44,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: bash scripts/release/promote-tag.sh
 
-  prod:
+  stable-preflight:
     if: ${{ !contains(github.ref_name, '-rc.') }}
-    environment: prod
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    permissions: {actions: read, contents: write, packages: write}
+    timeout-minutes: 5
+    permissions: {actions: read, contents: read}
     steps:
       - name: Refuse release candidate tags in production
         run: |
@@ -58,12 +57,18 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Require a successful release candidate for this commit
+      - name: Verify main CI and the prior release candidate
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           source scripts/release/image-manifest.sh
           commit=$(git rev-parse HEAD)
+          if ! run=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --branch main \
+            --event push --commit "$commit" --status success --limit 1 \
+            --json databaseId --jq '.[0].databaseId // empty') || [[ ! "$run" =~ ^[0-9]+$ ]]; then
+            echo '::error::No verified successful main CI push run for this commit'
+            exit 1
+          fi
           tags=$(gh api --method GET --paginate "repos/$GITHUB_REPOSITORY/actions/workflows/release.yml/runs" \
             -f event=push -f status=success -f head_sha="$commit" -F per_page=100 \
             --jq '.workflow_runs[].head_branch // empty') || {
@@ -80,6 +85,18 @@ jobs:
           done <<< "$tags"
           echo '::error::No successful published v*-rc.* release for this commit'
           exit 1
+
+  prod:
+    if: ${{ !contains(github.ref_name, '-rc.') }}
+    needs: stable-preflight
+    environment: prod
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions: {actions: read, contents: write, packages: write}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: ghcr.io

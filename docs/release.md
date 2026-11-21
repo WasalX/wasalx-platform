@@ -14,8 +14,8 @@ criteria below.
    lint, PostgreSQL and browser integration, and infrastructure validation
    for Helm, promtool, OpenTofu, migrations, and the secret adapter. Dependency
    review runs on the pull request.
-3. **Clean security state.** Both release repositories have zero open high or
-   critical CodeQL alerts and zero open high or critical Dependabot alerts.
+3. **Clean security state.** This platform repository and its Zammad add-on
+   repository each have zero open high or critical CodeQL and Dependabot alerts.
 4. **Proven as an RC.** `release.yml` publishes the RC in the `stg` GitHub
    environment. Deploy its digests to staging and install them in DEV using the
    installer's signed-image verification. DEV smoke must pass, held services
@@ -30,8 +30,9 @@ criteria below.
    digests. The release workflow attaches `images-manifest.json` with the
    verified digests.
 
-Stable tag promotion requires both a successful, published RC for the exact
-commit and a successful `ci.yml` run from that commit's push to `main`.
+Before requesting `prod` approval, the release workflow checks for a successful,
+published RC for the exact commit and a successful `ci.yml` run from that
+commit's push to `main`.
 
 Live-provider qualification with real WhatsApp or Meta services and real
 customers is a separate milestone that requires owner approval. A stable
