@@ -33,6 +33,8 @@ jobs:
           needed=true
           if git diff --quiet --no-ext-diff --no-renames HEAD^1 HEAD -- \
             ':(glob)scripts/release/installer-*' ':(glob)compose*.yaml' \
+            release/installer-images.json scripts/installer-evidence.mjs ':(glob)infra/docker/full/**' \
+            scripts/release/compose-stage-lock.mjs scripts/release/simulation-rails-json.mjs \
             scripts/release/preflight-full-env.mjs scripts/release/generate-simulation-env.py \
             scripts/release/images-by-digest.py scripts/release/image-manifest.sh .github/workflows/nightly-install.yml; then
             needed=false

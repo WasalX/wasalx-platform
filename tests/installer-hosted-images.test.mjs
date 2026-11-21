@@ -283,8 +283,15 @@ test("admitted hosted IDs reach replacement, smoke and held release without repe
   };
   assert.equal(await executeStage("replace", { ...f.context, drained: true }), 0);
   assert.deepEqual(replacements, [[...f.context.composeArguments, "up", "--no-build", "--pull", "never", "--wait"]]);
-  assert.equal(await executeStage("smoke", f.context), 0);
+  const envFile = join(f.context.privateDirectory, "full.env");
+  const devPreimagesFile = join(f.context.privateDirectory, "dev-preimages.json");
+  const devPreimagesSha256 = "c".repeat(64);
+  assert.equal(await executeStage("smoke", { ...f.context, envFile, devPreimagesFile, devPreimagesSha256 }), 0);
   assert.equal(smokes.length, 1);
+  assert.deepEqual(smokes[0].slice(1), ["fixture", "--full", "--env-file", envFile,
+    "--compose-file", "compose.yaml", "--compose-file", "compose.full.yaml", "--profile", "full", "--profile", "runtime-workers",
+    "--dev-preimages", devPreimagesFile, "--dev-preimages-sha256", devPreimagesSha256,
+    ...f.context.plan.flatMap(({ id, reference }) => ["--candidate-image", `${id}=${reference}`])]);
   await assert.rejects(executeStage("release-held", f.context), /held release requires bound DEV preimages/u);
 });
 

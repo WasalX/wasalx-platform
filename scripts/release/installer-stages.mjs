@@ -414,9 +414,9 @@ export async function executeStage(action, context) {
       assert.match(reference ?? "", /@sha256:[0-9a-f]{64}$/u, "dependency image must be pinned");
       if (!await inspectImage(reference) && pullMissing) {
         const exit = await execute("docker", ["pull", "--quiet", reference], environment, true);
-        assert.equal(exit, 0, "dependency image pull failed");
+        assert.equal(exit, 0, `dependency image pull failed: ${reference}`);
       }
-      assert.ok(await inspectImage(reference), "dependency image missing; run build before replacement");
+      assert.ok(await inspectImage(reference), `dependency image missing; run build before replacement: ${reference}`);
     }
   };
   if (action === "preload-hosted") {

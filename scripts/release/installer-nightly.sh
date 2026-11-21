@@ -40,7 +40,7 @@ phase() {
   timeout "$limit" "$@" > "$work/$name.raw" 2>&1 || status=$?
   printf '%s exit=%s elapsed=%ss\n' "$name" "$status" "$((SECONDS - started))" | tee -a "$diagnostics/phases.log"
   # Copy only installer control messages, never an env file, Compose logs or inspect payloads.
-  grep -E '^remote full stage [a-z-]+ (passed \(operator authentication/live acceptance separate\)|failed; inspect before retry)$|^remote full stage [a-z-]+ reason: assertion failed at [a-z-]+\.mjs:[0-9]+$|^unrecreatable fields: \[("[a-zA-Z0-9_.-]+"(,|\]))+$' \
+  grep -E '^remote full stage [a-z-]+ (passed \(operator authentication/live acceptance separate\)|failed; inspect before retry|reason: [[:print:]]+)$|^unrecreatable fields: \[("[a-zA-Z0-9_.-]+"(,|\]))+$' \
     "$work/$name.raw" >> "$diagnostics/installer.log" || true
   return "$status"
 }
