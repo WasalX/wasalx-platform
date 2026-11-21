@@ -148,7 +148,7 @@ test("tracked tests belong to a named CI runner or the test allowlist", async ()
 
 test("CI gates integration and infrastructure and runs portal integration files serially", async () => {
   const { on, jobs } = parse(await read(".github/workflows/ci.yml"));
-  const { integration, "ci-gate": gate } = jobs;
+  const { integration, "ci-gate": gate, "dev-install-dryrun": dryrun } = jobs;
   assert(Object.hasOwn(on, "workflow_dispatch"));
   assert(Object.hasOwn(on, "merge_group"));
   assert.deepEqual(on.push.branches, ["main"]);
@@ -160,15 +160,27 @@ test("CI gates integration and infrastructure and runs portal integration files 
   const devPreflight = jobs.checks.steps.find(step => runsFile(step.run ?? "", devPreflightFile));
   assert.equal(devPreflight?.if, "github.event_name == 'pull_request' && matrix.mode == 'unit' && matrix.shard == 1");
   assert(integration.steps.some(step => !step.if && runsFile(step.run ?? "", devPreflightFile)));
+  const dryrunFile = "scripts/dev-install/test_dryrun.py";
+  assert(integration.steps.some(step => !step.if && runsFile(step.run ?? "", dryrunFile, "--container")));
+  assert(dryrun.steps.some(step => !step.if && runsFile(step.run ?? "", dryrunFile, "--container")));
+  assert.equal(dryrun.needs, "changes");
+  assert.equal(dryrun.if, "${{ !cancelled() && github.event_name == 'pull_request' && needs.changes.outputs.dev-install != 'false' }}");
   const portalIntegration = integration.steps.find(step => step.name === "Test portal and tenant integration");
   assert.match(portalIntegration?.run, /^node --test --test-concurrency=1 /u);
   assert(gate.needs.includes("integration"));
+  assert(gate.needs.includes("dev-install-dryrun"));
   const [gateStep] = gate.steps;
   assert.equal(gateStep.env.INTEGRATION, "${{ needs.integration.result }}");
+  assert.equal(gateStep.env.DEV_INSTALL_NEEDED, "${{ needs.changes.outputs.dev-install }}");
+  assert.equal(gateStep.env.DEV_INSTALL, "${{ needs.dev-install-dryrun.result }}");
   assert.equal(gateStep.run, `test "$CHANGES" = success && test "$CHECKS" = success || exit 1
 case "$EVENT:$REVIEW:$IMAGES_NEEDED:$IMAGES:$INTEGRATION" in
   pull_request:success:false:skipped:skipped|pull_request:success:true:success:skipped) ;;
   merge_group:skipped:false:skipped:success|merge_group:skipped:true:success:success) ;;
+  *) exit 1 ;;
+esac
+case "$EVENT:$DEV_INSTALL_NEEDED:$DEV_INSTALL" in
+  pull_request:*:success|pull_request:false:skipped|merge_group:*:skipped) ;;
   *) exit 1 ;;
 esac
 test "$INFRA" = success || {
@@ -180,7 +192,7 @@ test "$INFRA" = success || {
   }
 });
 
-test("infra-validate fails open on PR diff errors and is required on the merge queue", async t => {
+test("optional PR lanes run on diff errors and gate their applicable checks", async t => {
   const { jobs } = parse(await read(".github/workflows/ci.yml"));
   const { "infra-validate": job, "ci-gate": gate, changes } = jobs;
   const [gateStep] = gate.steps;
@@ -196,8 +208,7 @@ test("infra-validate fails open on PR diff errors and is required on the merge q
   assert.equal(gateStep.env.INFRA, "${{ needs.infra-validate.result }}");
   assert.equal(gateStep.env.INFRA_NEEDED, "${{ needs.changes.outputs.infra }}");
   assert.equal(changes.outputs.infra, "${{ steps.infra.outputs.needed }}");
-  const detector = changes.steps.find(step => step.id === "infra");
-  assert.equal(detector.if, "github.event_name == 'pull_request'");
+  assert.equal(changes.outputs["dev-install"], "${{ steps.dev-install.outputs.needed }}");
   const paths = [
     "infra/helm/", "infra/terraform/", ":(glob)scripts/validate-*", "scripts/release/fetch-verified-asset.sh",
     "compose.full.yaml", "tests/fixtures/production-backup-alerts.yaml", "tests/secret-adapter-readiness.test.rb",
@@ -209,15 +220,24 @@ test("infra-validate fails open on PR diff errors and is required on the merge q
   });
   const directory = await mkdtemp(join(tmpdir(), "wasalx-infra-validate-changes-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
-  for (const [status, needed] of [[0, false], [1, true], [128, true]]) {
-    const outputFile = join(directory, String(status));
-    const result = run(`git() {
+  for (const [id, diffPaths] of [
+    ["infra", paths],
+    ["dev-install", ["scripts/dev-install/", "scripts/release/installer-stages.mjs",
+      "scripts/release/installer-stack.mjs", "scripts/release/compose-stage-lock.mjs",
+      "scripts/release/compose-stage-config.json", ".github/workflows/ci.yml"].join(" ")],
+  ]) {
+    const detector = changes.steps.find(step => step.id === id);
+    assert.equal(detector.if, "github.event_name == 'pull_request'");
+    for (const [status, needed] of [[0, false], [1, true], [128, true]]) {
+      const outputFile = join(directory, `${id}-${status}`);
+      const result = run(`git() {
   test "$*" = "diff --quiet --no-ext-diff --no-renames HEAD^1 HEAD -- $DIFF_PATHS" || exit 99
   return "$DIFF_STATUS"
 }
-${detector.run}`, { GITHUB_OUTPUT: outputFile.replaceAll("\\", "/"), DIFF_PATHS: paths, DIFF_STATUS: String(status) });
-    assert.equal(result.status, 0, result.error?.message ?? result.stderr);
-    assert.equal((await readFile(outputFile, "utf8")).trim(), `needed=${needed}`);
+${detector.run}`, { GITHUB_OUTPUT: outputFile.replaceAll("\\", "/"), DIFF_PATHS: diffPaths, DIFF_STATUS: String(status) });
+      assert.equal(result.status, 0, result.error?.message ?? result.stderr);
+      assert.equal((await readFile(outputFile, "utf8")).trim(), `needed=${needed}`);
+    }
   }
   for (const [event, needed, jobResult, status] of [
     ["pull_request", "true", "success", 0],
@@ -234,9 +254,21 @@ ${detector.run}`, { GITHUB_OUTPUT: outputFile.replaceAll("\\", "/"), DIFF_PATHS:
     const result = run(gateStep.run, {
       EVENT: event, CHANGES: "success", CHECKS: "success", REVIEW: pr ? "success" : "skipped",
       IMAGES_NEEDED: "false", IMAGES: "skipped", INTEGRATION: pr ? "skipped" : "success",
+      DEV_INSTALL_NEEDED: "false", DEV_INSTALL: "skipped",
       INFRA_NEEDED: needed, INFRA: jobResult,
     });
     assert.equal(result.status, status, `${event}/${needed}/${jobResult}: ${result.error?.message ?? result.stderr}`);
+  }
+  for (const [needed, jobResult, status] of [
+    ["true", "success", 0], ["false", "skipped", 0], ["true", "skipped", 1], ["", "skipped", 1],
+    ["true", "failure", 1], ["true", "cancelled", 1],
+  ]) {
+    const result = run(gateStep.run, {
+      EVENT: "pull_request", CHANGES: "success", CHECKS: "success", REVIEW: "success",
+      IMAGES_NEEDED: "false", IMAGES: "skipped", INTEGRATION: "skipped",
+      DEV_INSTALL_NEEDED: needed, DEV_INSTALL: jobResult, INFRA_NEEDED: "false", INFRA: "skipped",
+    });
+    assert.equal(result.status, status, `dev-install/${needed}/${jobResult}: ${result.error?.message ?? result.stderr}`);
   }
 });
 
