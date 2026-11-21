@@ -33,6 +33,8 @@ updates:
       # Keep Vinext pinned until newer versions pass the portal image regression.
       - dependency-name: "vinext"
         versions: [">1.0.0-beta.5"]
+      # Update Storybook and its version-specific pnpm patch together by hand.
+      - dependency-name: "storybook"
       # Keep the add-ons aligned with the locally patched Storybook release.
       - dependency-name: "@storybook/addon-a11y"
         versions: [">10.6.2"]

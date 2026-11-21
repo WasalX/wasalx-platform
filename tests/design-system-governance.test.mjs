@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { parse } from "yaml";
 
 const root = new URL("../", import.meta.url);
 const read = (path) => readFile(new URL(path, root), "utf8");
@@ -32,6 +33,12 @@ test("Storybook dependencies and scripts are exact and version-aligned", async (
   assert.equal(packageJson.devDependencies["@axe-core/playwright"], "4.12.1");
   assert.match(packageJson.scripts["build:storybook"], /storybook build/u);
   assert.match(packageJson.scripts["test:visual"], /storybook-visual-regression/u);
+});
+
+test("Dependabot skips standalone updates of the patched Storybook package", async () => {
+  const dependabot = parse(await read(".github/dependabot.yml"));
+  const npm = dependabot.updates.find(update => update["package-ecosystem"] === "npm");
+  assert.deepEqual(npm.ignore.find(rule => rule["dependency-name"] === "storybook"), { "dependency-name": "storybook" });
 });
 
 test("production and Storybook share the pinned local Geist assets", async () => {
