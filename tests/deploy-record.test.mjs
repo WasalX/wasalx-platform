@@ -29,6 +29,10 @@ test("deploy records only manifests admitted by the selected environment", async
   assert.deepEqual(Object.keys(workflow.jobs), ["record"]);
   const job = workflow.jobs.record;
   assert.equal(job.environment, "${{ inputs.environment }}");
+  assert.deepEqual(workflow.concurrency, {
+    group: `deploy-${job.environment}`,
+    "cancel-in-progress": false,
+  });
   assert.deepEqual(job.permissions, { actions: "read", contents: "read" });
   assert.doesNotMatch(source, /\benvironment_url\b/u);
 
