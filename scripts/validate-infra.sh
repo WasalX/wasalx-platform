@@ -9,17 +9,20 @@ NATIVE_INFRA=false
 if [[ "${WASALX_CI_RUNTIME-native}" == managed && "${WASALX_CI_ROUTE-fullruntime}" == cloud ]]; then
   NATIVE_INFRA=true
 fi
+mode=${1:-}
 prerequisites=(curl shasum)
-if [[ "${1:-}" == --terraform-test-only ]]; then
-  prerequisites+=(unzip)
-else
-  prerequisites+=(tar ruby python3)
-  if [[ "$NATIVE_INFRA" == true ]]; then prerequisites+=(unzip); else prerequisites+=(docker); fi
-fi
+case "$mode" in
+  --terraform-test-only) prerequisites+=(unzip) ;;
+  --render-secret-adapter) prerequisites+=(tar) ;;
+  *)
+    prerequisites+=(tar ruby python3)
+    if [[ "$NATIVE_INFRA" == true ]]; then prerequisites+=(unzip); else prerequisites+=(docker); fi
+    ;;
+esac
 for tool in "${prerequisites[@]}"; do
   command -v "$tool" >/dev/null || { printf 'missing infrastructure prerequisite: %s\n' "$tool" >&2; exit 1; }
 done
-if [[ "${1:-}" != --terraform-test-only ]]; then ruby -ryaml -e 'YAML.load_stream("--- {}")'; fi
+if [[ "$mode" != --terraform-test-only && "$mode" != --render-secret-adapter ]]; then ruby -ryaml -e 'YAML.load_stream("--- {}")'; fi
 
 HELM_VERSION="4.2.0"
 TOFU_VERSION="1.12.1"
@@ -249,6 +252,17 @@ tar -xzf "$TOOLS_DIR/$HELM_ARCHIVE" -C "$TOOLS_DIR"
 HELM="$TOOLS_DIR/$HELM_TARGET/helm"
 [[ "$("$HELM" version --short)" == "v${HELM_VERSION}+"* ]]
 
+PRODUCTION_VALUES_FILE="infra/helm/wasalx/ci/production-values.yaml"
+secret_adapter_values=(--namespace wasalx --values infra/helm/wasalx/ci/production-secret-sidecar-values.yaml)
+render_secret_adapter() {
+  "$HELM" template wasalx infra/helm/wasalx --values "$PRODUCTION_VALUES_FILE" "${secret_adapter_values[@]}"
+}
+
+if [[ "$mode" == --render-secret-adapter ]]; then
+  render_secret_adapter
+  exit 0
+fi
+
 install -d -m 0755 "$TOOLS_DIR/alert-checks"
 install -m 0644 infra/helm/wasalx/files/observability-rules.yaml "$TOOLS_DIR/alert-checks/application-rules.yaml"
 install -m 0644 tests/fixtures/production-backup-alerts.yaml "$TOOLS_DIR/alert-checks/tests.yaml"
@@ -280,7 +294,6 @@ else
 fi
 if [[ "${1:-}" == --production-only ]]; then exit 0; fi
 
-PRODUCTION_VALUES_FILE="infra/helm/wasalx/ci/production-values.yaml"
 ASSISTED_ALPHA_VALUES_FILE="${WASALX_ASSISTED_PROFILE_VALUES:?Set WASALX_ASSISTED_PROFILE_VALUES}"
 expect_production_lint_failure() {
   local label="$1"
@@ -320,7 +333,6 @@ done
 "$HELM" template wasalx infra/helm/wasalx --values "$PRODUCTION_VALUES_FILE" \
   --values "$ASSISTED_ALPHA_VALUES_FILE" > "$TOOLS_DIR/rendered-assisted-alpha.yaml"
 python3 "${WASALX_PRODUCTION_MIGRATION_CHECK:?Set WASALX_PRODUCTION_MIGRATION_CHECK}" "$TOOLS_DIR/rendered-assisted-alpha.yaml"
-secret_adapter_values=(--namespace wasalx --values infra/helm/wasalx/ci/production-secret-sidecar-values.yaml)
 "$HELM" lint infra/helm/wasalx --values "$PRODUCTION_VALUES_FILE" "${secret_adapter_values[@]}"
 expect_production_lint_failure secret-adapter-credentials "${secret_adapter_values[@]}" --set-string productionSecretSidecar.credentialsSecretName=
 expect_production_lint_failure secret-adapter-tls "${secret_adapter_values[@]}" --set-string productionSecretSidecar.tlsSecretName=
@@ -329,7 +341,7 @@ expect_production_lint_failure secret-adapter-egress "${secret_adapter_values[@]
 expect_production_lint_failure secret-adapter-wildcard "${secret_adapter_values[@]}" --set-string 'productionSecretSidecar.apiServerCidrs[0]=0.0.0.0/0'
 expect_production_lint_failure secret-adapter-image "${secret_adapter_values[@]}" --set-string productionSecretSidecar.image=example.test/secret-sidecar:latest
 expect_production_lint_failure secret-adapter-url "${secret_adapter_values[@]}" --set-string secretSidecarUrl=https://example.test
-"$HELM" template wasalx infra/helm/wasalx --values "$PRODUCTION_VALUES_FILE" "${secret_adapter_values[@]}" > "$TOOLS_DIR/rendered-secret-adapter.yaml"
+render_secret_adapter > "$TOOLS_DIR/rendered-secret-adapter.yaml"
 ruby scripts/validate-secret-adapter-render.rb "$TOOLS_DIR/rendered-secret-adapter.yaml"
 "$HELM" template wasalx infra/helm/wasalx --values "$PRODUCTION_VALUES_FILE" \
   --values "$ASSISTED_ALPHA_VALUES_FILE" "${secret_adapter_values[@]}" > "$TOOLS_DIR/rendered-assisted-secret-adapter.yaml"
@@ -338,7 +350,7 @@ ruby scripts/validate-secret-adapter-render.rb "$TOOLS_DIR/rendered-assisted-sec
   --namespace wasalx-production --set-string secretSidecarUrl=https://secrets-agent.wasalx-production.svc.cluster.local:8443 \
   --set-string productionSecretSidecar.storeNamespace=wasalx-production-secrets > "$TOOLS_DIR/rendered-secret-adapter-scoped.yaml"
 ruby scripts/validate-secret-adapter-render.rb "$TOOLS_DIR/rendered-secret-adapter-scoped.yaml"
-ruby "${WASALX_PRODUCTION_READINESS_CHECK:?Set WASALX_PRODUCTION_READINESS_CHECK}" "$TOOLS_DIR/rendered-secret-adapter.yaml"
+ruby tests/secret-adapter-readiness.test.rb "$TOOLS_DIR/rendered-secret-adapter.yaml"
 if "$HELM" template wasalx infra/helm/wasalx --values "$PRODUCTION_VALUES_FILE" "${secret_adapter_values[@]}" \
   --set-string productionSecretSidecar.storeNamespace=wasalx > "$TOOLS_DIR/invalid-secret-namespace.log" 2>&1; then
   printf 'secret adapter accepted application namespace as secret store\n' >&2
