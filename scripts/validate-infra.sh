@@ -294,7 +294,8 @@ else
 fi
 if [[ "${1:-}" == --production-only ]]; then exit 0; fi
 
-assisted_alpha_values=(--set deploymentProfile=assisted-alpha --set workspaceProvider.enabled=false --set provisioner.enabled=false)
+assisted_alpha_backup_values=(--set deploymentProfile=assisted-alpha --set workspaceProvider.enabled=false --set provisioner.enabled=false)
+assisted_alpha_values=("${assisted_alpha_backup_values[@]}" --set controlPlaneBackup.enabled=false)
 expect_production_lint_failure() {
   local label="$1"
   shift
@@ -315,7 +316,7 @@ fi
 # Both profiles admit client encryption without an unused KMS reference.
 for backup_profile in standard assisted-alpha; do
   backup_profile_args=(--set deploymentProfile=standard)
-  if [[ $backup_profile == assisted-alpha ]]; then backup_profile_args=("${assisted_alpha_values[@]}"); fi
+  if [[ $backup_profile == assisted-alpha ]]; then backup_profile_args=("${assisted_alpha_backup_values[@]}"); fi
   "$HELM" lint infra/helm/wasalx --values "$PRODUCTION_VALUES_FILE" \
     --set controlPlaneBackup.s3.encryptionMode=CLIENT_ENVELOPE \
     --set-string controlPlaneBackup.s3.ageRecipient=age1xq5ehcx9js6d2sawqu6f8emuw0vvjv0428wun3mda3n8tmtwl4csxzqhud \
@@ -329,6 +330,11 @@ for forbidden in workspaceProvider provisioner; do
     exit 1
   fi
 done
+"$HELM" template wasalx infra/helm/wasalx --values "$PRODUCTION_VALUES_FILE" > "$TOOLS_DIR/rendered-production.yaml"
+ruby scripts/validate-migration-render.rb "$TOOLS_DIR/rendered-production.yaml" standard
+"$HELM" template wasalx infra/helm/wasalx --values "$PRODUCTION_VALUES_FILE" \
+  "${assisted_alpha_values[@]}" > "$TOOLS_DIR/rendered-assisted-alpha.yaml"
+ruby scripts/validate-migration-render.rb "$TOOLS_DIR/rendered-assisted-alpha.yaml" assisted-alpha
 "$HELM" lint infra/helm/wasalx --values "$PRODUCTION_VALUES_FILE" "${secret_adapter_values[@]}"
 expect_production_lint_failure secret-adapter-credentials "${secret_adapter_values[@]}" --set-string productionSecretSidecar.credentialsSecretName=
 expect_production_lint_failure secret-adapter-tls "${secret_adapter_values[@]}" --set-string productionSecretSidecar.tlsSecretName=
