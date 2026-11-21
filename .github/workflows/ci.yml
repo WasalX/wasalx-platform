@@ -30,27 +30,21 @@ jobs:
     outputs:
       images: ${{ steps.matrix.outputs.images }}
       matrix: ${{ steps.matrix.outputs.matrix }}
-      terraform: ${{ steps.terraform.outputs.needed }}
       infra: ${{ steps.infra.outputs.needed }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: ${{ github.event_name == 'merge_group' && '0' || '2' }}
           persist-credentials: false
-      - id: terraform
+      - id: infra
         if: github.event_name == 'pull_request'
         run: |
           # Use the same test-merge base as the image matrix. Only a clean diff can skip tests.
           needed=true
-          if git diff --quiet --no-ext-diff --no-renames HEAD^1 HEAD -- infra/terraform/ scripts/validate-infra.sh scripts/release/fetch-verified-asset.sh .github/workflows/ci.yml; then
-            needed=false
-          fi
-          echo "needed=$needed" >> "$GITHUB_OUTPUT"
-      - id: infra
-        if: github.event_name == 'pull_request'
-        run: |
-          needed=true
-          if git diff --quiet --no-ext-diff --no-renames HEAD^1 HEAD -- infra/helm/ infra/terraform/ ':(glob)scripts/validate-*' scripts/release/fetch-verified-asset.sh .github/workflows/ci.yml; then
+          if git diff --quiet --no-ext-diff --no-renames HEAD^1 HEAD -- \
+            infra/helm/ infra/terraform/ ':(glob)scripts/validate-*' scripts/release/fetch-verified-asset.sh \
+            compose.full.yaml tests/fixtures/production-backup-alerts.yaml tests/secret-adapter-readiness.test.rb \
+            .github/workflows/ci.yml; then
             needed=false
           fi
           echo "needed=$needed" >> "$GITHUB_OUTPUT"
@@ -301,23 +295,6 @@ jobs:
           node --test --test-concurrency=1 tests/multitenant-e2e.test.mjs tests/platform-invitation-e2e.test.mjs
           tests/portal-security-headers.test.mjs tests/rendered-html.test.mjs
 
-  terraform-test:
-    needs: changes
-    if: >-
-      ${{ !cancelled() && (github.event_name == 'merge_group' ||
-      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
-      (github.event_name == 'pull_request' && (needs.changes.result != 'success' || needs.changes.outputs.terraform != 'false'))) }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Run OpenTofu tests
-        run: bash scripts/validate-infra.sh --terraform-test-only
-
   infra-validate:
     needs: changes
     if: >-
@@ -338,6 +315,9 @@ jobs:
           key: infra-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/validate-infra.sh', 'scripts/release/fetch-verified-asset.sh') }}
       - name: Validate infrastructure
         run: bash scripts/validate-infra.sh
+      - name: Validate native OpenTofu setup
+        # Exercise the pinned host binary and provider mirror alongside the Docker path.
+        run: bash scripts/validate-infra.sh --terraform-test-only
 
   images:
     # Stage checks and builds within the eight-slot budget for this run.
@@ -402,7 +382,7 @@ jobs:
 
   ci-gate:
     if: always() && (github.event_name == 'pull_request' || github.event_name == 'merge_group')
-    needs: [changes, dependency-review, checks, images, integration, terraform-test, infra-validate]
+    needs: [changes, dependency-review, checks, images, integration, infra-validate]
     runs-on: ubuntu-slim
     timeout-minutes: 2
     permissions: {}
@@ -416,8 +396,6 @@ jobs:
           IMAGES_NEEDED: ${{ needs.changes.outputs.images }}
           IMAGES: ${{ needs.images.result }}
           INTEGRATION: ${{ needs.integration.result }}
-          TERRAFORM_NEEDED: ${{ needs.changes.outputs.terraform }}
-          TERRAFORM: ${{ needs.terraform-test.result }}
           INFRA_NEEDED: ${{ needs.changes.outputs.infra }}
           INFRA: ${{ needs.infra-validate.result }}
         run: |
@@ -427,9 +405,6 @@ jobs:
             merge_group:skipped:false:skipped:success|merge_group:skipped:true:success:success) ;;
             *) exit 1 ;;
           esac
-          test "$TERRAFORM" = success || {
-            test "$EVENT" = pull_request && test "$TERRAFORM_NEEDED" = false && test "$TERRAFORM" = skipped
-          } || exit 1
           test "$INFRA" = success || {
             test "$EVENT" = pull_request && test "$INFRA_NEEDED" = false && test "$INFRA" = skipped
           }
