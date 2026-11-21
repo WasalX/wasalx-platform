@@ -179,9 +179,60 @@ test("nightly MinIO mirrors retain the full installer content digests", async ()
   ]);
   for (const [service, repositoryName] of [["minio", "minio"], ["minio-bootstrap", "mc"]]) {
     const [repository, digest] = nightly[service].image.split("@");
-    assert.equal(repository, `ghcr.io/netvark/${repositoryName}`);
+    assert.equal(repository, `ghcr.io/wasalx/${repositoryName}`);
     assert.match(digest, /^sha256:[0-9a-f]{64}$/u);
     assert.equal(digest, full[service].image.split("@")[1]);
+  }
+});
+
+test("MinIO mirror is dispatch-only on main and verifies the copied digest", async () => {
+  const { on, permissions, jobs } = parse(await read(".github/workflows/mirror-images.yml"));
+  const { mirror } = jobs;
+  assert.deepEqual(on, { workflow_dispatch: null });
+  assert.deepEqual(permissions, {});
+  assert.deepEqual(Object.keys(jobs), ["mirror"]);
+  assert.deepEqual(mirror.permissions, { contents: "read", packages: "write" });
+  assert.equal(mirror.if, "github.repository == 'WasalX/wasalx-platform' && github.ref == 'refs/heads/main'");
+  assert.equal(mirror["runs-on"], "ubuntu-24.04");
+  const actions = mirror.steps.filter(step => step.uses);
+  assert(actions.every(step => /@[0-9a-f]{40}$/u.test(step.uses)));
+  assert.equal(actions.find(step => step.uses.startsWith("actions/checkout@")).with["persist-credentials"], false);
+  assert.equal(actions.find(step => step.uses.startsWith("docker/login-action@")).with.password, "${{ github.token }}");
+  assert(!JSON.stringify(mirror).includes("secrets."));
+
+  const copy = mirror.steps.find(step => step.run);
+  assert.equal(copy.shell, "bash");
+  const bash = process.platform === "win32" ? "C:/Program Files/Git/bin/bash.exe" : "bash";
+  for (const [scenario, expectedStatus] of [["quay", 0], ["fallback", 0], ["source-mismatch", 1], ["mirror-mismatch", 1]]) {
+    const result = spawnSync(bash, ["--noprofile", "--norc", "-e", "-o", "pipefail", "-c", `docker() {
+  [[ "$1 $2" == 'buildx imagetools' ]] || exit 98
+  local reference="\${!#}"
+  case "$3:$reference" in
+    create:quay.io/minio/*@sha256:*|create:ghcr.io/netvark/*@sha256:*)
+      [[ "$4 $5" == '--prefer-index=false --tag' ]] || exit 98
+      echo "Copy $reference"
+      [[ "$SCENARIO" != fallback || "$reference" == ghcr.io/netvark/* ]]
+      ;;
+    inspect:ghcr.io/wasalx/*:sha256-*)
+      [[ "$4 $5" == '--format {{.Manifest.Digest}}' ]] || exit 98
+      if [[ "$SCENARIO" == mirror-mismatch ]]; then echo wrong; else echo "sha256:\${reference##*sha256-}"; fi
+      ;;
+    inspect:*@sha256:*)
+      [[ "$4 $5" == '--format {{.Manifest.Digest}}' ]] || exit 98
+      if [[ "$SCENARIO" == source-mismatch ]]; then echo wrong; else echo "\${reference##*@}"; fi
+      ;;
+    *) exit 98 ;;
+  esac
+}
+${copy.run}`], { cwd: repository, env: { ...process.env, SCENARIO: scenario }, encoding: "utf8", timeout: 10_000, windowsHide: true });
+    assert.equal(result.status, expectedStatus, result.error?.message ?? result.stdout);
+    assert.equal(result.stdout.includes("Copy ghcr.io/netvark/"), scenario === "fallback");
+    if (expectedStatus === 0) {
+      assert.match(result.stdout, /Verified ghcr\.io\/wasalx\/minio@sha256:[0-9a-f]{64}/u);
+      assert.match(result.stdout, /Verified ghcr\.io\/wasalx\/mc@sha256:[0-9a-f]{64}/u);
+    } else {
+      assert.match(result.stdout, /::error::Digest mismatch/u);
+    }
   }
 });
 

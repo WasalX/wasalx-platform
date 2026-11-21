@@ -1,0 +1,54 @@
+name: mirror-images
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  mirror:
+    if: github.repository == 'WasalX/wasalx-platform' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions: {contents: read, packages: write}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          version: v0.30.1
+          cache-binary: false
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Mirror and verify the full installer MinIO digests
+        shell: bash
+        run: |
+          for image in minio mc; do
+            digest=$(sed -nE "s|^[[:space:]]+image: quay\.io/minio/$image(:[^@]+)?@(sha256:[0-9a-f]{64})[[:space:]]*$|\2|p" compose.full.yaml)
+            if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "::error::Expected one full installer digest for $image"
+              exit 1
+            fi
+
+            source="quay.io/minio/$image@$digest"
+            repository="ghcr.io/wasalx/$image"
+            tag="$repository:sha256-${digest#sha256:}"
+            # A single image manifest must retain its media type and digest.
+            if ! docker buildx imagetools create --prefer-index=false --tag "$tag" "$source"; then
+              echo "::notice::Quay copy failed for $image. Trying the same digest from the fallback."
+              source="ghcr.io/netvark/$image@$digest"
+              docker buildx imagetools create --prefer-index=false --tag "$tag" "$source"
+            fi
+
+            source_digest=$(docker buildx imagetools inspect --format '{{.Manifest.Digest}}' "$source")
+            mirrored_digest=$(docker buildx imagetools inspect --format '{{.Manifest.Digest}}' "$tag")
+            if [[ "$source_digest" != "$digest" || "$mirrored_digest" != "$digest" ]]; then
+              echo "::error::Digest mismatch for $repository (expected $digest, source $source_digest, mirror $mirrored_digest)"
+              exit 1
+            fi
+            echo "Verified $repository@$digest"
+          done
