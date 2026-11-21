@@ -40,7 +40,7 @@ phase() {
   timeout "$limit" "$@" > "$work/$name.raw" 2>&1 || status=$?
   printf '%s exit=%s elapsed=%ss\n' "$name" "$status" "$((SECONDS - started))" | tee -a "$diagnostics/phases.log"
   # Copy only installer control messages, never an env file, Compose logs or inspect payloads.
-  grep -E '^remote full stage [a-z-]+ (passed \(operator authentication/live acceptance separate\)|failed; inspect before retry|reason: [[:print:]]+)$|^unrecreatable fields: \[("[a-zA-Z0-9_.-]+"(,|\]))+$' \
+  grep -E '^remote full stage [a-z-]+ (passed \(operator authentication/live acceptance separate\)|failed; inspect before retry|reason: [[:print:]]+)$|^remote full qualification reason: [[:print:]]+$|^flock: cannot open lock file /tmp/wasalx-compose-stage\.lock: [[:print:]]+$|^unrecreatable fields: \[("[a-zA-Z0-9_.-]+"(,|\]))+$' \
     "$work/$name.raw" >> "$diagnostics/installer.log" || true
   return "$status"
 }
@@ -69,6 +69,12 @@ resources baseline
 if (( $(sysctl -n vm.max_map_count) < 1048576 )); then
   sudo sysctl -w vm.max_map_count=1048576
 fi
+
+# Sticky /tmp rejects flock's O_CREAT when neither the caller nor /tmp owns the file.
+lock_path=$(jq -er '.lockPath' scripts/release/compose-stage-config.json)
+phase initialize-lock 30s sudo sh -c 'umask 022; set -C; : > "$1"' sh "$lock_path"
+phase runner-lock 30s flock --nonblock "$lock_path" true
+phase root-lock 30s sudo flock --nonblock "$lock_path" true
 
 phase fixture 30s python3 scripts/release/generate-simulation-env.py "$PWD" "$full_env" \
   scripts/contracts/waha-simulation-server.mjs --installer-rehearsal
@@ -105,7 +111,7 @@ preflight="$work/preflight"
 git worktree add --detach "$preflight" "$commit"
 (
   cd "$preflight"
-  phase native-preflight 5m sudo env "PATH=$PATH" GITHUB_ACTIONS=true \
+  phase native-preflight 5m sudo -H env "PATH=$PATH" GITHUB_ACTIONS=true \
     "WASALX_INSTALL_EXPECTED_HOSTNAME=$WASALX_INSTALL_EXPECTED_HOSTNAME" \
     GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory "GIT_CONFIG_VALUE_0=$preflight" \
     "${installer[@]}" preflight "${stage[@]}" --capture-preimage

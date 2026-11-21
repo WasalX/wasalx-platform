@@ -165,7 +165,7 @@ test("nightly install is report-only, read-only and fails open on PR diff errors
   const changes = job.steps.find(step => step.id === "changes").run;
   assert.match(changes, /needed=true\nif git diff --quiet[^]*; then\n {2}needed=false\nfi/u);
   for (const input of ["scripts/release/installer-*", "compose*.yaml", path, "release/installer-images.json",
-    "scripts/release/compose-stage-lock.mjs", "scripts/release/simulation-rails-json.mjs",
+    "scripts/release/compose-stage-lock.mjs", "scripts/release/compose-stage-config.json", "scripts/release/simulation-rails-json.mjs",
     "scripts/installer-evidence.mjs", "infra/docker/full/**"]) assert(changes.includes(input));
   assert(job.steps.some(step => step.if?.startsWith("always()")));
   assert(!parse(await read(".github/workflows/ci.yml")).jobs["ci-gate"].needs.includes("nightly-install"));
