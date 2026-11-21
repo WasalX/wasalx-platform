@@ -201,7 +201,7 @@ test("Terraform job fails open on PR diff errors and is required on the merge qu
   for (const [status, needed] of [[0, false], [1, true], [128, true]]) {
     const output = join(directory, String(status));
     const result = run(`git() {
-  test "$*" = 'diff --quiet --no-ext-diff --no-renames HEAD^1 HEAD -- infra/terraform/ scripts/validate-infra.sh scripts/release/fetch-verified-asset.sh' || exit 99
+  test "$*" = 'diff --quiet --no-ext-diff --no-renames HEAD^1 HEAD -- infra/terraform/ scripts/validate-infra.sh scripts/release/fetch-verified-asset.sh .github/workflows/ci.yml' || exit 99
   return "$DIFF_STATUS"
 }
 ${detector.run}`, { GITHUB_OUTPUT: output.replaceAll("\\", "/"), DIFF_STATUS: String(status) });
