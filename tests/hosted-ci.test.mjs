@@ -171,6 +171,20 @@ test("nightly install is report-only, read-only and fails open on PR diff errors
   assert(!parse(await read(".github/workflows/ci.yml")).jobs["ci-gate"].needs.includes("nightly-install"));
 });
 
+test("nightly MinIO mirrors retain the full installer content digests", async () => {
+  const loadServices = async file => parse(await read(file), { logLevel: "silent" }).services;
+  const [full, nightly] = await Promise.all([
+    loadServices("compose.full.yaml"),
+    loadServices("scripts/release/installer-nightly.compose.yaml"),
+  ]);
+  for (const [service, repositoryName] of [["minio", "minio"], ["minio-bootstrap", "mc"]]) {
+    const [repository, digest] = nightly[service].image.split("@");
+    assert.equal(repository, `ghcr.io/netvark/${repositoryName}`);
+    assert.match(digest, /^sha256:[0-9a-f]{64}$/u);
+    assert.equal(digest, full[service].image.split("@")[1]);
+  }
+});
+
 test("CI gates integration and infrastructure and runs portal integration files serially", async () => {
   const { on, jobs } = parse(await read(".github/workflows/ci.yml"));
   const { integration, "ci-gate": gate } = jobs;
