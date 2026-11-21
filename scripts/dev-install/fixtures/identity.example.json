@@ -1,0 +1,17 @@
+{
+  "guest_address": "192.0.2.41",
+  "expected_hostname": "guest.example.test",
+  "guest_port": 10022,
+  "guest_user": "fixture",
+  "probe_home": "/tmp/example.test/probe-home",
+  "original_env": "/tmp/example.test/install/full.env",
+  "ssh_key": "/tmp/example.test/ssh/key",
+  "ssh_known_hosts": "/tmp/example.test/ssh/known_hosts",
+  "project": "example-install",
+  "portal_origin": "https://review.example.test:1443",
+  "identity_origin": "https://review.example.test:2443",
+  "review_origin_suffix": ".example.test",
+  "private_umask": "077",
+  "checkout_umask": "022",
+  "probe_seconds": 2
+}

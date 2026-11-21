@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
 
 test("release promotion uses existing tags and the intended environment protections", async () => {
@@ -12,9 +14,16 @@ test("release promotion uses existing tags and the intended environment protecti
   const workflow = parse(source);
   assert.deepEqual(workflow.on, { push: { tags: ["v*"] } });
   assert.deepEqual(workflow.permissions, { contents: "read" });
-  assert.deepEqual(Object.keys(workflow.jobs).sort(), ["prod", "stg"]);
-  const commands = [script, helper];
-  for (const [name, job] of Object.entries(workflow.jobs)) {
+  const { jobs } = workflow;
+  const preflight = jobs["stable-preflight"];
+  assert.deepEqual(Object.keys(jobs).sort(), ["prod", "stable-preflight", "stg"]);
+  assert(!Object.hasOwn(preflight, "environment"));
+  assert.deepEqual(preflight.permissions, { actions: "read", contents: "read" });
+  assert.equal(jobs.prod.needs, "stable-preflight");
+  assert(!Object.hasOwn(jobs.stg, "needs"));
+  const commands = [script, helper, ...preflight.steps.map(step => step.run ?? "")];
+  for (const name of ["prod", "stg"]) {
+    const job = jobs[name];
     assert.equal(job.environment, name);
     assert.deepEqual(job.permissions, { actions: "read", contents: "write", packages: "write" });
     assert(job.steps.some(step => step.run === "bash scripts/release/promote-tag.sh"));
@@ -32,9 +41,83 @@ test("release promotion uses existing tags and the intended environment protecti
   assert(lines.includes("source scripts/release/image-manifest.sh"));
   assert(lines.includes('require_tag_commit "$GITHUB_REF" "$commit"'));
   assert(lines.includes('download_main_image_manifest "$commit" "$directory"'));
+  assert.match(helper, /--workflow ci\.yml --branch main[^\n]*\n\s*--event push --commit "\$commit" --status success/u);
   assert(lines.includes('  if [[ "$GITHUB_REF_NAME" == v*-rc.* ]]; then flags+=(--prerelease); fi'));
-  assert.equal(workflow.jobs.stg.if, "${{ github.repository == 'WasalX/wasalx-platform' && contains(github.ref_name, '-rc.') }}");
-  assert.equal(workflow.jobs.stg.steps[0].run, '[[ "$GITHUB_REF_NAME" == v*-rc.* ]]');
-  assert.equal(workflow.jobs.prod.if, "${{ !contains(github.ref_name, '-rc.') }}");
-  assert.match(workflow.jobs.prod.steps[0].run, /^\[\[ "\$\{GITHUB_REF_NAME,,\}" != \*-rc\.\* \]\] \|\| \{ [^\n]*; exit 1; \}$/mu);
+  assert.equal(jobs.stg.if, "${{ github.repository == 'WasalX/wasalx-platform' && contains(github.ref_name, '-rc.') }}");
+  assert.equal(jobs.stg.steps[0].run, '[[ "$GITHUB_REF_NAME" == v*-rc.* ]]');
+  assert.equal(jobs.prod.if, "${{ !contains(github.ref_name, '-rc.') }}");
+  assert.equal(preflight.if, jobs.prod.if);
+  assert.match(preflight.steps[0].run, /^\[\[ "\$\{GITHUB_REF_NAME,,\}" != \*-rc\.\* \]\] \|\| \{ [^\n]*; exit 1; \}$/mu);
+});
+
+test("stable release preflight requires successful main CI and a published RC for the same commit", async () => {
+  const { jobs } = parse(await readFile(new URL("../.github/workflows/release.yml", import.meta.url), "utf8"));
+  const name = "Verify main CI and the prior release candidate";
+  const step = jobs["stable-preflight"].steps.find(step => step.name === name);
+  assert(![...jobs.stg.steps, ...jobs.prod.steps].some(step => step.name === name));
+  assert.equal(step.env.GH_TOKEN, "${{ github.token }}");
+
+  const bash = process.platform === "win32" ? "C:/Program Files/Git/bin/bash.exe" : "bash";
+  const commit = "a".repeat(40);
+  const candidate = "v1.2.3-rc.1";
+  const stable = "v1.2.3";
+  const missing = "No successful published v*-rc.* release for this commit";
+  const missingCI = "No verified successful main CI push run for this commit";
+  const fixture = String.raw`
+git() {
+  case "$*" in
+    'rev-parse HEAD') printf '%s\n' "$FIXTURE_COMMIT" ;;
+    "ls-remote --exit-code origin refs/tags/$FIXTURE_TAG refs/tags/$FIXTURE_TAG^{}")
+      printf '%s\trefs/tags/%s^{}\n' "$FIXTURE_TAG_COMMIT" "$FIXTURE_TAG" ;;
+    *) return 2 ;;
+  esac
+}
+gh() {
+  case "$1 $2" in
+    'run list')
+      [[ "$*" == "run list --repo $GITHUB_REPOSITORY --workflow ci.yml --branch main --event push --commit $FIXTURE_COMMIT --status success --limit 1 --json databaseId --jq .[0].databaseId // empty" ]] || return 2
+      printf '%s\n' "$FIXTURE_CI_RUN"
+      return "$FIXTURE_CI_STATUS"
+      ;;
+    'api --method')
+      [[ "$*" == "api --method GET --paginate repos/$GITHUB_REPOSITORY/actions/workflows/release.yml/runs -f event=push -f status=success -f head_sha=$FIXTURE_COMMIT -F per_page=100 --jq .workflow_runs[].head_branch // empty" ]] || return 2
+      printf '%s\n' "$FIXTURE_TAGS"
+      return "$FIXTURE_API_STATUS"
+      ;;
+    'release view')
+      [[ "$*" == "release view $FIXTURE_TAG --repo $GITHUB_REPOSITORY --json isDraft,isPrerelease --jq .isDraft == false and .isPrerelease == true" ]] || return 2
+      printf '%s\n' "$FIXTURE_PUBLISHED"
+      return "$FIXTURE_RELEASE_STATUS"
+      ;;
+    *) return 2 ;;
+  esac
+}
+`;
+  const scenarios = [
+    { label: "published RC with an annotated tag", tags: `${stable}\n${candidate}` },
+    { label: "no successful main CI push run", ciRun: "", error: missingCI },
+    { label: "main CI lookup failed", ciStatus: "1", error: missingCI },
+    { label: "no successful RC run", tags: "", error: missing },
+    { label: "non-RC tag with a published prerelease", tags: stable, releaseTag: stable, error: missing },
+    { label: "tag points to a different commit", tagCommit: "b".repeat(40), error: missing },
+    { label: "release is a draft or is not a prerelease", published: "false", error: missing },
+    { label: "release lookup failed", releaseStatus: "1", error: missing },
+    { label: "run lookup failed", apiStatus: "1", error: "Could not verify successful release candidate workflow runs" },
+  ];
+  for (const {
+    label, tags = candidate, releaseTag = candidate, tagCommit = commit, published = "true",
+    ciRun = "123", ciStatus = "0", apiStatus = "0", releaseStatus = "0", error,
+  } of scenarios) {
+    const result = spawnSync(bash, ["--noprofile", "--norc", "-eo", "pipefail", "-c", fixture + step.run], {
+      cwd: fileURLToPath(new URL("../", import.meta.url)), encoding: "utf8", timeout: 10_000, windowsHide: true,
+      env: {
+        ...process.env, GITHUB_REPOSITORY: "fixture/release", FIXTURE_TAG: releaseTag, FIXTURE_COMMIT: commit,
+        FIXTURE_TAGS: tags, FIXTURE_TAG_COMMIT: tagCommit, FIXTURE_PUBLISHED: published,
+        FIXTURE_CI_RUN: ciRun, FIXTURE_CI_STATUS: ciStatus, FIXTURE_API_STATUS: apiStatus, FIXTURE_RELEASE_STATUS: releaseStatus,
+      },
+    });
+    assert.ifError(result.error);
+    assert.equal(result.status, error ? 1 : 0, `${label}\n${result.stdout}${result.stderr}`);
+    assert.equal(result.stdout.trim(), error ? `::error::${error}` : "", label);
+  }
 });

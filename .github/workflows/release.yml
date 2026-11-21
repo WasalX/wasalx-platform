@@ -44,17 +44,56 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: bash scripts/release/promote-tag.sh
 
-  prod:
+  stable-preflight:
     if: ${{ !contains(github.ref_name, '-rc.') }}
-    environment: prod
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    permissions: {actions: read, contents: write, packages: write}
+    timeout-minutes: 5
+    permissions: {actions: read, contents: read}
     steps:
       - name: Refuse release candidate tags in production
         run: |
           [[ "${GITHUB_REF_NAME,,}" != *-rc.* ]] || { echo '::error::Production refuses release candidate tags'; exit 1; }
           test "$GITHUB_REPOSITORY" = WasalX/wasalx-platform
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify main CI and the prior release candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          source scripts/release/image-manifest.sh
+          commit=$(git rev-parse HEAD)
+          if ! run=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --branch main \
+            --event push --commit "$commit" --status success --limit 1 \
+            --json databaseId --jq '.[0].databaseId // empty') || [[ ! "$run" =~ ^[0-9]+$ ]]; then
+            echo '::error::No verified successful main CI push run for this commit'
+            exit 1
+          fi
+          tags=$(gh api --method GET --paginate "repos/$GITHUB_REPOSITORY/actions/workflows/release.yml/runs" \
+            -f event=push -f status=success -f head_sha="$commit" -F per_page=100 \
+            --jq '.workflow_runs[].head_branch // empty') || {
+            echo '::error::Could not verify successful release candidate workflow runs'
+            exit 1
+          }
+          while IFS= read -r tag; do
+            [[ "$tag" == v*-rc.* ]] || continue
+            require_tag_commit "refs/tags/$tag" "$commit" >/dev/null || continue
+            if published=$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft,isPrerelease \
+              --jq '.isDraft == false and .isPrerelease == true') && [[ "$published" == true ]]; then
+              exit 0
+            fi
+          done <<< "$tags"
+          echo '::error::No successful published v*-rc.* release for this commit'
+          exit 1
+
+  prod:
+    if: ${{ !contains(github.ref_name, '-rc.') }}
+    needs: stable-preflight
+    environment: prod
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions: {actions: read, contents: write, packages: write}
+    steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false

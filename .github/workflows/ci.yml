@@ -31,6 +31,7 @@ jobs:
       images: ${{ steps.matrix.outputs.images }}
       matrix: ${{ steps.matrix.outputs.matrix }}
       infra: ${{ steps.infra.outputs.needed }}
+      dev-install: ${{ steps.dev-install.outputs.needed }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -44,6 +45,17 @@ jobs:
           if git diff --quiet --no-ext-diff --no-renames HEAD^1 HEAD -- \
             infra/helm/ infra/terraform/ ':(glob)scripts/validate-*' scripts/release/fetch-verified-asset.sh \
             compose.full.yaml tests/fixtures/production-backup-alerts.yaml tests/secret-adapter-readiness.test.rb \
+            .github/workflows/ci.yml; then
+            needed=false
+          fi
+          echo "needed=$needed" >> "$GITHUB_OUTPUT"
+      - id: dev-install
+        if: github.event_name == 'pull_request'
+        run: |
+          needed=true
+          if git diff --quiet --no-ext-diff --no-renames HEAD^1 HEAD -- \
+            scripts/dev-install/ scripts/release/installer-stages.mjs scripts/release/installer-stack.mjs \
+            scripts/release/compose-stage-lock.mjs scripts/release/compose-stage-config.json \
             .github/workflows/ci.yml; then
             needed=false
           fi
@@ -72,6 +84,18 @@ jobs:
       - uses: actions/dependency-review-action@bbc44d14a204704ccc493733616cd1e93a0321ec # v5.0.1
         with:
           fail-on-severity: high
+
+  dev-install-dryrun:
+    needs: changes
+    if: ${{ !cancelled() && github.event_name == 'pull_request' && needs.changes.outputs.dev-install != 'false' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: dev-install-dryrun
+        run: python3 -I -B scripts/dev-install/test_dryrun.py --container
 
   checks:
     if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
@@ -247,6 +271,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: dev-install-dryrun
+        run: python3 -I -B scripts/dev-install/test_dryrun.py --container
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24.13.1'
@@ -382,7 +408,7 @@ jobs:
 
   ci-gate:
     if: always() && (github.event_name == 'pull_request' || github.event_name == 'merge_group')
-    needs: [changes, dependency-review, checks, images, integration, infra-validate]
+    needs: [changes, dependency-review, checks, images, integration, infra-validate, dev-install-dryrun]
     runs-on: ubuntu-slim
     timeout-minutes: 2
     permissions: {}
@@ -398,11 +424,17 @@ jobs:
           INTEGRATION: ${{ needs.integration.result }}
           INFRA_NEEDED: ${{ needs.changes.outputs.infra }}
           INFRA: ${{ needs.infra-validate.result }}
+          DEV_INSTALL_NEEDED: ${{ needs.changes.outputs.dev-install }}
+          DEV_INSTALL: ${{ needs.dev-install-dryrun.result }}
         run: |
           test "$CHANGES" = success && test "$CHECKS" = success || exit 1
           case "$EVENT:$REVIEW:$IMAGES_NEEDED:$IMAGES:$INTEGRATION" in
             pull_request:success:false:skipped:skipped|pull_request:success:true:success:skipped) ;;
             merge_group:skipped:false:skipped:success|merge_group:skipped:true:success:success) ;;
+            *) exit 1 ;;
+          esac
+          case "$EVENT:$DEV_INSTALL_NEEDED:$DEV_INSTALL" in
+            pull_request:*:success|pull_request:false:skipped|merge_group:*:skipped) ;;
             *) exit 1 ;;
           esac
           test "$INFRA" = success || {
