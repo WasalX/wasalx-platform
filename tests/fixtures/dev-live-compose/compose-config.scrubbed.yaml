@@ -1,0 +1,2762 @@
+{
+  "name": "wasalx-live",
+  "networks": {
+    "connector-egress": {
+      "ipam": {},
+      "name": "network-1"
+    },
+    "connectors": {
+      "internal": true,
+      "ipam": {},
+      "name": "network-2"
+    },
+    "core": {
+      "internal": true,
+      "ipam": {},
+      "name": "network-3"
+    },
+    "edge": {
+      "ipam": {},
+      "name": "network-4"
+    },
+    "identity-db": {
+      "internal": true,
+      "ipam": {},
+      "name": "network-5"
+    },
+    "identity-runtime": {
+      "internal": true,
+      "ipam": {},
+      "name": "network-6"
+    },
+    "invitation-egress": {
+      "ipam": {},
+      "name": "network-7"
+    },
+    "observability": {
+      "internal": true,
+      "ipam": {},
+      "name": "network-8"
+    },
+    "security-egress": {
+      "ipam": {},
+      "name": "network-9"
+    },
+    "storage": {
+      "internal": true,
+      "ipam": {},
+      "name": "network-10"
+    },
+    "tenant-egress": {
+      "ipam": {},
+      "name": "network-11"
+    },
+    "tenant-zammad": {
+      "internal": true,
+      "ipam": {},
+      "name": "network-12"
+    }
+  },
+  "services": {
+    "alertmanager": {
+      "cap_drop": [
+        "<VALUE_1>"
+      ],
+      "command": [
+        "<VALUE_2>",
+        "<VALUE_3>",
+        "<VALUE_4>"
+      ],
+      "entrypoint": null,
+      "image": "image-1/image-2:tag-1@sha256:51a825c2a40acc3e338fdd00d622e01ec090f72be2b3ea46be0839cd47a4d286",
+      "networks": {
+        "observability": null
+      },
+      "ports": [
+        {
+          "<FIELD_1>": "<VALUE_5>",
+          "host_ip": "<IP_1>",
+          "protocol": "tcp",
+          "published": "3493",
+          "target": 9093
+        }
+      ],
+      "profiles": [
+        "<VALUE_6>"
+      ],
+      "restart": "unless-stopped",
+      "security_opt": [
+        "<VALUE_7>"
+      ],
+      "volumes": [
+        {
+          "bind": {
+            "create_host_path": true
+          },
+          "read_only": true,
+          "source": "/<PATH_1>/<PATH_2>/<PATH_3>/<PATH_4>/<PATH_5>/<PATH_6>/<VALUE_6>/image-2/<PATH_7>",
+          "target": "/<PATH_8>/image-2/<PATH_7>",
+          "type": "bind"
+        },
+        {
+          "source": "alertmanager-data",
+          "target": "/image-2",
+          "type": "volume",
+          "volume": {}
+        }
+      ]
+    },
+    "clamav": {
+      "cap_add": [
+        "<VALUE_8>",
+        "<VALUE_9>",
+        "<VALUE_10>",
+        "<VALUE_11>",
+        "<VALUE_12>"
+      ],
+      "cap_drop": [
+        "<VALUE_1>"
+      ],
+      "command": [
+        "/<PATH_2>/<PATH_9>"
+      ],
+      "entrypoint": null,
+      "environment": {
+        "CLAMAV_NO_CLAMD": "<VALUE_13>",
+        "CLAMAV_NO_FRESHCLAMD": "<VALUE_13>",
+        "CLAMD_CONF_ConcurrentDatabaseReload": "<VALUE_14>",
+        "CLAMD_CONF_MaxQueue": "<VALUE_15>",
+        "CLAMD_CONF_MaxThreads": "<VALUE_16>",
+        "CLAMD_CONF_StreamMaxLength": "<VALUE_17>",
+        "FRESHCLAM_CHECKS": "<VALUE_18>",
+        "FRESHCLAM_CONF_TestDatabases": "<VALUE_14>"
+      },
+      "healthcheck": {
+        "interval": "<VALUE_19>",
+        "retries": 3,
+        "start_period": "<VALUE_20>",
+        "test": [
+          "CMD-SHELL",
+          "<VALUE_21>"
+        ],
+        "timeout": "<VALUE_22>"
+      },
+      "image": "image-3/image-3:tag-2@sha256:d06c1d6a451d616e1dd79b42f44c8c8c291bba9cf4e75ebc4d0e43c1c6dd87bb",
+      "networks": {
+        "security-egress": null,
+        "storage": null
+      },
+      "platform": "<VALUE_23>",
+      "profiles": [
+        "<VALUE_6>"
+      ],
+      "restart": "unless-stopped",
+      "security_opt": [
+        "<VALUE_7>"
+      ],
+      "volumes": [
+        {
+          "source": "clamav-db",
+          "target": "/<PATH_10>/<PATH_11>/image-3",
+          "type": "volume",
+          "volume": {}
+        },
+        {
+          "bind": {
+            "create_host_path": true
+          },
+          "read_only": true,
+          "source": "/<PATH_1>/<PATH_2>/<PATH_3>/<PATH_4>/<PATH_5>/<PATH_6>/<VALUE_6>/image-3/<PATH_12>",
+          "target": "/<PATH_2>/<PATH_9>",
+          "type": "bind"
+        }
+      ]
+    },
+    "connector-worker": {
+      "build": {
+        "context": "/<PATH_1>/<PATH_2>/<PATH_3>/<PATH_4>",
+        "dockerfile": "<VALUE_24>"
+      },
+      "cap_drop": [
+        "<VALUE_1>"
+      ],
+      "command": null,
+      "depends_on": {
+        "clamav": {
+          "condition": "service_healthy",
+          "required": true
+        },
+        "full-qualification-seed": {
+          "condition": "service_completed_successfully",
+          "required": true
+        },
+        "migrate": {
+          "condition": "service_completed_successfully",
+          "required": true
+        },
+        "minio-bootstrap": {
+          "condition": "service_completed_successfully",
+          "required": true
+        },
+        "otel-collector": {
+          "condition": "service_started",
+          "required": true
+        },
+        "redis": {
+          "condition": "service_healthy",
+          "required": true
+        },
+        "runtime-role-bootstrap": {
+          "condition": "service_completed_successfully",
+          "required": true
+        },
+        "secret-sidecar": {
+          "condition": "service_healthy",
+          "required": true
+        },
+        "waha-gows": {
+          "condition": "service_healthy",
+          "required": true
+        },
+        "zammad-activation": {
+          "condition": "service_completed_successfully",
+          "required": true
+        }
+      },
+      "entrypoint": null,
+      "environment": {
+        "ALLOW_INSECURE_WEBHOOK_URL": "<VALUE_13>",
+        "CLAMAV_HOST": "image-3",
+        "CLAMAV_PORT": "<VALUE_25>",
+        "CLIENT_ROUTING_EXTERNAL_CONNECTORS_ENABLED": "<VALUE_26>",
+        "DATABASE_POOL_SIZE": "<VALUE_27>",
+        "DATABASE_URL": "postgresql://<USERNAME_1>:<SECRET_1>@host-1.invalid:5432/<PATH_2>",
+        "INBOUND_WORKER_CONCURRENCY": "<VALUE_15>",
+        "META_APP_ID": "",
+        "META_APP_SECRET_REFERENCE": "<SECRET_2>",
+        "META_COEXISTENCE_ENABLED": "<VALUE_13>",
+        "META_DELIVERY_MAX_ATTEMPTS": "<VALUE_28>",
+        "META_GRAPH_VERSION": "<VALUE_29>",
+        "META_SIGNUP_BUSINESS_APP_CONFIG_ID": "",
+        "META_SIGNUP_CUSTOMER_CONFIG_ID": "",
+        "META_SIGNUP_ENABLED": "<VALUE_13>",
+        "NODE_ENV": "<VALUE_30>",
+        "OTEL_EXPORTER_OTLP_ENDPOINT": "http://host-2.invalid:4318",
+        "OTEL_EXPORTER_OTLP_PROTOCOL": "<VALUE_31>",
+        "OTEL_METRIC_EXPORT_INTERVAL": "<VALUE_32>",
+        "OTEL_SERVICE_NAME": "<PERSON_NAME_1>",
+        "OTEL_TRACES_SAMPLER": "<VALUE_33>",
+        "OTEL_TRACES_SAMPLER_ARG": "<VALUE_34>",
+        "PORT": "<VALUE_35>",
+        "PORTAL_PUBLIC_ORIGIN": "http://<IP_1>:3000",
+        "PUBLIC_WEBHOOK_BASE_URL": "https://tailnet-1.invalid",
+        "REDIS_URL": "redis://host-3.invalid:6379",
+        "S3_ACCESS_KEY_ID": "<SECRET_3>",
+        "S3_BUCKET": "<VALUE_36>",
+        "S3_ENDPOINT": "http://host-4.invalid:9000",
+        "S3_REGION": "<VALUE_37>",
+        "S3_SECRET_ACCESS_KEY": "<SECRET_4>",
+        "S3_SERVER_SIDE_ENCRYPTION": "<VALUE_38>",
+        "SECRET_SIDECAR_TOKEN": "<SECRET_5>",
+        "SECRET_SIDECAR_URL": "<SECRET_6>",
+        "WAHA_ADMIN_SECRET_REFERENCE": "<SECRET_7>",
+        "WAHA_BASE_URL": "http://host-5.invalid:3000",
+        "WAHA_DELIVERY_MAX_ATTEMPTS": "<VALUE_28>",
+        "WAHA_REGISTRY_DATABASE_URL": "postgresql://<USERNAME_2>:<SECRET_8>@host-1.invalid:5432/<PATH_2>",
+        "WAHA_WORKERS_JSON": "<VALUE_39>",
+        "WAHA_WORKER_PROBE_TIMEOUT_MS": "<VALUE_40>",
+        "WASALX_ENVIRONMENT": "<VALUE_41>",
+        "WASALX_META_TEST_PHONE_SENDERS": "",
+        "WASALX_TEST_RECIPIENT_ALLOWLIST": "<VALUE_42>",
+        "WORKER_CONCURRENCY": "<VALUE_15>",
+        "WORKER_JOB_JWT_SECRET": "<SECRET_9>",
+        "ZAMMAD_STATUS_MAX_ATTEMPTS": "<VALUE_28>"
+      },
+      "healthcheck": {
+        "interval": "<VALUE_43>",
+        "retries": 5,
+        "start_period": "<VALUE_44>",
+        "test": [
+          "CMD",
+          "<VALUE_45>",
+          "<VALUE_46>",
+          "<VALUE_47>"
+        ],
+        "timeout": "<VALUE_48>"
+      },
+      "image": "<PATH_2>/image-4:tag-3",
+      "init": true,
+      "networks": {
+        "connector-egress": null,
+        "connectors": null,
+        "core": null,
+        "observability": null,
+        "storage": null,
+        "tenant-zammad": null
+      },
+      "profiles": [
+        "<VALUE_6>"
+      ],
+      "read_only": true,
+      "restart": "unless-stopped",
+      "security_opt": [
+        "<VALUE_7>"
+      ],
+      "tmpfs": [
+        "/<PATH_13>"
+      ]
+    },
+    "control-api": {
+      "build": {
+        "context": "/<PATH_1>/<PATH_2>/<PATH_3>/<PATH_4>",
+        "dockerfile": "<VALUE_49>"
+      },
+      "cap_drop": [
+        "<VALUE_1>"
+      ],
+      "command": null,
+      "depends_on": {
+        "clamav": {
+          "condition": "service_healthy",
+          "required": true
+        },
+        "full-qualification-seed": {
+          "condition": "service_completed_successfully",
+          "required": true
+        },
+        "keycloak-bootstrap": {
+          "condition": "service_completed_successfully",
+          "required": true
+        },
+        "migrate": {
+          "condition": "service_completed_successfully",
+          "required": true
+        },
+        "minio-bootstrap": {
+          "condition": "service_completed_successfully",
+          "required": true
+        },
+        "otel-collector": {
+          "condition": "service_started",
+          "required": true
+        },
+        "redis": {
+          "condition": "service_healthy",
+          "required": true
+        },
+        "runtime-role-bootstrap": {
+          "condition": "service_completed_successfully",
+          "required": true
+        },
+        "secret-sidecar": {
+          "condition": "service_healthy",
+          "required": true
+        },
+        "zammad-activation": {
+          "condition": "service_completed_successfully",
+          "required": true
+        }
+      },
+      "entrypoint": null,
+      "environment": {
+        "ALLOWED_ORIGINS": "http://<IP_1>:3000",
+        "ALLOW_INSECURE_PLATFORM_OPERATOR_OIDC": "<VALUE_26>",
+        "ALLOW_INSECURE_WEBHOOK_URL": "<VALUE_13>",
+        "CLAMAV_HOST": "image-3",
+        "CLAMAV_PORT": "<VALUE_25>",
+        "CLIENT_ROUTING_EXTERNAL_CONNECTORS_ENABLED": "<VALUE_26>",
+        "DATABASE_POOL_SIZE": "<VALUE_27>",
+        "DATABASE_URL": "postgresql://<USERNAME_3>:<SECRET_10>@host-1.invalid:5432/<PATH_2>",
+        "INVITATION_TOKEN_ENCRYPTION_PUBLIC_KEY": "<SECRET_11>",
+        "INVITATION_TOKEN_KEY_VERSION": "<SECRET_12>",
+        "META_APP_ID": "",
+        "META_APP_SECRET_REFERENCE": "<SECRET_2>",
+        "META_COEXISTENCE_ENABLED": "<VALUE_13>",
+        "META_GRAPH_VERSION": "<VALUE_29>",
+        "META_SIGNUP_BUSINESS_APP_CONFIG_ID": "",
+        "META_SIGNUP_CUSTOMER_CONFIG_ID": "",
+        "META_SIGNUP_ENABLED": "<VALUE_13>",
+        "META_VERIFY_TOKEN": "<SECRET_13>",
+        "METERING_CATCHUP_PERIODS_PER_TICK": "<VALUE_15>",
+        "METERING_INGEST_DATABASE_URL": "postgresql://<USERNAME_4>:<SECRET_14>@host-1.invalid:5432/<PATH_2>",
+        "METERING_RECONCILE_INTERVAL_MS": "<VALUE_50>",
+        "METERING_SERVICE_JWT_SECRET": "<SECRET_15>",
+        "NODE_ENV": "<VALUE_30>",
+        "NOTION_OAUTH_CLIENT_ID": "<VALUE_51>",
+        "NOTION_OAUTH_CLIENT_SECRET_REFERENCE": "<SECRET_16>",
+        "OIDC_AUDIENCE": "<VALUE_52>",
+        "OIDC_ISSUER": "http://<IP_1>:8080/<PATH_14>/<PATH_2>",
+        "OIDC_JWKS_URI": "http://host-6.invalid:8080/<PATH_14>/<PATH_2>/<PATH_15>/<PATH_16>/<PATH_17>",
+        "OIDC_PRIVILEGED_ACR_VALUES": "<VALUE_53>",
+        "OIDC_PRIVILEGED_MFA_AMR_VALUES": "<VALUE_54>",
+        "OTEL_EXPORTER_OTLP_ENDPOINT": "http://host-2.invalid:4318",
+        "OTEL_EXPORTER_OTLP_PROTOCOL": "<VALUE_31>",
+        "OTEL_METRIC_EXPORT_INTERVAL": "<VALUE_32>",
+        "OTEL_SERVICE_NAME": "<VALUE_52>",
+        "OTEL_TRACES_SAMPLER": "<VALUE_33>",
+        "OTEL_TRACES_SAMPLER_ARG": "<VALUE_34>",
+        "PLATFORM_OPERATIONS_DATABASE_URL": "postgresql://<USERNAME_5>:<SECRET_17>@host-1.invalid:5432/<PATH_2>",
+        "PLATFORM_OPERATOR_MAX_AUTH_AGE_SECONDS": "<USERNAME_6>",
+        "PLATFORM_OPERATOR_OIDC_AUDIENCE": "<USERNAME_7>",
+        "PLATFORM_OPERATOR_OIDC_ISSUER": "http://<IP_1>:8080/<PATH_14>/<PATH_18>",
+        "PLATFORM_OPERATOR_OIDC_JWKS_URI": "http://host-6.invalid:8080/<PATH_14>/<PATH_18>/<PATH_15>/<PATH_16>/<PATH_17>",
+        "PORT": "<VALUE_55>",
+        "PORTAL_PUBLIC_ORIGIN": "http://<IP_1>:3000",
+        "PRIVACY_EXPORT_S3_ACCESS_KEY_ID": "<SECRET_3>",
+        "PRIVACY_EXPORT_S3_BUCKET": "<VALUE_36>",
+        "PRIVACY_EXPORT_S3_ENDPOINT": "http://host-4.invalid:9000",
+        "PRIVACY_EXPORT_S3_REGION": "<VALUE_37>",
+        "PRIVACY_EXPORT_S3_SECRET_ACCESS_KEY": "<SECRET_4>",
+        "PROVISIONING_DATABASE_URL": "postgresql://<USERNAME_8>:<SECRET_18>@host-1.invalid:5432/<PATH_2>",
+        "PROVISIONING_DRIVER_JWT_SECRET": "<SECRET_19>",
+        "PROVISIONING_DRIVER_URL": "",
+        "PUBLIC_PORTAL_BASE_URL": "http://host-7.invalid:3000",
+        "PUBLIC_WEBHOOK_BASE_URL": "https://tailnet-1.invalid",
+        "REDIS_URL": "redis://host-3.invalid:6379",
+        "S3_ACCESS_KEY_ID": "<SECRET_3>",
+        "S3_BUCKET": "<VALUE_36>",
+        "S3_ENDPOINT": "http://host-4.invalid:9000",
+        "S3_REGION": "<VALUE_37>",
+        "S3_SECRET_ACCESS_KEY": "<SECRET_4>",
+        "SECRET_CLEANUP_DATABASE_URL": "<SECRET_20>",
+        "SECRET_SIDECAR_TOKEN": "<SECRET_5>",
+        "SECRET_SIDECAR_URL": "<SECRET_6>",
+        "SECRET_SIDECAR_WRITE_TOKEN": "<SECRET_21>",
+        "SUPPORT_ACCESS_DATABASE_URL": "postgresql://<USERNAME_9>:<SECRET_22>@host-1.invalid:5432/<PATH_2>",
+        "WAHA_ADMIN_BASE_URL": "http://host-5.invalid:3000",
+        "WAHA_ADMIN_SECRET_REFERENCE": "<SECRET_7>",
+        "WAHA_OPERATOR_DATABASE_URL": "postgresql://<USERNAME_10>:<SECRET_23>@host-1.invalid:5432/<PATH_2>",
+        "WASALX_ENVIRONMENT": "<VALUE_41>",
+        "WASALX_META_TEST_PHONE_SENDERS": "",
+        "WASALX_TEST_RECIPIENT_ALLOWLIST": "<VALUE_42>",
+        "WASALX_ZAMMAD_PACKAGE_SHA256": "<VALUE_56>",
+        "WASALX_ZAMMAD_PACKAGE_VERSION": "<VALUE_57>",
+        "WORKER_JOB_JWT_SECRET": "<SECRET_9>",
+        "ZAMMAD_CONFIGURATOR_IMAGE": "",
+        "ZAMMAD_IMAGE_BY_VERSION_JSON": "<VALUE_58>",
+        "ZAMMAD_MEMCACHED_IMAGE": "",
+        "ZAMMAD_NGINX_IMAGE": "",
+        "ZAMMAD_REDIS_IMAGE": ""
+      },
+      "healthcheck": {
+        "interval": "<VALUE_43>",
+        "retries": 5,
+        "start_period": "<VALUE_44>",
+        "test": [
+          "CMD",
+          "<VALUE_45>",
+          "<VALUE_46>",
+          "<VALUE_59>"
+        ],
+        "timeout": "<VALUE_48>"
+      },
+      "image": "<PATH_2>/image-5:tag-3",
+      "init": true,
+      "networks": {
+        "connectors": null,
+        "core": null,
+        "edge": null,
+        "observability": null,
+        "storage": null,
+        "tenant-zammad": null
+      },
+      "profiles": [
+        "<VALUE_6>"
+      ],
+      "read_only": true,
+      "restart": "unless-stopped",
+      "security_opt": [
+        "<VALUE_7>"
+      ],
+      "tmpfs": [
+        "/<PATH_13>"
+      ]
+    },
+    "full-qualification-seed": {
+      "cap_drop": [
+        "<VALUE_1>"
+      ],
+      "command": [
+        "<VALUE_60>",
+        "<VALUE_61>",
+        "<VALUE_62>"
+      ],
+      "depends_on": {
+        "migrate": {
+          "condition": "service_completed_successfully",
+          "required": true
+        }
+      },
+      "entrypoint": null,
+      "environment": {
+        "PGDATABASE": "<PATH_2>",
+        "PGHOST": "host-1.invalid",
+        "PGPASSWORD": "<VALUE_63>",
+        "PGPORT": "<VALUE_64>",
+        "PGUSER": "<PATH_2>"
+      },
+      "image": "host-1.invalid:tag-4@sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193",
+      "networks": {
+        "core": null
+      },
+      "profiles": [
+        "<VALUE_6>"
+      ],
+      "read_only": true,
+      "restart": "no",
+      "security_opt": [
+        "<VALUE_7>"
+      ],
+      "tmpfs": [
+        "/<PATH_13>"
+      ],
+      "volumes": [
+        {
+          "bind": {
+            "create_host_path": true
+          },
+          "read_only": true,
+          "source": "/<PATH_1>/<PATH_2>/<PATH_3>/<PATH_4>/<PATH_5>/<PATH_6>/<VALUE_6>/host-1.invalid/<PATH_19>",
+          "target": "/<PATH_20>/<PATH_19>",
+          "type": "bind"
+        }
+      ]
+    },
+    "grafana": {
+      "cap_drop": [
+        "<VALUE_1>"
+      ],
+      "command": null,
+      "depends_on": {
+        "jaeger": {
+          "condition": "service_started",
+          "required": true
+        },
+        "prometheus": {
+          "condition": "service_started",
+          "required": true
+        }
+      },
+      "entrypoint": null,
+      "environment": {
+        "GF_ANALYTICS_CHECK_FOR_UPDATES": "<VALUE_13>",
+        "GF_ANALYTICS_REPORTING_ENABLED": "<VALUE_13>",
+        "GF_AUTH_ANONYMOUS_ENABLED": "<VALUE_26>",
+        "GF_AUTH_ANONYMOUS_ORG_ROLE": "<VALUE_65>",
+        "GF_SECURITY_ADMIN_PASSWORD": "<SECRET_24>",
+        "GF_SECURITY_ADMIN_USER": "<USERNAME_11>",
+        "GF_USERS_ALLOW_SIGN_UP": "<VALUE_13>"
+      },
+      "image": "image-6/image-6:tag-5@sha256:121a7a9ece6dc10b969f1f96eed64b4f07dfac0d0b8abc070f7cb83bbde86f63",
+      "networks": {
+        "observability": null
+      },
+      "ports": [
+        {
+          "<FIELD_1>": "<VALUE_5>",
+          "host_ip": "<IP_1>",
+          "protocol": "tcp",
+          "published": "3402",
+          "target": 3000
+        }
+      ],
+      "profiles": [
+        "<VALUE_6>"
+      ],
+      "restart": "unless-stopped",
+      "security_opt": [
+        "<VALUE_7>"
+      ],
+      "volumes": [
+        {
+          "bind": {
+            "create_host_path": true
+          },
+          "read_only": true,
+          "source": "/<PATH_1>/<PATH_2>/<PATH_3>/<PATH_4>/<PATH_5>/<PATH_6>/<VALUE_6>/image-6/<PATH_21>",
+          "target": "/<PATH_8>/image-6/<PATH_21>",
+          "type": "bind"
+        },
+        {
+          "bind": {
+            "create_host_path": true
+          },
+          "read_only": true,
+          "source": "/<PATH_1>/<PATH_2>/<PATH_3>/<PATH_4>/<PATH_5>/<PATH_6>/<VALUE_6>/image-6/<PATH_22>",
+          "target": "/<PATH_10>/<PATH_11>/image-6/<PATH_22>",
+          "type": "bind"
+        },
+        {
+          "source": "grafana-data",
+          "target": "/<PATH_10>/<PATH_11>/image-6",
+          "type": "volume",
+          "volume": {}
+        }
+      ]
+    },
+    "identity-policy-activator": {
+      "build": {
+        "context": "/<PATH_1>/<PATH_2>/<PATH_3>/<PATH_4>",
+        "dockerfile": "<VALUE_66>"
+      },
+      "cap_drop": [
+        "<VALUE_1>"
+      ],
+      "command": null,
+      "depends_on": {
+        "full-qualification-seed": {
+          "condition": "service_completed_successfully",
+          "required": true
+        },
+        "keycloak": {
+          "condition": "service_healthy",
+          "required": true
+        },
+        "migrate": {
+          "condition": "service_completed_successfully",
+          "required": true
+        },
+        "otel-collector": {
+          "condition": "service_started",
+          "required": true
+        },
+        "runtime-role-bootstrap": {
+          "condition": "service_completed_successfully",
+          "required": true
+        }
+      },
+      "entrypoint": null,
+      "environment": {
+        "IDENTITY_POLICY_ATTESTATION_AUDIENCE": "<VALUE_67>",
+        "IDENTITY_POLICY_ATTESTATION_ISSUER": "http://<IP_1>:8080/<PATH_14>/<PATH_2>",
+        "IDENTITY_POLICY_ATTESTATION_JWKS_URI": "http://host-6.invalid:8080/<PATH_14>/<PATH_2>/<PATH_15>/<PATH_16>/<PATH_17>",
+        "IDENTITY_POLICY_DATABASE_URL": "postgresql://<USERNAME_12>:<SECRET_25>@host-1.invalid:5432/<PATH_2>",
+        "NODE_ENV": "<VALUE_30>",
+        "OTEL_EXPORTER_OTLP_ENDPOINT": "http://host-2.invalid:4318",
+        "OTEL_EXPORTER_OTLP_PROTOCOL": "<VALUE_31>",
+        "OTEL_SERVICE_NAME": "<VALUE_67>",
+        "PORT": "<VALUE_68>",
+        "WASALX_ENVIRONMENT": "<VALUE_41>"
+      },
+      "image": "<PATH_2>/image-7:tag-3",
+      "init": true,
+      "networks": {
+        "core": null,
+        "identity-runtime": null,
+        "observability": null
+      },
+      "profiles": [
+        "<VALUE_6>"
+      ],
+      "read_only": true,
+      "restart": "unless-stopped",
+      "security_opt": [
+        "<VALUE_7>"
+      ],
+      "tmpfs": [
+        "/<PATH_13>"
+      ]
+    },
+    "invitation-mailer": {
+      "build": {
+        "context": "/<PATH_1>/<PATH_2>/<PATH_3>/<PATH_4>",
+        "dockerfile": "<VALUE_69>"
+      },
+      "cap_drop": [
+        "<VALUE_1>"
+      ],
+      "command": null,
+      "depends_on": {
+        "full-qualification-seed": {
+          "condition": "service_completed_successfully",
+          "required": true
+        },
+        "migrate": {
+          "condition": "service_completed_successfully",
+          "required": true
+        },
+        "otel-collector": {
+          "condition": "service_started",
+          "required": true
+        },
+        "runtime-role-bootstrap": {
+          "condition": "service_completed_successfully",
+          "required": true
+        },
+        "secret-sidecar": {
+          "condition": "service_healthy",
+          "required": true
+        }
+      },
+      "entrypoint": null,
+      "environment": {
+        "INVITATION_EMAIL_FROM": "<EMAIL_1>",
+        "INVITATION_EMAIL_PROVIDER_SECRET_REFERENCE": "<SECRET_26>",
+        "INVITATION_EMAIL_PROVIDER_URL": "smtp://host-8.invalid:587",
+        "INVITATION_EMAIL_TEMPLATE_ID": "<VALUE_70>",
+        "INVITATION_MAILER_DATABASE_URL": "postgresql://<USERNAME_13>:<SECRET_27>@host-1.invalid:5432/<PATH_2>",
+        "INVITATION_TOKEN_PRIVATE_KEY_REFERENCES_JSON": "<SECRET_28>",
+        "NODE_ENV": "<VALUE_30>",
+        "OTEL_EXPORTER_OTLP_ENDPOINT": "http://host-2.invalid:4318",
+        "OTEL_EXPORTER_OTLP_PROTOCOL": "<VALUE_31>",
+        "OTEL_SERVICE_NAME": "<PERSON_NAME_2>",
+        "PORT": "<VALUE_71>",
+        "PORTAL_PUBLIC_ORIGIN": "http://<IP_1>:3000",
+        "SECRET_SIDECAR_TOKEN": "<SECRET_5>",
+        "SECRET_SIDECAR_URL": "<SECRET_6>",
+        "WASALX_ENVIRONMENT": "<VALUE_41>"
+      },
+      "image": "<PATH_2>/image-8:tag-3",
+      "init": true,
+      "networks": {
+        "core": null,
+        "invitation-egress": null,
+        "observability": null
+      },
+      "profiles": [
+        "<VALUE_72>"
+      ],
+      "read_only": true,
+      "restart": "unless-stopped",
+      "security_opt": [
+        "<VALUE_7>"
+      ],
+      "tmpfs": [
+        "/<PATH_13>"
+      ]
+    },
+    "jaeger": {
+      "cap_drop": [
+        "<VALUE_1>"
+      ],
+      "command": null,
+      "entrypoint": null,
+      "environment": {
+        "JAEGER_LISTEN_HOST": "<IP_2>"
+      },
+      "image": "image-9/image-10:tag-6@sha256:46a886260e04002d8f45e213fc39063fa11a50446048fdaa64786fc0840cb9f8",
+      "networks": {
+        "observability": null
+      },
+      "ports": [
+        {
+          "<FIELD_1>": "<VALUE_5>",
+          "host_ip": "<IP_1>",
+          "protocol": "tcp",
+          "published": "34686",
+          "target": 16686
+        }
+      ],
+      "profiles": [
+        "<VALUE_6>"
+      ],
+      "read_only": true,
+      "restart": "unless-stopped",
+      "security_opt": [
+        "<VALUE_7>"
+      ],
+      "tmpfs": [
+        "/<PATH_13>"
+      ]
+    },
+    "keycloak": {
+      "command": [
+        "<VALUE_73>",
+        "<VALUE_74>"
+      ],
+      "depends_on": {
+        "keycloak-postgresql": {
+          "condition": "service_healthy",
+          "required": true
+        }
+      },
+      "entrypoint": null,
+      "environment": {
+        "KC_BOOTSTRAP_ADMIN_PASSWORD": "<SECRET_29>",
+        "KC_BOOTSTRAP_ADMIN_USERNAME": "<USERNAME_11>",
+        "KC_CACHE": "tag-3",
+        "KC_DB": "host-1.invalid",
+        "KC_DB_PASSWORD": "<SECRET_30>",
+        "KC_DB_URL": "<VALUE_75>",
+        "KC_DB_USERNAME": "host-6.invalid",
+        "KC_HEALTH_ENABLED": "<VALUE_26>",
+        "KC_HOSTNAME": "http://<IP_1>:8080",
+        "KC_HOSTNAME_BACKCHANNEL_DYNAMIC": "<VALUE_26>",
+        "KC_HTTP_ENABLED": "<VALUE_26>",
+        "KC_METRICS_ENABLED": "<VALUE_26>",
+        "WASALX_PORTAL_PUBLIC_ORIGIN": "http://<IP_1>:3000"
+      },
+      "healthcheck": {
+        "interval": "<VALUE_48>",
+        "retries": 30,
+        "start_period": "<VALUE_76>",
+        "test": [
+          "CMD",
+          "/<PATH_23>/<PATH_24>",
+          "<VALUE_77>",
+          "<VALUE_78>"
+        ],
+        "timeout": "<VALUE_22>"
+      },
+      "image": "host-9.invalid/host-6.invalid/host-6.invalid:tag-7@sha256:f1f1f01e472c8a78df40d8f2a49a925274eda4d3d80d5f6edbb5c880ee3c01c6",
+      "init": true,
+      "networks": {
+        "edge": null,
+        "identity-db": null,
+        "identity-runtime": null
+      },
+      "ports": [
+        {
+          "<FIELD_1>": "<VALUE_5>",
+          "host_ip": "<IP_1>",
+          "protocol": "tcp",
+          "published": "3480",
+          "target": 8080
+        }
+      ],
+      "profiles": [
+        "<VALUE_6>"
+      ],
+      "restart": "unless-stopped",
+      "volumes": [
+        {
+          "bind": {
+            "create_host_path": true
+          },
+          "read_only": true,
+          "source": "/<PATH_1>/<PATH_2>/<PATH_3>/<PATH_4>/<PATH_5>/<PATH_6>/<VALUE_6>/host-6.invalid/<PATH_25>",
+          "target": "/<PATH_26>/host-6.invalid/<PATH_27>/<PATH_28>/<PATH_25>",
+          "type": "bind"
+        },
+        {
+          "bind": {
+            "create_host_path": true
+          },
+          "read_only": true,
+          "source": "/<PATH_1>/<PATH_2>/<PATH_3>/<PATH_4>/<PATH_5>/<PATH_6>/<VALUE_6>/host-6.invalid/<PATH_29>",
+          "target": "/<PATH_26>/host-6.invalid/<PATH_27>/<PATH_28>/<PATH_29>",
+          "type": "bind"
+        },
+        {
+          "bind": {
+            "create_host_path": true
+          },
+          "read_only": true,
+          "source": "/<PATH_1>/<PATH_2>/<PATH_3>/<PATH_4>/<PATH_5>/<PATH_6>/<VALUE_6>/host-6.invalid/<PATH_30>/<PATH_2>",
+          "target": "/<PATH_26>/host-6.invalid/<PATH_30>/<PATH_2>",
+          "type": "bind"
+        },
+        {
+          "bind": {
+            "create_host_path": true
+          },
+          "read_only": true,
+          "source": "/<PATH_1>/<PATH_2>/<PATH_3>/<PATH_4>/<PATH_31>/<PATH_32>",
+          "target": "/<PATH_26>/host-6.invalid/<PATH_30>/<PATH_2>/<PATH_33>/<PATH_34>/<PATH_32>",
+          "type": "bind"
+        },
+        {
+          "bind": {
+            "create_host_path": true
+          },
+          "read_only": true,
+          "source": "/<PATH_1>/<PATH_2>/<PATH_3>/<PATH_4>/<PATH_35>",
+          "target": "/<PATH_26>/host-6.invalid/<PATH_30>/<PATH_2>/<PATH_33>/<PATH_34>/<PATH_36>",
+          "type": "bind"
+        }
+      ]
+    },
+    "keycloak-bootstrap": {
+      "cap_drop": [
+        "<VALUE_1>"
+      ],
+      "command": null,
+      "depends_on": {
+        "keycloak": {
+          "condition": "service_healthy",
+          "required": true
+        }
+      },
+      "entrypoint": [
+        "<VALUE_45>",
+        "/<PATH_20>/<PATH_37>"
+      ],
+      "environment": {
+        "HOME": "/<PATH_13>/<PATH_38>",
+        "KEYCLOAK_ADMIN": "<USERNAME_11>",
+        "KEYCLOAK_ADMIN_PASSWORD": "<SECRET_29>",
+        "WASALX_ISOLATION_OWNER_EMAIL": "<EMAIL_2>",
+        "WASALX_ISOLATION_OWNER_PASSWORD": "<SECRET_31>",
+        "WASALX_KEYCLOAK_SMTP_FROM": "<EMAIL_3>",
+        "WASALX_KEYCLOAK_SMTP_HOST": "host-8.invalid",
+        "WASALX_KEYCLOAK_SMTP_PASSWORD": "<SECRET_32>",
+        "WASALX_KEYCLOAK_SMTP_PORT": "<VALUE_79>",
+        "WASALX_KEYCLOAK_SMTP_USER": "<EMAIL_3>",
+        "WASALX_PLATFORM_OPERATOR_PASSWORD": "<SECRET_33>",
+        "WASALX_QUALIFICATION_OWNER_EMAIL": "<EMAIL_3>",
+        "WASALX_QUALIFICATION_OWNER_PASSWORD": "<SECRET_34>"
+      },
+      "image": "<VALUE_45>:tag-8@sha256:de170b39439eb0e5a3444ad7d60b015614a381e10fecae2e30ec9e735122f38d",
+      "network_mode": "service:keycloak",
+      "profiles": [
+        "<VALUE_6>"
+      ],
+      "read_only": true,
+      "restart": "no",
+      "security_opt": [
+        "<VALUE_7>"
+      ],
+      "tmpfs": [
+        "/<PATH_13>"
+      ],
+      "user": "<VALUE_80>",
+      "volumes": [
+        {
+          "bind": {
+            "create_host_path": true
+          },
+          "read_only": true,
+          "source": "/<PATH_1>/<PATH_2>/<PATH_3>/<PATH_4>/<PATH_5>/<PATH_6>/<VALUE_6>/host-6.invalid/<PATH_37>",
+          "target": "/<PATH_20>/<PATH_37>",
+          "type": "bind"
+        }
+      ]
+    },
+    "keycloak-postgresql": {
+      "command": null,
+      "entrypoint": null,
+      "environment": {
+        "POSTGRES_DB": "host-6.invalid",
+        "POSTGRES_PASSWORD": "<SECRET_30>",
+        "POSTGRES_USER": "host-6.invalid"
+      },
+      "healthcheck": {
+        "interval": "<VALUE_22>",
+        "retries": 30,
+        "test": [
+          "CMD-SHELL",
+          "<VALUE_81>"
+        ],
+        "timeout": "<VALUE_82>"
+      },
+      "image": "host-1.invalid:tag-4@sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193",
+      "networks": {
+        "identity-db": null
+      },
+      "profiles": [
+        "<VALUE_6>"
+      ],
+      "restart": "unless-stopped",
+      "volumes": [
+        {
+          "source": "keycloak-postgresql-data",
+          "target": "/<PATH_10>/<PATH_11>/<PATH_39>/<PATH_27>",
+          "type": "volume",
+          "volume": {}
+        }
+      ]
+    },
+    "migrate": {
+      "build": {
+        "context": "/<PATH_1>/<PATH_2>/<PATH_3>/<PATH_4>",
+        "dockerfile": "<VALUE_49>"
+      },
+      "cap_drop": [
+        "<VALUE_1>"
+      ],
+      "command": [
+        "<VALUE_83>",
+        "<VALUE_84>",
+        "/<PATH_31>/<PATH_40>"
+      ],
+      "depends_on": {
+        "postgres": {
+          "condition": "service_healthy",
+          "required": true
+        }
+      },
+      "entrypoint": null,
+      "environment": {
+        "DATABASE_ADMIN_URL": "postgresql://<PATH_2>:<VALUE_63>@host-1.invalid:5432/<PATH_2>"
+      },
+      "image": "<PATH_2>/image-5:tag-3",
+      "networks": {
+        "core": null
+      },
+      "profiles": [
+        "<VALUE_6>"
+      ],
+      "read_only": true,
+      "restart": "no",
+      "security_opt": [
+        "<VALUE_7>"
+      ],
+      "tmpfs": [
+        "/<PATH_13>"
+      ]
+    },
+    "minio": {
+      "cap_drop": [
+        "<VALUE_1>"
+      ],
+      "command": [
+        "<VALUE_85>",
+        "/<PATH_27>",
+        "<VALUE_86>",
+        "<VALUE_87>"
+      ],
+      "entrypoint": null,
+      "environment": {
+        "MINIO_PROMETHEUS_AUTH_TYPE": "<PATH_35>",
+        "MINIO_ROOT_PASSWORD": "<SECRET_4>",
+        "MINIO_ROOT_USER": "<SECRET_3>"
+      },
+      "healthcheck": {
+        "interval": "<VALUE_22>",
+        "retries": 30,
+        "start_period": "<VALUE_48>",
+        "test": [
+          "CMD",
+          "<VALUE_88>",
+          "<VALUE_89>",
+          "<VALUE_90>",
+          "http://<IP_1>:9000/host-4.invalid/<PATH_41>/<PATH_42>"
+        ],
+        "timeout": "<VALUE_82>"
+      },
+      "image": "host-9.invalid/host-4.invalid/host-4.invalid:tag-9@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e",
+      "networks": {
+        "storage": null,
+        "tenant-zammad": null
+      },
+      "profiles": [
+        "<VALUE_6>"
+      ],
+      "restart": "unless-stopped",
+      "security_opt": [
+        "<VALUE_7>"
+      ],
+      "volumes": [
+        {
+          "source": "minio-data",
+          "target": "/<PATH_27>",
+          "type": "volume",
+          "volume": {}
+        }
+      ]
+    },
+    "minio-bootstrap": {
+      "cap_drop": [
+        "<VALUE_1>"
+      ],
+      "command": [
+        "/<PATH_20>/<PATH_43>"
+      ],
+      "depends_on": {
+        "minio": {
+          "condition": "service_healthy",
+          "required": true
+        }
+      },
+      "entrypoint": [
+        "/<PATH_23>/<PATH_44>"
+      ],
+      "environment": {
+        "MC_CONFIG_DIR": "/<PATH_13>/<PATH_45>",
+        "MC_HOST_local": "http://<SECRET_3>:<SECRET_4>@host-4.invalid:9000"
+      },
+      "image": "host-9.invalid/host-4.invalid/image-11:tag-10@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727",
+      "networks": {
+        "storage": null
+      },
+      "profiles": [
+        "<VALUE_6>"
+      ],
+      "read_only": true,
+      "restart": "no",
+      "security_opt": [
+        "<VALUE_7>"
+      ],
+      "tmpfs": [
+        "/<PATH_13>"
+      ],
+      "volumes": [
+        {
+          "bind": {
+            "create_host_path": true
+          },
+          "read_only": true,
+          "source": "/<PATH_1>/<PATH_2>/<PATH_3>/<PATH_4>/<PATH_5>/<PATH_6>/<VALUE_6>/host-4.invalid/<PATH_43>",
+          "target": "/<PATH_20>/<PATH_43>",
+          "type": "bind"
+        },
+        {
+          "bind": {
+            "create_host_path": true
+          },
+          "read_only": true,
+          "source": "/<PATH_1>/<PATH_2>/<PATH_3>/<PATH_4>/<PATH_5>/<PATH_6>/<VALUE_6>/host-4.invalid/<PATH_46>",
+          "target": "/<PATH_20>/<PATH_46>",
+          "type": "bind"
+        }
+      ]
+    },
+    "otel-collector": {
+      "cap_drop": [
+        "<VALUE_1>"
+      ],
+      "command": [
+        "<VALUE_91>"
+      ],
+      "depends_on": {
+        "jaeger": {
+          "condition": "service_started",
+          "required": true
+        },
+        "redis": {
+          "condition": "service_healthy",
+          "required": true
+        },
+        "zammad-elasticsearch": {
+          "condition": "service_healthy",
+          "required": true
+        }
+      },
+      "entrypoint": null,
+      "healthcheck": {
+        "interval": "<VALUE_19>",
+        "retries": 5,
+        "start_period": "<VALUE_92>",
+        "test": [
+          "CMD",
+          "/<PATH_47>",
+          "<VALUE_93>"
+        ],
+        "timeout": "<VALUE_19>"
+      },
+      "image": "image-12/image-13:tag-11@sha256:c5918f78992ee73b0d6f0e599423ac5ec52dd5d9726733114d6eca53d5a32ed5",
+      "networks": {
+        "core": null,
+        "observability": null,
+        "tenant-zammad": null
+      },
+      "profiles": [
+        "<VALUE_6>"
+      ],
+      "read_only": true,
+      "restart": "unless-stopped",
+      "security_opt": [
+        "<VALUE_7>"
+      ],
+      "tmpfs": [
+        "/<PATH_13>"
+      ],
+      "volumes": [
+        {
+          "bind": {
+            "create_host_path": true
+          },
+          "read_only": true,
+          "source": "/<PATH_1>/<PATH_2>/<PATH_3>/<PATH_4>/<PATH_5>/<PATH_6>/<VALUE_6>/image-12/<PATH_48>",
+          "target": "/<PATH_8>/<PATH_47>/<PATH_49>",
+          "type": "bind"
+        }
+      ]
+    },
+    "portal": {
+      "build": {
+        "context": "/<PATH_1>/<PATH_2>/<PATH_3>/<PATH_4>",
+        "dockerfile": "<VALUE_94>"
+      },
+      "cap_drop": [
+        "<VALUE_1>"
+      ],
+      "command": null,
+      "depends_on": {
+        "control-api": {
+          "condition": "service_healthy",
+          "required": true
+        },
+        "keycloak-bootstrap": {
+          "condition": "service_completed_successfully",
+          "required": true
+        },
+        "redis": {
+          "condition": "service_healthy",
+          "required": true
+        }
+      },
+      "entrypoint": null,
+      "environment": {
+        "ALLOW_INSECURE_PLATFORM_OPERATOR_OIDC": "<VALUE_26>",
+        "CONNECTOR_WORKER_INTERNAL_URL": "http://image-4:8080",
+        "CONTROL_API_URL": "http://image-5:3001",
+        "NODE_ENV": "<VALUE_95>",
+        "OIDC_AUTHORIZATION_ENDPOINT": "http://<IP_1>:8080/<PATH_14>/<PATH_2>/<PATH_15>/<PATH_16>/<PATH_50>",
+        "OIDC_CLIENT_ID": "<VALUE_96>",
+        "OIDC_INVITATION_REDIRECT_URI": "http://<IP_1>:3000/<PATH_51>/<PATH_52>",
+        "OIDC_ISSUER": "http://<IP_1>:8080/<PATH_14>/<PATH_2>",
+        "OIDC_JWKS_URI": "http://host-6.invalid:8080/<PATH_14>/<PATH_2>/<PATH_15>/<PATH_16>/<PATH_17>",
+        "OIDC_PRIVILEGED_ACR_VALUES": "<VALUE_53>",
+        "OIDC_PRIVILEGED_MFA_AMR_VALUES": "<VALUE_54>",
+        "OIDC_REDIRECT_URI": "http://<IP_1>:3000/<PATH_50>/<PATH_52>",
+        "OIDC_TOKEN_ENDPOINT": "<SECRET_35>",
+        "OTEL_EXPORTER_OTLP_ENDPOINT": "http://host-2.invalid:4318",
+        "OTEL_EXPORTER_OTLP_PROTOCOL": "<VALUE_31>",
+        "OTEL_METRIC_EXPORT_INTERVAL": "<VALUE_32>",
+        "OTEL_SDK_DISABLED": "<VALUE_13>",
+        "OTEL_SERVICE_NAME": "<VALUE_96>",
+        "OTEL_TRACES_SAMPLER": "<VALUE_33>",
+        "OTEL_TRACES_SAMPLER_ARG": "<VALUE_34>",
+        "PLATFORM_OPERATOR_MAX_AUTH_AGE_SECONDS": "<USERNAME_6>",
+        "PLATFORM_OPERATOR_OIDC_AUDIENCE": "<USERNAME_7>",
+        "PLATFORM_OPERATOR_OIDC_AUTHORIZATION_ENDPOINT": "http://<IP_1>:8080/<PATH_14>/<PATH_18>/<PATH_15>/<PATH_16>/<PATH_50>",
+        "PLATFORM_OPERATOR_OIDC_CLIENT_ID": "<USERNAME_14>",
+        "PLATFORM_OPERATOR_OIDC_ISSUER": "http://<IP_1>:8080/<PATH_14>/<PATH_18>",
+        "PLATFORM_OPERATOR_OIDC_JWKS_URI": "http://host-6.invalid:8080/<PATH_14>/<PATH_18>/<PATH_15>/<PATH_16>/<PATH_17>",
+        "PLATFORM_OPERATOR_OIDC_REDIRECT_URI": "http://<IP_1>:3000/<PATH_53>/<PATH_50>/<PATH_52>",
+        "PLATFORM_OPERATOR_OIDC_TOKEN_ENDPOINT": "<SECRET_36>",
+        "PLATFORM_PORTAL_SESSION_REDIS_URL": "redis://host-3.invalid:6379",
+        "PLATFORM_PORTAL_SESSION_SECRET": "<SECRET_37>",
+        "PORT": "<VALUE_97>",
+        "PORTAL_COOKIE_SECURE": "<VALUE_13>",
+        "PORTAL_DATA_BACKEND": "<VALUE_98>",
+        "PORTAL_FIXTURE_ROLE": "",
+        "PORTAL_PUBLIC_ORIGIN": "http://<IP_1>:3000",
+        "PORTAL_SESSION_REDIS_URL": "redis://host-3.invalid:6379",
+        "PORTAL_SESSION_SECRET": "<SECRET_38>",
+        "VINEXT_TRUSTED_HOSTS": "",
+        "WASALX_ENVIRONMENT": "<VALUE_41>",
+        "WRANGLER_LOG_PATH": "/<PATH_13>/<PATH_54>"
+      },
+      "healthcheck": {
+        "interval": "<VALUE_43>",
+        "retries": 5,
+        "start_period": "<VALUE_44>",
+        "test": [
+          "CMD",
+          "<VALUE_45>",
+          "<VALUE_46>",
+          "<VALUE_99>"
+        ],
+        "timeout": "<VALUE_48>"
+      },
+      "image": "<PATH_2>/image-14:tag-3",
+      "init": true,
+      "networks": {
+        "core": null,
+        "edge": null,
+        "observability": null
+      },
+      "ports": [
+        {
+          "<FIELD_1>": "<VALUE_5>",
+          "host_ip": "<IP_1>",
+          "protocol": "tcp",
+          "published": "3400",
+          "target": 3000
+        }
+      ],
+      "profiles": [
+        "<VALUE_6>"
+      ],
+      "read_only": true,
+      "restart": "unless-stopped",
+      "security_opt": [
+        "<VALUE_7>"
+      ],
+      "tmpfs": [
+        "/<PATH_13>"
+      ]
+    },
+    "postgres": {
+      "command": null,
+      "entrypoint": null,
+      "environment": {
+        "POSTGRES_DB": "<PATH_2>",
+        "POSTGRES_PASSWORD": "<VALUE_63>",
+        "POSTGRES_USER": "<PATH_2>",
+        "WASALX_APP_PASSWORD": "<SECRET_10>",
+        "WASALX_CONNECTOR_WORKER_DB_PASSWORD": "<SECRET_1>",
+        "WASALX_IDENTITY_POLICY_DB_PASSWORD": "<SECRET_25>",
+        "WASALX_INVITATION_MAILER_DB_PASSWORD": "<SECRET_27>",
+        "WASALX_METERING_INGEST_DB_PASSWORD": "<SECRET_14>",
+        "WASALX_PLATFORM_OPERATIONS_DB_PASSWORD": "<SECRET_17>",
+        "WASALX_PROVISIONING_DB_PASSWORD": "<SECRET_18>",
+        "WASALX_SECRET_CLEANUP_DB_PASSWORD": "<SECRET_39>",
+        "WASALX_SUPPORT_DB_PASSWORD": "<SECRET_22>",
+        "WASALX_WAHA_OPERATOR_DB_PASSWORD": "<SECRET_23>",
+        "WASALX_WAHA_REGISTRY_DB_PASSWORD": "<SECRET_8>",
+        "WASALX_WAHA_ROLLOUT_GATE_DB_PASSWORD": "<SECRET_40>"
+      },
+      "healthcheck": {
+        "interval": "<VALUE_22>",
+        "retries": 20,
+        "test": [
+          "CMD-SHELL",
+          "<VALUE_100>"
+        ],
+        "timeout": "<VALUE_82>"
+      },
+      "image": "host-1.invalid:tag-12@sha256:8189a1f6e40904781fc9e2612687877791d21679866db58b1de996b31fc312e4",
+      "networks": {
+        "core": null
+      },
+      "profiles": [
+        "<VALUE_6>"
+      ],
+      "restart": "unless-stopped",
+      "volumes": [
+        {
+          "source": "postgres-data",
+          "target": "/<PATH_10>/<PATH_11>/<PATH_39>/<PATH_27>",
+          "type": "volume",
+          "volume": {}
+        },
+        {
+          "bind": {
+            "create_host_path": true
+          },
+          "read_only": true,
+          "source": "/<PATH_1>/<PATH_2>/<PATH_3>/<PATH_4>/<PATH_5>/<PATH_6>/host-1.invalid/<PATH_55>",
+          "target": "/<PATH_56>/<PATH_57>",
+          "type": "bind"
+        }
+      ]
+    },
+    "prometheus": {
+      "cap_drop": [
+        "<VALUE_1>"
+      ],
+      "command": [
+        "<VALUE_101>",
+        "<VALUE_102>",
+        "<VALUE_103>",
+        "<VALUE_104>"
+      ],
+      "depends_on": {
+        "alertmanager": {
+          "condition": "service_started",
+          "required": true
+        },
+        "minio": {
+          "condition": "service_healthy",
+          "required": true
+        },
+        "otel-collector": {
+          "condition": "service_started",
+          "required": true
+        }
+      },
+      "entrypoint": null,
+      "image": "image-1/image-15:tag-13@sha256:3c42b892cf723fa54d2f262c37a0e1f80aa8c8ddb1da7b9b0df9455a35a7f893",
+      "networks": {
+        "edge": null,
+        "observability": null,
+        "storage": null
+      },
+      "ports": [
+        {
+          "<FIELD_1>": "<VALUE_5>",
+          "host_ip": "<IP_1>",
+          "protocol": "tcp",
+          "published": "3490",
+          "target": 9090
+        }
+      ],
+      "profiles": [
+        "<VALUE_6>"
+      ],
+      "restart": "unless-stopped",
+      "security_opt": [
+        "<VALUE_7>"
+      ],
+      "volumes": [
+        {
+          "bind": {
+            "create_host_path": true
+          },
+          "read_only": true,
+          "source": "/<PATH_1>/<PATH_2>/<PATH_3>/<PATH_4>/<PATH_5>/<PATH_6>/<VALUE_6>/image-15/<PATH_58>",
+          "target": "/<PATH_8>/image-15/<PATH_58>",
+          "type": "bind"
+        },
+        {
+          "bind": {
+            "create_host_path": true
+          },
+          "read_only": true,
+          "source": "/<PATH_1>/<PATH_2>/<PATH_3>/<PATH_4>/<PATH_5>/<PATH_6>/<VALUE_6>/image-15/<PATH_59>",
+          "target": "/<PATH_8>/image-15/<PATH_60>/<PATH_59>",
+          "type": "bind"
+        },
+        {
+          "bind": {
+            "create_host_path": true
+          },
+          "read_only": true,
+          "source": "/<PATH_1>/<PATH_2>/<PATH_3>/<PATH_4>/<PATH_5>/<PATH_6>/<VALUE_6>/image-15/<PATH_61>",
+          "target": "/<PATH_8>/image-15/<PATH_60>/<PATH_61>",
+          "type": "bind"
+        },
+        {
+          "source": "prometheus-data",
+          "target": "/image-15",
+          "type": "volume",
+          "volume": {}
+        }
+      ]
+    },
+    "public-webhook-preflight": {
+      "cap_drop": [
+        "<VALUE_1>"
+      ],
+      "command": [
+        "<VALUE_45>",
+        "<VALUE_105>",
+        "<VALUE_106>",
+        "<VALUE_107>"
+      ],
+      "depends_on": {
+        "control-api": {
+          "condition": "service_healthy",
+          "required": true
+        }
+      },
+      "dns": [
+        "<IP_3>",
+        "<IP_4>"
+      ],
+      "entrypoint": null,
+      "environment": {
+        "PUBLIC_WEBHOOK_BASE_URL": "https://tailnet-1.invalid"
+      },
+      "image": "<VALUE_45>:tag-8@sha256:de170b39439eb0e5a3444ad7d60b015614a381e10fecae2e30ec9e735122f38d",
+      "networks": {
+        "connector-egress": null
+      },
+      "profiles": [
+        "<VALUE_6>"
+      ],
+      "read_only": true,
+      "restart": "no",
+      "security_opt": [
+        "<VALUE_7>"
+      ],
+      "tmpfs": [
+        "/<PATH_13>"
+      ],
+      "user": "<VALUE_80>"
+    },
+    "redis": {
+      "command": [
+        "<VALUE_108>",
+        "<VALUE_109>",
+        "<VALUE_110>",
+        "<VALUE_111>",
+        "<VALUE_112>",
+        "<VALUE_34>"
+      ],
+      "entrypoint": null,
+      "healthcheck": {
+        "interval": "<VALUE_22>",
+        "retries": 20,
+        "test": [
+          "CMD",
+          "<VALUE_113>",
+          "<VALUE_114>"
+        ],
+        "timeout": "<VALUE_82>"
+      },
+      "image": "host-3.invalid:tag-14@sha256:e55195a3afbb812a14306909caad6583a1ab6c79f393f53490e42cb2111084a9",
+      "networks": {
+        "core": null
+      },
+      "profiles": [
+        "<VALUE_6>"
+      ],
+      "restart": "unless-stopped",
+      "volumes": [
+        {
+          "source": "redis-data",
+          "target": "/<PATH_27>",
+          "type": "volume",
+          "volume": {}
+        }
+      ]
+    },
+    "runtime-role-bootstrap": {
+      "cap_drop": [
+        "<VALUE_1>"
+      ],
+      "command": [
+        "/<PATH_23>/<PATH_44>",
+        "/<PATH_20>/<PATH_62>"
+      ],
+      "depends_on": {
+        "migrate": {
+          "condition": "service_completed_successfully",
+          "required": true
+        }
+      },
+      "entrypoint": null,
+      "environment": {
+        "PGHOST": "host-1.invalid",
+        "PGPASSWORD": "<VALUE_63>",
+        "PGPORT": "<VALUE_64>",
+        "POSTGRES_DB": "<PATH_2>",
+        "POSTGRES_USER": "<PATH_2>",
+        "WASALX_APP_PASSWORD": "<SECRET_10>",
+        "WASALX_CONNECTOR_WORKER_DB_PASSWORD": "<SECRET_1>",
+        "WASALX_IDENTITY_POLICY_DB_PASSWORD": "<SECRET_25>",
+        "WASALX_INVITATION_MAILER_DB_PASSWORD": "<SECRET_27>",
+        "WASALX_METERING_INGEST_DB_PASSWORD": "<SECRET_14>",
+        "WASALX_PLATFORM_OPERATIONS_DB_PASSWORD": "<SECRET_17>",
+        "WASALX_PROVISIONING_DB_PASSWORD": "<SECRET_18>",
+        "WASALX_SECRET_CLEANUP_DB_PASSWORD": "<SECRET_39>",
+        "WASALX_SUPPORT_DB_PASSWORD": "<SECRET_22>",
+        "WASALX_WAHA_OPERATOR_DB_PASSWORD": "<SECRET_23>",
+        "WASALX_WAHA_REGISTRY_DB_PASSWORD": "<SECRET_8>",
+        "WASALX_WAHA_ROLLOUT_GATE_DB_PASSWORD": "<SECRET_40>"
+      },
+      "image": "host-1.invalid:tag-12@sha256:8189a1f6e40904781fc9e2612687877791d21679866db58b1de996b31fc312e4",
+      "networks": {
+        "core": null
+      },
+      "profiles": [
+        "<VALUE_6>"
+      ],
+      "read_only": true,
+      "restart": "no",
+      "security_opt": [
+        "<VALUE_7>"
+      ],
+      "tmpfs": [
+        "/<PATH_13>"
+      ],
+      "volumes": [
+        {
+          "bind": {
+            "create_host_path": true
+          },
+          "read_only": true,
+          "source": "/<PATH_1>/<PATH_2>/<PATH_3>/<PATH_4>/<PATH_5>/<PATH_6>/host-1.invalid/<PATH_55>",
+          "target": "/<PATH_20>/<PATH_62>",
+          "type": "bind"
+        }
+      ]
+    },
+    "secret-sidecar": {
+      "build": {
+        "context": "/<PATH_1>/<PATH_2>/<PATH_3>/<PATH_4>",
+        "dockerfile": "<VALUE_115>"
+      },
+      "cap_drop": [
+        "<VALUE_1>"
+      ],
+      "command": null,
+      "entrypoint": null,
+      "environment": {
+        "DEV_SECRET_SIDECAR_READ_TOKEN": "<SECRET_5>",
+        "DEV_SECRET_SIDECAR_WRITE_TOKEN": "<SECRET_21>",
+        "DEV_SECRET_STORE_ENCRYPTION_KEY": "<SECRET_41>",
+        "DEV_SECRET_STORE_JSON": "<SECRET_42>",
+        "DEV_SECRET_STORE_PATH": "<SECRET_43>",
+        "NODE_ENV": "<VALUE_30>"
+      },
+      "healthcheck": {
+        "interval": "<VALUE_43>",
+        "retries": 5,
+        "start_period": "<VALUE_19>",
+        "test": [
+          "CMD",
+          "<VALUE_45>",
+          "<VALUE_46>",
+          "<VALUE_116>"
+        ],
+        "timeout": "<VALUE_48>"
+      },
+      "image": "<PATH_2>/image-16:tag-3",
+      "init": true,
+      "networks": {
+        "core": null
+      },
+      "profiles": [
+        "<VALUE_6>"
+      ],
+      "read_only": true,
+      "restart": "unless-stopped",
+      "security_opt": [
+        "<VALUE_7>"
+      ],
+      "tmpfs": [
+        "/<PATH_13>"
+      ],
+      "volumes": [
+        {
+          "source": "secret-sidecar-data",
+          "target": "/<PATH_27>",
+          "type": "volume",
+          "volume": {}
+        }
+      ]
+    },
+    "waha-gows": {
+      "cap_drop": [
+        "<VALUE_1>"
+      ],
+      "command": null,
+      "depends_on": {
+        "minio-bootstrap": {
+          "condition": "service_completed_successfully",
+          "required": true
+        },
+        "public-webhook-preflight": {
+          "condition": "service_completed_successfully",
+          "required": true
+        }
+      },
+      "dns": [
+        "<IP_3>",
+        "<IP_4>"
+      ],
+      "entrypoint": null,
+      "environment": {
+        "WAHA_API_KEY": "<SECRET_44>",
+        "WAHA_API_KEY_EXCLUDE_PATH": "<SECRET_45>",
+        "WAHA_DASHBOARD_PASSWORD": "<SECRET_46>",
+        "WAHA_DASHBOARD_USERNAME": "<USERNAME_11>",
+        "WAHA_HTTP_LOG_LEVEL": "<VALUE_117>",
+        "WAHA_LOCAL_STORE_BASE_DIR": "/<PATH_31>/<PATH_63>",
+        "WAHA_LOG_FORMAT": "<VALUE_118>",
+        "WAHA_LOG_LEVEL": "<VALUE_117>",
+        "WAHA_MEDIA_STORAGE": "<VALUE_119>",
+        "WAHA_PRINT_QR": "<VALUE_13>",
+        "WAHA_S3_ACCESS_KEY_ID": "<SECRET_3>",
+        "WAHA_S3_BUCKET": "<VALUE_120>",
+        "WAHA_S3_ENDPOINT": "http://host-4.invalid:9000",
+        "WAHA_S3_FORCE_PATH_STYLE": "<VALUE_26>",
+        "WAHA_S3_PROXY_FILES": "<VALUE_26>",
+        "WAHA_S3_REGION": "<VALUE_37>",
+        "WAHA_S3_SECRET_ACCESS_KEY": "<SECRET_4>",
+        "WAHA_WORKER_ID": "<VALUE_121>",
+        "WAHA_WORKER_RESTART_SESSIONS": "<VALUE_26>",
+        "WHATSAPP_DEFAULT_ENGINE": "<VALUE_122>",
+        "WHATSAPP_SWAGGER_PASSWORD": "<SECRET_47>",
+        "WHATSAPP_SWAGGER_USERNAME": "<USERNAME_11>"
+      },
+      "healthcheck": {
+        "interval": "<VALUE_48>",
+        "retries": 30,
+        "start_period": "<VALUE_19>",
+        "test": [
+          "CMD",
+          "<VALUE_45>",
+          "<VALUE_46>",
+          "<VALUE_123>"
+        ],
+        "timeout": "<VALUE_43>"
+      },
+      "image": "image-17/image-18:tag-15@sha256:ee94669b8b007f8108d2e93dc8ce1af78743919823bc6748facab35d8cc2c26c",
+      "init": true,
+      "networks": {
+        "connector-egress": null,
+        "connectors": null,
+        "storage": null
+      },
+      "platform": "<VALUE_23>",
+      "profiles": [
+        "<VALUE_6>"
+      ],
+      "restart": "unless-stopped",
+      "security_opt": [
+        "<VALUE_7>"
+      ],
+      "tmpfs": [
+        "/<PATH_13>"
+      ],
+      "volumes": [
+        {
+          "source": "waha-gows-sessions",
+          "target": "/<PATH_31>/<PATH_63>",
+          "type": "volume",
+          "volume": {}
+        }
+      ]
+    },
+    "zammad-activation": {
+      "command": [
+        "<VALUE_60>",
+        "<VALUE_61>",
+        "<VALUE_124>"
+      ],
+      "depends_on": {
+        "full-qualification-seed": {
+          "condition": "service_completed_successfully",
+          "required": true
+        },
+        "zammad-nginx": {
+          "condition": "service_healthy",
+          "required": true
+        },
+        "zammad-package": {
+          "condition": "service_completed_successfully",
+          "required": true
+        },
+        "zammad-runtime-bootstrap": {
+          "condition": "service_completed_successfully",
+          "required": true
+        }
+      },
+      "entrypoint": null,
+      "environment": {
+        "PGDATABASE": "<PATH_2>",
+        "PGHOST": "host-1.invalid",
+        "PGPASSWORD": "<VALUE_63>",
+        "PGPORT": "<VALUE_64>",
+        "PGUSER": "<PATH_2>"
+      },
+      "image": "host-1.invalid:tag-4@sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193",
+      "networks": {
+        "core": null
+      },
+      "profiles": [
+        "<VALUE_6>"
+      ],
+      "restart": "no",
+      "volumes": [
+        {
+          "bind": {
+            "create_host_path": true
+          },
+          "read_only": true,
+          "source": "/<PATH_1>/<PATH_2>/<PATH_3>/<PATH_4>/<PATH_5>/<PATH_6>/<VALUE_6>/host-1.invalid/<PATH_64>",
+          "target": "/<PATH_20>/<PATH_64>",
+          "type": "bind"
+        }
+      ]
+    },
+    "zammad-backup": {
+      "build": {
+        "args": {
+          "COMMIT_SHA": "<VALUE_125>",
+          "NODE_IMAGE": "<VALUE_126>",
+          "WASALX_CANDIDATE_TREE": "<VALUE_127>",
+          "WASALX_PACKAGE_SHA256": "<VALUE_56>",
+          "WASALX_PACKAGE_VERSION": "<VALUE_57>",
+          "ZAMMAD_BASE_IMAGE": "<VALUE_128>"
+        },
+        "context": "/<PATH_1>/<PATH_2>/<PATH_3>/<PATH_4>",
+        "dockerfile": "<VALUE_129>"
+      },
+      "command": [
+        "<VALUE_130>"
+      ],
+      "depends_on": {
+        "zammad-package": {
+          "condition": "service_completed_successfully",
+          "required": true
+        }
+      },
+      "entrypoint": null,
+      "environment": {
+        "BACKUP_DIR": "/<PATH_10>/<PATH_13>/<PATH_65>",
+        "BACKUP_ON_START": "<VALUE_13>",
+        "BACKUP_TIME": "<VALUE_131>",
+        "ELASTICSEARCH_ENABLED": "<VALUE_26>",
+        "ELASTICSEARCH_HOST": "host-10.invalid",
+        "ELASTICSEARCH_NAMESPACE": "<VALUE_132>",
+        "ELASTICSEARCH_PORT": "<VALUE_133>",
+        "ELASTICSEARCH_REINDEX": "<VALUE_26>",
+        "ELASTICSEARCH_SCHEMA": "<VALUE_134>",
+        "HOLD_DAYS": "<VALUE_27>",
+        "MEMCACHE_SERVERS": "<VALUE_135>",
+        "NGINX_CLIENT_MAX_BODY_SIZE": "<VALUE_136>",
+        "NGINX_PORT": "<VALUE_35>",
+        "POSTGRESQL_DB": "<VALUE_137>",
+        "POSTGRESQL_HOST": "host-11.invalid",
+        "POSTGRESQL_OPTIONS": "<VALUE_138>",
+        "POSTGRESQL_PASS": "<VALUE_139>",
+        "POSTGRESQL_PORT": "<VALUE_64>",
+        "POSTGRESQL_USER": "<PATH_65>",
+        "REDIS_URL": "redis://host-12.invalid:6379",
+        "TZ": "<VALUE_140>",
+        "WASALX_CONTROL_URL": "http://image-5:3001",
+        "WASALX_MAIL_ALLOWED_HOSTS": "",
+        "WASALX_PORTAL_URL": "http://<IP_1>:3000",
+        "WASALX_SERVICE_JWT_SECRET": "<SECRET_48>",
+        "WASALX_TENANT_ID": "<VALUE_141>",
+        "WASALX_ZAMMAD_INSTANCE_ID": "<VALUE_142>",
+        "ZAMMAD_FQDN": "host-13.invalid",
+        "ZAMMAD_HTTP_TYPE": "<VALUE_134>"
+      },
+      "image": "<PATH_2>/<PATH_65>:tag-16",
+      "init": true,
+      "networks": {
+        "tenant-egress": null,
+        "tenant-zammad": null
+      },
+      "profiles": [
+        "<VALUE_6>"
+      ],
+      "restart": "unless-stopped",
+      "user": "<VALUE_143>",
+      "volumes": [
+        {
+          "source": "zammad-backup",
+          "target": "/<PATH_10>/<PATH_13>/<PATH_65>",
+          "type": "volume",
+          "volume": {}
+        },
+        {
+          "source": "zammad-storage",
+          "target": "/<PATH_26>/<PATH_65>/<PATH_66>",
+          "type": "volume",
+          "volume": {}
+        }
+      ]
+    },
+    "zammad-elasticsearch": {
+      "command": null,
+      "entrypoint": null,
+      "environment": {
+        "<FIELD_2>": "<VALUE_145>",
+        "<FIELD_3>": "<VALUE_13>",
+        "<FIELD_4>": "<VALUE_13>",
+        "<FIELD_5>": "<VALUE_13>",
+        "<FIELD_6>": "<VALUE_13>",
+        "ES_JAVA_OPTS": "<VALUE_144>"
+      },
+      "healthcheck": {
+        "interval": "<VALUE_48>",
+        "retries": 20,
+        "start_period": "<VALUE_44>",
+        "test": [
+          "CMD-SHELL",
+          "<VALUE_146>"
+        ],
+        "timeout": "<VALUE_48>"
+      },
+      "image": "image-19:tag-17@sha256:5b4517639f5c027e5abc0dbb29dc99e0662b2d060befe17d91c953b88020391d",
+      "networks": {
+        "tenant-zammad": null
+      },
+      "profiles": [
+        "<VALUE_6>"
+      ],
+      "restart": "unless-stopped",
+      "volumes": [
+        {
+          "source": "zammad-elasticsearch-data",
+          "target": "/<PATH_67>/<PATH_68>/image-19/<PATH_27>",
+          "type": "volume",
+          "volume": {}
+        }
+      ]
+    },
+    "zammad-init": {
+      "build": {
+        "args": {
+          "COMMIT_SHA": "<VALUE_125>",
+          "NODE_IMAGE": "<VALUE_126>",
+          "WASALX_CANDIDATE_TREE": "<VALUE_127>",
+          "WASALX_PACKAGE_SHA256": "<VALUE_56>",
+          "WASALX_PACKAGE_VERSION": "<VALUE_57>",
+          "ZAMMAD_BASE_IMAGE": "<VALUE_128>"
+        },
+        "context": "/<PATH_1>/<PATH_2>/<PATH_3>/<PATH_4>",
+        "dockerfile": "<VALUE_129>"
+      },
+      "command": [
+        "<VALUE_147>"
+      ],
+      "depends_on": {
+        "zammad-elasticsearch": {
+          "condition": "service_healthy",
+          "required": true
+        },
+        "zammad-memcached": {
+          "condition": "service_healthy",
+          "required": true
+        },
+        "zammad-postgresql": {
+          "condition": "service_healthy",
+          "required": true
+        },
+        "zammad-redis": {
+          "condition": "service_healthy",
+          "required": true
+        }
+      },
+      "entrypoint": null,
+      "environment": {
+        "BACKUP_DIR": "/<PATH_10>/<PATH_13>/<PATH_65>",
+        "BACKUP_ON_START": "<VALUE_13>",
+        "BACKUP_TIME": "<VALUE_131>",
+        "ELASTICSEARCH_ENABLED": "<VALUE_26>",
+        "ELASTICSEARCH_HOST": "host-10.invalid",
+        "ELASTICSEARCH_NAMESPACE": "<VALUE_132>",
+        "ELASTICSEARCH_PORT": "<VALUE_133>",
+        "ELASTICSEARCH_REINDEX": "<VALUE_26>",
+        "ELASTICSEARCH_SCHEMA": "<VALUE_134>",
+        "HOLD_DAYS": "<VALUE_27>",
+        "MEMCACHE_SERVERS": "<VALUE_135>",
+        "NGINX_CLIENT_MAX_BODY_SIZE": "<VALUE_136>",
+        "NGINX_PORT": "<VALUE_35>",
+        "POSTGRESQL_DB": "<VALUE_137>",
+        "POSTGRESQL_HOST": "host-11.invalid",
+        "POSTGRESQL_OPTIONS": "<VALUE_138>",
+        "POSTGRESQL_PASS": "<VALUE_139>",
+        "POSTGRESQL_PORT": "<VALUE_64>",
+        "POSTGRESQL_USER": "<PATH_65>",
+        "REDIS_URL": "redis://host-12.invalid:6379",
+        "TZ": "<VALUE_140>",
+        "WASALX_CONTROL_URL": "http://image-5:3001",
+        "WASALX_MAIL_ALLOWED_HOSTS": "",
+        "WASALX_PORTAL_URL": "http://<IP_1>:3000",
+        "WASALX_SERVICE_JWT_SECRET": "<SECRET_48>",
+        "WASALX_TENANT_ID": "<VALUE_141>",
+        "WASALX_ZAMMAD_INSTANCE_ID": "<VALUE_142>",
+        "ZAMMAD_FQDN": "host-13.invalid",
+        "ZAMMAD_HTTP_TYPE": "<VALUE_134>"
+      },
+      "image": "<PATH_2>/<PATH_65>:tag-16",
+      "init": true,
+      "networks": {
+        "tenant-egress": null,
+        "tenant-zammad": null
+      },
+      "profiles": [
+        "<VALUE_6>"
+      ],
+      "restart": "on-failure",
+      "user": "<VALUE_143>",
+      "volumes": [
+        {
+          "read_only": true,
+          "source": "zammad-backup",
+          "target": "/<PATH_10>/<PATH_13>/<PATH_65>",
+          "type": "volume",
+          "volume": {}
+        },
+        {
+          "source": "zammad-storage",
+          "target": "/<PATH_26>/<PATH_65>/<PATH_66>",
+          "type": "volume",
+          "volume": {}
+        }
+      ]
+    },
+    "zammad-memcached": {
+      "command": [
+        "<VALUE_148>",
+        "<VALUE_149>",
+        "<VALUE_150>"
+      ],
+      "entrypoint": null,
+      "healthcheck": {
+        "interval": "<VALUE_48>",
+        "retries": 10,
+        "test": [
+          "CMD",
+          "<VALUE_151>",
+          "<VALUE_152>",
+          "<IP_1>",
+          "<VALUE_153>"
+        ],
+        "timeout": "<VALUE_22>"
+      },
+      "image": "<VALUE_148>:tag-18@sha256:c29847751abb41f4c268c84fb3087fee05d4edcbda44409ccb5086e26148e8a7",
+      "networks": {
+        "tenant-zammad": null
+      },
+      "profiles": [
+        "<VALUE_6>"
+      ],
+      "restart": "unless-stopped"
+    },
+    "zammad-nginx": {
+      "build": {
+        "args": {
+          "COMMIT_SHA": "<VALUE_125>",
+          "NODE_IMAGE": "<VALUE_126>",
+          "WASALX_CANDIDATE_TREE": "<VALUE_127>",
+          "WASALX_PACKAGE_SHA256": "<VALUE_56>",
+          "WASALX_PACKAGE_VERSION": "<VALUE_57>",
+          "ZAMMAD_BASE_IMAGE": "<VALUE_128>"
+        },
+        "context": "/<PATH_1>/<PATH_2>/<PATH_3>/<PATH_4>",
+        "dockerfile": "<VALUE_129>"
+      },
+      "command": [
+        "<VALUE_154>"
+      ],
+      "depends_on": {
+        "zammad-railsserver": {
+          "condition": "service_healthy",
+          "required": true
+        }
+      },
+      "entrypoint": null,
+      "environment": {
+        "BACKUP_DIR": "/<PATH_10>/<PATH_13>/<PATH_65>",
+        "BACKUP_ON_START": "<VALUE_13>",
+        "BACKUP_TIME": "<VALUE_131>",
+        "ELASTICSEARCH_ENABLED": "<VALUE_26>",
+        "ELASTICSEARCH_HOST": "host-10.invalid",
+        "ELASTICSEARCH_NAMESPACE": "<VALUE_132>",
+        "ELASTICSEARCH_PORT": "<VALUE_133>",
+        "ELASTICSEARCH_REINDEX": "<VALUE_26>",
+        "ELASTICSEARCH_SCHEMA": "<VALUE_134>",
+        "HOLD_DAYS": "<VALUE_27>",
+        "MEMCACHE_SERVERS": "<VALUE_135>",
+        "NGINX_CLIENT_MAX_BODY_SIZE": "<VALUE_136>",
+        "NGINX_PORT": "<VALUE_35>",
+        "POSTGRESQL_DB": "<VALUE_137>",
+        "POSTGRESQL_HOST": "host-11.invalid",
+        "POSTGRESQL_OPTIONS": "<VALUE_138>",
+        "POSTGRESQL_PASS": "<VALUE_139>",
+        "POSTGRESQL_PORT": "<VALUE_64>",
+        "POSTGRESQL_USER": "<PATH_65>",
+        "REDIS_URL": "redis://host-12.invalid:6379",
+        "TZ": "<VALUE_140>",
+        "WASALX_CONTROL_URL": "http://image-5:3001",
+        "WASALX_MAIL_ALLOWED_HOSTS": "",
+        "WASALX_PORTAL_URL": "http://<IP_1>:3000",
+        "WASALX_SERVICE_JWT_SECRET": "<SECRET_48>",
+        "WASALX_TENANT_ID": "<VALUE_141>",
+        "WASALX_ZAMMAD_INSTANCE_ID": "<VALUE_142>",
+        "ZAMMAD_FQDN": "host-13.invalid",
+        "ZAMMAD_HTTP_TYPE": "<VALUE_134>"
+      },
+      "healthcheck": {
+        "interval": "<VALUE_48>",
+        "retries": 12,
+        "start_period": "<VALUE_155>",
+        "test": [
+          "CMD",
+          "<VALUE_88>",
+          "<VALUE_89>",
+          "<VALUE_90>",
+          "http://<IP_1>:8080/<PATH_69>/<PATH_70>/<PATH_2>/<PATH_41>"
+        ],
+        "timeout": "<VALUE_48>"
+      },
+      "image": "<PATH_2>/<PATH_65>:tag-16",
+      "init": false,
+      "networks": {
+        "edge": null,
+        "tenant-zammad": null
+      },
+      "ports": [
+        {
+          "<FIELD_1>": "<VALUE_5>",
+          "host_ip": "<IP_1>",
+          "protocol": "tcp",
+          "published": "8081",
+          "target": 8080
+        }
+      ],
+      "profiles": [
+        "<VALUE_6>"
+      ],
+      "restart": "unless-stopped",
+      "volumes": [
+        {
+          "read_only": true,
+          "source": "zammad-backup",
+          "target": "/<PATH_10>/<PATH_13>/<PATH_65>",
+          "type": "volume",
+          "volume": {}
+        },
+        {
+          "source": "zammad-storage",
+          "target": "/<PATH_26>/<PATH_65>/<PATH_66>",
+          "type": "volume",
+          "volume": {}
+        },
+        {
+          "bind": {
+            "create_host_path": true
+          },
+          "read_only": true,
+          "source": "/<PATH_1>/<PATH_2>/<PATH_3>/<PATH_4>/<PATH_5>/<PATH_6>/<VALUE_6>/<PATH_65>/<PATH_71>",
+          "target": "/<PATH_26>/<PATH_65>/<PATH_72>/<PATH_73>/<PATH_74>",
+          "type": "bind"
+        }
+      ]
+    },
+    "zammad-package": {
+      "build": {
+        "args": {
+          "COMMIT_SHA": "<VALUE_125>",
+          "NODE_IMAGE": "<VALUE_126>",
+          "WASALX_CANDIDATE_TREE": "<VALUE_127>",
+          "WASALX_PACKAGE_SHA256": "<VALUE_56>",
+          "WASALX_PACKAGE_VERSION": "<VALUE_57>",
+          "ZAMMAD_BASE_IMAGE": "<VALUE_128>"
+        },
+        "context": "/<PATH_1>/<PATH_2>/<PATH_3>/<PATH_4>",
+        "dockerfile": "<VALUE_129>"
+      },
+      "command": [
+        "<VALUE_156>"
+      ],
+      "depends_on": {
+        "zammad-init": {
+          "condition": "service_completed_successfully",
+          "required": true
+        }
+      },
+      "entrypoint": null,
+      "environment": {
+        "BACKUP_DIR": "/<PATH_10>/<PATH_13>/<PATH_65>",
+        "BACKUP_ON_START": "<VALUE_13>",
+        "BACKUP_TIME": "<VALUE_131>",
+        "ELASTICSEARCH_ENABLED": "<VALUE_26>",
+        "ELASTICSEARCH_HOST": "host-10.invalid",
+        "ELASTICSEARCH_NAMESPACE": "<VALUE_132>",
+        "ELASTICSEARCH_PORT": "<VALUE_133>",
+        "ELASTICSEARCH_REINDEX": "<VALUE_26>",
+        "ELASTICSEARCH_SCHEMA": "<VALUE_134>",
+        "HOLD_DAYS": "<VALUE_27>",
+        "MEMCACHE_SERVERS": "<VALUE_135>",
+        "NGINX_CLIENT_MAX_BODY_SIZE": "<VALUE_136>",
+        "NGINX_PORT": "<VALUE_35>",
+        "POSTGRESQL_DB": "<VALUE_137>",
+        "POSTGRESQL_HOST": "host-11.invalid",
+        "POSTGRESQL_OPTIONS": "<VALUE_138>",
+        "POSTGRESQL_PASS": "<VALUE_139>",
+        "POSTGRESQL_PORT": "<VALUE_64>",
+        "POSTGRESQL_USER": "<PATH_65>",
+        "REDIS_URL": "redis://host-12.invalid:6379",
+        "TZ": "<VALUE_140>",
+        "WASALX_CONTROL_URL": "http://image-5:3001",
+        "WASALX_MAIL_ALLOWED_HOSTS": "",
+        "WASALX_PORTAL_URL": "http://<IP_1>:3000",
+        "WASALX_SERVICE_JWT_SECRET": "<SECRET_48>",
+        "WASALX_TENANT_ID": "<VALUE_141>",
+        "WASALX_ZAMMAD_INSTANCE_ID": "<VALUE_142>",
+        "ZAMMAD_FQDN": "host-13.invalid",
+        "ZAMMAD_HTTP_TYPE": "<VALUE_134>"
+      },
+      "image": "<PATH_2>/<PATH_65>:tag-16",
+      "init": true,
+      "networks": {
+        "tenant-egress": null,
+        "tenant-zammad": null
+      },
+      "profiles": [
+        "<VALUE_6>"
+      ],
+      "restart": "no",
+      "volumes": [
+        {
+          "read_only": true,
+          "source": "zammad-backup",
+          "target": "/<PATH_10>/<PATH_13>/<PATH_65>",
+          "type": "volume",
+          "volume": {}
+        },
+        {
+          "source": "zammad-storage",
+          "target": "/<PATH_26>/<PATH_65>/<PATH_66>",
+          "type": "volume",
+          "volume": {}
+        }
+      ]
+    },
+    "zammad-postgresql": {
+      "command": null,
+      "entrypoint": null,
+      "environment": {
+        "POSTGRES_DB": "<VALUE_137>",
+        "POSTGRES_PASSWORD": "<VALUE_139>",
+        "POSTGRES_USER": "<PATH_65>"
+      },
+      "healthcheck": {
+        "interval": "<VALUE_48>",
+        "retries": 10,
+        "start_period": "<VALUE_19>",
+        "test": [
+          "CMD-SHELL",
+          "<VALUE_157>"
+        ],
+        "timeout": "<VALUE_22>"
+      },
+      "image": "host-1.invalid:tag-4@sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193",
+      "networks": {
+        "tenant-zammad": null
+      },
+      "profiles": [
+        "<VALUE_6>"
+      ],
+      "restart": "unless-stopped",
+      "volumes": [
+        {
+          "source": "zammad-postgresql-data",
+          "target": "/<PATH_10>/<PATH_11>/<PATH_39>/<PATH_27>",
+          "type": "volume",
+          "volume": {}
+        }
+      ]
+    },
+    "zammad-railsserver": {
+      "build": {
+        "args": {
+          "COMMIT_SHA": "<VALUE_125>",
+          "NODE_IMAGE": "<VALUE_126>",
+          "WASALX_CANDIDATE_TREE": "<VALUE_127>",
+          "WASALX_PACKAGE_SHA256": "<VALUE_56>",
+          "WASALX_PACKAGE_VERSION": "<VALUE_57>",
+          "ZAMMAD_BASE_IMAGE": "<VALUE_128>"
+        },
+        "context": "/<PATH_1>/<PATH_2>/<PATH_3>/<PATH_4>",
+        "dockerfile": "<VALUE_129>"
+      },
+      "command": [
+        "<VALUE_158>"
+      ],
+      "depends_on": {
+        "zammad-runtime-bootstrap": {
+          "condition": "service_completed_successfully",
+          "required": true
+        }
+      },
+      "entrypoint": null,
+      "environment": {
+        "BACKUP_DIR": "/<PATH_10>/<PATH_13>/<PATH_65>",
+        "BACKUP_ON_START": "<VALUE_13>",
+        "BACKUP_TIME": "<VALUE_131>",
+        "ELASTICSEARCH_ENABLED": "<VALUE_26>",
+        "ELASTICSEARCH_HOST": "host-10.invalid",
+        "ELASTICSEARCH_NAMESPACE": "<VALUE_132>",
+        "ELASTICSEARCH_PORT": "<VALUE_133>",
+        "ELASTICSEARCH_REINDEX": "<VALUE_26>",
+        "ELASTICSEARCH_SCHEMA": "<VALUE_134>",
+        "HOLD_DAYS": "<VALUE_27>",
+        "MEMCACHE_SERVERS": "<VALUE_135>",
+        "NGINX_CLIENT_MAX_BODY_SIZE": "<VALUE_136>",
+        "NGINX_PORT": "<VALUE_35>",
+        "POSTGRESQL_DB": "<VALUE_137>",
+        "POSTGRESQL_HOST": "host-11.invalid",
+        "POSTGRESQL_OPTIONS": "<VALUE_138>",
+        "POSTGRESQL_PASS": "<VALUE_139>",
+        "POSTGRESQL_PORT": "<VALUE_64>",
+        "POSTGRESQL_USER": "<PATH_65>",
+        "REDIS_URL": "redis://host-12.invalid:6379",
+        "TZ": "<VALUE_140>",
+        "WASALX_CONTROL_URL": "http://image-5:3001",
+        "WASALX_MAIL_ALLOWED_HOSTS": "",
+        "WASALX_PORTAL_URL": "http://<IP_1>:3000",
+        "WASALX_SERVICE_JWT_SECRET": "<SECRET_48>",
+        "WASALX_TENANT_ID": "<VALUE_141>",
+        "WASALX_ZAMMAD_INSTANCE_ID": "<VALUE_142>",
+        "ZAMMAD_FQDN": "host-13.invalid",
+        "ZAMMAD_HTTP_TYPE": "<VALUE_134>"
+      },
+      "healthcheck": {
+        "interval": "<VALUE_19>",
+        "retries": 5,
+        "start_period": "<VALUE_159>",
+        "test": [
+          "CMD",
+          "<VALUE_88>",
+          "<VALUE_89>",
+          "<VALUE_90>",
+          "http://<IP_1>:3000"
+        ],
+        "timeout": "<VALUE_22>"
+      },
+      "image": "<PATH_2>/<PATH_65>:tag-16",
+      "init": true,
+      "networks": {
+        "tenant-egress": null,
+        "tenant-zammad": null
+      },
+      "profiles": [
+        "<VALUE_6>"
+      ],
+      "restart": "unless-stopped",
+      "volumes": [
+        {
+          "read_only": true,
+          "source": "zammad-backup",
+          "target": "/<PATH_10>/<PATH_13>/<PATH_65>",
+          "type": "volume",
+          "volume": {}
+        },
+        {
+          "source": "zammad-storage",
+          "target": "/<PATH_26>/<PATH_65>/<PATH_66>",
+          "type": "volume",
+          "volume": {}
+        }
+      ]
+    },
+    "zammad-redis": {
+      "command": [
+        "<VALUE_108>",
+        "<VALUE_109>",
+        "<VALUE_110>",
+        "<VALUE_111>",
+        "<VALUE_112>",
+        "<VALUE_34>"
+      ],
+      "entrypoint": null,
+      "healthcheck": {
+        "interval": "<VALUE_48>",
+        "retries": 10,
+        "test": [
+          "CMD",
+          "<VALUE_113>",
+          "<VALUE_114>"
+        ],
+        "timeout": "<VALUE_22>"
+      },
+      "image": "host-3.invalid:tag-19@sha256:978f0e01593e65eed801f2402944efcd936d43b5027e4908a7897baf88ed6241",
+      "networks": {
+        "tenant-zammad": null
+      },
+      "profiles": [
+        "<VALUE_6>"
+      ],
+      "restart": "unless-stopped",
+      "volumes": [
+        {
+          "source": "zammad-redis-data",
+          "target": "/<PATH_27>",
+          "type": "volume",
+          "volume": {}
+        }
+      ]
+    },
+    "zammad-runtime-bootstrap": {
+      "build": {
+        "args": {
+          "COMMIT_SHA": "<VALUE_125>",
+          "NODE_IMAGE": "<VALUE_126>",
+          "WASALX_CANDIDATE_TREE": "<VALUE_127>",
+          "WASALX_PACKAGE_SHA256": "<VALUE_56>",
+          "WASALX_PACKAGE_VERSION": "<VALUE_57>",
+          "ZAMMAD_BASE_IMAGE": "<VALUE_128>"
+        },
+        "context": "/<PATH_1>/<PATH_2>/<PATH_3>/<PATH_4>",
+        "dockerfile": "<VALUE_129>"
+      },
+      "command": [
+        "<PATH_24>",
+        "/<PATH_67>/tag-3/<PATH_23>/<PATH_75>"
+      ],
+      "depends_on": {
+        "zammad-package": {
+          "condition": "service_completed_successfully",
+          "required": true
+        }
+      },
+      "entrypoint": null,
+      "environment": {
+        "BACKUP_DIR": "/<PATH_10>/<PATH_13>/<PATH_65>",
+        "BACKUP_ON_START": "<VALUE_13>",
+        "BACKUP_TIME": "<VALUE_131>",
+        "ELASTICSEARCH_ENABLED": "<VALUE_26>",
+        "ELASTICSEARCH_HOST": "host-10.invalid",
+        "ELASTICSEARCH_NAMESPACE": "<VALUE_132>",
+        "ELASTICSEARCH_PORT": "<VALUE_133>",
+        "ELASTICSEARCH_REINDEX": "<VALUE_26>",
+        "ELASTICSEARCH_SCHEMA": "<VALUE_134>",
+        "HOLD_DAYS": "<VALUE_27>",
+        "MEMCACHE_SERVERS": "<VALUE_135>",
+        "NGINX_CLIENT_MAX_BODY_SIZE": "<VALUE_136>",
+        "NGINX_PORT": "<VALUE_35>",
+        "POSTGRESQL_DB": "<VALUE_137>",
+        "POSTGRESQL_HOST": "host-11.invalid",
+        "POSTGRESQL_OPTIONS": "<VALUE_138>",
+        "POSTGRESQL_PASS": "<VALUE_139>",
+        "POSTGRESQL_PORT": "<VALUE_64>",
+        "POSTGRESQL_USER": "<PATH_65>",
+        "REDIS_URL": "redis://host-12.invalid:6379",
+        "TZ": "<VALUE_140>",
+        "WASALX_CONTROL_URL": "http://image-5:3001",
+        "WASALX_MAIL_ALLOWED_HOSTS": "",
+        "WASALX_PORTAL_URL": "http://<IP_1>:3000",
+        "WASALX_SERVICE_IDENTITY_MODE": "",
+        "WASALX_SERVICE_JWT_SECRET": "<SECRET_48>",
+        "WASALX_TENANT_ID": "<VALUE_141>",
+        "WASALX_ZAMMAD_AGENT_EMAIL": "<EMAIL_4>",
+        "WASALX_ZAMMAD_AGENT_NAME": "<PERSON_NAME_3>",
+        "WASALX_ZAMMAD_AGENT_PASSWORD": "<SECRET_49>",
+        "WASALX_ZAMMAD_BOOTSTRAP_EMAIL": "<EMAIL_5>",
+        "WASALX_ZAMMAD_BOOTSTRAP_NAME": "<PERSON_NAME_4>",
+        "WASALX_ZAMMAD_BOOTSTRAP_PASSWORD": "<SECRET_50>",
+        "WASALX_ZAMMAD_BOOTSTRAP_PREVIOUS_EMAIL": "<EMAIL_6>",
+        "WASALX_ZAMMAD_INSTANCE_ID": "<VALUE_142>",
+        "ZAMMAD_FQDN": "host-13.invalid",
+        "ZAMMAD_HTTP_TYPE": "<VALUE_134>",
+        "ZAMMAD_PRIVACY_TOKEN": "<SECRET_51>",
+        "ZAMMAD_SERVICE_TOKEN": "<SECRET_52>"
+      },
+      "image": "<PATH_2>/<PATH_65>:tag-16",
+      "init": true,
+      "networks": {
+        "tenant-egress": null,
+        "tenant-zammad": null
+      },
+      "profiles": [
+        "<VALUE_6>"
+      ],
+      "restart": "no",
+      "volumes": [
+        {
+          "read_only": true,
+          "source": "zammad-backup",
+          "target": "/<PATH_10>/<PATH_13>/<PATH_65>",
+          "type": "volume",
+          "volume": {}
+        },
+        {
+          "source": "zammad-storage",
+          "target": "/<PATH_26>/<PATH_65>/<PATH_66>",
+          "type": "volume",
+          "volume": {}
+        },
+        {
+          "bind": {
+            "create_host_path": true
+          },
+          "read_only": true,
+          "source": "/<PATH_1>/<PATH_2>/<PATH_3>/<PATH_4>/<PATH_5>/<PATH_6>/<VALUE_6>/<PATH_65>/<PATH_76>",
+          "target": "/<PATH_67>/tag-3/<PATH_23>/<PATH_75>",
+          "type": "bind"
+        },
+        {
+          "bind": {
+            "create_host_path": true
+          },
+          "read_only": true,
+          "source": "/<PATH_1>/<PATH_2>/<PATH_3>/<PATH_4>/<PATH_5>/<PATH_6>/<VALUE_6>/<PATH_65>/<PATH_77>",
+          "target": "/<PATH_67>/tag-3/<PATH_11>/<PATH_2>/<PATH_77>",
+          "type": "bind"
+        }
+      ]
+    },
+    "zammad-scheduler": {
+      "build": {
+        "args": {
+          "COMMIT_SHA": "<VALUE_125>",
+          "NODE_IMAGE": "<VALUE_126>",
+          "WASALX_CANDIDATE_TREE": "<VALUE_127>",
+          "WASALX_PACKAGE_SHA256": "<VALUE_56>",
+          "WASALX_PACKAGE_VERSION": "<VALUE_57>",
+          "ZAMMAD_BASE_IMAGE": "<VALUE_128>"
+        },
+        "context": "/<PATH_1>/<PATH_2>/<PATH_3>/<PATH_4>",
+        "dockerfile": "<VALUE_129>"
+      },
+      "command": [
+        "<VALUE_160>"
+      ],
+      "depends_on": {
+        "zammad-runtime-bootstrap": {
+          "condition": "service_completed_successfully",
+          "required": true
+        }
+      },
+      "entrypoint": null,
+      "environment": {
+        "BACKUP_DIR": "/<PATH_10>/<PATH_13>/<PATH_65>",
+        "BACKUP_ON_START": "<VALUE_13>",
+        "BACKUP_TIME": "<VALUE_131>",
+        "ELASTICSEARCH_ENABLED": "<VALUE_26>",
+        "ELASTICSEARCH_HOST": "host-10.invalid",
+        "ELASTICSEARCH_NAMESPACE": "<VALUE_132>",
+        "ELASTICSEARCH_PORT": "<VALUE_133>",
+        "ELASTICSEARCH_REINDEX": "<VALUE_26>",
+        "ELASTICSEARCH_SCHEMA": "<VALUE_134>",
+        "HOLD_DAYS": "<VALUE_27>",
+        "MEMCACHE_SERVERS": "<VALUE_135>",
+        "NGINX_CLIENT_MAX_BODY_SIZE": "<VALUE_136>",
+        "NGINX_PORT": "<VALUE_35>",
+        "POSTGRESQL_DB": "<VALUE_137>",
+        "POSTGRESQL_HOST": "host-11.invalid",
+        "POSTGRESQL_OPTIONS": "<VALUE_138>",
+        "POSTGRESQL_PASS": "<VALUE_139>",
+        "POSTGRESQL_PORT": "<VALUE_64>",
+        "POSTGRESQL_USER": "<PATH_65>",
+        "REDIS_URL": "redis://host-12.invalid:6379",
+        "TZ": "<VALUE_140>",
+        "WASALX_CONTROL_URL": "http://image-5:3001",
+        "WASALX_MAIL_ALLOWED_HOSTS": "",
+        "WASALX_PORTAL_URL": "http://<IP_1>:3000",
+        "WASALX_SERVICE_JWT_SECRET": "<SECRET_48>",
+        "WASALX_TENANT_ID": "<VALUE_141>",
+        "WASALX_ZAMMAD_INSTANCE_ID": "<VALUE_142>",
+        "ZAMMAD_FQDN": "host-13.invalid",
+        "ZAMMAD_HTTP_TYPE": "<VALUE_134>"
+      },
+      "image": "<PATH_2>/<PATH_65>:tag-16",
+      "init": true,
+      "networks": {
+        "tenant-egress": null,
+        "tenant-zammad": null
+      },
+      "profiles": [
+        "<VALUE_6>"
+      ],
+      "restart": "unless-stopped",
+      "volumes": [
+        {
+          "read_only": true,
+          "source": "zammad-backup",
+          "target": "/<PATH_10>/<PATH_13>/<PATH_65>",
+          "type": "volume",
+          "volume": {}
+        },
+        {
+          "source": "zammad-storage",
+          "target": "/<PATH_26>/<PATH_65>/<PATH_66>",
+          "type": "volume",
+          "volume": {}
+        }
+      ]
+    },
+    "zammad-websocket": {
+      "build": {
+        "args": {
+          "COMMIT_SHA": "<VALUE_125>",
+          "NODE_IMAGE": "<VALUE_126>",
+          "WASALX_CANDIDATE_TREE": "<VALUE_127>",
+          "WASALX_PACKAGE_SHA256": "<VALUE_56>",
+          "WASALX_PACKAGE_VERSION": "<VALUE_57>",
+          "ZAMMAD_BASE_IMAGE": "<VALUE_128>"
+        },
+        "context": "/<PATH_1>/<PATH_2>/<PATH_3>/<PATH_4>",
+        "dockerfile": "<VALUE_129>"
+      },
+      "command": [
+        "<VALUE_161>"
+      ],
+      "depends_on": {
+        "zammad-runtime-bootstrap": {
+          "condition": "service_completed_successfully",
+          "required": true
+        }
+      },
+      "entrypoint": null,
+      "environment": {
+        "BACKUP_DIR": "/<PATH_10>/<PATH_13>/<PATH_65>",
+        "BACKUP_ON_START": "<VALUE_13>",
+        "BACKUP_TIME": "<VALUE_131>",
+        "ELASTICSEARCH_ENABLED": "<VALUE_26>",
+        "ELASTICSEARCH_HOST": "host-10.invalid",
+        "ELASTICSEARCH_NAMESPACE": "<VALUE_132>",
+        "ELASTICSEARCH_PORT": "<VALUE_133>",
+        "ELASTICSEARCH_REINDEX": "<VALUE_26>",
+        "ELASTICSEARCH_SCHEMA": "<VALUE_134>",
+        "HOLD_DAYS": "<VALUE_27>",
+        "MEMCACHE_SERVERS": "<VALUE_135>",
+        "NGINX_CLIENT_MAX_BODY_SIZE": "<VALUE_136>",
+        "NGINX_PORT": "<VALUE_35>",
+        "POSTGRESQL_DB": "<VALUE_137>",
+        "POSTGRESQL_HOST": "host-11.invalid",
+        "POSTGRESQL_OPTIONS": "<VALUE_138>",
+        "POSTGRESQL_PASS": "<VALUE_139>",
+        "POSTGRESQL_PORT": "<VALUE_64>",
+        "POSTGRESQL_USER": "<PATH_65>",
+        "REDIS_URL": "redis://host-12.invalid:6379",
+        "TZ": "<VALUE_140>",
+        "WASALX_CONTROL_URL": "http://image-5:3001",
+        "WASALX_MAIL_ALLOWED_HOSTS": "",
+        "WASALX_PORTAL_URL": "http://<IP_1>:3000",
+        "WASALX_SERVICE_JWT_SECRET": "<SECRET_48>",
+        "WASALX_TENANT_ID": "<VALUE_141>",
+        "WASALX_ZAMMAD_INSTANCE_ID": "<VALUE_142>",
+        "ZAMMAD_FQDN": "host-13.invalid",
+        "ZAMMAD_HTTP_TYPE": "<VALUE_134>"
+      },
+      "image": "<PATH_2>/<PATH_65>:tag-16",
+      "init": true,
+      "networks": {
+        "tenant-egress": null,
+        "tenant-zammad": null
+      },
+      "profiles": [
+        "<VALUE_6>"
+      ],
+      "restart": "unless-stopped",
+      "volumes": [
+        {
+          "read_only": true,
+          "source": "zammad-backup",
+          "target": "/<PATH_10>/<PATH_13>/<PATH_65>",
+          "type": "volume",
+          "volume": {}
+        },
+        {
+          "source": "zammad-storage",
+          "target": "/<PATH_26>/<PATH_65>/<PATH_66>",
+          "type": "volume",
+          "volume": {}
+        }
+      ]
+    }
+  },
+  "volumes": {
+    "alertmanager-data": {
+      "name": "volume-1"
+    },
+    "clamav-db": {
+      "name": "volume-2"
+    },
+    "grafana-data": {
+      "name": "volume-3"
+    },
+    "keycloak-postgresql-data": {
+      "name": "volume-4"
+    },
+    "minio-data": {
+      "name": "volume-5"
+    },
+    "postgres-data": {
+      "name": "volume-6"
+    },
+    "prometheus-data": {
+      "name": "volume-7"
+    },
+    "redis-data": {
+      "name": "volume-8"
+    },
+    "secret-sidecar-data": {
+      "name": "volume-9"
+    },
+    "waha-gows-sessions": {
+      "name": "volume-10"
+    },
+    "zammad-backup": {
+      "name": "volume-11"
+    },
+    "zammad-elasticsearch-data": {
+      "name": "volume-12"
+    },
+    "zammad-postgresql-data": {
+      "name": "volume-13"
+    },
+    "zammad-redis-data": {
+      "name": "volume-14"
+    },
+    "zammad-storage": {
+      "name": "volume-15"
+    }
+  },
+  "x-app-environment": {
+    "CLIENT_ROUTING_EXTERNAL_CONNECTORS_ENABLED": "<VALUE_26>",
+    "DATABASE_POOL_SIZE": "<VALUE_27>",
+    "DATABASE_URL": "postgresql://<USERNAME_3>:<SECRET_10>@host-1.invalid:5432/<PATH_2>",
+    "NODE_ENV": "<VALUE_30>",
+    "REDIS_URL": "redis://host-3.invalid:6379",
+    "SECRET_SIDECAR_TOKEN": "<SECRET_5>",
+    "SECRET_SIDECAR_URL": "<SECRET_6>",
+    "WORKER_JOB_JWT_SECRET": "<SECRET_9>"
+  },
+  "x-container-security": {
+    "cap_drop": [
+      "<VALUE_1>"
+    ],
+    "init": true,
+    "read_only": true,
+    "restart": "unless-stopped",
+    "security_opt": [
+      "<VALUE_7>"
+    ]
+  },
+  "x-full-zammad-environment": {
+    "BACKUP_DIR": "/<PATH_10>/<PATH_13>/<PATH_65>",
+    "BACKUP_ON_START": "<VALUE_13>",
+    "BACKUP_TIME": "<VALUE_131>",
+    "ELASTICSEARCH_ENABLED": "<VALUE_26>",
+    "ELASTICSEARCH_HOST": "host-10.invalid",
+    "ELASTICSEARCH_NAMESPACE": "<VALUE_132>",
+    "ELASTICSEARCH_PORT": "<VALUE_133>",
+    "ELASTICSEARCH_REINDEX": "<VALUE_26>",
+    "ELASTICSEARCH_SCHEMA": "<VALUE_134>",
+    "HOLD_DAYS": "<VALUE_27>",
+    "MEMCACHE_SERVERS": "<VALUE_135>",
+    "NGINX_CLIENT_MAX_BODY_SIZE": "<VALUE_136>",
+    "NGINX_PORT": "<VALUE_35>",
+    "POSTGRESQL_DB": "<VALUE_137>",
+    "POSTGRESQL_HOST": "host-11.invalid",
+    "POSTGRESQL_OPTIONS": "<VALUE_138>",
+    "POSTGRESQL_PASS": "<VALUE_139>",
+    "POSTGRESQL_PORT": "<VALUE_64>",
+    "POSTGRESQL_USER": "<PATH_65>",
+    "REDIS_URL": "redis://host-12.invalid:6379",
+    "TZ": "<VALUE_140>",
+    "WASALX_CONTROL_URL": "http://image-5:3001",
+    "WASALX_MAIL_ALLOWED_HOSTS": "",
+    "WASALX_PORTAL_URL": "http://<IP_1>:3000",
+    "WASALX_SERVICE_JWT_SECRET": "<SECRET_48>",
+    "WASALX_TENANT_ID": "<VALUE_141>",
+    "WASALX_ZAMMAD_INSTANCE_ID": "<VALUE_142>",
+    "ZAMMAD_FQDN": "host-13.invalid",
+    "ZAMMAD_HTTP_TYPE": "<VALUE_134>"
+  },
+  "x-full-zammad-service": {
+    "build": {
+      "args": {
+        "COMMIT_SHA": "<VALUE_125>",
+        "NODE_IMAGE": "<VALUE_126>",
+        "WASALX_CANDIDATE_TREE": "<VALUE_127>",
+        "WASALX_PACKAGE_SHA256": "<VALUE_56>",
+        "WASALX_PACKAGE_VERSION": "<VALUE_57>",
+        "ZAMMAD_BASE_IMAGE": "<VALUE_128>"
+      },
+      "context": "<VALUE_162>",
+      "dockerfile": "<VALUE_129>"
+    },
+    "environment": {
+      "BACKUP_DIR": "/<PATH_10>/<PATH_13>/<PATH_65>",
+      "BACKUP_ON_START": "<VALUE_13>",
+      "BACKUP_TIME": "<VALUE_131>",
+      "ELASTICSEARCH_ENABLED": "<VALUE_26>",
+      "ELASTICSEARCH_HOST": "host-10.invalid",
+      "ELASTICSEARCH_NAMESPACE": "<VALUE_132>",
+      "ELASTICSEARCH_PORT": "<VALUE_133>",
+      "ELASTICSEARCH_REINDEX": "<VALUE_26>",
+      "ELASTICSEARCH_SCHEMA": "<VALUE_134>",
+      "HOLD_DAYS": "<VALUE_27>",
+      "MEMCACHE_SERVERS": "<VALUE_135>",
+      "NGINX_CLIENT_MAX_BODY_SIZE": "<VALUE_136>",
+      "NGINX_PORT": "<VALUE_35>",
+      "POSTGRESQL_DB": "<VALUE_137>",
+      "POSTGRESQL_HOST": "host-11.invalid",
+      "POSTGRESQL_OPTIONS": "<VALUE_138>",
+      "POSTGRESQL_PASS": "<VALUE_139>",
+      "POSTGRESQL_PORT": "<VALUE_64>",
+      "POSTGRESQL_USER": "<PATH_65>",
+      "REDIS_URL": "redis://host-12.invalid:6379",
+      "TZ": "<VALUE_140>",
+      "WASALX_CONTROL_URL": "http://image-5:3001",
+      "WASALX_MAIL_ALLOWED_HOSTS": "",
+      "WASALX_PORTAL_URL": "http://<IP_1>:3000",
+      "WASALX_SERVICE_JWT_SECRET": "<SECRET_48>",
+      "WASALX_TENANT_ID": "<VALUE_141>",
+      "WASALX_ZAMMAD_INSTANCE_ID": "<VALUE_142>",
+      "ZAMMAD_FQDN": "host-13.invalid",
+      "ZAMMAD_HTTP_TYPE": "<VALUE_134>"
+    },
+    "image": "<PATH_2>/<PATH_65>:tag-16",
+    "init": true,
+    "networks": [
+      "<VALUE_163>",
+      "<VALUE_164>"
+    ],
+    "profiles": [
+      "<VALUE_6>"
+    ],
+    "restart": "unless-stopped",
+    "volumes": [
+      "<VALUE_165>",
+      "<VALUE_166>"
+    ]
+  }
+}

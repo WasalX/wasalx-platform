@@ -154,6 +154,10 @@ test("CI gates integration and OpenTofu and runs portal integration files serial
   assert.equal(integration["timeout-minutes"], 25);
   assert.deepEqual(integration.permissions, { contents: "read" });
   assert.match(integration.services.postgres.image, /^postgres:[^@]+@sha256:[a-f0-9]{64}$/u);
+  const devPreflightFile = "tests/installer-dev-recreatability.test.mjs";
+  const devPreflight = jobs.checks.steps.find(step => runsFile(step.run ?? "", devPreflightFile));
+  assert.equal(devPreflight?.if, "github.event_name == 'pull_request' && matrix.mode == 'unit' && matrix.shard == 1");
+  assert(integration.steps.some(step => !step.if && runsFile(step.run ?? "", devPreflightFile)));
   const portalIntegration = integration.steps.find(step => step.name === "Test portal and tenant integration");
   assert.match(portalIntegration?.run, /^node --test --test-concurrency=1 /u);
   assert(gate.needs.includes("integration"));

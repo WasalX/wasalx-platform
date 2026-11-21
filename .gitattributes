@@ -13,3 +13,4 @@ services/control-api/migrations/*.sql text eol=lf
 patches/braces@3.0.3.patch text eol=lf
 patches/storybook@10.6.2.patch text eol=lf
 tests/fixtures/native-group/document.txt -text
+tests/fixtures/dev-live-compose/* -text

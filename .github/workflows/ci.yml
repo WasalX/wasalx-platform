@@ -153,6 +153,10 @@ jobs:
       - name: Collect tests
         if: matrix.mode == 'collection'
         run: node scripts/hosted-ci.mjs collection
+      - name: Test DEV Compose preflight on pull requests
+        # The integration job runs this test on merge groups and main.
+        if: github.event_name == 'pull_request' && matrix.mode == 'unit' && matrix.shard == 1
+        run: node --test tests/installer-dev-recreatability.test.mjs
       - name: Run unit shard
         if: matrix.mode == 'unit'
         env:
@@ -253,7 +257,9 @@ jobs:
           restore-keys: pnpm-${{ runner.os }}-${{ runner.arch }}-
       - run: pnpm install --frozen-lockfile --fetch-retries=2
       - name: Test native installer preimage capture
-        run: node --experimental-strip-types --import ./tests/helpers/operator-input-fixtures.mjs --test tests/installer-preimage.test.mjs
+        run: >-
+          node --experimental-strip-types --import ./tests/helpers/operator-input-fixtures.mjs --test --test-concurrency=1
+          tests/installer-preimage.test.mjs tests/installer-dev-recreatability.test.mjs
       - name: Test PostgreSQL integration
         env:
           DATABASE_ADMIN_URL: postgresql://postgres:wasalx-ci-admin@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/wasalx_ci
