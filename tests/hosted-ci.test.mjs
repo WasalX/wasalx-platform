@@ -186,7 +186,7 @@ test "$INFRA" = success || {
 
 for (const [name, output, envName, paths, command] of [
   ["terraform-test", "terraform", "TERRAFORM",
-    "infra/terraform/ scripts/validate-infra.sh scripts/release/fetch-verified-asset.sh", "bash scripts/validate-infra.sh --terraform-test-only"],
+    "infra/terraform/ scripts/validate-infra.sh scripts/release/fetch-verified-asset.sh .github/workflows/ci.yml", "bash scripts/validate-infra.sh --terraform-test-only"],
   ["infra-validate", "infra", "INFRA",
     "infra/helm/ infra/terraform/ :(glob)scripts/validate-* scripts/release/fetch-verified-asset.sh .github/workflows/ci.yml", "bash scripts/validate-infra.sh"],
 ]) {

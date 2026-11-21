@@ -15,7 +15,7 @@ case "$mode" in
   --terraform-test-only) prerequisites+=(unzip) ;;
   --render-secret-adapter) prerequisites+=(tar) ;;
   *)
-    prerequisites+=(tar ruby python3)
+    prerequisites+=(tar ruby)
     if [[ "$NATIVE_INFRA" == true ]]; then prerequisites+=(unzip); else prerequisites+=(docker); fi
     ;;
 esac
@@ -294,7 +294,8 @@ else
 fi
 if [[ "${1:-}" == --production-only ]]; then exit 0; fi
 
-ASSISTED_ALPHA_VALUES_FILE="${WASALX_ASSISTED_PROFILE_VALUES:?Set WASALX_ASSISTED_PROFILE_VALUES}"
+assisted_alpha_backup_values=(--set deploymentProfile=assisted-alpha --set workspaceProvider.enabled=false --set provisioner.enabled=false)
+assisted_alpha_values=("${assisted_alpha_backup_values[@]}" --set controlPlaneBackup.enabled=false)
 expect_production_lint_failure() {
   local label="$1"
   shift
@@ -311,28 +312,29 @@ if "$HELM" lint infra/helm/wasalx --set environment=production > "$TOOLS_DIR/inc
   exit 1
 fi
 "$HELM" lint infra/helm/wasalx --values "$PRODUCTION_VALUES_FILE"
-"$HELM" lint infra/helm/wasalx --values "$PRODUCTION_VALUES_FILE" --values "$ASSISTED_ALPHA_VALUES_FILE"
+"$HELM" lint infra/helm/wasalx --values "$PRODUCTION_VALUES_FILE" "${assisted_alpha_values[@]}"
 # Both profiles admit client encryption without an unused KMS reference.
 for backup_profile in standard assisted-alpha; do
-  backup_profile_args=()
-  if [[ $backup_profile == assisted-alpha ]]; then backup_profile_args=(--set workspaceProvider.enabled=false --set provisioner.enabled=false); fi
+  backup_profile_args=(--set deploymentProfile=standard)
+  if [[ $backup_profile == assisted-alpha ]]; then backup_profile_args=("${assisted_alpha_backup_values[@]}"); fi
   "$HELM" lint infra/helm/wasalx --values "$PRODUCTION_VALUES_FILE" \
-    --set "deploymentProfile=$backup_profile" \
     --set controlPlaneBackup.s3.encryptionMode=CLIENT_ENVELOPE \
     --set-string controlPlaneBackup.s3.ageRecipient=age1xq5ehcx9js6d2sawqu6f8emuw0vvjv0428wun3mda3n8tmtwl4csxzqhud \
     --set controlPlaneBackup.s3.kmsKeyReference=null \
     "${backup_profile_args[@]}"
  done
 for forbidden in workspaceProvider provisioner; do
-  if "$HELM" lint infra/helm/wasalx --values "$PRODUCTION_VALUES_FILE" --values "$ASSISTED_ALPHA_VALUES_FILE" \
+  if "$HELM" lint infra/helm/wasalx --values "$PRODUCTION_VALUES_FILE" "${assisted_alpha_values[@]}" \
     --set "$forbidden.enabled=true" > "$TOOLS_DIR/invalid-assisted-${forbidden}.log" 2>&1; then
     printf 'assisted alpha unexpectedly enabled deferred component: %s\n' "$forbidden" >&2
     exit 1
   fi
 done
+"$HELM" template wasalx infra/helm/wasalx --values "$PRODUCTION_VALUES_FILE" > "$TOOLS_DIR/rendered-production.yaml"
+ruby scripts/validate-migration-render.rb "$TOOLS_DIR/rendered-production.yaml" standard
 "$HELM" template wasalx infra/helm/wasalx --values "$PRODUCTION_VALUES_FILE" \
-  --values "$ASSISTED_ALPHA_VALUES_FILE" > "$TOOLS_DIR/rendered-assisted-alpha.yaml"
-python3 "${WASALX_PRODUCTION_MIGRATION_CHECK:?Set WASALX_PRODUCTION_MIGRATION_CHECK}" "$TOOLS_DIR/rendered-assisted-alpha.yaml"
+  "${assisted_alpha_values[@]}" > "$TOOLS_DIR/rendered-assisted-alpha.yaml"
+ruby scripts/validate-migration-render.rb "$TOOLS_DIR/rendered-assisted-alpha.yaml" assisted-alpha
 "$HELM" lint infra/helm/wasalx --values "$PRODUCTION_VALUES_FILE" "${secret_adapter_values[@]}"
 expect_production_lint_failure secret-adapter-credentials "${secret_adapter_values[@]}" --set-string productionSecretSidecar.credentialsSecretName=
 expect_production_lint_failure secret-adapter-tls "${secret_adapter_values[@]}" --set-string productionSecretSidecar.tlsSecretName=
@@ -344,7 +346,7 @@ expect_production_lint_failure secret-adapter-url "${secret_adapter_values[@]}" 
 render_secret_adapter > "$TOOLS_DIR/rendered-secret-adapter.yaml"
 ruby scripts/validate-secret-adapter-render.rb "$TOOLS_DIR/rendered-secret-adapter.yaml"
 "$HELM" template wasalx infra/helm/wasalx --values "$PRODUCTION_VALUES_FILE" \
-  --values "$ASSISTED_ALPHA_VALUES_FILE" "${secret_adapter_values[@]}" > "$TOOLS_DIR/rendered-assisted-secret-adapter.yaml"
+  "${assisted_alpha_values[@]}" "${secret_adapter_values[@]}" > "$TOOLS_DIR/rendered-assisted-secret-adapter.yaml"
 ruby scripts/validate-secret-adapter-render.rb "$TOOLS_DIR/rendered-assisted-secret-adapter.yaml"
 "$HELM" template wasalx infra/helm/wasalx --values "$PRODUCTION_VALUES_FILE" "${secret_adapter_values[@]}" \
   --namespace wasalx-production --set-string secretSidecarUrl=https://secrets-agent.wasalx-production.svc.cluster.local:8443 \

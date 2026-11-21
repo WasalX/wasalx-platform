@@ -42,7 +42,7 @@ jobs:
         run: |
           # Use the same test-merge base as the image matrix. Only a clean diff can skip tests.
           needed=true
-          if git diff --quiet --no-ext-diff --no-renames HEAD^1 HEAD -- infra/terraform/ scripts/validate-infra.sh scripts/release/fetch-verified-asset.sh; then
+          if git diff --quiet --no-ext-diff --no-renames HEAD^1 HEAD -- infra/terraform/ scripts/validate-infra.sh scripts/release/fetch-verified-asset.sh .github/workflows/ci.yml; then
             needed=false
           fi
           echo "needed=$needed" >> "$GITHUB_OUTPUT"
