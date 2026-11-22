@@ -27,9 +27,10 @@ CENSUS = "Confirm census PASS"
 SHA = re.compile(r"[0-9a-f]{40}")
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 RC = re.compile(r"v[A-Za-z0-9_.-]{0,120}-rc\.[A-Za-z0-9_.-]{1,32}")
-REF = re.compile(
-    r"[a-z0-9]+(?:[._-][a-z0-9]+)*(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)*"
-    r"(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?@sha256:[0-9a-f]{64}"
+IMAGE_NAME = r"[a-z0-9]+(?:[._-][a-z0-9]+)*(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)*"
+REF = re.compile(rf"(?!docker\.io/){IMAGE_NAME}@{DIGEST.pattern}")
+COMPOSE_REF = re.compile(
+    rf"({IMAGE_NAME})(?::[A-Za-z0-9_][A-Za-z0-9_.-]{{0,127}})?@((?ai:{DIGEST.pattern}))"
 )
 PRODUCT_PREFIX = "ghcr.io/wasalx/"
 SCHEMA = "ot3.wasalx.d1-handover/v1"
@@ -221,7 +222,7 @@ def validate_handover(data):
                    "release_asset_digest", "nightly", "receipt", "signer", "signature")
             or data["schema"] != SCHEMA or data["source"] != "b2-verified"
             or not matches(RC, data["tag"]) or not matches(SHA, data["commit"]) or not matches(SHA, data["tree"])
-            or (data["release_asset_digest"] is not None and not matches(DIGEST, data["release_asset_digest"]))):
+            or not matches(DIGEST, data["release_asset_digest"])):
         raise ValueError("invalid hand-over identity")
     counts, refs = data["counts"], data["refs"]
     if not fields(counts, "product", "compose") or not isinstance(refs, list):
@@ -341,6 +342,11 @@ def compose_refs(api, commit, product_refs):
             ref = value.split(" #", 1)[0].strip().strip("'\"")
             if "@" not in ref and ref.split(":")[0] in local:
                 continue
+            pinned = COMPOSE_REF.fullmatch(ref)
+            require(pinned is not None)
+            image, digest = pinned.groups()
+            image = image.removeprefix("docker.io/library/").removeprefix("docker.io/")
+            ref = f"{image}@{digest.lower()}"
             require(bool(REF.fullmatch(ref)) and not ref.startswith(PRODUCT_PREFIX))
             refs.add(ref)
     require(bool(refs))
@@ -349,7 +355,6 @@ def compose_refs(api, commit, product_refs):
 
 def media_type(api, ref):
     name, digest = ref.rsplit("@", 1)
-    name = name.rsplit(":", 1)[0]
     host, _, repository = name.partition("/")
     if "." not in host:
         repository = name if repository else "library/" + name
