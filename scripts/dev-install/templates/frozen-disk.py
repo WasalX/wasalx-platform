@@ -92,9 +92,21 @@ def digest(path):
         return hashlib.file_digest(file, "sha256").hexdigest()
 
 
-def audit_stamp(phase, event, tick):
+def timing_stamp(step, event, size=None):
+    phase = os.environ.get("PHASE_TIMING_MODE")
+    if not phase:
+        return
+    tick = time.time_ns()
     at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(tick // 10**9))
-    print(f"PHASE_TIMING phase={phase} step=daily-base-hash event={event} epoch_ns={tick} at={at}", flush=True)
+    byte_count = f" bytes={size}" if size is not None else ""
+    print(f"PHASE_TIMING phase={phase} step={step} event={event} epoch_ns={tick} at={at}{byte_count}", flush=True)
+
+
+def timed_digest(path, size):
+    timing_stamp("full-top-hash", "start", size)
+    sha256 = digest(path)
+    timing_stamp("full-top-hash", "pass", size)
+    return sha256
 
 
 class FrozenDisk:
@@ -145,16 +157,10 @@ class FrozenDisk:
         self.check_identity(expected)
         self.structural_proof(overlay)
         now = time.time_ns()
-        # The explicit audit is already timed by the host action.
-        inline_phase = os.environ.get("PHASE_TIMING_MODE") if not audit else None
         audit = audit or not 0 <= now - receipt["audited_ns"] <= 86_400 * 10**9
         if audit:
-            if inline_phase:
-                audit_stamp(inline_phase, "start", now)
-            require(digest(self.top) == receipt["sha256"], "DISK_SHA256")
+            require(timed_digest(self.top, expected["size"]) == receipt["sha256"], "DISK_SHA256")
             receipt["audited_ns"] = time.time_ns()
-            if inline_phase:
-                audit_stamp(inline_phase, "pass", receipt["audited_ns"])
         self.check_identity(expected)
         self.check_backing(receipt.get("backing_identities", []))
         if audit:
@@ -167,7 +173,7 @@ class FrozenDisk:
         self.structural_proof()
         if new_generation:
             previous = {
-                **previous, "sha256": digest(self.top), "audited_ns": time.time_ns(),
+                **previous, "sha256": timed_digest(self.top, before["size"]), "audited_ns": time.time_ns(),
                 "generation": previous.get("generation", 0) + 1,
             }
         self.check_identity(before)
@@ -246,17 +252,20 @@ class FrozenDisk:
         run("chattr", "+i", "--", self.top)
         confirmed = identity(self.top)
         self.structural_proof()
-        require(digest(self.top) == receipt["sha256"], "RECOVERY_DISK_SHA256")
+        require(timed_digest(self.top, confirmed["size"]) == receipt["sha256"], "RECOVERY_DISK_SHA256")
         self.check_identity(confirmed)
         self.check_backing(receipt.get("backing_identities", []))
         self.save({**receipt, "phase": "sealed", "identity": confirmed, "audited_ns": time.time_ns()})
 
     def commit(self, overlay, run_id):
         receipt = self.frozen_check(overlay=overlay, audit=True)
+        overlay_bytes = identity(overlay)["size"]
         self.save({**receipt, "phase": "committing", "run_id": run_id})
         run("chattr", "-i", "--", self.top)
         self.top.chmod(0o600)
+        timing_stamp("qemu-commit", "start", overlay_bytes)
         run("qemu-img", "commit", "-f", "qcow2", "-b", self.top, "-d", overlay)
+        timing_stamp("qemu-commit", "pass", overlay_bytes)
         self.top.chmod(0o400)
         run("chattr", "+i", "--", self.top)
         require(same_inode(identity(self.top), receipt["identity"]), "DISK_INODE")

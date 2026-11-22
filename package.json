@@ -40,7 +40,7 @@
     "zammad:package": "pnpm run zammad:fetch && node scripts/build-zammad-package.mjs",
     "zammad:compat:build": "bash scripts/build-zammad-previous-stable-image.sh",
     "zammad:compat:browser": "node --test tests/zammad-image-browser-compat.test.mjs",
-    "build:services": "pnpm --filter @wasalx/observability run build && pnpm --filter @wasalx/core run build && pnpm --filter @wasalx/control-api run build && pnpm --filter @wasalx/connector-worker run build && pnpm --filter @wasalx/tenant-provisioner run build && pnpm --filter @wasalx/invitation-mailer run build && pnpm --filter @wasalx/identity-policy-activator run build && pnpm --filter @wasalx/workspace-provider run build && pnpm --filter @wasalx/workspace-configurator run build",
+    "build:services": "node scripts/build-services.mjs",
     "docker:build": "docker compose build portal control-api connector-worker secret-sidecar invitation-mailer identity-policy-activator && docker build --file Dockerfile.tenant-provisioner --tag wasalx/tenant-provisioner:local . && docker build --file Dockerfile.tenant-workspace-controller --tag wasalx/tenant-workspace-controller:local . && docker build --file Dockerfile.workspace-provider --tag wasalx/workspace-provider:local . && docker build --file Dockerfile.workspace-configurator --tag wasalx/workspace-configurator:local .",
     "docker:build:provisioner": "docker build -f Dockerfile.tenant-provisioner -t wasalx/tenant-provisioner:local .",
     "docker:build:workspace-controller": "docker build -f Dockerfile.tenant-workspace-controller -t wasalx/tenant-workspace-controller:local .",

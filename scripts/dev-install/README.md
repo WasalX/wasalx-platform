@@ -33,13 +33,30 @@ Keep the JSON report private. The nightly logs only the counts and census result
 
 Render the host lease budgets directly from raw host receipts. The renderer takes
 125% of the longest successful install and discard lease for each phase, then adds
-125% of the slowest completed full-hash step to discard. Each component is rounded
-up to whole seconds. Install registration reserves both budgets.
+one full TOP hash allowance to discard. Install registration reserves both budgets.
+Registration estimates a full hash using the slowest measured seconds per GB and
+the current TOP file length in bytes. Only timings emitted around the actual hash
+with its byte count qualify. Whole-second budgets round up.
 
 Omit the receipt arguments for the first packet. Until there is a stamped install
 PASS, a stamped discard PASS and a full-hash measurement, the packet uses the
 reviewed reservations of 13,400 seconds for install and 11,400 seconds for discard.
-The sealed host environment records which source supplied the budget.
+
+Register an approved commit with `register.sh commit "$STATE"`. Its lease reserves
+125% of a hash at the current TOP size, a hash at TOP plus overlay size, the
+slowest successful `qemu-img commit` rate scaled to the overlay size, and the
+longest successful TOP restore. The lease has a 25,050-second minimum and must
+fit before `DISCARD_LIMIT`. Missing measurements or a commit timing without
+overlay bytes select `LEASE_BUDGET_SOURCE=fallback-commit`.
+The 2026-11-22 DEV cycle measurements put a full hash of ~115 GB at 2,880 seconds
+(~40 MB/s). The fallback allows two hashes, one assumed full-disk commit pass
+of 2,880 seconds, and the reviewed 11,400-second discard/restore reservation,
+with 25% headroom on the sum.
+
+Record the independently checked SHA-256 of each raw receipt in the host identity's
+`LEASE_RECEIPT_SHA256S` array, in the order passed below. The renderer checks the
+exact receipt bytes against that array before reading their timings. The sealed
+host environment records the same hashes and budget sources.
 
 ```sh
 python3 -I -B scripts/dev-install/render.py --host-identity "$HOST_IDENTITY" \
@@ -76,3 +93,63 @@ persists across runs, outside the support directories.
 
 The real-QEMU nightly uses a scratch ext4 filesystem and a boot-sector guard stub.
 Use the signed host qualification to measure the live phase budgets.
+
+## DEV step lock
+
+Set `DEV_STEP_LOCK` in the private host identity to the absolute path of the
+host-provided marker. WasalX holds an exclusive, nonblocking `flock` on that
+path from before the first action until the step exits, including if it is killed.
+Lease units, install/discard, overlay actions and host-side guest phases share
+this lock. A competing step reports `HOLD_DEV_STEP_BUSY` and exits 75.
+D1 uses the same path and treats a failed `flock -n "$DEV_STEP_LOCK" true` probe as busy.
+The host provisions the dedicated root-owned mode-0755 directory and empty
+root-owned marker via `tmpfiles.d`. Steps open the marker read-only. Leave it
+in place between steps so every probe uses the same inode. A missing directory
+or marker holds the step with `HOLD_DEV_STEP_MARKER_DIR` or `HOLD_DEV_STEP_MARKER`.
+The pull report agent and standing services such as the VM and forwards never
+take this lock.
+
+## DEV pull report agent
+
+Render the report packet from the reviewed checkout with a private pull identity.
+
+```sh
+python3 -I -B scripts/dev-install/render.py --pull-identity "$PULL_IDENTITY" --output "$PACKET"
+```
+
+The pull identity supplies these fields.
+
+- `mode` set to `report`.
+- `install_dir` for the installed packet, `receipt_key` for the Servers-generated Ed25519 key, and
+  `cosign`, `trusted_root`, and `trusted_root_sha256` for the pinned Linux amd64 verification tools.
+
+Servers verifies `SHA256SUMS` before installing the root-owned packet and units. The
+`wasalx-dev-pull` account needs read access to the installed tools and trust root.
+Keep `pull-config.json` and the receipt key root-only. Systemd loads them as private
+credentials. Keep the account out of the Docker group. Discovery and verification
+use anonymous public endpoints and a pinned Sigstore trust root.
+
+The timer checks at ten-minute calendar boundaries. D1 owns image blob downloads,
+staging windows and disk admission.
+
+The agent publishes one numbered `<20-digit-seq>.json` file per verified tag in
+`handover-outbox` under the unit's `StateDirectory`. The
+`ot3.wasalx.d1-handover/v1` receipt identifies the tag, exact commit and tree, release
+asset digest, and successful nightly run and attempt. The sorted image references
+contain the 21 verified product digests and the digest-pinned third-party Compose
+references at that commit. Each row records its origin and its manifest media type
+when available from an anonymous registry HEAD.
+
+The first receipt starts at sequence 1 with a null previous hash. Each subsequent
+receipt hashes the entire prior canonical JSON object, including its signature.
+The embedded signature is base64 of the armored Ed25519 SSHSIG over canonical JSON
+without the signature field. Canonical JSON uses sorted keys, compact separators,
+ASCII escaping, UTF-8 encoding, and no trailing newline. D1 verifies with namespace
+`wasalx-dev-receipt` and principal `wasalx-dev-pull` using its pinned allowed-signers
+file. Keep the receipt files in sequence.
+
+The nightly PR leg binds the exact PR head and its tree through the anonymous GitHub
+API and independently verifies real GHCR/Sigstore bytes for the recorded main
+publication. The release path requires the RC asset and a successful census on the
+latest nightly push run for that tag and commit. The census step checks the installer
+commit, tree and published image commit against the rehearsal log.

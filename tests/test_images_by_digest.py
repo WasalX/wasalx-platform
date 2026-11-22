@@ -21,6 +21,9 @@ ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("images", ROOT / "scripts/release/images-by-digest.py")
 images = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(images)
+alias_spec = importlib.util.spec_from_file_location("aliases", ROOT / "scripts/release/advance-main-image-aliases.py")
+aliases = importlib.util.module_from_spec(alias_spec)
+alias_spec.loader.exec_module(aliases)
 
 
 class ImagePublicationTests(unittest.TestCase):
@@ -428,7 +431,7 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
         self.assertEqual(run.call_args_list, [mock.call(*command)] * 3)
         self.assertEqual(sleep.call_args_list, [mock.call(10), mock.call(20)])
 
-    def test_publication_uses_the_push_branch_alias_and_signing_identity(self):
+    def test_publication_pushes_only_the_commit_tag_and_uses_the_signing_identity(self):
         commit, tree, digest = "a" * 40, "b" * 40, "sha256:" + "1" * 64
         inspection = {"configDigest": "sha256:" + "2" * 64, "addonLicenses": {}}
         manifest = json.dumps({"mediaType": "application/vnd.oci.image.manifest.v1+json",
@@ -445,8 +448,7 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
             with self.subTest(image=image), tempfile.TemporaryDirectory() as directory, \
                     patch.dict(os.environ, env, clear=True), \
                     patch.object(images, "coordinates", return_value=(commit, tree)), \
-                    patch.object(images, "run", side_effect=[f"digest: {digest}", manifest, "", "", "", "", "",
-                                                             f"digest: {digest}"]) as run, \
+                    patch.object(images, "run", side_effect=[f"digest: {digest}", manifest, "", "", "", ""]) as run, \
                     patch.object(images, "pull"), patch.object(images, "inspect_image", return_value=inspection):
                 path = Path(directory) / "receipt.json"
                 if image == "portal":
@@ -466,18 +468,72 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
                     self.assertNotIn("contactEmailSha256", published)
                     self.assertNotIn("contactEmailSha256", parameters)
                 reference = repository + "@" + digest
-                alias = repository + ":main"
                 self.assertEqual(published["workflow"], identity)
                 self.assertTrue(published["verified"])
                 run.assert_any_call("cosign", "verify", "--certificate-identity", identity,
                                     "--certificate-oidc-issuer", "https://token.actions.githubusercontent.com", reference)
-                self.assertEqual(run.call_args_list[-2:], [mock.call("docker", "tag", reference, alias),
-                                                          mock.call("docker", "push", alias)])
+                self.assertEqual([call for call in run.call_args_list if call.args[:2] == ("docker", "push")],
+                                 [mock.call("docker", "push", receipt["reference"])])
 
         for event, ref in (("push", "refs/heads/dev"), ("push", "refs/heads/feature"), ("pull_request", "refs/heads/main")):
             with self.subTest(event=event, ref=ref), patch.dict(os.environ, {"GITHUB_EVENT_NAME": event, "GITHUB_REF": ref}):
                 with self.assertRaisesRegex(ValueError, "requires a main push"):
                     images.publish("unused")
+
+    def test_main_alias_advances_to_a_descendant_and_skips_a_late_older_publish_or_unknown_revision(self):
+        raw = b'{"schemaVersion":2}'
+        digest = images.sha256(raw)
+        repository = "ghcr.io/wasalx/portal"
+        alias = repository + ":main"
+        reference = repository + "@" + digest
+        git_run = subprocess.run
+        with tempfile.TemporaryDirectory() as directory:
+            git_run(["git", "init", "--quiet"], cwd=directory, check=True)
+
+            def commit(message):
+                git_run(["git", "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "-c",
+                         "commit.gpgsign=false", "commit", "--quiet", "--allow-empty", "-m", message],
+                        cwd=directory, check=True)
+                return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=directory, text=True).strip()
+
+            older, newer = commit("older"), commit("newer")
+            current = older
+
+            def registry_read(command, **kwargs):
+                self.assertEqual(command[:4], ["docker", "buildx", "imagetools", "inspect"])
+                self.assertEqual(command[-1], alias)
+                if command[4] == "--raw":
+                    return raw
+                self.assertEqual(command[4:-1], ["--format", "{{json .Image.Config.Labels}}"])
+                return json.dumps({"org.opencontainers.image.revision": current}).encode()
+
+            def git_or_push(command, **kwargs):
+                nonlocal current
+                if command[0] == "git":
+                    return git_run(command, cwd=directory, **kwargs)
+                self.assertEqual(command, ["docker", "buildx", "imagetools", "create", "--prefer-index=false",
+                                           "--tag", alias, reference])
+                current = newer
+
+            manifest = Path(directory) / "images-manifest.json"
+            summary = Path(directory) / "summary.md"
+            env = {"GITHUB_EVENT_NAME": "push", "GITHUB_REF": "refs/heads/main", "GITHUB_REPOSITORY": images.REPOSITORY,
+                   "GITHUB_STEP_SUMMARY": str(summary)}
+            with patch.object(subprocess, "check_output", side_effect=registry_read), \
+                    patch.object(subprocess, "run", side_effect=git_or_push) as run, redirect_stdout(io.StringIO()):
+                for candidate, expected in ((newer, newer), (older, newer), (older, None)):
+                    if expected is None:
+                        current = None
+                    images.write(manifest, {"commit": candidate, "images": {"portal": {
+                        "commit": candidate, "digest": digest, "verified": True}}})
+                    with patch.dict(os.environ, {**env, "GITHUB_SHA": candidate}):
+                        aliases.advance_main_aliases(manifest)
+                    self.assertEqual(current, expected)
+                self.assertEqual(sum(call.args[0][0] == "docker" for call in run.call_args_list), 1)
+            messages = summary.read_text(encoding="utf-8")
+            self.assertIn(f"Advanced `{alias}` from `{older}` to `{newer}`", messages)
+            self.assertIn(f"Skipped `{alias}` at `{newer}` because `{older}` does not descend from it", messages)
+            self.assertIn(f"Skipped `{alias}` because its current revision could not be determined", messages)
 
     def test_release_verifies_every_digest_against_the_tagged_commit(self):
         commit, tree = "a" * 40, "b" * 40
@@ -519,11 +575,11 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
                     images.verify_publication(path)
                 inspect.assert_not_called()
 
-    def test_workflow_restricts_writes_and_oidc_to_main_publish(self):
+    def test_workflow_restricts_package_writes_to_publish_and_aliases_and_oidc_to_publish(self):
         text = (ROOT / ".github/workflows/branch-image.yml").read_text()
         self.assertEqual(text.count("driver-opts: image=moby/buildkit:v0.26.3"), 1)
         self.assertNotIn("pull_request_target", text)
-        self.assertEqual(text.count("packages: write"), 1)
+        self.assertEqual(text.count("packages: write"), 2)
         self.assertEqual(text.count("id-token: write"), 1)
         self.assertNotIn("attestations: write", text)
         jobs = re.split(r"(?m)^  (\w+):\n", text.split("jobs:\n", 1)[1])
@@ -532,10 +588,9 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
             self.assertIn("runs-on: ubuntu-24.04", body)
             self.assertIn("HOSTED_KIND: ${{ runner.environment }}", body)
             self.assertIn('test "$HOSTED_KIND" = github-hosted', body)
-            if name != "publish":
-                self.assertNotIn("packages: write", body)
-                self.assertNotIn("id-token: write", body)
-                self.assertNotIn("secrets.GITHUB_TOKEN", body)
+            self.assertEqual("id-token: write" in body, name == "publish")
+            self.assertEqual("packages: write" in body, name in ("publish", "aliases"))
+            self.assertEqual("secrets.GITHUB_TOKEN" in body, name in ("publish", "aliases"))
         guard = ("github.event_name == 'push' && github.ref == 'refs/heads/main'"
                  " && github.repository == 'WasalX/wasalx-platform'")
         self.assertIn(guard, bodies["publish"])

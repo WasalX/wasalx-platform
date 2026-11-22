@@ -621,11 +621,6 @@ def publish(receipt_path):
     with tempfile.TemporaryDirectory() as directory:
         final = inspect_image(reference, row, commit, tree, directory, receipt["inspection"]["addonLicenses"])
     require(final == receipt["inspection"], "Published image differs from inspected image")
-    # Advance the discovery alias only after signature and exact-digest reinspection.
-    alias = repository + ":" + ref.removeprefix("refs/heads/")
-    run("docker", "tag", reference, alias)
-    alias_result = run_retry("docker", "push", alias)
-    require("digest: " + digest in alias_result, "Discovery alias digest mismatch")
     receipt["verified"] = True
     receipt["status"] = "published"
     write(receipt_path, receipt)

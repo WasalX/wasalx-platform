@@ -12,6 +12,9 @@ RUN="$(cat "$STATE/run-id")"
 # The signed host packet supplies this file. It is never sent to the guest.
 # shellcheck source=/dev/null
 source "$STATE/host.env"
+# shellcheck source=/dev/null
+source "$STATE/dev-step-lock.sh"
+hold_dev_step_lock
 export STATE
 ORIGINAL="$STATE/original-dropin.conf"
 ROLLBACK_KEPT="$DIR/disk-install-$RUN.rolled-back.$RUN.qcow2"
@@ -58,7 +61,7 @@ if test "$MODE" != rollback || test "$LEASE_UNIT" != "$LEASE_PREFIX-install-$RUN
 fi
 grep -Fqx "0::/system.slice/$LEASE_UNIT" /proc/self/cgroup
 (cd "$STAGING" && sha256sum --check --strict --quiet DEV-SHA256SUMS)
-for input in overlay-action.sh frozen-disk.py host.env dev-guest-phase.sh probe-up.py run-id; do
+for input in overlay-action.sh frozen-disk.py host.env dev-guest-phase.sh dev-step-lock.sh probe-up.py run-id; do
     cmp -s -- "$STATE/$input" "$STAGING/$input"
 done
 exec 8>>"$DISK_STATE/host-action.lock"
@@ -205,6 +208,10 @@ restore_definition() {
     check_drive "$TOP_DRIVE"
 }
 
+if [ "$MODE" = commit ]; then
+    # Commit is a separate offline slot after explicit WasalX approval.
+    grep -Fq "$REV held_smoke=PASS fence=PASS release=HELD" "$STATE/install.done"
+fi
 disk_phase="$(disk phase)"
 case "$disk_phase" in
     mode-restore|sealing|committing)
@@ -353,7 +360,7 @@ rollback)
     else
         stop_overlay
         step frozen-proof frozen_check verify
-        restore_top "$ROLLBACK_KEPT"
+        step top-restore restore_top "$ROLLBACK_KEPT"
     fi
     printf 'ROLLBACK_PASS %s overlay_retained=%s\n' "$(date -u +%FT%TZ)" "$ROLLBACK_KEPT"
     stamp https-readiness start
@@ -365,8 +372,6 @@ rollback)
     stamp lease pass
     ;;
 commit)
-    # Run only after explicit WasalX approval of commit, in a separate offline slot.
-    grep -Fq "$REV held_smoke=PASS fence=PASS release=HELD" "$STATE/install.done"
     if test "$(disk phase)" = writable && test "$(value MainPID)" -ne 0; then
         disk committed "$RUN"
         step recovered-top-drive check_drive "$TOP_DRIVE"
@@ -385,8 +390,9 @@ commit)
             step committed-base disk commit "$OVERLAY" "$RUN"
         fi
         test "$(value MainPID)" = 0
-        restore_top "$COMMIT_KEPT"
+        step top-restore restore_top "$COMMIT_KEPT"
     fi
+    stamp lease pass
     printf 'COMMIT_PASS %s overlay_retained=%s\n' "$(date -u +%FT%TZ)" "$COMMIT_KEPT"
     ;;
 esac

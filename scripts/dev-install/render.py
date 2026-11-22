@@ -13,13 +13,17 @@ import shlex
 
 
 TEMPLATES = Path(__file__).with_name("templates")
+ROOT = TEMPLATES.parents[2]
+PULL_PATHS = ("install_dir", "receipt_key", "cosign", "trusted_root")
+PULL_SERVICE = "wasalx-dev-pull.service"
+PULL_TIMER = "wasalx-dev-pull.timer"
 SCRIPTS = ("dispatch.py", "probe.py", "receive.py")
 HOST_SCRIPTS = (
-    "dev-guest-phase.sh", "frozen-disk.py", "host-maintenance.py",
+    "dev-guest-phase.sh", "dev-step-lock.sh", "frozen-disk.py", "host-maintenance.py",
     "install-or-discard.sh", "overlay-action.sh", "probe-up.py", "register.sh",
 )
 HOST_PATHS = (
-    "ALLOW_START", "DIR", "DISK_MOUNT_SOURCE", "DISK_STATE", "DROPIN", "ENGINE_FREE", "GUEST_KEY",
+    "ALLOW_START", "DEV_STEP_LOCK", "DIR", "DISK_MOUNT_SOURCE", "DISK_STATE", "DROPIN", "ENGINE_FREE", "GUEST_KEY",
     "GUEST_KNOWN_HOSTS", "GUEST_RUN_SCRIPT", "GUEST_VOLUME_SOURCE", "HOST_EXPORT_RECEIPT",
     "HOST_STAGING_RECEIPT", "MARKER_DIRECTORY", "OVERLAY", "POWEROFF_HELPER", "QMP", "STAGING",
     "STATE_MOUNT_SOURCE", "TOP",
@@ -102,7 +106,7 @@ def absolute_path(value):
 
 def render_host(identity, run_id, commit, receipts, bundle):
     fields = set(HOST_PATHS) | HOST_PATTERNS.keys() | set(HOST_NUMBERS) | {"TOP_CHAIN"}
-    if not isinstance(identity, dict) or set(identity) != fields:
+    if not isinstance(identity, dict) or set(identity) - {"LEASE_RECEIPT_SHA256S"} != fields:
         raise ValueError("invalid host identity fields")
     for key in HOST_PATHS:
         if not absolute_path(identity[key]):
@@ -126,21 +130,53 @@ def render_host(identity, run_id, commit, receipts, bundle):
         raise ValueError("invalid TOP chain")
     if not re.fullmatch(r"[0-9]{8}T[0-9]{6}Z", run_id or "") or not re.fullmatch(r"[0-9a-f]{40}", commit or ""):
         raise ValueError("invalid host run identity")
+    expected = identity.get("LEASE_RECEIPT_SHA256S", [])
+    if not isinstance(expected, list) or not all(isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value)
+                                                for value in expected) or len(expected) != len(receipts):
+        raise ValueError("lease receipts require an ordered list of expected SHA-256 hashes")
+    raw_receipts = [path.read_bytes() for path in receipts]
+    if [hashlib.sha256(raw).hexdigest() for raw in raw_receipts] != expected:
+        raise ValueError("lease receipt SHA-256 mismatch")
     lease_budgets = run_path(str(TEMPLATES / "host-maintenance.py"))["lease_budgets"]
-    leases, source = lease_budgets(path.read_text(encoding="utf-8") for path in receipts)
-    for phase, seconds in leases.items():
-        if type(seconds) is not int or not 0 < seconds < 2**31:
-            raise ValueError(f"invalid lease duration: {phase}")
+    leases = lease_budgets(raw.decode("utf-8") for raw in raw_receipts)
+    for key in ("INSTALL_SECONDS", "DISCARD_SECONDS"):
+        if not 0 < leases[key] < 2**31:
+            raise ValueError(f"invalid lease duration: {key}")
 
     env = {
-        **identity, "TOP_CHAIN": json.dumps(chain), "REV": commit,
-        "INSTALL_SECONDS": leases["install"], "DISCARD_SECONDS": leases["rollback"],
-        "LEASE_BUDGET_SOURCE": source,
+        **identity, **leases, "TOP_CHAIN": json.dumps(chain), "REV": commit,
+        "LEASE_RECEIPT_SHA256S": json.dumps(expected),
     }
     files = {name: (TEMPLATES / name).read_text(encoding="utf-8").encode() for name in HOST_SCRIPTS}
     files["run-id"] = (run_id + "\n").encode()
     files["host.env"] = "".join(f"export {key}={shlex.quote(str(value))}\n"
                                 for key, value in sorted(env.items())).encode()
+    write_packet(bundle, files)
+
+
+def render_pull(identity, bundle):
+    if not isinstance(identity, dict) or set(identity) != {*PULL_PATHS, "trusted_root_sha256", "mode"}:
+        raise ValueError("invalid pull identity fields")
+    if identity["mode"] != "report" or not re.fullmatch(r"[0-9a-f]{64}", identity["trusted_root_sha256"]):
+        raise ValueError("invalid pull mode or trust pin")
+    for field in PULL_PATHS:
+        if not absolute_path(identity[field]):
+            raise ValueError(f"invalid pull path: {field}")
+    config = {key: value for key, value in identity.items() if key not in {"receipt_key", "install_dir"}}
+    service = (TEMPLATES / PULL_SERVICE).read_text(encoding="utf-8")
+    for field in ("install_dir", "receipt_key"):
+        service = service.replace(f"@{field.upper()}@", identity[field])
+    files = {
+        "pull-agent.py": (TEMPLATES / "pull-agent.py").read_text(encoding="utf-8").encode(),
+        PULL_SERVICE: service.encode(),
+        PULL_TIMER: (TEMPLATES / PULL_TIMER).read_text(encoding="utf-8").encode(),
+        "pull-config.json": (json.dumps(config, indent=2, sort_keys=True) + "\n").encode(),
+    }
+    for name in (
+        "scripts/dev-install/pull-verify.mjs", "scripts/release/installer-hosted-images.mjs",
+        "release/installer-images.json",
+    ):
+        files[name] = (ROOT / name).read_bytes()
     write_packet(bundle, files)
 
 
@@ -151,7 +187,9 @@ def write_packet(bundle, files):
     os.umask(0o077)
     bundle.mkdir(parents=True, exist_ok=False)
     for name, data in files.items():
-        with (bundle / name).open("xb") as output:
+        path = bundle / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("xb") as output:
             output.write(data)
 
 
@@ -160,6 +198,7 @@ def main():
     kind = parser.add_mutually_exclusive_group(required=True)
     kind.add_argument("--identity", type=Path)
     kind.add_argument("--host-identity", type=Path)
+    kind.add_argument("--pull-identity", type=Path)
     parser.add_argument("--run-id")
     parser.add_argument("--lease-receipt", type=Path, action="append", default=[])
     parser.add_argument("--output", type=Path, required=True)
@@ -171,6 +210,10 @@ def main():
             parser.error("host packets require --run-id and --commit and accept raw --lease-receipt inputs")
         render_host(json.loads(args.host_identity.read_bytes()), args.run_id, args.commit,
                     args.lease_receipt, args.output)
+    elif args.pull_identity:
+        if any((args.run_id, args.lease_receipt, args.tag, args.commit, args.tree, args.env_sha256)):
+            parser.error("run coordinates and lease receipts do not apply to --pull-identity")
+        render_pull(json.loads(args.pull_identity.read_bytes()), args.output)
     else:
         if args.run_id or args.lease_receipt or not all((args.tag, args.commit, args.tree, args.env_sha256)):
             parser.error("guest packets require --tag, --commit, --tree and --env-sha256")

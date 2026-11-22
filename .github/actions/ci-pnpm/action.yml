@@ -1,0 +1,174 @@
+name: CI pnpm caches
+description: Install workspace dependencies and cache incremental service builds for hosted CI.
+inputs:
+  task:
+    description: install, build, or save-build
+    default: install
+  seed-dependencies:
+    description: Allow the main lint job to seed dependency caches
+    default: 'false'
+  dependency-key:
+    description: Dependency cache key from the install task
+  force-build:
+    description: Run a clean compiler build without restoring outputs
+    default: 'false'
+outputs:
+  dependency-key:
+    description: Node and workspace dependency fingerprint
+    value: ${{ steps.pnpm.outputs.dependency-key }}
+runs:
+  using: composite
+  steps:
+    - name: Enable pinned pnpm
+      id: pnpm
+      if: inputs.task == 'install'
+      shell: bash
+      env:
+        MODULES_HASH: ${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', '**/package.json', 'patches/**', '.npmrc') }}
+        RUNNER_PLATFORM: ${{ runner.os }}-${{ runner.arch }}
+      run: |
+        corepack enable
+        for attempt in 1 2 3; do
+          if corepack install; then break; fi
+          test "$attempt" != 3
+          sleep "$attempt"
+        done
+        store=$(pnpm store path --silent)
+        node_version=$(node --version)
+        test -n "$MODULES_HASH"
+        printf 'store=%s\ndependency-key=pnpm-modules-v1-%s-%s-%s\n' \
+          "$store" "$RUNNER_PLATFORM" "$node_version" "$MODULES_HASH" >> "$GITHUB_OUTPUT"
+
+    - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      id: modules
+      if: inputs.task == 'install' && (github.event_name == 'pull_request' || github.event_name == 'merge_group' || github.event_name == 'push')
+      with:
+        path: |
+          node_modules
+          services/*/node_modules
+          packages/*/node_modules
+        key: ${{ steps.pnpm.outputs.dependency-key }}
+
+    - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      id: store
+      if: inputs.task == 'install' && steps.modules.outputs.cache-hit != 'true'
+      with:
+        path: ${{ steps.pnpm.outputs.store }}
+        key: pnpm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', 'package.json', 'patches/**') }}
+        restore-keys: pnpm-${{ runner.os }}-${{ runner.arch }}-
+
+    - name: Install workspace dependencies
+      if: inputs.task == 'install'
+      shell: bash
+      env:
+        MODULES_HIT: ${{ steps.modules.outputs.cache-hit }}
+      run: |
+        if [[ "$MODULES_HIT" == true ]]; then
+          time pnpm install --frozen-lockfile --offline
+        else
+          pnpm install --frozen-lockfile --fetch-retries=2
+        fi
+
+    - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      if: >-
+        inputs.task == 'install' && inputs.seed-dependencies == 'true' &&
+        github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+        github.repository == 'WasalX/wasalx-platform' &&
+        steps.modules.outputs.cache-hit != 'true' && steps.store.outputs.cache-hit != 'true'
+      with:
+        path: ${{ steps.pnpm.outputs.store }}
+        key: ${{ steps.store.outputs.cache-primary-key }}
+
+    - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      if: >-
+        inputs.task == 'install' && inputs.seed-dependencies == 'true' &&
+        github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+        github.repository == 'WasalX/wasalx-platform' && steps.modules.outputs.cache-hit != 'true'
+      with:
+        path: |
+          node_modules
+          services/*/node_modules
+          packages/*/node_modules
+        key: ${{ steps.pnpm.outputs.dependency-key }}
+
+    - name: Report dependency cache hits
+      if: always() && inputs.task == 'install'
+      shell: bash
+      env:
+        STORE_HIT: ${{ steps.store.outputs.cache-matched-key != '' }}
+        MODULES_HIT: ${{ steps.modules.outputs.cache-hit == 'true' }}
+      run: |
+        printf 'pnpm store cache-hit: %s\n\nnode_modules cache-hit: %s\n' \
+          "$STORE_HIT" "$MODULES_HIT" >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Resolve service build cache key
+      id: build-key
+      if: inputs.task == 'save-build' || (inputs.task == 'build' && inputs.force-build != 'true')
+      shell: bash
+      env:
+        DEPENDENCY_KEY: ${{ inputs.dependency-key }}
+        BUILD_CONFIG: ${{ hashFiles('tsconfig.json', 'services/*/tsconfig*.json', 'packages/*/tsconfig*.json', 'scripts/build-services.mjs', '.gitattributes') }}
+      run: |
+        test -n "$DEPENDENCY_KEY"
+        test -n "$BUILD_CONFIG"
+        sources=(':(glob)**/*.[cm]ts' ':(glob)**/*.ts' ':(glob)**/*.tsx' ':(glob)**/*.[cm]js' ':(glob)**/*.js' ':(glob)**/*.jsx' ':(glob)**/*.json')
+        # A different file layout can leave orphaned JavaScript in restored dist directories.
+        layout=$(git ls-files -z -- "${sources[@]}" | sha256sum | cut -d ' ' -f 1)
+        content=$(git ls-files --stage -z -- "${sources[@]}" | sha256sum | cut -d ' ' -f 1)
+        prefix="services-build-v1-$DEPENDENCY_KEY-$BUILD_CONFIG-$layout-"
+        printf 'prefix=%s\nkey=%s%s\n' "$prefix" "$prefix" "$content" >> "$GITHUB_OUTPUT"
+
+    - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      id: services
+      if: >-
+        inputs.task == 'build' && inputs.force-build != 'true' &&
+        (github.event_name == 'pull_request' || github.event_name == 'merge_group')
+      with:
+        path: |
+          services/*/dist
+          packages/*/dist
+          services/*/*.tsbuildinfo
+          packages/*/*.tsbuildinfo
+          packages/core/packages/core/tsconfig.domain.tsbuildinfo
+        key: ${{ steps.build-key.outputs.key }}
+        # Queue tests consume only outputs built from the exact same inputs.
+        restore-keys: ${{ github.event_name == 'pull_request' && steps.build-key.outputs.prefix || '' }}
+
+    - name: Build services
+      if: inputs.task == 'build'
+      shell: bash
+      env:
+        FORCE_BUILD: ${{ inputs.force-build }}
+        EXACT_BUILD: ${{ steps.services.outputs.cache-hit }}
+        MATCHED_BUILD: ${{ steps.services.outputs.cache-matched-key }}
+      run: |
+        if [[ "$FORCE_BUILD" == true ]]; then
+          pnpm run build:services --force
+        elif [[ "$EXACT_BUILD" == true || -z "$MATCHED_BUILD" ]]; then
+          pnpm run build:services --build
+        else
+          pnpm run build:services --incremental
+        fi
+
+    - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      if: >-
+        inputs.task == 'save-build' && github.event_name == 'push' &&
+        github.ref == 'refs/heads/main' && github.repository == 'WasalX/wasalx-platform'
+      with:
+        path: |
+          services/*/dist
+          packages/*/dist
+          services/*/*.tsbuildinfo
+          packages/*/*.tsbuildinfo
+          packages/core/packages/core/tsconfig.domain.tsbuildinfo
+        key: ${{ steps.build-key.outputs.key }}
+
+    - name: Report service build cache hit
+      if: always() && inputs.task != 'install'
+      shell: bash
+      env:
+        SERVICES_HIT: ${{ steps.services.outputs.cache-matched-key != '' }}
+        FORCED_BUILD: ${{ inputs.force-build == 'true' }}
+      run: |
+        printf 'Service build cache-hit: %s (forced build: %s)\n' \
+          "$SERVICES_HIT" "$FORCED_BUILD" >> "$GITHUB_STEP_SUMMARY"

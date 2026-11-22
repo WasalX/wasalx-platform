@@ -1,5 +1,6 @@
 {
   "ALLOW_START": "/run/dev-vm/allow-start",
+  "DEV_STEP_LOCK": "/fixture/dev-step/active",
   "DIR": "/fixture/vm",
   "DISCARD_LIMIT": "2000-01-01T21:40:00Z",
   "DISK_MOUNT_SOURCE": "/dev/vdb1",
@@ -21,6 +22,7 @@
   "INSTALL_CUTOFF": "2000-01-01T15:00:00Z",
   "INSTALL_NOT_BEFORE": "2000-01-01T01:00:00Z",
   "LEASE_PREFIX": "dev-overlay",
+  "LEASE_RECEIPT_SHA256S": [],
   "MANIFEST_SHA": "1111111111111111111111111111111111111111111111111111111111111111",
   "MARKER_DIRECTORY": "/fixture/markers",
   "MARKER_PREFIX": "dev-overlay",
