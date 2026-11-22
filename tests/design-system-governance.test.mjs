@@ -61,6 +61,7 @@ test("Dependabot groups Docker, Docker Compose and GitHub Actions version update
         "dependency-name": "elasticsearch",
         "update-types": ["version-update:semver-major", "version-update:semver-minor"],
       },
+      { "dependency-name": "jaegertracing/jaeger", "versions": [">=2.21.0"] },
       { "dependency-name": "keycloak/keycloak" },
       { "dependency-name": "prom/prometheus" },
       { "dependency-name": "minio/minio" },
