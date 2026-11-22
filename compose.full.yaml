@@ -877,7 +877,7 @@ services:
 
   jaeger:
     profiles: [full]
-    image: jaegertracing/jaeger:2.20.0@sha256:46a886260e04002d8f45e213fc39063fa11a50446048fdaa64786fc0840cb9f8
+    image: jaegertracing/jaeger:2.23.0@sha256:3823829974ccfc2485d2e48b165579091f32295022ae80ca49704e2f4834116e
     environment:
       JAEGER_LISTEN_HOST: 0.0.0.0
     ports: ["127.0.0.1:${JAEGER_PORT:-16686}:16686"]
