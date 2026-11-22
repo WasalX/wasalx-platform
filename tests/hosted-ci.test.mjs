@@ -428,29 +428,54 @@ test("CI gates integration and infrastructure and runs portal integration files 
   assert.equal(gateStep.env.INTEGRATION_COVERAGE, "${{ needs.integration-coverage.result }}");
   assert.equal(gateStep.env.DEV_INSTALL_NEEDED, "${{ needs.changes.outputs.dev-install }}");
   assert.equal(gateStep.env.DEV_INSTALL, "${{ needs.dev-install-dryrun.result }}");
-  assert.equal(gateStep.run, `test "$CHANGES" = success && test "$CHECKS" = success || exit 1
-case "$EVENT:$REVIEW:$IMAGES" in
-  pull_request:success:*)
-    echo 'See PR image results (advisory) for image build outcomes.' >> "$GITHUB_STEP_SUMMARY"
-    ;;
-  merge_group:skipped:success) ;;
-  *) exit 1 ;;
-esac
-case "$EVENT:$INTEGRATION_NEEDED:$INTEGRATION:$PORTAL_INTEGRATION:$INTEGRATION_COVERAGE" in
-  pull_request:false:skipped:skipped:skipped|pull_request:*:success:success:success|merge_group:*:success:success:success) ;;
-  *) exit 1 ;;
-esac
-case "$EVENT:$DEV_INSTALL_NEEDED:$DEV_INSTALL" in
-  pull_request:*:success|pull_request:false:skipped|merge_group:*:skipped) ;;
-  *) exit 1 ;;
-esac
-test "$INFRA" = success || {
-  test "$EVENT" = pull_request && test "$INFRA_NEEDED" = false && test "$INFRA" = skipped
-}
-`);
   for (const job of [jobs.changes, jobs.checks]) {
     assert.equal(job.if, "github.event_name == 'pull_request' || github.event_name == 'merge_group'");
   }
+});
+
+test("CI gate requires each event's jobs and rejects unplanned skips, failures, and cancellations", async t => {
+  const { jobs } = parse(await read(".github/workflows/ci.yml"));
+  const [{ run }] = jobs["ci-gate"].steps;
+  const directory = await mkdtemp(join(tmpdir(), "ci-gate-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const summary = join(directory, "summary.md");
+  const pr = {
+    EVENT: "pull_request", CHANGES: "success", CHECKS: "success", REVIEW: "success", IMAGES: "skipped",
+    INTEGRATION_NEEDED: "true", INTEGRATION: "success", PORTAL_INTEGRATION: "success",
+    INTEGRATION_COVERAGE: "success", INFRA_NEEDED: "true", INFRA: "success",
+    DEV_INSTALL_NEEDED: "true", DEV_INSTALL: "success",
+  };
+  const unselected = {
+    ...pr, INTEGRATION_NEEDED: "false", INTEGRATION: "skipped", PORTAL_INTEGRATION: "skipped",
+    INTEGRATION_COVERAGE: "skipped", INFRA_NEEDED: "false", INFRA: "skipped",
+    DEV_INSTALL_NEEDED: "false", DEV_INSTALL: "skipped",
+  };
+  const queue = {
+    ...pr, EVENT: "merge_group", REVIEW: "skipped", IMAGES: "success",
+    INTEGRATION_NEEDED: "", INFRA_NEEDED: "", DEV_INSTALL_NEEDED: "", DEV_INSTALL: "skipped",
+  };
+  const push = { ...queue, EVENT: "push", CHANGES: "skipped", CHECKS: "skipped", IMAGES: "skipped" };
+  const dispatch = { ...push, EVENT: "workflow_dispatch", INFRA: "skipped" };
+
+  for (const [lane, result, override, expected] of [
+    ["PR with selected jobs", pr, {}, 0],
+    ["PR with unselected jobs", unselected, {}, 0],
+    ["PR without a recorded skip reason", unselected, { INTEGRATION_NEEDED: "" }, 1],
+    ["PR with cancelled queue images", pr, { IMAGES: "cancelled" }, 1],
+    ["merge queue", queue, {}, 0],
+    ["merge queue with failed images", queue, { IMAGES: "failure" }, 1],
+    ["main push", push, {}, 0],
+    ["main push with failed integration", push, { INTEGRATION: "failure" }, 1],
+    ["main push with skipped infrastructure", push, { INFRA: "skipped" }, 1],
+    ["main push with cancelled selection", push, { CHANGES: "cancelled" }, 1],
+    ["manual dispatch", dispatch, {}, 0],
+    ["manual dispatch with cancelled infrastructure", dispatch, { INFRA: "cancelled" }, 1],
+  ]) {
+    const execution = runWorkflowScript(run, { ...result, ...override, GITHUB_STEP_SUMMARY: summary });
+    assert.ifError(execution.error);
+    assert.equal(execution.status, expected, `${lane}: ${execution.stderr}`);
+  }
+  assert.match(await readFile(summary, "utf8"), /Event push skips PR and merge queue jobs/u);
 });
 
 test("CI seeds pnpm caches on main and builds cleanly in the merge queue", async () => {
@@ -510,7 +535,7 @@ test("PR image results are advisory while the merge queue requires the full imag
   const { jobs } = parse(await read(".github/workflows/ci.yml"));
   const branch = parse(await read(".github/workflows/branch-image.yml")).jobs;
   const { images, "pr-images": prImages, "pr-image-results": report, "ci-gate": gate, publish } = jobs;
-  assert.equal(gate.if, "always() && (github.event_name == 'pull_request' || github.event_name == 'merge_group')");
+  assert.equal(gate.if, "always()");
   assert(gate.needs.includes("images"));
   assert(!gate.needs.includes("pr-images"));
   assert(!gate.needs.includes("pr-image-results"));

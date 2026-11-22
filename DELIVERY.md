@@ -1,5 +1,7 @@
 # WasalX delivery
 
+Follows engineering standard v1.3.
+
 WasalX Delivery owns this document. Change it through a reviewed PR.
 
 ## Branching and merging
@@ -82,3 +84,7 @@ Measure first attempts from GitHub Actions run and job timestamps. Record trends
 | CI cost | Zero. Changes that would incur charges require owner approval. |
 
 Keep these performance targets independent of the merge result. Address misses through the board while preserving the required checks.
+
+## Deviations
+
+None.
