@@ -13,6 +13,7 @@ import runpy
 import sys
 import tarfile
 import tempfile
+import textwrap
 import unittest
 from unittest.mock import patch
 
@@ -23,6 +24,30 @@ spec.loader.exec_module(images)
 
 
 class ImagePublicationTests(unittest.TestCase):
+    def test_merge_group_workflow_selects_all_21_images(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        step = workflow.split("      - id: matrix\n", 1)[1].split("\n\n", 1)[0]
+        script = textwrap.dedent(step.split("        run: |\n", 1)[1])
+        bash = "C:/Program Files/Git/bin/bash.exe" if os.name == "nt" else "bash"
+        helpers = '''\
+python3() { "$TEST_PYTHON" -B "$@"; }
+jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.stdin)["include"])))'; }
+'''
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "output"
+            # Comparing HEAD with itself would give the selector an empty diff.
+            subprocess.run(
+                [bash, "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", helpers + script],
+                cwd=ROOT, check=True, timeout=10,
+                env={**os.environ, "EVENT": "merge_group", "BASE_SHA": "HEAD", "PUBLIC_ADDON_SOURCE": "",
+                     "TEST_PYTHON": sys.executable, "GITHUB_OUTPUT": output.as_posix()},
+            )
+            values = dict(line.split("=", 1) for line in output.read_text().splitlines())
+        self.assertEqual(values["images"], "true")
+        selected = json.loads(values["matrix"])["include"]
+        self.assertEqual(len(selected), 21)
+        self.assertEqual([row["image"] for row in selected], [row["image"] for row in images.catalog()])
+
     def test_portal_contact_email_is_passed_without_logging_commands(self):
         dockerfile = (ROOT / "Dockerfile.portal").read_text()
         build_stage = dockerfile.split(" AS build\n", 1)[1].split("\nFROM ", 1)[0]
@@ -206,7 +231,7 @@ class ImagePublicationTests(unittest.TestCase):
             (images.ROOT / "Dockerfile.unknown").write_text('COPY ["src", "/src"]')
             self.assertEqual(images.changed_images(rows, ["unmapped/new-file"], pull_request=True), rows)
 
-    def test_matrix_command_selects_images_for_diff_and_full_push(self):
+    def test_matrix_command_selects_pr_diff_legacy_base_and_full_catalog(self):
         base = "a" * 40
         script = ROOT / "scripts/release/images-by-digest.py"
         all_images = [row["image"] for row in images.catalog()]
