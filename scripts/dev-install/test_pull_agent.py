@@ -58,6 +58,7 @@ class Reply(io.BytesIO):
 class PublicAPI:
     def __init__(self):
         self.requests = []
+        self.tag = TAG
         self.status = "ahead"
         self.census = "success"
         self.raw = RAW
@@ -74,7 +75,7 @@ class PublicAPI:
             raise HTTPError(request.full_url, 429, "limit", {"Retry-After": "2700"}, None)
         if url.netloc == "github.com":
             assert not request.has_header("Authorization")
-            assert url.path.endswith(f"/{TAG}/{agent.ASSET}")
+            assert url.path.endswith(f"/{self.tag}/{agent.ASSET}")
             return Reply(self.raw)
         if url.netloc != "api.github.com":
             if url.path == "/token":
@@ -93,10 +94,10 @@ class PublicAPI:
         if path == "/releases":
             if request.get_header("If-none-match"):
                 raise HTTPError(request.full_url, 304, "", headers, None)
-            value = [{"tag_name": TAG, "prerelease": True, "draft": False, "assets": [
+            value = [{"tag_name": self.tag, "prerelease": True, "draft": False, "assets": [
                 {"name": agent.ASSET, "state": "uploaded", "digest": self.digest}]}]
-        elif path == f"/git/ref/tags/{TAG}":
-            value = {"ref": f"refs/tags/{TAG}", "object": {"sha": "3" * 40, "type": "tag"}}
+        elif path == f"/git/ref/tags/{self.tag}":
+            value = {"ref": f"refs/tags/{self.tag}", "object": {"sha": "3" * 40, "type": "tag"}}
         elif path == f"/git/tags/{'3' * 40}":
             value = {"sha": "3" * 40, "object": {"sha": self.commit, "type": "commit"}}
         elif path == f"/compare/{self.commit}...main":
@@ -104,9 +105,9 @@ class PublicAPI:
         elif path in {"/actions/workflows/ci.yml/runs", "/actions/workflows/nightly-install.yml/runs"}:
             ci = "/ci.yml/" in path
             if not ci:
-                assert url.query == f"event=push&branch={TAG}&head_sha={self.commit}&per_page=1"
+                assert url.query == f"event=push&branch={self.tag}&head_sha={self.commit}&per_page=1"
             run = {"head_sha": self.commit, "status": "completed", "conclusion": "success", "id": 1 if ci else 2,
-                   "run_attempt": 1 if ci else 4, "head_branch": "main" if ci else TAG,
+                   "run_attempt": 1 if ci else 4, "head_branch": "main" if ci else self.tag,
                    "head_repository": {"full_name": agent.REPO}, "event": "push"}
             value = {"workflow_runs": [run | overrides for overrides in ([{}] if ci else self.nightly)]}
         elif path in {"/actions/runs/1/attempts/1/jobs", "/actions/runs/2/attempts/4/jobs"}:
@@ -172,6 +173,27 @@ class PullTest(unittest.TestCase):
         self.assertEqual(by_ref[f"{agent.PRODUCT_PREFIX}control-api@{PRODUCT_DIGEST}"]["mediaType"], agent.MEDIA_TYPES[2])
         self.assertFalse(any("/blobs/" in req.full_url for req in self.fake.requests))
         self.assertTrue(any(req.get_header("If-none-match") == '"listing"' for req in self.fake.requests))
+
+    def test_rc_tag_at_consumer_limits_creates_receipt(self):
+        self.fake.tag = f"v{'a' * 108}-rc.{'b' * 16}"
+        with patch.object(agent, "verify", return_value=PRODUCT_REFS):
+            self.tick()
+        self.assertEqual([json.loads(path.read_bytes())["tag"] for path in self.records()], [self.fake.tag])
+        self.assertEqual(self.outbox.seq, 1)
+
+    def test_oversized_rc_tags_leave_receipt_chain_unchanged(self):
+        self.outbox.add(self.make_offer())
+        records = [path.read_bytes() for path in self.records()]
+        seq, last = self.outbox.seq, self.outbox.last
+        for prefix, suffix in ((109, 15), (107, 17)):
+            with self.subTest(prefix=prefix, suffix=suffix):
+                self.fake.tag = f"v{'a' * prefix}-rc.{'b' * suffix}"
+                (self.work / "releases.json").unlink(missing_ok=True)
+                with patch.object(agent.subprocess, "check_output") as sign:
+                    self.tick()
+                sign.assert_not_called()
+                self.assertEqual([path.read_bytes() for path in self.records()], records)
+                self.assertEqual((self.outbox.seq, self.outbox.last), (seq, last))
 
     def test_handover_normalizes_and_sorts_unique_compose_refs(self):
         second_digest = "sha256:" + "c" * 64
