@@ -12,8 +12,7 @@ import re
 
 TEMPLATES = Path(__file__).with_name("templates")
 ROOT = TEMPLATES.parents[2]
-PULL_PATHS = ("install_dir", "receipt_key", "staging_dir", "staging_mount", "stage_guard",
-              "lane_lock", "cosign", "trusted_root")
+PULL_PATHS = ("install_dir", "receipt_key", "cosign", "trusted_root")
 PULL_SERVICE = "wasalx-dev-pull.service"
 PULL_TIMER = "wasalx-dev-pull.timer"
 SCRIPTS = ("dispatch.py", "probe.py", "receive.py")
@@ -82,7 +81,7 @@ def render_pull(identity, bundle):
             raise ValueError(f"invalid pull path: {field}")
     config = {key: value for key, value in identity.items() if key not in {"receipt_key", "install_dir"}}
     service = (TEMPLATES / PULL_SERVICE).read_text(encoding="utf-8")
-    for field in ("install_dir", "receipt_key", "staging_dir"):
+    for field in ("install_dir", "receipt_key"):
         service = service.replace(f"@{field.upper()}@", identity[field])
     files = {
         "pull-agent.py": (TEMPLATES / "pull-agent.py").read_text(encoding="utf-8").encode(),
@@ -90,12 +89,9 @@ def render_pull(identity, bundle):
         PULL_TIMER: (TEMPLATES / PULL_TIMER).read_text(encoding="utf-8").encode(),
         "pull-config.json": (json.dumps(config, indent=2, sort_keys=True) + "\n").encode(),
     }
-    catalog = "scripts/release/product-images.json"
-    dockerfiles = [row["dockerfile"] for row in json.loads((ROOT / catalog).read_bytes())]
     for name in (
-        "scripts/dev-install/pull-verify.mjs", "scripts/dev-install/host-staging.sh", "scripts/dev-install/host-staging.py",
-        "scripts/release/installer-hosted-images.mjs", "scripts/release/images-by-digest.py",
-        "release/installer-images.json", catalog, *dockerfiles,
+        "scripts/dev-install/pull-verify.mjs", "scripts/release/installer-hosted-images.mjs",
+        "release/installer-images.json",
     ):
         files[name] = (ROOT / name).read_bytes()
     write_bundle(bundle, files)

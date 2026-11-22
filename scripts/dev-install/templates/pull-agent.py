@@ -2,6 +2,7 @@
 """Run one credential-free DEV report tick."""
 
 import argparse
+import base64
 from datetime import datetime, timezone
 import fcntl
 import hashlib
@@ -14,7 +15,7 @@ import sys
 import tempfile
 import time
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote, urlencode, urlsplit
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
 
@@ -24,9 +25,26 @@ RELEASES = "/releases?per_page=5"
 ASSET = "images-manifest.json"
 CENSUS = "Confirm census PASS"
 SHA = re.compile(r"[0-9a-f]{40}")
-HEX = re.compile(r"[0-9a-f]{64}")
-RC = re.compile(r"v[A-Za-z0-9_.-]*-rc\.[A-Za-z0-9_.-]+")
-CODES = {"ELIGIBLE", "VERIFIED", "STAGED", "HOLD_VERIFY", "HOLD_STAGING"}
+DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
+RC = re.compile(r"v[A-Za-z0-9_.-]{0,120}-rc\.[A-Za-z0-9_.-]{1,32}")
+REF = re.compile(
+    r"[a-z0-9]+(?:[._-][a-z0-9]+)*(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)*"
+    r"(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?@sha256:[0-9a-f]{64}"
+)
+PRODUCT_PREFIX = "ghcr.io/wasalx/"
+SCHEMA = "ot3.wasalx.d1-handover/v1"
+CONFIG_FIELDS = {"mode", "cosign", "trusted_root", "trusted_root_sha256"}
+MEDIA_TYPES = (
+    "application/vnd.oci.image.manifest.v1+json",
+    "application/vnd.oci.image.index.v1+json",
+    "application/vnd.docker.distribution.manifest.v2+json",
+    "application/vnd.docker.distribution.manifest.list.v2+json",
+)
+ANONYMOUS_TOKEN = {
+    "registry-1.docker.io": ("https://auth.docker.io/token", "registry.docker.io"),
+    "ghcr.io": ("https://ghcr.io/token", "ghcr.io"),
+    "quay.io": ("https://quay.io/v2/auth", "quay.io"),
+}
 ROOT = Path(__file__).resolve().parent
 TOOLS = ROOT / "scripts/dev-install"
 
@@ -55,11 +73,13 @@ class GitHub:
         self.remaining = None
         self.reset = 0
 
-    def request(self, path, *, etag=None, asset=False):
+    def request(self, path, *, etag=None, asset=False, raw=False):
         if not asset and self.remaining == 0:
             raise RateLimit(max(self.reset, int(time.time()) + 600))
         headers = {"User-Agent": "wasalx-dev-pull", "Accept": "application/vnd.github+json",
                    "X-GitHub-Api-Version": "2022-11-28"}
+        if raw:
+            headers["Accept"] = "application/vnd.github.raw+json"
         if etag:
             headers["If-None-Match"] = etag
         url = f"https://github.com/{REPO}/releases/download/{path}/{ASSET}" if asset else API + path
@@ -134,52 +154,104 @@ def main_tree(api, commit):
     return object_sha(base["commit"]["tree"]["sha"])
 
 
-def successful_steps(api, workflow, commit, job_name, step=None, *, event=None):
-    filters = f"head_sha={commit}&status=success&per_page=10"
-    if event:
-        filters += "&event=push&branch=main"
+def successful_steps(api, workflow, commit, job_name, *, tag=None):
+    if tag:
+        filters = f"event=push&branch={quote(tag, safe='')}&head_sha={commit}&per_page=1"
+    else:
+        filters = f"head_sha={commit}&status=success&per_page=10&event=push&branch=main"
     runs = api.json(f"/actions/workflows/{workflow}/runs?{filters}")["workflow_runs"]
+    if tag:
+        runs = runs[:1]
     run = next((row for row in runs
-                if row["head_sha"] == commit and row["conclusion"] == "success"
+                if row["head_sha"] == commit and row["status"] == "completed" and row["conclusion"] == "success"
                 and row["head_repository"]["full_name"] == REPO
-                and (row["event"] == "push" and row["head_branch"] == "main" if event
-                     else row["event"] in {"schedule", "workflow_dispatch", "push"})), None)
+                and row["event"] == "push" and row["head_branch"] == (tag or "main")), None)
     require(run is not None)
-    run_id = run["id"]
-    require(type(run_id) is int and run_id > 0)
-    jobs = api.json(f"/actions/runs/{run_id}/jobs?filter=latest&per_page=100")["jobs"]
+    run_id, attempt = run["id"], run["run_attempt"]
+    require(positive_int(run_id) and positive_int(attempt))
+    jobs = api.json(f"/actions/runs/{run_id}/attempts/{attempt}/jobs?per_page=100")["jobs"]
     matching = [job for job in jobs if job["name"] == job_name and job["head_sha"] == commit
                 and job["conclusion"] == "success"]
     require(len(matching) == 1)
-    if step:
-        require(any(item["name"] == step and item["conclusion"] == "success" for item in matching[0]["steps"]))
+    if tag:
+        require(any(item["name"] == CENSUS and item["conclusion"] == "success" for item in matching[0]["steps"]))
+    return run_id, attempt
+
+
+def positive_int(value):
+    return type(value) is int and value > 0
 
 
 def release_asset(release):
     assets = [asset for asset in release["assets"] if asset["name"] == ASSET and asset["state"] == "uploaded"]
     if len(assets) == 1:
         digest = assets[0].get("digest") or ""
-        if digest.startswith("sha256:") and HEX.fullmatch(digest[7:]):
-            return digest[7:]
+        if DIGEST.fullmatch(digest):
+            return digest
     return None
 
 
-def eligible(api, tag, digest):
-    commit = tag_commit(api, tag)
+def eligible(api, tag, commit, digest):
     tree = main_tree(api, commit)
-    successful_steps(api, "ci.yml", commit, "publish / Image digest manifest", event="push")
-    successful_steps(api, "nightly-install.yml", commit, "nightly-install", CENSUS)
+    successful_steps(api, "ci.yml", commit, "publish / Image digest manifest")
+    run_id, attempt = successful_steps(api, "nightly-install.yml", commit, "nightly-install", tag=tag)
     raw, _ = api.request(quote(tag, safe=""), asset=True)
-    require(sha256(raw) == digest)
-    return commit, tree, raw
+    require(content_digest(raw) == digest)
+    return tree, raw, {"run_id": run_id, "attempt": attempt, "census": "PASS"}
 
 
-def sha256(raw):
-    return hashlib.sha256(raw).hexdigest()
+def content_digest(raw):
+    return "sha256:" + hashlib.sha256(raw).hexdigest()
 
 
 def json_bytes(value):
-    return (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode("ascii")
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+
+
+def fields(value, *names):
+    return isinstance(value, dict) and value.keys() == set(names)
+
+
+def matches(pattern, value):
+    return isinstance(value, str) and re.fullmatch(pattern, value)
+
+
+def validate_handover(data):
+    if (not fields(data, "schema", "source", "tag", "commit", "tree", "refs", "counts",
+                   "release_asset_digest", "nightly", "receipt", "signer", "signature")
+            or data["schema"] != SCHEMA or data["source"] != "b2-verified"
+            or not matches(RC, data["tag"]) or not matches(SHA, data["commit"]) or not matches(SHA, data["tree"])
+            or (data["release_asset_digest"] is not None and not matches(DIGEST, data["release_asset_digest"]))):
+        raise ValueError("invalid hand-over identity")
+    counts, refs = data["counts"], data["refs"]
+    if not fields(counts, "product", "compose") or not isinstance(refs, list):
+        raise ValueError("invalid hand-over refs")
+    observed = {"product": 0, "compose": 0}
+    previous = ""
+    for row in refs:
+        if (not fields(row, "ref", "mediaType", "origin") or not matches(REF, row["ref"])
+                or (row["mediaType"] is not None and not isinstance(row["mediaType"], str))
+                or row["origin"] not in ("product", "compose") or row["ref"] <= previous
+                or row["ref"].startswith(PRODUCT_PREFIX) != (row["origin"] == "product")):
+            raise ValueError("invalid hand-over ref")
+        observed[row["origin"]] += 1
+        previous = row["ref"]
+    if any(type(count) is not int for count in counts.values()) or counts != observed or counts["product"] != 21:
+        raise ValueError("invalid hand-over counts")
+    nightly, receipt, signer = data["nightly"], data["receipt"], data["signer"]
+    if (not fields(nightly, "run_id", "attempt", "census") or not positive_int(nightly["run_id"])
+            or not positive_int(nightly["attempt"]) or nightly["census"] != "PASS"
+            or not fields(receipt, "seq", "prev_hash", "produced_utc") or not positive_int(receipt["seq"])
+            or (receipt["prev_hash"] is not None and not matches(DIGEST, receipt["prev_hash"]))
+            or not matches(r"[0-9]{4}(?:-[0-9]{2}){2}T[0-9]{2}(?::[0-9]{2}){2}Z", receipt["produced_utc"])
+            or not fields(signer, "key_id", "alg") or signer["alg"] != "ed25519"
+            or not matches(r"SHA256:[A-Za-z0-9+/]{43}", signer["key_id"])
+            or not isinstance(data["signature"], str)):
+        raise ValueError("invalid hand-over evidence")
+    signature = base64.b64decode(data["signature"], validate=True)
+    if not (signature.startswith(b"-----BEGIN SSH SIGNATURE-----\n")
+            and signature.endswith(b"-----END SSH SIGNATURE-----\n")):
+        raise ValueError("invalid hand-over signature")
 
 
 def durable_replace(path, data):
@@ -200,46 +272,45 @@ class Outbox:
     def __init__(self, directory, key):
         self.directory, self.key = directory, key
         directory.mkdir(mode=0o700, exist_ok=True)
-        self.last = "0" * 64
+        self.last = None
         self.seq = 0
-        self.progress = {}
-        # The relay reads numbered JSON files only. An orphan signature can be replaced.
+        self.tags = {}
         for sequence, path in enumerate(sorted(directory.glob("*.json")), 1):
             raw = path.read_bytes()
             record = json.loads(raw)
-            if (path.name != f"{sequence:020}.json" or record["seq"] != sequence
-                    or record["prev_sha256"] != self.last or record["code"] not in CODES
-                    or not path.with_suffix(".json.sig").is_file()):
+            validate_handover(record)
+            if (path.name != f"{sequence:020}.json" or record["receipt"]["seq"] != sequence
+                    or record["receipt"]["prev_hash"] != self.last or raw != json_bytes(record)
+                    or record["tag"] in self.tags):
                 raise ValueError("broken receipt chain")
             self.remember(record, raw)
 
     def remember(self, record, raw):
-        self.seq, self.last = record["seq"], sha256(raw)
-        self.progress[(record["tag"], record["manifest_sha256"])] = record
+        self.seq, self.last = record["receipt"]["seq"], content_digest(raw)
+        self.tags[record["tag"]] = (record["commit"], record["release_asset_digest"])
 
-    def add(self, tag, commit, digest, code, started):
-        previous = self.progress.get((tag, digest))
-        data = {"schema_version": 1, "seq": self.seq + 1, "prev_sha256": self.last,
-                "attempt_id": sha256(f"{tag}\n{commit}\n{digest}".encode()), "tag": tag, "commit": commit,
-                "manifest_sha256": digest, "code": code,
-                "stage_stamps": {"started_at": started, "recorded_at": stamp()}}
-        if previous and previous["commit"] != commit:
-            raise ValueError("receipt identity changed")
-        raw = json_bytes(data)
-        path = self.directory / f"{data['seq']:020}.json"
-        # ssh-keygen signs stdin to stdout, so no half-written JSON becomes visible.
+    def add(self, handover):
+        if handover["tag"] in self.tags:
+            raise ValueError("receipt already exists")
         public_key = subprocess.check_output(
             ["ssh-keygen", "-y", "-f", self.key], stdin=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            timeout=10, env=command_env(self.directory))
-        if not public_key.startswith(b"ssh-ed25519 "):
+            timeout=10, env=command_env(self.directory)).split()
+        if len(public_key) < 2 or public_key[0] != b"ssh-ed25519":
             raise ValueError("receipt key must be Ed25519")
+        fingerprint = hashlib.sha256(base64.b64decode(public_key[1], validate=True)).digest()
+        key_id = "SHA256:" + base64.b64encode(fingerprint).decode("ascii").rstrip("=")
+        sequence = self.seq + 1
+        data = {**handover, "receipt": {"seq": sequence, "prev_hash": self.last, "produced_utc": stamp()},
+                "signer": {"key_id": key_id, "alg": "ed25519"}}
         signature = subprocess.check_output(
             ["ssh-keygen", "-Y", "sign", "-f", self.key, "-n", "wasalx-dev-receipt"],
-            input=raw, stderr=subprocess.DEVNULL, timeout=10, env=command_env(self.directory))
-        durable_replace(path.with_suffix(".json.sig"), signature)
-        durable_replace(path, raw)
+            input=json_bytes(data), stderr=subprocess.DEVNULL, timeout=10, env=command_env(self.directory))
+        data["signature"] = base64.b64encode(signature).decode("ascii")
+        validate_handover(data)
+        raw = json_bytes(data)
+        durable_replace(self.directory / f"{sequence:020}.json", raw)
         self.remember(data, raw)
-        print(code, flush=True)
+        print("VERIFIED", flush=True)
 
 
 def stamp():
@@ -251,24 +322,80 @@ def command_env(work):
             "DOCKER_CONFIG": str(work / "docker"), "SSH_ASKPASS_REQUIRE": "never"}
 
 
-def command(args, work, timeout):
-    subprocess.run(args, check=True, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                   stderr=subprocess.DEVNULL, env=command_env(work), timeout=timeout)
-
-
-def verify(manifest, commit, tree, config, *, inventory_only=False):
+def verify(manifest, commit, tree, config):
     tools = ["node", TOOLS / "pull-verify.mjs", manifest, commit, tree, config["cosign"],
              config["trusted_root"], config["trusted_root_sha256"]]
-    work = manifest.parent
-    if inventory_only:
-        command([*tools, "inventory"], work, 20)
-        return
-    command(tools, work, 300)
+    return json.loads(subprocess.check_output(
+        tools, stdin=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=command_env(manifest.parent), timeout=300))
 
 
-def fetch_bundles(manifest):
-    command([sys.executable, "-I", "-B", ROOT / "scripts/release/images-by-digest.py",
-             "stage-hosted-bundles", "--manifest", manifest], manifest.parent, 270)
+def compose_refs(api, commit, product_refs):
+    # The local build aliases are represented by the verified product references.
+    local = {"wasalx/" + ref.removeprefix(PRODUCT_PREFIX).split("@")[0] for ref in product_refs}
+    if "wasalx/secret-sidecar" in local:
+        local.add("wasalx/dev-secret-sidecar")
+    refs = set()
+    for name in ("compose.yaml", "compose.full.yaml"):
+        raw, _ = api.request(f"/contents/{name}?ref={commit}", raw=True)
+        for value in re.findall(r"(?m)^[ \t]+image:[ \t]*(.*)$", raw.decode("utf-8")):
+            ref = value.split(" #", 1)[0].strip().strip("'\"")
+            if "@" not in ref and ref.split(":")[0] in local:
+                continue
+            require(bool(REF.fullmatch(ref)) and not ref.startswith(PRODUCT_PREFIX))
+            refs.add(ref)
+    require(bool(refs))
+    return refs
+
+
+def media_type(api, ref):
+    name, digest = ref.rsplit("@", 1)
+    name = name.rsplit(":", 1)[0]
+    host, _, repository = name.partition("/")
+    if "." not in host:
+        repository = name if repository else "library/" + name
+        host = "registry-1.docker.io"
+    if host not in ANONYMOUS_TOKEN:
+        return None
+    url = f"https://{host}/v2/{repository}/manifests/{digest}"
+    headers = {"User-Agent": "wasalx-dev-pull", "Accept": ", ".join(MEDIA_TYPES)}
+
+    def head():
+        with api.open(Request(url, headers=headers, method="HEAD"), timeout=2) as response:
+            if response.headers.get("Docker-Content-Digest", digest) == digest:
+                value = response.headers.get("Content-Type", "").split(";", 1)[0].strip()
+                if value in MEDIA_TYPES:
+                    return value
+
+    try:
+        try:
+            return head()
+        except HTTPError as challenge:
+            challenge.close()
+            if challenge.code != 401:
+                return None
+        endpoint, service = ANONYMOUS_TOKEN[host]
+        query = urlencode({"service": service, "scope": f"repository:{repository}:pull"})
+        with api.open(Request(f"{endpoint}?{query}"), timeout=2) as response:
+            token = json.loads(response.read(8192)).get("token")
+        if not matches(r"[A-Za-z0-9_.~+/=-]+", token):
+            return None
+        headers["Authorization"] = "Bearer " + token
+        return head()
+    except HTTPError as error:
+        error.close()
+    except (AttributeError, URLError, TimeoutError, ValueError):
+        pass
+    return None
+
+
+def handover(api, tag, commit, tree, digest, nightly, product_refs):
+    compose = compose_refs(api, commit, product_refs)
+    refs = [{"ref": ref, "mediaType": media_type(api, ref), "origin": origin}
+            for origin, group in (("compose", compose), ("product", product_refs)) for ref in sorted(group)]
+    return {"schema": SCHEMA, "source": "b2-verified", "tag": tag, "commit": commit, "tree": tree,
+            "refs": sorted(refs, key=lambda row: row["ref"]),
+            "counts": {"compose": len(compose), "product": len(product_refs)},
+            "release_asset_digest": digest, "nightly": nightly}
 
 
 def cache_releases(api, state):
@@ -287,14 +414,6 @@ def cache_releases(api, state):
     return cache["releases"]
 
 
-def offpeak_seconds():
-    now = datetime.now(timezone.utc)
-    seconds = now.hour * 3600 + now.minute * 60 + now.second
-    if now.hour >= 23:
-        seconds -= 24 * 3600
-    return max(0, 15 * 3600 - seconds)
-
-
 def tick(api, outbox, state, config):
     releases = cache_releases(api, state)
     for release in releases:
@@ -302,59 +421,24 @@ def tick(api, outbox, state, config):
         if not (len(tag) <= 128 and RC.fullmatch(tag) and release["prerelease"] is True and release["draft"] is False):
             continue
         digest = release_asset(release)
-        record = outbox.progress.get((tag, digest))
-        if digest and (not record or record["code"] not in {"STAGED", "HOLD_VERIFY"}):
+        if digest:
             break
     else:
         return
-    if record and offpeak_seconds() < 600:
-        return
-    if api.remaining is not None and api.remaining < 9:
+    if api.remaining is not None and api.remaining < 13:
         raise RateLimit(max(api.reset, int(time.time()) + 600))
-    started = stamp()
-    commit, tree, raw = eligible(api, tag, digest)
-    if record and record["commit"] != commit:
-        raise Pending()
+    commit = tag_commit(api, tag)
+    if tag in outbox.tags:
+        require(outbox.tags[tag] == (commit, digest))
+        return
+    tree, raw, nightly = eligible(api, tag, commit, digest)
     with tempfile.TemporaryDirectory(prefix="pull-", dir=state) as temporary:
-        work = Path(temporary)
-        manifest = work / ASSET
+        manifest = Path(temporary) / ASSET
         manifest.write_bytes(raw)
-        verify(manifest, commit, tree, config, inventory_only=True)
-        if not record:
-            outbox.add(tag, commit, digest, "ELIGIBLE", started)
-        if offpeak_seconds() < 600:
-            return
-        with open(config["lane_lock"], "rb") as lane:
-            try:
-                fcntl.flock(lane, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                command([config["stage_guard"]], work, 30)
-            except (BlockingIOError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
-                return
-            verified = record and record["code"] in {"VERIFIED", "HOLD_STAGING"}
-            try:
-                fetch_bundles(manifest)
-            except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
-                print("PUBLIC_INPUT_UNAVAILABLE")
-                return
-            try:
-                verify(manifest, commit, tree, config)
-            except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
-                outbox.add(tag, commit, digest, "HOLD_VERIFY", started)
-                return
-            if not verified:
-                outbox.add(tag, commit, digest, "VERIFIED", started)
-            remaining = offpeak_seconds()
-            if remaining <= 0:
-                return
-            try:
-                command(["/bin/bash", TOOLS / "host-staging.sh", manifest, config["staging_dir"],
-                         config["staging_mount"]],
-                        work, min(8400, remaining))
-            except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
-                if not record or record["code"] != "HOLD_STAGING":
-                    outbox.add(tag, commit, digest, "HOLD_STAGING", started)
-                return
-            outbox.add(tag, commit, digest, "STAGED", started)
+        product_refs = verify(manifest, commit, tree, config)
+    offer = handover(api, tag, commit, tree, digest, nightly, product_refs)
+    require(tag_commit(api, tag) == commit)
+    outbox.add(offer)
 
 
 def main():
@@ -365,8 +449,10 @@ def main():
     os.umask(0o077)
     try:
         config = json.loads(args.config.read_bytes())
-        if config["mode"] != "report":
+        if not isinstance(config, dict) or config.keys() != CONFIG_FIELDS or config["mode"] != "report":
             raise ValueError("unsupported mode")
+        if not args.key.is_file():
+            raise ValueError("missing receipt key")
         state = Path(os.environ["STATE_DIRECTORY"])
         with (state / "tick.lock").open("a") as lock:
             try:
@@ -374,7 +460,7 @@ def main():
             except BlockingIOError:
                 return 0
             try:
-                tick(GitHub(), Outbox(state / "outbox", args.key), state, config)
+                tick(GitHub(), Outbox(state / "handover-outbox", args.key), state, config)
             except RateLimit as limit:
                 path = state / "releases.json"
                 cache = json.loads(path.read_bytes()) if path.exists() else {}
