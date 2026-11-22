@@ -103,6 +103,8 @@ test("tracked tests belong to a named CI runner or the test allowlist", async ()
       case "infra-validate":
         return commands(command).includes("bash scripts/validate-infra.sh")
           && (runsFile(validation, file) || (runsTofu && tofuFile(file)));
+      case "frozen-disk-qemu":
+        return commands(command).includes(`sudo bash ${file}`);
       case "test:postgres":
         return postgresImports.has(file);
       case "images": {
