@@ -8,7 +8,7 @@ import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { stripVTControlCharacters } from "node:util";
 import { activeServiceNames, assertDevInstallPreimages, devContainerPreimage, devColdResidents, devHeldServices, devHeldPrerequisites, devPreservedServices, devValueDigest, captureDevReviewAuth, assertDevReviewAuthRows, devReviewAuthEnvironment, devReviewAuthConfiguration, assertInstallHostname } from "./installer-stack.mjs";
-import { rehearsalComposeFile, rehearsalImageSource } from "./installer-stack.mjs";
+import { oneShotServiceNames, rehearsalComposeFile, rehearsalImageSource } from "./installer-stack.mjs";
 import { parseRailsJson } from "./simulation-rails-json.mjs";
 import { sha256, preserveReplacement, readBoundArtifacts, writeArtifactState,
   assertRetainedPreimage, composeProfiles, dockerfileOf, imageServices, inspectOwned, preparePrivateDirectory, preimagePath, fenceReplacementEffects, rollbackReplacement } from "./installer-artifacts.mjs";
@@ -193,10 +193,7 @@ export async function captureDevInstallPreimages(context) {
   const api = rows.find((row) => row.Config.Labels["com.docker.compose.service"] === "control-api");
   const active = activeServiceNames(context.model, composeProfiles);
   const heldPrerequisites = devHeldPrerequisites(context.model, active);
-  // Same completed-dependency classification used by existing projectStack.
-  const oneShots = new Set(active.flatMap((name) => Object.entries(context.model.services[name].depends_on ?? {})
-    .filter(([, dependency]) => dependency?.condition === "service_completed_successfully")
-    .map(([dependency]) => dependency)).filter((name) => active.includes(name)));
+  const oneShots = new Set(oneShotServiceNames(context.model, active));
   const cold = rows.some((row) => !["control-api", ...devColdResidents, ...devHeldServices].includes(row.Config.Labels["com.docker.compose.service"])
     && !oneShots.has(row.Config.Labels["com.docker.compose.service"]) && !row.State.Running);
   const held = cold ? active.filter((name) => !devColdResidents.includes(name)) : [...devHeldServices, ...Object.keys(heldPrerequisites)];

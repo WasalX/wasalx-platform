@@ -165,11 +165,13 @@ test("nightly install is report-only, read-only and fails open on PR diff errors
   assert(!JSON.stringify(job).includes("secrets."));
   const changes = job.steps.find(step => step.id === "changes").run;
   assert.match(changes, /needed=true\nif git diff --quiet[^]*; then\n {2}needed=false\nfi/u);
-  for (const input of ["scripts/release/installer-*", "compose*.yaml", path, "release/installer-images.json",
+  for (const input of ["scripts/release/installer-*", "scripts/dev-install/**", "compose*.yaml", path, "release/installer-images.json",
     "scripts/release/compose-stage-lock.mjs", "scripts/release/compose-stage-config.json", "scripts/release/simulation-rails-json.mjs",
     "scripts/installer-evidence.mjs", "infra/docker/full/**"]) assert(changes.includes(input));
   assert(job.steps.some(step => step.if?.startsWith("always()")));
   assert(!parse(await read(".github/workflows/ci.yml")).jobs["ci-gate"].needs.includes("nightly-install"));
+  const rehearsal = await read("scripts/release/installer-nightly.sh");
+  assert.match(rehearsal, /phase native-preflight [^]*phase probe-scan 5m sudo -H env "PATH=\$PATH" node scripts\/dev-install\/probe\.mjs [^]*--held-services ''[^]*\.census == "PASS" and \.services == 37 and \.rerendered_hashes == \.services[^]*phase configured-reinstall/u);
 });
 
 test("nightly MinIO mirrors retain the full installer content digests", async () => {

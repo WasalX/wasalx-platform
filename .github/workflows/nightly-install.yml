@@ -32,7 +32,7 @@ jobs:
         run: |
           needed=true
           if git diff --quiet --no-ext-diff --no-renames HEAD^1 HEAD -- \
-            ':(glob)scripts/release/installer-*' ':(glob)compose*.yaml' \
+            ':(glob)scripts/release/installer-*' ':(glob)scripts/dev-install/**' ':(glob)compose*.yaml' \
             release/installer-images.json scripts/installer-evidence.mjs ':(glob)infra/docker/full/**' \
             scripts/release/compose-stage-lock.mjs scripts/release/compose-stage-config.json scripts/release/simulation-rails-json.mjs \
             scripts/release/preflight-full-env.mjs scripts/release/generate-simulation-env.py \

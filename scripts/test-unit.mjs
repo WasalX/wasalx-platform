@@ -37,6 +37,7 @@ const unitInventory = ["tests/operator-input.test.mjs","tests/no-agent-instructi
   "tests/ci-browser-runtime.test.mjs",
   "tests/ci-phase-admission.test.mjs",
   "tests/client-routing-availability.test.ts",
+  "tests/dev-install-probe.test.mjs",
   "tests/direct-dispatch-fence.test.mjs",
   "tests/group-designation-cleanup.test.mjs",
   "tests/group-designation-evidence.test.mjs",

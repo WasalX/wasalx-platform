@@ -42,6 +42,17 @@ phase() {
   # Copy only installer control messages, never an env file, Compose logs or inspect payloads.
   grep -E '^remote full stage [a-z-]+ (passed \(operator authentication/live acceptance separate\)|failed; inspect before retry|reason: [[:print:]]+)$|^remote full qualification reason: [[:print:]]+$|^flock: cannot open lock file /tmp/wasalx-compose-stage\.lock: [[:print:]]+$|^unrecreatable fields: \[("[a-zA-Z0-9_.-]+"(,|\]))+$' \
     "$work/$name.raw" >> "$diagnostics/installer.log" || true
+  if [[ "$name" == native-preflight ]]; then
+    grep -E '^native docker diff service=[a-z0-9][a-z0-9_-]{0,62} elapsed=[0-9]+ms$' \
+      "$work/$name.raw" | tee -a "$diagnostics/installer.log" || true
+    if (( status != 0 )); then
+      grep -E '^native docker diff service=[a-z0-9][a-z0-9_-]{0,62} (started|elapsed=[0-9]+ms)$' "$work/$name.raw" \
+        | tail -n 1 | grep ' started$' | tee -a "$diagnostics/installer.log" || true
+    fi
+  elif [[ "$name" == probe-scan && "$status" != 0 ]]; then
+    grep -E '^probe-scan error=(Error|AssertionError|SyntaxError|TypeError|RangeError) message=[[:print:]]{1,480}$' \
+      "$work/$name.raw" | tail -n 1 | tee -a "$diagnostics/installer.log" >&2 || true
+  fi
   return "$status"
 }
 
@@ -118,6 +129,13 @@ preflight="$work/preflight"
     "WASALX_INSTALL_EXPECTED_HOSTNAME=$WASALX_INSTALL_EXPECTED_HOSTNAME" \
     GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory "GIT_CONFIG_VALUE_0=$preflight" \
     "${installer[@]}" preflight "${stage[@]}" --capture-preimage
+
+  # Nightly uses the ordinary replace path, whose actual held set is empty.
+  phase probe-scan 5m sudo -H env "PATH=$PATH" node scripts/dev-install/probe.mjs \
+    --env-file "$full_env" --project-name "$project" --compose-file scripts/release/installer-nightly.compose.yaml --held-services ''
+  jq -e '.census == "PASS" and .services == 37 and .rerendered_hashes == .services
+    and (.compose_hashes | length) == .services and (.fields | length) == 0' "$work/probe-scan.raw" > /dev/null
+  printf 'probe-scan services=37 rerendered_hashes=37 census=PASS\n' | tee -a "$diagnostics/phases.log"
 )
 
 printf '\nWASALX_FULL_GRAFANA_ADMIN_USER=nightly-recreated\n' >> "$full_env"
