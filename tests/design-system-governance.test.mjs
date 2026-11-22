@@ -41,11 +41,30 @@ test("Dependabot skips standalone updates of the patched Storybook package", asy
   assert.deepEqual(npm.ignore.find(rule => rule["dependency-name"] === "storybook"), { "dependency-name": "storybook" });
 });
 
-test("Dependabot groups all Docker and GitHub Actions version updates by ecosystem", async () => {
+test("Dependabot groups Docker, Docker Compose and GitHub Actions version updates by ecosystem", async () => {
   const dependabot = parse(await read(".github/dependabot.yml"));
   const docker = dependabot.updates.filter(update => update["package-ecosystem"] === "docker");
+  const compose = dependabot.updates.filter(update => update["package-ecosystem"] === "docker-compose");
   const actions = dependabot.updates.filter(update => update["package-ecosystem"] === "github-actions");
   assert.deepEqual(docker.map(update => update.directories), [["/", "/infra/docker"]]);
+  assert.deepEqual(compose, [{
+    "package-ecosystem": "docker-compose",
+    directory: "/",
+    "exclude-paths": ["tests/fixtures/dev-live-compose/**"],
+    "open-pull-requests-limit": docker[0]["open-pull-requests-limit"],
+    schedule: docker[0].schedule,
+    cooldown: docker[0].cooldown,
+    ignore: [
+      { "dependency-name": "node", "update-types": ["version-update:semver-major"] },
+      { "dependency-name": "keycloak/keycloak" },
+      { "dependency-name": "prom/prometheus" },
+      { "dependency-name": "minio/minio" },
+      { "dependency-name": "minio/mc" },
+      { "dependency-name": "devlikeapro/waha" },
+      { "dependency-name": "wasalx/*" },
+    ],
+    groups: { "docker-compose-version-updates": { patterns: ["*"] } },
+  }]);
   assert.deepEqual(actions.map(update => update.directory), ["/"]);
   for (const [ecosystem, [update]] of [["docker", docker], ["github-actions", actions]]) {
     assert.deepEqual(update.groups, {

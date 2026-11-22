@@ -88,3 +88,30 @@ updates:
       docker-security:
         applies-to: security-updates
         patterns: ['*']
+  - package-ecosystem: docker-compose
+    directory: /
+    exclude-paths:
+      - "tests/fixtures/dev-live-compose/**"
+    open-pull-requests-limit: 2
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 3
+    ignore:
+      - dependency-name: "node"
+        update-types: ["version-update:semver-major"]
+      # Keep the same manual Keycloak upgrade hold as the Docker ecosystem.
+      - dependency-name: "keycloak/keycloak"
+      # Upgrade with the promtool pin in scripts/validate-infra.sh and the infra contract test.
+      - dependency-name: "prom/prometheus"
+      # Coordinate MinIO server upgrades with the manual ghcr.io/wasalx mirror dispatch.
+      - dependency-name: "minio/minio"
+      # Coordinate MinIO client upgrades with the manual ghcr.io/wasalx mirror dispatch.
+      - dependency-name: "minio/mc"
+      # Refresh the provider contract in tests/fixtures/waha/installed-contract.json with each upgrade.
+      - dependency-name: "devlikeapro/waha"
+      # WasalX manages its own local and build image tags.
+      - dependency-name: "wasalx/*"
+    groups:
+      docker-compose-version-updates:
+        patterns: ['*']
