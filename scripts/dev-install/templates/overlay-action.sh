@@ -41,6 +41,7 @@ overlay_floor() {
 }
 check_hash() { printf '%s  %s\n' "$1" "$2" | sha256sum -c -; }
 
+stamp lease start
 root_floor
 test "$(findmnt -n -T "$STATE" -o SOURCE)" = "$STATE_MOUNT_SOURCE"
 test "$(findmnt -n -T "$DISK_STATE" -o SOURCE)" = "$STATE_MOUNT_SOURCE"
@@ -204,7 +205,6 @@ restore_definition() {
     check_drive "$TOP_DRIVE"
 }
 
-stamp lease start
 disk_phase="$(disk phase)"
 case "$disk_phase" in
     mode-restore|sealing|committing)

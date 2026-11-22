@@ -91,7 +91,7 @@ disk verify
 disk begin-writable "$run_id"
 guard_stub "$top"
 disk finish-writable "$run_id"
-qemu-io -f qcow2 -c 'read -P 0x00 1M 512' "$top" >/dev/null
+qemu-io -r -f qcow2 -c 'read -P 0x00 1M 512' "$top" >/dev/null
 disk freeze "$run_id"
 disk audit
 echo 'DISCARD_FIXTURE=PASS offline_recovery=PASS'
@@ -99,10 +99,13 @@ echo 'DISCARD_FIXTURE=PASS offline_recovery=PASS'
 fixture commit
 disk preboot "$overlay"
 qemu-io -f qcow2 -c 'write -P 0xa5 1M 512' "$overlay" >/dev/null
+disk record-overlay-stop "$overlay" "$DISK_STATE/retained.json"
 disk commit "$overlay" "$run_id"
 disk committed "$run_id"
 disk verify
-qemu-io -f qcow2 -c 'read -P 0xa5 1M 512' "$top" >/dev/null
+qemu-io -r -f qcow2 -c 'read -P 0xa5 1M 512' "$top" >/dev/null
+disk restore-mode "$run_id"
+disk archive-overlay "$overlay" "$overlay.retained" "$DISK_STATE/retained.json"
 echo 'COMMIT_FIXTURE=PASS'
 
 expect_hold() {
