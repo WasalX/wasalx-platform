@@ -94,6 +94,21 @@ persists across runs, outside the support directories.
 The real-QEMU nightly uses a scratch ext4 filesystem and a boot-sector guard stub.
 Use the signed host qualification to measure the live phase budgets.
 
+## DEV step lock
+
+Set `DEV_STEP_LOCK` in the private host identity to the absolute path of the
+host-provided marker. WasalX holds an exclusive, nonblocking `flock` on that
+path from before the first action until the step exits, including if it is killed.
+Lease units, install/discard, overlay actions and host-side guest phases share
+this lock. A competing step reports `HOLD_DEV_STEP_BUSY` and exits 75.
+D1 uses the same path and treats a failed `flock -n "$DEV_STEP_LOCK" true` probe as busy.
+The host provisions the dedicated root-owned mode-0755 directory and empty
+root-owned marker via `tmpfiles.d`. Steps open the marker read-only. Leave it
+in place between steps so every probe uses the same inode. A missing directory
+or marker holds the step with `HOLD_DEV_STEP_MARKER_DIR` or `HOLD_DEV_STEP_MARKER`.
+The pull report agent and standing services such as the VM and forwards never
+take this lock.
+
 ## DEV pull report agent
 
 Render the report packet from the reviewed checkout with a private pull identity.
@@ -115,8 +130,7 @@ credentials. Keep the account out of the Docker group. Discovery and verificatio
 use anonymous public endpoints and a pinned Sigstore trust root.
 
 The timer checks at ten-minute calendar boundaries. D1 owns image blob downloads,
-staging windows, disk admission and the DEV-step marker. Servers provisions
-`/run/ot3` for D1 via `tmpfiles.d`. The report agent does not acquire the marker.
+staging windows and disk admission.
 
 The agent publishes one numbered `<20-digit-seq>.json` file per verified tag in
 `handover-outbox` under the unit's `StateDirectory`. The

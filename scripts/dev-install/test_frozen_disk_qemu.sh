@@ -163,14 +163,22 @@ echo 'COMMIT_FIXTURE=PASS'
 
 test_commit_registration() (
     local state="$mountpoint/registration" templates="$repo/scripts/dev-install/templates"
+    local marker="$state/locks/active"
     mkdir -p -- "$state/markers" "$state/staging"
     export LEASE_RECORD="$state/systemd-run.args"
     systemctl() { if [ "$1" = show ] && [ "${2:-}" = -p ]; then echo not-found; fi; }
     systemd-run() { printf '%s\n' "$@" > "$LEASE_RECORD"; }
     export -f systemctl systemd-run
-    cp -- "$templates/host-maintenance.py" "$templates/install-or-discard.sh" "$state/"
+    cp -- "$templates/dev-step-lock.sh" "$templates/host-maintenance.py" "$templates/install-or-discard.sh" "$state/"
     printf '%s\n' "$run_id" > "$state/run-id"
     cat > "$state/overlay-action.sh" <<'SH'
+source "$2/dev-step-lock.sh"
+hold_dev_step_lock
+if [ "${LOCK_TEST:-}" = hold ]; then
+    printf 'ready\n' >&5
+    read -r _ <&6
+    exit
+fi
 printf 'ACTION=%s\n' "$1"
 exit 75
 SH
@@ -179,6 +187,7 @@ SH
     cat > "$state/host.env" <<EOF
 export LEASE_PREFIX=fixture MARKER_PREFIX=fixture TOOLING_SHA=fixture
 export MARKER_DIRECTORY=$state/markers STAGING=$state/staging
+export DEV_STEP_LOCK=$marker
 export ENGINE_FREE=/bin/true ENGINE_RUN=$run_id ROOT_FLOOR_BYTES=1
 export INSTALL_NOT_BEFORE=$(date -u -d '1 hour ago' +%FT%TZ)
 export INSTALL_CUTOFF=$(date -u -d '+1 hour' +%FT%TZ)
@@ -186,7 +195,22 @@ export DISCARD_LIMIT=$(date -u -d '+6 hours' +%FT%TZ)
 export COMMIT_FALLBACK_SECONDS=25050 INSTALL_DISCARD_BUDGET_SOURCE=reviewed-reservations
 export LEASE_BUDGET_SOURCE=fallback-commit
 EOF
-    local result=0 output
+    local result=0 output holder ready finish
+    output="$(bash "$templates/register.sh" commit "$state")" || result=$?
+    test "$result" = 75
+    test "$output" = HOLD_DEV_STEP_MARKER_DIR
+    test ! -e "$state/locks"
+    test ! -e "$LEASE_RECORD"
+    mkdir -- "$state/locks"
+    result=0
+    output="$(bash "$templates/register.sh" commit "$state")" || result=$?
+    test "$result" = 75
+    test "$output" = HOLD_DEV_STEP_MARKER
+    test ! -e "$marker"
+    test ! -e "$LEASE_RECORD"
+    touch -- "$marker"
+    chmod 0444 -- "$marker"
+    result=0
     output="$(bash "$templates/register.sh" commit "$state")" || result=$?
     test "$result" = 75
     test "$output" = HOLD_LEASE_WINDOW_TOO_SHORT
@@ -194,11 +218,51 @@ EOF
     printf 'export DISCARD_LIMIT=%s\n' "$(date -u -d '+8 hours' +%FT%TZ)" >> "$state/host.env"
     bash "$templates/register.sh" commit "$state" | grep -Fx 'LEASE_BUDGET_SOURCE=fallback-commit mode=commit runtime_seconds=25050'
     grep -Fx 'RuntimeMaxSec=25050' "$LEASE_RECORD"
-    test "$(tail -n 1 "$LEASE_RECORD")" = commit
+    local -a lease
+    mapfile -t lease < <(tail -n 4 "$LEASE_RECORD")
+    test "${lease[3]}" = commit
     result=0
-    output="$(bash "$state/install-or-discard.sh" "$state" commit)" || result=$?
+    output="$("${lease[@]}")" || result=$?
     test "$result" = 75
     test "$output" = ACTION=commit
+
+    mkfifo -- "$state/ready.fifo" "$state/finish.fifo"
+    exec 5<>"$state/ready.fifo" 6<>"$state/finish.fifo"
+    holder=
+    trap 'if [ -n "$holder" ]; then kill -KILL "$holder" 2>/dev/null || :; wait "$holder" 2>/dev/null || :; fi' EXIT
+    expect_busy() {
+        local status=0 log
+        log="$("$@")" || status=$?
+        test "$status" = 75
+        test "$log" = HOLD_DEV_STEP_BUSY
+    }
+    for finish in exit kill; do
+        LOCK_TEST=hold "${lease[@]}" &
+        holder=$!
+        read -rt 5 ready <&5
+        test "$ready" = ready
+        expect_busy bash "$templates/register.sh" commit "$state"
+        expect_busy "${lease[@]}"
+        expect_busy bash "$templates/overlay-action.sh" audit "$state"
+        expect_busy bash "$templates/dev-guest-phase.sh" prove "$state"
+        if flock -n "$marker" true; then
+            echo 'DEV_STEP_LOCK=FAIL probe admitted during lease' >&2
+            exit 1
+        fi
+        if [ "$finish" = kill ]; then
+            kill -KILL "$holder"
+            result=0
+            wait "$holder" 2>/dev/null || result=$?
+            test "$result" = 137
+        else
+            printf 'finish\n' >&6
+            wait "$holder"
+        fi
+        holder=
+        flock -n "$marker" true
+        test ! -s "$marker"
+    done
+    echo 'DEV_STEP_LOCK=PASS contention=75 release_after_exit=PASS release_after_kill=PASS'
 )
 test_commit_registration
 

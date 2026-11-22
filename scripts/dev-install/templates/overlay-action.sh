@@ -12,6 +12,9 @@ RUN="$(cat "$STATE/run-id")"
 # The signed host packet supplies this file. It is never sent to the guest.
 # shellcheck source=/dev/null
 source "$STATE/host.env"
+# shellcheck source=/dev/null
+source "$STATE/dev-step-lock.sh"
+hold_dev_step_lock
 export STATE
 ORIGINAL="$STATE/original-dropin.conf"
 ROLLBACK_KEPT="$DIR/disk-install-$RUN.rolled-back.$RUN.qcow2"
@@ -58,7 +61,7 @@ if test "$MODE" != rollback || test "$LEASE_UNIT" != "$LEASE_PREFIX-install-$RUN
 fi
 grep -Fqx "0::/system.slice/$LEASE_UNIT" /proc/self/cgroup
 (cd "$STAGING" && sha256sum --check --strict --quiet DEV-SHA256SUMS)
-for input in overlay-action.sh frozen-disk.py host.env dev-guest-phase.sh probe-up.py run-id; do
+for input in overlay-action.sh frozen-disk.py host.env dev-guest-phase.sh dev-step-lock.sh probe-up.py run-id; do
     cmp -s -- "$STATE/$input" "$STAGING/$input"
 done
 exec 8>>"$DISK_STATE/host-action.lock"

@@ -19,11 +19,11 @@ PULL_SERVICE = "wasalx-dev-pull.service"
 PULL_TIMER = "wasalx-dev-pull.timer"
 SCRIPTS = ("dispatch.py", "probe.py", "receive.py")
 HOST_SCRIPTS = (
-    "dev-guest-phase.sh", "frozen-disk.py", "host-maintenance.py",
+    "dev-guest-phase.sh", "dev-step-lock.sh", "frozen-disk.py", "host-maintenance.py",
     "install-or-discard.sh", "overlay-action.sh", "probe-up.py", "register.sh",
 )
 HOST_PATHS = (
-    "ALLOW_START", "DIR", "DISK_MOUNT_SOURCE", "DISK_STATE", "DROPIN", "ENGINE_FREE", "GUEST_KEY",
+    "ALLOW_START", "DEV_STEP_LOCK", "DIR", "DISK_MOUNT_SOURCE", "DISK_STATE", "DROPIN", "ENGINE_FREE", "GUEST_KEY",
     "GUEST_KNOWN_HOSTS", "GUEST_RUN_SCRIPT", "GUEST_VOLUME_SOURCE", "HOST_EXPORT_RECEIPT",
     "HOST_STAGING_RECEIPT", "MARKER_DIRECTORY", "OVERLAY", "POWEROFF_HELPER", "QMP", "STAGING",
     "STATE_MOUNT_SOURCE", "TOP",

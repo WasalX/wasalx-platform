@@ -7,6 +7,10 @@ test "$(stat -c '%F:%u:%a' -- "$STATE")" = directory:0:700
 case "$MODE" in install|rollback|commit) ;; *) echo HOLD_LEASE_MODE; exit 75 ;; esac
 # shellcheck source=/dev/null
 source "$STATE/host.env"
+# shellcheck source=/dev/null
+source "$STATE/dev-step-lock.sh"
+# Refuse an already busy host before writing registration records.
+(hold_dev_step_lock)
 ATTEMPT="$(cat "$STATE/run-id")"
 [[ "$ATTEMPT" =~ ^[0-9]{8}T[0-9]{6}Z$ ]] || { echo HOLD_LEASE_RUN_ID; exit 75; }
 LEASE_UNIT="${LEASE_PREFIX}-$MODE-$ATTEMPT.service"
@@ -80,6 +84,7 @@ if [ "$((limit-now))" -le "$runtime" ]; then
     echo HOLD_LEASE_WINDOW_TOO_SHORT
     exit 75
 fi
+# The unit entry takes the DEV step lock before running any action.
 if ! systemd-run --unit="$LEASE_UNIT" --setenv="LEASE_UNIT=$LEASE_UNIT" --setenv="TMPDIR=$STATE" \
     -p CPUQuota=800% -p MemoryMax=8G -p MemorySwapMax=0 -p CPUWeight=10 -p IOWeight=10 \
     -p Nice=19 -p IOSchedulingClass=idle -p UMask=0077 -p RuntimeMaxSec="$runtime" \
