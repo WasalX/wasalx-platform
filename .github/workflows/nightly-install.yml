@@ -24,7 +24,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 2
+          # The PR merge commit plus five first-parent main candidates.
+          fetch-depth: 6
           persist-credentials: false
       - name: Select changed installer inputs
         id: changes
@@ -36,7 +37,8 @@ jobs:
             release/installer-images.json scripts/installer-evidence.mjs ':(glob)infra/docker/full/**' \
             scripts/release/compose-stage-lock.mjs scripts/release/compose-stage-config.json scripts/release/simulation-rails-json.mjs \
             scripts/release/preflight-full-env.mjs scripts/release/generate-simulation-env.py \
-            scripts/release/images-by-digest.py scripts/release/image-manifest.sh .github/workflows/nightly-install.yml; then
+            scripts/release/images-by-digest.py scripts/release/product-images.json scripts/release/image-manifest.sh \
+            .github/workflows/nightly-install.yml; then
             needed=false
           fi
           echo "needed=$needed" >> "$GITHUB_OUTPUT"
@@ -52,18 +54,20 @@ jobs:
       - name: Test the DEV pull report agent
         if: steps.changes.outputs.needed != 'false'
         run: python3 -I -B scripts/dev-install/test_pull_agent.py
-      - name: Download the exact main publication manifest
+      - name: Resolve and download a complete main publication manifest
         id: publication
         if: steps.changes.outputs.needed != 'false'
         env:
           GH_TOKEN: ${{ github.token }}
-          PR_BASE: ${{ github.event.pull_request.base.sha }}
         run: |
-          commit=${PR_BASE:-$GITHUB_SHA}
+          base=$GITHUB_SHA
+          if [[ "$GITHUB_EVENT_NAME" == pull_request ]]; then
+            base=$(git rev-parse HEAD^1)
+          fi
           work="$RUNNER_TEMP/wasalx-nightly"
           install -d -m 0700 "$work/diagnostics"
           source scripts/release/image-manifest.sh
-          download_main_image_manifest "$commit" "$work"
+          commit=$(download_nightly_image_manifest "$base" "$work")
           echo "commit=$commit" >> "$GITHUB_OUTPUT"
       - if: steps.changes.outputs.needed != 'false'
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -105,7 +109,7 @@ jobs:
           TRUSTED_ROOT: ${{ steps.trust.outputs.root }}
         run: bash scripts/release/installer-nightly.sh
       - name: Confirm census PASS
-        if: steps.changes.outputs.needed != 'false'
+        if: steps.changes.outputs.needed != 'false' && steps.publication.outputs.commit == github.sha
         run: grep -Fxq 'probe-scan services=37 rerendered_hashes=37 census=PASS' "$RUNNER_TEMP/wasalx-nightly/diagnostics/phases.log"
       - name: Tear down the disposable stack and volumes
         if: always() && steps.changes.outputs.needed != 'false'

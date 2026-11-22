@@ -34,6 +34,14 @@ Before requesting `prod` approval, the release workflow checks for a successful,
 published RC for the exact commit and a successful `ci.yml` run from that
 commit's push to `main`.
 
+Nightly installer rehearsals use a PR's checked-out merge tree for installer
+scripts and configuration, with published images from the newest complete
+green `main` publication in the PR base's first five first-parent commits
+(including the base). Scheduled and manual runs start at their checked-out
+`main` SHA and use its publication when complete. The run logs the image
+source separately from the installer tree and fails if the bounded search
+finds no eligible publication.
+
 Live-provider qualification with real WhatsApp or Meta services and real
 customers is a separate milestone that requires owner approval. A stable
 release proves the platform end to end in its own environments.
