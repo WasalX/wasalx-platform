@@ -1,0 +1,8 @@
+{
+  "name": "wasalx-typescript-comparison",
+  "private": true,
+  "dependencies": {
+    "typescript-eslint-compiler": "npm:typescript@5.9.3",
+    "typescript-native": "npm:typescript@7.0.2"
+  }
+}
