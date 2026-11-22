@@ -1,11 +1,11 @@
 # WasalX delivery
 
-WasalX Delivery owns this document.
+WasalX Delivery owns this document. Change it through a reviewed PR.
 
 ## Branching and merging
 
 - Use short-lived branches and open PRs against trunk `main`. Enable auto-merge into the protected merge queue once checks pass at the exact PR head and any required risk-path review gives a passing verdict. Squash through the queue.
-- For the [risk paths defined in the agent instructions](AGENTS.md#risk-paths), require one independent Opus 5.5 high verdict on the full diff at the exact PR head. [CODEOWNERS](CODEOWNERS) marks risk paths only. Code-owner and lead approvals are not required.
+- For the [risk paths defined in the agent instructions](AGENTS.md#risk-paths), require one independent Opus 5.5 high verdict on the full diff at the exact PR head. Reuse the verdict for a merge-only base update with the same reviewed diff (same patch-id) or a same-tree re-cut. Review substantive diff changes again. [CODEOWNERS](CODEOWNERS) marks risk paths only. Code-owner and lead approvals are not required.
 - If the PR head changes after auto-merge is enabled or a review sends the PR back, disable auto-merge and remove the PR from the merge queue. Check queue membership directly because a queued PR shows no auto-merge request.
 - Keep `main` protected and update it only through the queue. The queue qualifies the exact combined tree.
 - Run agent pushes, PR operations, merges, reruns, and issue and board writes only through the project's reviewed GitHub App helper. Never print its installation token. Use the owner login only for approved settings changes.
