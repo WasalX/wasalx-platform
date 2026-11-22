@@ -79,7 +79,7 @@ jobs:
             scripts/release/preflight-full-env.mjs scripts/release/generate-simulation-env.py \
             scripts/release/images-by-digest.py scripts/release/product-images.json scripts/release/image-manifest.sh \
             tests/pull-verify.test.mjs \
-            .github/workflows/nightly-install.yml; then
+            tests/installer-nightly-grafana.test.mjs .github/workflows/nightly-install.yml; then
             needed=false
           fi
           echo "needed=$needed" >> "$GITHUB_OUTPUT"
@@ -155,7 +155,9 @@ jobs:
         env:
           MAIN_SHA: ${{ steps.publication.outputs.commit }}
           TRUSTED_ROOT: ${{ steps.trust.outputs.root }}
-        run: bash scripts/release/installer-nightly.sh
+        run: |
+          node --test tests/installer-nightly-grafana.test.mjs
+          bash scripts/release/installer-nightly.sh
       - name: Confirm census PASS
         if: steps.changes.outputs.needed != 'false' && steps.publication.outputs.commit == github.sha
         env:
