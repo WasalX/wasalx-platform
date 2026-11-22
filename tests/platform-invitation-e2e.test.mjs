@@ -68,8 +68,8 @@ test("platform and invitation journeys cross signed OIDC, portal, API, Redis, an
     await seed(resources.admin);
 
     resources.identity = await IdentityServer.start();
-    const controlPort = await freePort();
-    const portalPort = await freePort();
+    const controlPort = process.env.WASALX_E2E_CONTROL_PORT ?? await freePort();
+    const portalPort = process.env.WASALX_E2E_PORTAL_PORT ?? await freePort();
     const controlOrigin = `http://127.0.0.1:${controlPort}`;
     const portalOrigin = `http://127.0.0.1:${portalPort}`;
     resources.control = start("control-api", process.execPath, ["services/control-api/dist/cli.js", "serve"], {
@@ -84,7 +84,7 @@ test("platform and invitation journeys cross signed OIDC, portal, API, Redis, an
       CLIENT_ROUTING_EXTERNAL_CONNECTORS_ENABLED: "false", OTEL_SDK_DISABLED: "true",
     });
     await waitHttp(`${controlOrigin}/health/ready`, "control API", resources.control);
-    resources.portal = start("portal", process.execPath, ["node_modules/vinext/dist/cli.js", "start", "-p", String(portalPort)], {
+    resources.portal = start("portal", process.execPath, ["node_modules/vinext/dist/cli.js", "start", "--hostname", "127.0.0.1", "-p", String(portalPort)], {
       NODE_ENV: "production", WASALX_ENVIRONMENT: "local-full", PORTAL_DATA_BACKEND: "control-plane", CONTROL_API_URL: controlOrigin,
       PORTAL_SESSION_REDIS_URL: redisUrl, PORTAL_SESSION_SECRET: "test-portal-session-secret-at-least-32-bytes",
       PLATFORM_PORTAL_SESSION_REDIS_URL: redisUrl, PLATFORM_PORTAL_SESSION_SECRET: "test-platform-session-secret-at-least-32-bytes",

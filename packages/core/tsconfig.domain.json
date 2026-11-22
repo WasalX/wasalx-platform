@@ -4,9 +4,8 @@
     "target": "ES2022",
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
-    "baseUrl": ".",
     "paths": {
-      "re2-wasm": ["node_modules/re2-wasm"]
+      "re2-wasm": ["./node_modules/re2-wasm"]
     },
     "rootDir": "../../lib",
     "outDir": "dist",

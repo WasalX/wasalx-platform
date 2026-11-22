@@ -7,9 +7,9 @@ builds, which run without registry login, package writes or OIDC.
 
 On a push to `main`, `ci` calls `release` in
 `.github/workflows/branch-image.yml` to build, inspect, publish, sign and
-attest the full catalog. Only the publish lanes have package-write and OIDC
-access. Admission to the DEV environment requires a successful `ci` run on the
-`main` branch with the `images-manifest` artifact.
+attest the full catalog. Package writes are limited to the publish and alias
+jobs. OIDC is limited to the publish lanes. Admission to the DEV environment
+requires a successful `ci` run on `main` with the `images-manifest` artifact.
 
 The publish jobs on `main` export one GHCR cache tag per heavy
 image, without importing layers. PR and merge-queue builds import those
@@ -17,11 +17,15 @@ layers anonymously and run the same image inspection. The cache package
 must be public for anonymous cache hits. The first publish creates the
 package and seeds the cache. Check the anonymous access before claiming a
 warm-cache timing. Cosign produces the signature and SLSA attestation.
-Image pushes, signing, and attestation allow up to three attempts.
+Exact-SHA image pushes, signing, and attestation allow up to three attempts.
 
 Each package is `ghcr.io/wasalx/<image>`, tagged with the full public commit SHA.
-The `main` discovery alias advances after signature verification and reinspection.
-Resolve it once, then use only `@sha256:<manifest digest>`.
+Each main commit publishes independently. After its manifest is uploaded, a
+serialized job advances each `main` discovery alias only when the commit
+descends from the revision on the current alias. The job summary records skips
+when the revision or ancestry is unknown or the update would move backwards.
+Exact-SHA tags and manifest receipts remain available.
+Resolve the alias once, then use only `@sha256:<manifest digest>`.
 The `images-manifest` artifact requires one receipt for every matrix row, all
 bound to the same commit and tree. When the plan marks both add-on images
 pending, the artifact lists 19 published images and two `pending` entries

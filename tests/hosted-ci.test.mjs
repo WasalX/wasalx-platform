@@ -12,6 +12,7 @@ import { unitAllowlist, unitFiles } from "../scripts/test-unit.mjs";
 import { addonSkips, skipPattern } from "../scripts/hosted-ci-policy.mjs";
 import { generateBaseline } from "../scripts/generate-hosted-ci-baseline.mjs";
 import baseline from "../scripts/hosted-ci-baseline.mjs";
+import { parsePostgresShardArgs, postgresScenarioGroups, verifyPostgresReports } from "../scripts/postgres-scenario-registry.mjs";
 
 const repository = fileURLToPath(new URL("../", import.meta.url));
 const read = file => readFile(join(repository, file), "utf8");
@@ -21,7 +22,9 @@ const words = text => Array.from(text.matchAll(/"([^"]*)"|'([^']*)'|([^\s"'()]+)
 
 function runsFile(text, file, option) {
   return commands(text).some(command => {
-    const [exe, ...args] = words(command);
+    let w = words(command);
+    if (w[0] === "sudo") w = w.slice(1);
+    const [exe, ...args] = w;
     if (!["node", "python", "python3", "ruby", "bash"].includes(exe) || (option && !args.includes(option))) return false;
     const paths = args.map(arg => arg.replace(/^\.\//u, ""));
     if (args.includes("unittest") && args.includes("discover")) {
@@ -31,12 +34,26 @@ function runsFile(text, file, option) {
   });
 }
 
+test("runner ownership recognizes a bare sudo interpreter", () => {
+  const file = "scripts/example.sh";
+  assert(runsFile(`sudo bash ${file}`, file));
+  assert(!runsFile(`sudo apt-get ${file}`, file));
+  assert(!runsFile(`sudo -u x bash ${file}`, file));
+});
+
 function referencesFile(source, file) {
   return source.includes(`"${file}"`) || source.includes(`'${file}'`);
 }
 
 const tofuFile = file => /^infra\/terraform\/tests\/[^/]+\.tftest\.(?:hcl|json)$/u.test(file);
 const postgresFile = file => /^tests\/.*(?:-postgres(?:-check)?|-real-schema-check)\.mjs$/u.test(file);
+
+function runWorkflowScript(script, env) {
+  const bash = process.platform === "win32" ? "C:/Program Files/Git/bin/bash.exe" : "bash";
+  return spawnSync(bash, ["--noprofile", "--norc", "-e", "-o", "pipefail", "-c", script], {
+    env: { ...process.env, ...env }, encoding: "utf8", timeout: 10_000, windowsHide: true,
+  });
+}
 
 test("tracked tests belong to a named CI runner or the test allowlist", async () => {
   const tracked = execFileSync("git", ["ls-files", "-z", "--", "tests", "infra/terraform/tests", "scripts", ".github/workflows",
@@ -76,9 +93,11 @@ test("tracked tests belong to a named CI runner or the test allowlist", async ()
 
   const unitWrappers = await Promise.all(["tests/application-e2e-harness.test.mjs", "tests/ci-phase-admission.test.mjs",
     "tests/simulation-native-isolation.test.mjs"].filter(file => units.has(file)).map(read));
+  const postgresHarness = "scripts/test-postgres-integration.mjs";
+  const postgresSource = await read(postgresHarness);
   const postgresImports = new Set();
-  if (runsFile(runnerText("test:postgres"), "scripts/test-postgres-integration.mjs")) {
-    postgresImports.add("scripts/test-postgres-integration.mjs");
+  if (runsFile(runnerText("integration"), postgresHarness, "--shard")) {
+    postgresImports.add(postgresHarness);
     for (const entry of postgresImports) {
       for (const [, relative] of (await read(entry)).matchAll(/^import\s+(?:[^;]*?\sfrom\s+)?["'](\.{1,2}\/[^"']+)["']/gmu)) {
         const dependency = posix.join(posix.dirname(entry), relative);
@@ -103,8 +122,10 @@ test("tracked tests belong to a named CI runner or the test allowlist", async ()
       case "infra-validate":
         return commands(command).includes("bash scripts/validate-infra.sh")
           && (runsFile(validation, file) || (runsTofu && tofuFile(file)));
-      case "test:postgres":
-        return postgresImports.has(file);
+      case "integration":
+        return postgresImports.has(file) || (postgresImports.has(postgresHarness)
+          && file === "tests/postgres-load-recovery.test.mjs"
+          && postgresSource.includes('process.execPath,["--test","tests/postgres-load-recovery.test.mjs"]'));
       case "images": {
         const copiedPath = `/tmp/${posix.basename(file)}`;
         return runsFile(command, "scripts/release/images-by-digest.py", "build")
@@ -149,12 +170,18 @@ test("tracked tests belong to a named CI runner or the test allowlist", async ()
 
 test("nightly install is report-only, read-only and fails open on PR diff errors", async () => {
   const path = ".github/workflows/nightly-install.yml";
-  const { on, permissions, jobs } = parse(await read(path));
+  const { on, permissions, concurrency, jobs } = parse(await read(path));
   const job = jobs["nightly-install"];
   assert.deepEqual(on, {
     schedule: [{ cron: "30 3 * * *" }],
     workflow_dispatch: null,
     pull_request: { branches: ["main"], types: ["opened", "synchronize", "reopened"] },
+    push: { tags: ["v*-rc.*"] },
+  });
+  assert.match(job.if, /\(github\.event_name == 'push' && github\.ref_type == 'tag'\)/u);
+  assert.deepEqual(concurrency, {
+    group: "nightly-${{ github.event.pull_request.number || github.run_id }}",
+    "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
   });
   assert.deepEqual(permissions, { contents: "read" });
   assert.deepEqual(job.permissions, { contents: "read", actions: "read" });
@@ -163,7 +190,9 @@ test("nightly install is report-only, read-only and fails open on PR diff errors
   assert(actions.every(step => /@[0-9a-f]{40}$/u.test(step.uses)));
   assert.equal(actions.find(step => step.uses.startsWith("actions/checkout@")).with["persist-credentials"], false);
   assert(!JSON.stringify(job).includes("secrets."));
-  const changes = job.steps.find(step => step.id === "changes").run;
+  const changeSelection = job.steps.find(step => step.id === "changes");
+  assert.equal(changeSelection.if, "github.event_name == 'pull_request'");
+  const changes = changeSelection.run;
   assert.match(changes, /needed=true\nif git diff --quiet[^]*; then\n {2}needed=false\nfi/u);
   for (const input of ["scripts/release/installer-*", "scripts/dev-install/**", "compose*.yaml", path, "release/installer-images.json",
     "scripts/release/compose-stage-lock.mjs", "scripts/release/compose-stage-config.json", "scripts/release/simulation-rails-json.mjs",
@@ -188,7 +217,7 @@ test("nightly MinIO mirrors retain the full installer content digests", async ()
   }
 });
 
-test("nightly selects the newest complete publication within five first-parent commits", async t => {
+test("nightly selects the newest complete publication within five first-parent commits and requires an exact publication on tags", async t => {
   const directory = await mkdtemp(join(tmpdir(), "nightly-publication-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const options = { cwd: directory, encoding: "utf8", windowsHide: true };
@@ -204,10 +233,19 @@ test("nightly selects the newest complete publication within five first-parent c
   const side = git("commit-tree", tree, "-p", parent, "-m", "side branch");
   const base = git("commit-tree", tree, "-p", parent, "-p", side, "-m", "base merge");
   const commits = git("rev-list", "--first-parent", base).split(/\r?\n/u);
+  const tag = "v0.0.0-rc.1";
+  git("tag", "-a", tag, base, "-m", "fixture tag");
+  git("checkout", "--quiet", "--detach", base);
+  git("remote", "add", "origin", ".");
+  const { jobs } = parse(await read(".github/workflows/nightly-install.yml"));
+  const publication = jobs["nightly-install"].steps.find(step => step.id === "publication");
   await mkdir(join(directory, "scripts", "release"), { recursive: true });
   await writeFile(join(directory, "scripts", "release", "product-images.json"), '[{"image":"zammad"}]');
-  await writeFile(join(directory, "image-manifest.sh"), await read("scripts/release/image-manifest.sh"));
-  const fixture = String.raw`
+  await writeFile(join(directory, "scripts", "release", "image-manifest.sh"), await read("scripts/release/image-manifest.sh"));
+  const ghFixture = String.raw`
+install() {
+  [[ "$1 $2 $3" == '-d -m 0700' ]] && mkdir -p "$4"
+}
 gh() {
   case "$1 $2" in
     "api repos/$GITHUB_REPOSITORY/compare/$BASE...main") echo ahead ;;
@@ -230,14 +268,13 @@ gh() {
       local commit=$READY images='{"zammad":{}}' pending='{}' complete=true
       [[ "$3" != 102 ]] || { commit=$INCOMPLETE; images='{}'; pending='{"zammad":{}}'; complete=false; }
       [[ "$INVALID" != true ]] || commit=$BASE
+      while [[ "$1" != --dir ]]; do shift; done
       printf '{"schemaVersion":1,"repository":"%s","platform":"linux/amd64","commit":"%s","tree":"%s","images":%s,"pending":%s,"publicationComplete":%s}\n' \
-        "$GITHUB_REPOSITORY" "$commit" "$(git rev-parse "$commit^{tree}")" "$images" "$pending" "$complete" > images-manifest.json
+        "$GITHUB_REPOSITORY" "$commit" "$(git rev-parse "$commit^{tree}")" "$images" "$pending" "$complete" > "$2/images-manifest.json"
       ;;
     *) return 2 ;;
   esac
 }
-source ./image-manifest.sh
-"$RESOLVER" "$BASE" .
 `;
   const cases = [
     { ready: base, selected: base, lookups: commits.slice(0, 1), reason: "requested base has a complete publication" },
@@ -247,24 +284,31 @@ source ./image-manifest.sh
     { ready: side, lookups: commits.slice(0, 5), reason: "No complete green main publication" },
     { ready: commits[1], lookupError: base, lookups: commits.slice(0, 1), status: 17 },
     { ready: commits[1], invalid: true, lookups: commits.slice(0, 2), status: 5, reason: "Invalid nightly publication manifest" },
+    { ready: base, exact: true, selected: base, lookups: commits.slice(0, 1) },
     { ready: commits[1], exact: true, lookups: commits.slice(0, 1), reason: "No green main CI push run for the commit" },
   ];
   const bash = process.platform === "win32" ? "C:/Program Files/Git/bin/bash.exe" : "bash";
   for (const { ready, selected, incomplete = "", expired = "", noJob = "", lookupError = "", invalid = false,
     exact = false, lookups, status = selected ? 0 : 1, reason } of cases) {
     await writeFile(join(directory, "lookups"), "");
-    const result = spawnSync(bash, ["--noprofile", "--norc", "-euo", "pipefail", "-c", fixture], {
+    await writeFile(join(directory, "publication-output"), "");
+    const result = spawnSync(bash, ["--noprofile", "--norc", "-euo", "pipefail", "-c", ghFixture + publication.run], {
       ...options, timeout: 10_000, env: {
         ...process.env, GITHUB_REPOSITORY: "fixture/nightly", BASE: base, READY: ready, INCOMPLETE: incomplete,
         EXPIRED: expired, NO_JOB: noJob, LOOKUP_ERROR: lookupError, INVALID: String(invalid),
-        RESOLVER: exact ? "download_main_image_manifest" : "download_nightly_image_manifest",
+        GITHUB_EVENT_NAME: exact ? "push" : "schedule", GITHUB_REF_TYPE: exact ? "tag" : "branch",
+        GITHUB_REF: exact ? `refs/tags/${tag}` : "refs/heads/main",
+        GITHUB_SHA: base, GITHUB_OUTPUT: "publication-output", RUNNER_TEMP: ".",
       },
     });
     assert.ifError(result.error);
     assert.equal(result.status, status, result.stdout + result.stderr);
-    if (!exact) assert.equal(result.stdout.trim(), selected ?? "");
+    assert.equal((await readFile(join(directory, "publication-output"), "utf8")).trim(), selected ? `commit=${selected}` : "");
     if (reason) assert.ok((result.stdout + result.stderr).includes(reason), result.stderr);
-    if (selected) assert.equal(JSON.parse(await readFile(join(directory, "images-manifest.json"), "utf8")).commit, selected);
+    if (selected) {
+      const manifest = join(directory, "wasalx-nightly", "images-manifest.json");
+      assert.equal(JSON.parse(await readFile(manifest, "utf8")).commit, selected);
+    }
     assert.deepEqual((await readFile(join(directory, "lookups"), "utf8")).trim().split(/\r?\n/u), lookups);
   }
 });
@@ -346,35 +390,54 @@ ${copy.run}`], {
 
 test("CI gates integration and infrastructure and runs portal integration files serially", async () => {
   const { on, jobs } = parse(await read(".github/workflows/ci.yml"));
-  const { integration, "ci-gate": gate, "dev-install-dryrun": dryrun } = jobs;
+  const { integration, "integration-coverage": coverage, "portal-integration": portal,
+    "ci-gate": gate, "dev-install-dryrun": dryrun } = jobs;
   assert(Object.hasOwn(on, "workflow_dispatch"));
   assert(Object.hasOwn(on, "merge_group"));
   assert.deepEqual(on.push.branches, ["main"]);
-  assert.equal(integration.if, "github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')");
+  assert.equal(integration.needs, "changes");
+  assert.equal(integration.if, "${{ !cancelled() && (github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && (needs.changes.result != 'success' || needs.changes.outputs.integration != 'false'))) }}");
+  assert.equal(portal.needs, "changes");
+  assert.equal(portal.if, integration.if);
+  assert.equal(coverage.needs, "integration");
+  assert.deepEqual(integration.strategy, { "fail-fast": false, matrix: { shard: [1, 2, 3, 4] } });
+  assert.match(integration.services.postgres.options, /--tmpfs /u);
+  assert(coverage.steps.some(step => runsFile(step.run ?? "", "scripts/postgres-scenario-registry.mjs")));
+  assert(integration.steps.some(step => runsFile(step.run ?? "", "scripts/test-postgres-integration.mjs", "--shard")));
   assert.equal(integration["timeout-minutes"], 25);
   assert.deepEqual(integration.permissions, { contents: "read" });
   assert.match(integration.services.postgres.image, /^postgres:[^@]+@sha256:[a-f0-9]{64}$/u);
   const devPreflightFile = "tests/installer-dev-recreatability.test.mjs";
   const devPreflight = jobs.checks.steps.find(step => runsFile(step.run ?? "", devPreflightFile));
   assert.equal(devPreflight?.if, "github.event_name == 'pull_request' && matrix.mode == 'unit' && matrix.shard == 1");
-  assert(integration.steps.some(step => !step.if && runsFile(step.run ?? "", devPreflightFile)));
+  assert(portal.steps.some(step => !step.if && runsFile(step.run ?? "", devPreflightFile)));
   const dryrunFile = "scripts/dev-install/test_dryrun.py";
-  assert(integration.steps.some(step => !step.if && runsFile(step.run ?? "", dryrunFile, "--container")));
+  assert(portal.steps.some(step => step.if === "github.event_name != 'pull_request'" && runsFile(step.run ?? "", dryrunFile, "--container")));
   assert(dryrun.steps.some(step => !step.if && runsFile(step.run ?? "", dryrunFile, "--container")));
   assert.equal(dryrun.needs, "changes");
   assert.equal(dryrun.if, "${{ !cancelled() && github.event_name == 'pull_request' && needs.changes.outputs.dev-install != 'false' }}");
-  const portalIntegration = integration.steps.find(step => step.name === "Test portal and tenant integration");
+  const portalIntegration = portal.steps.find(step => step.name === "Test portal and tenant integration");
   assert.match(portalIntegration?.run, /^node --test --test-concurrency=1 /u);
-  assert(gate.needs.includes("integration"));
+  assert.deepEqual(portalIntegration.env, { WASALX_E2E_CONTROL_PORT: "14101", WASALX_E2E_PORTAL_PORT: "14102" });
+  for (const job of ["integration", "portal-integration", "integration-coverage"]) assert(gate.needs.includes(job));
   assert(gate.needs.includes("dev-install-dryrun"));
   const [gateStep] = gate.steps;
+  assert.equal(gateStep.env.INTEGRATION_NEEDED, "${{ needs.changes.outputs.integration }}");
   assert.equal(gateStep.env.INTEGRATION, "${{ needs.integration.result }}");
+  assert.equal(gateStep.env.PORTAL_INTEGRATION, "${{ needs.portal-integration.result }}");
+  assert.equal(gateStep.env.INTEGRATION_COVERAGE, "${{ needs.integration-coverage.result }}");
   assert.equal(gateStep.env.DEV_INSTALL_NEEDED, "${{ needs.changes.outputs.dev-install }}");
   assert.equal(gateStep.env.DEV_INSTALL, "${{ needs.dev-install-dryrun.result }}");
   assert.equal(gateStep.run, `test "$CHANGES" = success && test "$CHECKS" = success || exit 1
-case "$EVENT:$REVIEW:$IMAGES_NEEDED:$IMAGES:$INTEGRATION" in
-  pull_request:success:false:skipped:skipped|pull_request:success:true:success:skipped) ;;
-  merge_group:skipped:false:skipped:success|merge_group:skipped:true:success:success) ;;
+case "$EVENT:$REVIEW:$IMAGES" in
+  pull_request:success:*)
+    echo 'See PR image results (advisory) for image build outcomes.' >> "$GITHUB_STEP_SUMMARY"
+    ;;
+  merge_group:skipped:success) ;;
+  *) exit 1 ;;
+esac
+case "$EVENT:$INTEGRATION_NEEDED:$INTEGRATION:$PORTAL_INTEGRATION:$INTEGRATION_COVERAGE" in
+  pull_request:false:skipped:skipped:skipped|pull_request:*:success:success:success|merge_group:*:success:success:success) ;;
   *) exit 1 ;;
 esac
 case "$EVENT:$DEV_INSTALL_NEEDED:$DEV_INSTALL" in
@@ -388,6 +451,64 @@ test "$INFRA" = success || {
   for (const job of [jobs.changes, jobs.checks]) {
     assert.equal(job.if, "github.event_name == 'pull_request' || github.event_name == 'merge_group'");
   }
+});
+
+test("PR image results are advisory while the merge queue requires the full image matrix", async t => {
+  const { jobs } = parse(await read(".github/workflows/ci.yml"));
+  const branch = parse(await read(".github/workflows/branch-image.yml")).jobs;
+  const { images, "pr-images": prImages, "pr-image-results": report, "ci-gate": gate, publish } = jobs;
+  assert.equal(gate.if, "always() && (github.event_name == 'pull_request' || github.event_name == 'merge_group')");
+  assert(gate.needs.includes("images"));
+  assert(!gate.needs.includes("pr-images"));
+  assert(!gate.needs.includes("pr-image-results"));
+  assert.deepEqual(images.needs, ["changes"]);
+  assert.deepEqual(prImages.needs, images.needs);
+  assert.equal(images.if, "${{ !cancelled() && github.event_name == 'merge_group' && needs.changes.outputs.images == 'true' }}");
+  assert.equal(prImages.if, "${{ !cancelled() && github.event_name == 'pull_request' && needs.changes.outputs.images == 'true' }}");
+  assert.equal(images.strategy["max-parallel"], 21);
+  assert.deepEqual(prImages.strategy, { ...images.strategy, "max-parallel": 8 });
+  assert.equal(prImages.steps, images.steps);
+  assert.equal(images["continue-on-error"], undefined);
+  assert.equal(prImages["continue-on-error"], undefined);
+  assert.equal(report.if, "always() && github.event_name == 'pull_request'");
+  assert.equal(report.needs, "pr-images");
+  assert.equal(report.steps[0].env.IMAGES, "${{ needs.pr-images.result }}");
+  assert.equal(gate.steps[0].env.IMAGES, "${{ needs.images.result }}");
+  assert.equal(publish.needs, "lint-on-push");
+  assert.equal(publish.if, "${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'WasalX/wasalx-platform' }}");
+  assert.equal(publish.uses, "./.github/workflows/branch-image.yml");
+  assert.deepEqual(publish.concurrency, { group: "release-${{ github.sha }}", "cancel-in-progress": false });
+  assert.equal(branch.publish.strategy["max-parallel"], 21);
+  assert.equal(branch.manifest.needs, "publish");
+  assert.equal(branch.manifest.concurrency, undefined);
+  assert.equal(branch.aliases.needs, "manifest");
+  assert.deepEqual(branch.aliases.concurrency, { group: "release-main", queue: "max" });
+
+  const directory = await mkdtemp(join(tmpdir(), "wasalx-ci-image-results-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  for (const imageResult of ["success", "failure", "skipped", "cancelled"]) {
+    const summary = join(directory, imageResult).replaceAll("\\", "/");
+    const advisory = runWorkflowScript(report.steps[0].run, { IMAGES: imageResult, GITHUB_STEP_SUMMARY: summary });
+    assert.equal(advisory.status, ["success", "skipped"].includes(imageResult) ? 0 : 1, advisory.stderr);
+    assert.equal((await readFile(summary, "utf8")).trim(), `PR image builds (advisory): ${imageResult}`);
+    if (imageResult === "failure") assert.match(advisory.stdout, /::warning::Advisory PR image builds: failure/u);
+
+    const result = runWorkflowScript(gate.steps[0].run, {
+      EVENT: "merge_group", CHANGES: "success", CHECKS: "success", REVIEW: "skipped",
+      IMAGES: imageResult, INTEGRATION: "success", PORTAL_INTEGRATION: "success",
+      INTEGRATION_COVERAGE: "success", DEV_INSTALL: "skipped", INFRA: "success",
+    });
+    assert.equal(result.status, imageResult === "success" ? 0 : 1, `merge_group/${imageResult}: ${result.stderr}`);
+  }
+  const summary = join(directory, "gate").replaceAll("\\", "/");
+  const result = runWorkflowScript(gate.steps[0].run, {
+    EVENT: "pull_request", CHANGES: "success", CHECKS: "success", REVIEW: "success",
+    IMAGES: "skipped", INTEGRATION_NEEDED: "false", INTEGRATION: "skipped",
+    PORTAL_INTEGRATION: "skipped", INTEGRATION_COVERAGE: "skipped", DEV_INSTALL_NEEDED: "false", DEV_INSTALL: "skipped",
+    INFRA_NEEDED: "false", INFRA: "skipped", GITHUB_STEP_SUMMARY: summary,
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert((await readFile(summary, "utf8")).includes(report.name));
 });
 
 test("optional PR lanes run on diff errors and gate their applicable checks", async t => {
@@ -407,28 +528,28 @@ test("optional PR lanes run on diff errors and gate their applicable checks", as
   assert.equal(gateStep.env.INFRA_NEEDED, "${{ needs.changes.outputs.infra }}");
   assert.equal(changes.outputs.infra, "${{ steps.infra.outputs.needed }}");
   assert.equal(changes.outputs["dev-install"], "${{ steps.dev-install.outputs.needed }}");
+  assert.equal(changes.outputs.integration, "${{ steps.integration.outputs.needed }}");
   const paths = [
     "infra/helm/", "infra/terraform/", ":(glob)scripts/validate-*", "scripts/release/fetch-verified-asset.sh",
     "compose.full.yaml", "tests/fixtures/production-backup-alerts.yaml", "tests/secret-adapter-readiness.test.rb",
     ".github/workflows/ci.yml",
   ].join(" ");
-  const bash = process.platform === "win32" ? "C:/Program Files/Git/bin/bash.exe" : "bash";
-  const run = (script, env) => spawnSync(bash, ["--noprofile", "--norc", "-e", "-o", "pipefail", "-c", script], {
-    env: { ...process.env, ...env }, encoding: "utf8", timeout: 10_000, windowsHide: true,
-  });
   const directory = await mkdtemp(join(tmpdir(), "wasalx-infra-validate-changes-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
+  const summary = join(directory, "gate-summary").replaceAll("\\", "/");
   for (const [id, diffPaths] of [
     ["infra", paths],
     ["dev-install", ["scripts/dev-install/", "scripts/release/installer-stages.mjs",
       "scripts/release/installer-stack.mjs", "scripts/release/compose-stage-lock.mjs",
       "scripts/release/compose-stage-config.json", ".github/workflows/ci.yml"].join(" ")],
+    ["integration", [".github/workflows/ci.yml", "scripts/test-postgres-integration.mjs",
+      "scripts/postgres-scenario-registry.mjs", ":(glob)tests/*postgres*.mjs"].join(" ")],
   ]) {
     const detector = changes.steps.find(step => step.id === id);
     assert.equal(detector.if, "github.event_name == 'pull_request'");
     for (const [status, needed] of [[0, false], [1, true], [128, true]]) {
       const outputFile = join(directory, `${id}-${status}`);
-      const result = run(`git() {
+      const result = runWorkflowScript(`git() {
   test "$*" = "diff --quiet --no-ext-diff --no-renames HEAD^1 HEAD -- $DIFF_PATHS" || exit 99
   return "$DIFF_STATUS"
 }
@@ -449,11 +570,13 @@ ${detector.run}`, { GITHUB_OUTPUT: outputFile.replaceAll("\\", "/"), DIFF_PATHS:
     ["merge_group", "", "failure", 1],
   ]) {
     const pr = event === "pull_request";
-    const result = run(gateStep.run, {
+    const result = runWorkflowScript(gateStep.run, {
       EVENT: event, CHANGES: "success", CHECKS: "success", REVIEW: pr ? "success" : "skipped",
-      IMAGES_NEEDED: "false", IMAGES: "skipped", INTEGRATION: pr ? "skipped" : "success",
+      IMAGES: pr ? "skipped" : "success", INTEGRATION_NEEDED: "false",
+      INTEGRATION: pr ? "skipped" : "success", PORTAL_INTEGRATION: pr ? "skipped" : "success",
+      INTEGRATION_COVERAGE: pr ? "skipped" : "success",
       DEV_INSTALL_NEEDED: "false", DEV_INSTALL: "skipped",
-      INFRA_NEEDED: needed, INFRA: jobResult,
+      INFRA_NEEDED: needed, INFRA: jobResult, GITHUB_STEP_SUMMARY: summary,
     });
     assert.equal(result.status, status, `${event}/${needed}/${jobResult}: ${result.error?.message ?? result.stderr}`);
   }
@@ -461,13 +584,53 @@ ${detector.run}`, { GITHUB_OUTPUT: outputFile.replaceAll("\\", "/"), DIFF_PATHS:
     ["true", "success", 0], ["false", "skipped", 0], ["true", "skipped", 1], ["", "skipped", 1],
     ["true", "failure", 1], ["true", "cancelled", 1],
   ]) {
-    const result = run(gateStep.run, {
+    const result = runWorkflowScript(gateStep.run, {
       EVENT: "pull_request", CHANGES: "success", CHECKS: "success", REVIEW: "success",
-      IMAGES_NEEDED: "false", IMAGES: "skipped", INTEGRATION: "skipped",
+      IMAGES: "skipped", INTEGRATION_NEEDED: "false",
+      INTEGRATION: "skipped", PORTAL_INTEGRATION: "skipped", INTEGRATION_COVERAGE: "skipped",
       DEV_INSTALL_NEEDED: needed, DEV_INSTALL: jobResult, INFRA_NEEDED: "false", INFRA: "skipped",
+      GITHUB_STEP_SUMMARY: summary,
     });
     assert.equal(result.status, status, `dev-install/${needed}/${jobResult}: ${result.error?.message ?? result.stderr}`);
   }
+  for (const [event, needed, postgres, portal, coverage, status] of [
+    ["pull_request", "true", "success", "success", "success", 0],
+    ["pull_request", "true", "skipped", "skipped", "skipped", 1],
+    ["pull_request", "", "skipped", "skipped", "skipped", 1],
+    ["merge_group", "", "success", "success", "success", 0],
+    ["merge_group", "", "failure", "success", "success", 1],
+    ["merge_group", "", "success", "skipped", "success", 1],
+    ["merge_group", "", "success", "success", "skipped", 1],
+  ]) {
+    const pr = event === "pull_request";
+    const result = runWorkflowScript(gateStep.run, {
+      EVENT: event, CHANGES: "success", CHECKS: "success", REVIEW: pr ? "success" : "skipped",
+      IMAGES: pr ? "skipped" : "success", DEV_INSTALL_NEEDED: "false", DEV_INSTALL: "skipped",
+      INFRA_NEEDED: "true", INFRA: "success", INTEGRATION_NEEDED: needed, GITHUB_STEP_SUMMARY: summary,
+      INTEGRATION: postgres, PORTAL_INTEGRATION: portal, INTEGRATION_COVERAGE: coverage,
+    });
+    assert.equal(result.status, status, [event, needed, postgres, portal, coverage].join("/"));
+  }
+});
+
+test("PostgreSQL coverage requires an exact report from every shard", async t => {
+  assert.deepEqual(parsePostgresShardArgs(["--shard", "3/4", "--report", "report.json"]), { shard: 3, report: "report.json" });
+  for (const selection of ["0/4", "5/4", "1/3", "1/4x"]) assert.throws(() => parsePostgresShardArgs(["--shard", selection]));
+  const directory = await mkdtemp(join(tmpdir(), "postgres-scenario-coverage-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const report = (index, scenarios) => writeFile(join(directory, "postgres-shard-" + index + ".json"),
+    JSON.stringify({ shard: index, scenarios }));
+  for (const [index, names] of postgresScenarioGroups.entries()) await report(index + 1, names);
+  assert.equal(await verifyPostgresReports(directory), postgresScenarioGroups.flat().length);
+  const [first, second] = postgresScenarioGroups;
+  await report(1, first.slice(1));
+  await assert.rejects(verifyPostgresReports(directory), /coverage in PostgreSQL shard 1/u);
+  await report(1, [...first, first[0]]);
+  await assert.rejects(verifyPostgresReports(directory), /coverage in PostgreSQL shard 1/u);
+  await report(1, [...first.slice(1), second[0]]);
+  await assert.rejects(verifyPostgresReports(directory), /coverage in PostgreSQL shard 1/u);
+  await rm(join(directory, "postgres-shard-1.json"));
+  await assert.rejects(verifyPostgresReports(directory), /one report from each PostgreSQL shard/u);
 });
 
 test("shards cover each file once regardless of inventory order or duplicates", () => {

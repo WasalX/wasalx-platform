@@ -24,7 +24,13 @@ SOURCE = "https://github.com/" + REPOSITORY
 MAIN_PUBLISHER = SOURCE + "/.github/workflows/branch-image.yml@refs/heads/main"
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 SHA = re.compile(r"[0-9a-f]{40}")
-ADDON_IMAGES = {"zammad", "workspace-configurator"}
+ADDON_STAGED = ("zammad-package/", "build/zammad/", "build/addon-licenses/", "tests/fixtures/")
+RERUN_ALL = {
+    "scripts/release/images-by-digest.py",  # Selects, builds, and inspects images.
+    ".github/workflows/ci.yml",  # Configures the PR image build jobs and their inputs.
+    "scripts/release/product-images.json",  # Supplies the Dockerfile and image matrix.
+    "zammad-addon.json",  # Pins the public add-on source passed to image builds.
+}
 CACHED_IMAGES = {
     "production-prometheus", "zammad", "production-otel", "control-api", "connector-worker", "portal",
     "tenant-provisioner", "tenant-workspace-controller", "workspace-provider", "identity-policy-activator",
@@ -99,7 +105,12 @@ def catalog():
         require(row["dockerfile"] == ("infra/docker/Dockerfile.zammad" if row["image"] == "zammad"
                                     else "Dockerfile." + row["image"]), "Invalid Dockerfile")
         require((ROOT / row["dockerfile"]).is_file(), "Missing Dockerfile")
+        require(type(row.get("stagesAddon", False)) is bool, "Invalid add-on staging flag")
     return rows
+
+
+def addon_images(rows):
+    return {row["image"] for row in rows if row.get("stagesAddon", False)}
 
 
 def public_addon_source(raw=None):
@@ -117,13 +128,15 @@ def public_addon_source(raw=None):
     return source
 
 
-def matrix(changed_paths=None):
+def matrix(changed_paths=None, *, pull_request=False):
     rows = catalog()
     if changed_paths is not None:
-        rows = changed_images(rows, changed_paths)
+        rows = changed_images(rows, changed_paths, pull_request=pull_request)
     source = public_addon_source() if rows else None
-    return {"include": [{**row, "pending": row["image"] in ADDON_IMAGES and source is None,
-                          "addonSource": source if row["image"] in ADDON_IMAGES else None} for row in rows]}
+    addons = addon_images(rows)
+    return {"include": [{"image": row["image"], "dockerfile": row["dockerfile"],
+                          "pending": row["image"] in addons and source is None,
+                          "addonSource": source if row["image"] in addons else None} for row in rows]}
 
 
 def coordinates():
@@ -175,25 +188,33 @@ def context_sources(text):
     return paths
 
 
-def changed_images(rows, paths):
+def changed_images(rows, paths, *, pull_request=False):
     inputs = {}
     for row in rows:
         dockerfile = row["dockerfile"]
         sources = context_sources((ROOT / dockerfile).read_text())
-        if sources is None:
+        if sources is None:  # An unsupported Dockerfile context may depend on any path.
             return rows
         inputs[row["image"]] = sources | {dockerfile}
 
     ignored = ("README.md", "docs/*", ".github/workflows/deploy.yml", ".github/dependabot.yml",
                "scripts/hosted-ci*.mjs", "scripts/hosted-ci*.json", "scripts/test-unit.mjs", "tests/hosted-ci.test.mjs")
+    addons = addon_images(rows)
     selected = set()
     for path in paths:
+        name = PurePosixPath(path).name
+        if pull_request and (path in RERUN_ALL or name == ".gitattributes" or name.endswith(".dockerignore")):
+            return rows
         matches = {image for image, sources in inputs.items()
                    if any(path == source or path.startswith(source + "/") for source in sources)}
-        if len(matches) == 1:
-            selected.update(matches)
-        elif matches or not any(fnmatchcase(path, pattern) for pattern in ignored):
+        # The staging helper checks these paths before Docker reads the context.
+        if pull_request and (path == "scripts/fetch-zammad-addon.mjs" or path.startswith(ADDON_STAGED)
+                             or re.fullmatch(r"tests/[^/]+\.rb", path)):
+            matches |= addons
+        if not pull_request and len(matches) != 1 and (
+                matches or not any(fnmatchcase(path, pattern) for pattern in ignored)):
             return rows
+        selected.update(matches)
     return [row for row in rows if row["image"] in selected]
 
 
@@ -441,8 +462,9 @@ def build(image, output, cache="off"):
     commit, tree = coordinates()
     epoch = run("git", "log", "-1", "--format=%ct", commit, cwd=ROOT)
     reference = "ghcr.io/wasalx/" + image + ":" + commit
-    addon = public_addon_source() if image in ADDON_IMAGES else None
-    require(image not in ADDON_IMAGES or addon is not None, "pending add-on source")
+    stages_addon = row.get("stagesAddon", False)
+    addon = public_addon_source() if stages_addon else None
+    require(not stages_addon or addon is not None, "pending add-on source")
     with tempfile.TemporaryDirectory() as directory:
         context = Path(directory) / "source"
         context.mkdir()
@@ -489,7 +511,7 @@ def build(image, output, cache="off"):
 
 
 def pending(image, output):
-    require(image in ADDON_IMAGES and public_addon_source() is None, "Only unset add-on source may be skipped")
+    require(image in addon_images(catalog()) and public_addon_source() is None, "Only unset add-on source may be skipped")
     commit, tree = coordinates()
     write(output, {"image": image, "commit": commit, "tree": tree, "platform": "linux/amd64",
                    "status": "pending add-on source"})
@@ -599,25 +621,22 @@ def publish(receipt_path):
     with tempfile.TemporaryDirectory() as directory:
         final = inspect_image(reference, row, commit, tree, directory, receipt["inspection"]["addonLicenses"])
     require(final == receipt["inspection"], "Published image differs from inspected image")
-    # Advance the discovery alias only after signature and exact-digest reinspection.
-    alias = repository + ":" + ref.removeprefix("refs/heads/")
-    run("docker", "tag", reference, alias)
-    alias_result = run_retry("docker", "push", alias)
-    require("digest: " + digest in alias_result, "Discovery alias digest mismatch")
     receipt["verified"] = True
     receipt["status"] = "published"
     write(receipt_path, receipt)
 
 
 def assemble(records):
-    require(len(records) == 21 and {r["image"] for r in records} == {r["image"] for r in catalog()},
+    rows = catalog()
+    addons = addon_images(rows)
+    require(len(records) == 21 and {r["image"] for r in records} == {r["image"] for r in rows},
             "Complete unique image receipts required")
     require(len({(r["commit"], r["tree"]) for r in records}) == 1, "Mixed source identities")
     published, pending_images = {}, {}
     for row in records:
         require(SHA.fullmatch(row["commit"]) and SHA.fullmatch(row["tree"]), "Invalid receipt source identity")
         if row.get("status") == "pending add-on source":
-            require(row["image"] in ADDON_IMAGES and not any(key in row for key in ["digest", "configDigest", "verified"]),
+            require(row["image"] in addons and not any(key in row for key in ["digest", "configDigest", "verified"]),
                     "Only add-on-dependent images may be pending without digest claims")
             pending_images[row["image"]] = row
             continue
@@ -725,7 +744,8 @@ if __name__ == "__main__":
             sys.exit("Loaded image config verification failed")
     elif args.command == "matrix":
         base = "HEAD^1" if args.pull_request else args.base_sha
-        print(json.dumps(matrix(changed_paths(base) if base is not None else None), separators=(",", ":")))
+        paths = changed_paths(base) if base is not None else None
+        print(json.dumps(matrix(paths, pull_request=args.pull_request), separators=(",", ":")))
     elif args.command == "build":
         build(args.image, args.output, args.cache)
     elif args.command == "publish":

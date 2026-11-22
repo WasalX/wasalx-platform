@@ -1,4 +1,5 @@
 from unittest import mock
+from contextlib import redirect_stdout
 import subprocess
 import os
 import copy
@@ -8,6 +9,7 @@ import gzip
 import json
 from pathlib import Path
 import re
+import runpy
 import sys
 import tarfile
 import tempfile
@@ -19,6 +21,9 @@ ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("images", ROOT / "scripts/release/images-by-digest.py")
 images = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(images)
+alias_spec = importlib.util.spec_from_file_location("aliases", ROOT / "scripts/release/advance-main-image-aliases.py")
+aliases = importlib.util.module_from_spec(alias_spec)
+alias_spec.loader.exec_module(aliases)
 
 
 class ImagePublicationTests(unittest.TestCase):
@@ -140,11 +145,12 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
             rows = images.matrix()["include"]
         self.assertEqual(len(rows), 21)
         self.assertFalse(any(r["pending"] for r in rows))
-        self.assertEqual([r["addonSource"] for r in rows if r["image"] == "zammad"], [source])
+        addon_sources = {"zammad": source, "workspace-configurator": source}
+        self.assertEqual({r["image"]: r["addonSource"] for r in rows if r["addonSource"]}, addon_sources)
         with patch.dict(images.os.environ, {"PUBLIC_ADDON_SOURCE": json.dumps(source)}):
             rows = images.matrix()["include"]
         self.assertFalse(any(r["pending"] for r in rows))
-        self.assertEqual([r["addonSource"] for r in rows if r["image"] == "zammad"], [source])
+        self.assertEqual({r["image"]: r["addonSource"] for r in rows if r["addonSource"]}, addon_sources)
         for bad in [{**source, "repository": "https://user:password@github.com/example/addon"},
                     {**source, "commit": "main"}, {**source, "extra": "value"},
                     {**source, "commit": "a" * 40}, {**source, "repository": "https://github.com/example/addon"}]:
@@ -169,7 +175,7 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
         catalog = [row["image"] for row in images.matrix()["include"]]
         self.assertEqual(re.findall(r"(?m)^          - ([a-z-]+)$", publish), catalog)
 
-    def test_pull_request_matrix_selects_literal_context_inputs_and_falls_back_to_all(self):
+    def test_pull_request_matrix_selects_union_of_literal_context_inputs(self):
         rows = images.matrix()["include"]
         narrow = {
             "Dockerfile.foundation-postgres": "foundation-postgres",
@@ -177,30 +183,84 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
             "services/invitation-mailer/src/removed.ts": "invitation-mailer",
             "scripts/release/patch-keycloak-jackson.py": "foundation-keycloak",
             "tools/dev-secret-sidecar.mjs": "secret-sidecar",
-            "tests/zammad-redis-tls.test.rb": "zammad",
-            "zammad-package/product.rb": "workspace-configurator",
+            "infra/docker/Dockerfile.zammad": "zammad",
+            "infra/docker/full/zammad/entrypoint.rb": "zammad",
         }
         for path, image in narrow.items():
             with self.subTest(path=path):
-                self.assertEqual(images.matrix([path])["include"], [row for row in rows if row["image"] == image])
-        self.assertEqual([row["image"] for row in images.matrix(["app/page.tsx", "Dockerfile.foundation-postgres",
-                                                               "docs/image.md"])["include"]],
-                         ["portal", "foundation-postgres"])
-        self.assertEqual(images.matrix(["README.md", "docs/guide/intro.md", ".github/dependabot.yml"]), {"include": []})
-        for path in ["pnpm-lock.yaml", "packages/core/src/index.ts", "zammad-addon.json", ".dockerignore",
-                     ".github/workflows/ci.yml", ".github/workflows/branch-image.yml", "unmapped/new-file"]:
-            with self.subTest(path=path):
-                self.assertEqual(images.matrix([path])["include"], rows)
+                self.assertEqual(images.matrix([path], pull_request=True)["include"],
+                                 [row for row in rows if row["image"] == image])
+        paths = ["packages/core/src/index.ts", "Dockerfile.foundation-postgres", "unmapped/new-file"]
+        self.assertEqual([row["image"] for row in images.matrix(paths, pull_request=True)["include"]],
+                         ["portal", "control-api", "connector-worker", "foundation-postgres"])
+        self.assertEqual(images.matrix(["docs/guide/intro.md", "unmapped/new-file"], pull_request=True),
+                         {"include": []})
 
-    def test_merge_group_diff_uses_the_event_base_and_falls_back_to_all_images(self):
+    def test_pull_request_matrix_selects_addon_staging_inputs(self):
+        addon_images = {"zammad", "workspace-configurator"}
+        for path, expected in {
+            "tests/fixtures/portal-mail-native/followup-body.txt": addon_images,
+            "tests/portal-delegation-test.rb": addon_images,
+            "tests/zammad-redis-tls.test.rb": addon_images,
+            "zammad-package/product.rb": addon_images,
+            "build/zammad/wasalx.zpm": addon_images | {"portal"},
+            "build/addon-licenses/LICENSE": addon_images | {"portal"},
+            "scripts/fetch-zammad-addon.mjs": addon_images,
+        }.items():
+            with self.subTest(path=path):
+                rows = images.matrix([path], pull_request=True)["include"]
+                self.assertEqual({row["image"] for row in rows}, expected)
+
+    def test_pull_request_matrix_reruns_all_for_shared_build_inputs(self):
+        rows = images.matrix()["include"]
+        for path in ["scripts/release/images-by-digest.py", ".github/workflows/ci.yml",
+                     ".dockerignore", ".gitattributes", "scripts/release/.gitattributes",
+                     "Dockerfile.portal.dockerignore", "infra/docker/Dockerfile.zammad.dockerignore",
+                     "infra/docker/.gitattributes", "scripts/release/product-images.json", "zammad-addon.json"]:
+            with self.subTest(path=path):
+                self.assertEqual(images.matrix(["app/page.tsx", path], pull_request=True)["include"], rows)
+
+    def test_pull_request_matrix_ignores_publish_workflow(self):
+        paths = [".github/workflows/branch-image.yml"]
+        self.assertEqual(images.matrix(paths, pull_request=True), {"include": []})
+        self.assertEqual(images.matrix(paths + ["app/page.tsx"], pull_request=True),
+                         images.matrix(["app/page.tsx"], pull_request=True))
+
+    def test_pull_request_matrix_reruns_all_if_a_dockerfile_cannot_be_mapped(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(images, "ROOT", Path(directory)):
+            rows = [{"image": "known", "dockerfile": "Dockerfile.known"},
+                    {"image": "unknown", "dockerfile": "Dockerfile.unknown"}]
+            (images.ROOT / "Dockerfile.known").write_text("COPY app /app")
+            (images.ROOT / "Dockerfile.unknown").write_text('COPY ["src", "/src"]')
+            self.assertEqual(images.changed_images(rows, ["unmapped/new-file"], pull_request=True), rows)
+
+    def test_matrix_command_selects_pr_diff_legacy_base_and_full_catalog(self):
         base = "a" * 40
-        command = ["git", "diff", "--name-only", "-z", "--no-ext-diff", "--no-renames", base, "HEAD", "--"]
-        with patch.object(subprocess, "check_output", return_value=b"app/page.tsx\0") as git:
-            selected = images.matrix(images.changed_paths(base))["include"]
-            self.assertEqual([row["image"] for row in selected], ["portal"])
-            git.assert_called_once_with(command, cwd=ROOT)
-        with patch.object(subprocess, "check_output", side_effect=subprocess.CalledProcessError(128, command)):
-            self.assertEqual(images.matrix(images.changed_paths(base)), images.matrix())
+        script = ROOT / "scripts/release/images-by-digest.py"
+        all_images = [row["image"] for row in images.catalog()]
+        self.assertEqual(len(all_images), 21)
+        for flags, diff_base, diff, expected in [
+            (["--pull-request"], "HEAD^1", b"packages/core/src/index.ts\0",
+             ["portal", "control-api", "connector-worker"]),
+            (["--base-sha", base], base, b"app/page.tsx\0", ["portal"]),
+            (["--base-sha", base], base, b"packages/core/src/index.ts\0", all_images),
+            (["--base-sha", base], base, b"unmapped/new-file\0", all_images),
+            (["--base-sha", base], base, b"docs/image.md\0", []),
+            (["--base-sha", base], base, subprocess.CalledProcessError(128, "git diff"), all_images),
+            ([], None, None, all_images),
+        ]:
+            with (self.subTest(flags=flags, diff=diff), io.StringIO() as stdout, redirect_stdout(stdout),
+                  patch.object(sys, "argv", [str(script), "matrix", *flags]),
+                  patch.object(subprocess, "check_output", return_value=diff,
+                               side_effect=diff if isinstance(diff, Exception) else None) as git):
+                runpy.run_path(str(script), run_name="__main__")
+                self.assertEqual([row["image"] for row in json.loads(stdout.getvalue())["include"]], expected)
+                if diff_base is None:
+                    git.assert_not_called()
+                else:
+                    git.assert_called_once_with(
+                        ["git", "diff", "--name-only", "-z", "--no-ext-diff", "--no-renames", diff_base, "HEAD", "--"],
+                        cwd=ROOT)
 
     def test_context_map_handles_copy_continuations_and_refuses_unknown_context_syntax(self):
         self.assertEqual(images.context_sources("COPY\t./a//b \\\n  # Comment\n  local/ /app/\n"
@@ -313,13 +373,14 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
                    for r in images.catalog()]
         self.assertEqual(len(images.assemble(records)["images"]), 21)
         pending = copy.deepcopy(records)
+        addon_images = {"zammad", "workspace-configurator"}
         for index, row in enumerate(pending):
-            if row["image"] in images.ADDON_IMAGES:
+            if row["image"] in addon_images:
                 pending[index] = {k: row[k] for k in ["image", "commit", "tree"]}
                 pending[index]["status"] = "pending add-on source"
         manifest = images.assemble(pending)
         self.assertEqual(len(manifest["images"]), 19)
-        self.assertEqual(set(manifest["pending"]), images.ADDON_IMAGES)
+        self.assertEqual(set(manifest["pending"]), addon_images)
         self.assertFalse(manifest["publicationComplete"])
         pending[0] = {"image": "portal", "commit": "a" * 40, "tree": "b" * 40, "status": "pending add-on source"}
         with self.assertRaises(ValueError):
@@ -370,7 +431,7 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
         self.assertEqual(run.call_args_list, [mock.call(*command)] * 3)
         self.assertEqual(sleep.call_args_list, [mock.call(10), mock.call(20)])
 
-    def test_publication_uses_the_push_branch_alias_and_signing_identity(self):
+    def test_publication_pushes_only_the_commit_tag_and_uses_the_signing_identity(self):
         commit, tree, digest = "a" * 40, "b" * 40, "sha256:" + "1" * 64
         inspection = {"configDigest": "sha256:" + "2" * 64, "addonLicenses": {}}
         manifest = json.dumps({"mediaType": "application/vnd.oci.image.manifest.v1+json",
@@ -387,8 +448,7 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
             with self.subTest(image=image), tempfile.TemporaryDirectory() as directory, \
                     patch.dict(os.environ, env, clear=True), \
                     patch.object(images, "coordinates", return_value=(commit, tree)), \
-                    patch.object(images, "run", side_effect=[f"digest: {digest}", manifest, "", "", "", "", "",
-                                                             f"digest: {digest}"]) as run, \
+                    patch.object(images, "run", side_effect=[f"digest: {digest}", manifest, "", "", "", ""]) as run, \
                     patch.object(images, "pull"), patch.object(images, "inspect_image", return_value=inspection):
                 path = Path(directory) / "receipt.json"
                 if image == "portal":
@@ -408,18 +468,72 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
                     self.assertNotIn("contactEmailSha256", published)
                     self.assertNotIn("contactEmailSha256", parameters)
                 reference = repository + "@" + digest
-                alias = repository + ":main"
                 self.assertEqual(published["workflow"], identity)
                 self.assertTrue(published["verified"])
                 run.assert_any_call("cosign", "verify", "--certificate-identity", identity,
                                     "--certificate-oidc-issuer", "https://token.actions.githubusercontent.com", reference)
-                self.assertEqual(run.call_args_list[-2:], [mock.call("docker", "tag", reference, alias),
-                                                          mock.call("docker", "push", alias)])
+                self.assertEqual([call for call in run.call_args_list if call.args[:2] == ("docker", "push")],
+                                 [mock.call("docker", "push", receipt["reference"])])
 
         for event, ref in (("push", "refs/heads/dev"), ("push", "refs/heads/feature"), ("pull_request", "refs/heads/main")):
             with self.subTest(event=event, ref=ref), patch.dict(os.environ, {"GITHUB_EVENT_NAME": event, "GITHUB_REF": ref}):
                 with self.assertRaisesRegex(ValueError, "requires a main push"):
                     images.publish("unused")
+
+    def test_main_alias_advances_to_a_descendant_and_skips_a_late_older_publish_or_unknown_revision(self):
+        raw = b'{"schemaVersion":2}'
+        digest = images.sha256(raw)
+        repository = "ghcr.io/wasalx/portal"
+        alias = repository + ":main"
+        reference = repository + "@" + digest
+        git_run = subprocess.run
+        with tempfile.TemporaryDirectory() as directory:
+            git_run(["git", "init", "--quiet"], cwd=directory, check=True)
+
+            def commit(message):
+                git_run(["git", "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "-c",
+                         "commit.gpgsign=false", "commit", "--quiet", "--allow-empty", "-m", message],
+                        cwd=directory, check=True)
+                return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=directory, text=True).strip()
+
+            older, newer = commit("older"), commit("newer")
+            current = older
+
+            def registry_read(command, **kwargs):
+                self.assertEqual(command[:4], ["docker", "buildx", "imagetools", "inspect"])
+                self.assertEqual(command[-1], alias)
+                if command[4] == "--raw":
+                    return raw
+                self.assertEqual(command[4:-1], ["--format", "{{json .Image.Config.Labels}}"])
+                return json.dumps({"org.opencontainers.image.revision": current}).encode()
+
+            def git_or_push(command, **kwargs):
+                nonlocal current
+                if command[0] == "git":
+                    return git_run(command, cwd=directory, **kwargs)
+                self.assertEqual(command, ["docker", "buildx", "imagetools", "create", "--prefer-index=false",
+                                           "--tag", alias, reference])
+                current = newer
+
+            manifest = Path(directory) / "images-manifest.json"
+            summary = Path(directory) / "summary.md"
+            env = {"GITHUB_EVENT_NAME": "push", "GITHUB_REF": "refs/heads/main", "GITHUB_REPOSITORY": images.REPOSITORY,
+                   "GITHUB_STEP_SUMMARY": str(summary)}
+            with patch.object(subprocess, "check_output", side_effect=registry_read), \
+                    patch.object(subprocess, "run", side_effect=git_or_push) as run, redirect_stdout(io.StringIO()):
+                for candidate, expected in ((newer, newer), (older, newer), (older, None)):
+                    if expected is None:
+                        current = None
+                    images.write(manifest, {"commit": candidate, "images": {"portal": {
+                        "commit": candidate, "digest": digest, "verified": True}}})
+                    with patch.dict(os.environ, {**env, "GITHUB_SHA": candidate}):
+                        aliases.advance_main_aliases(manifest)
+                    self.assertEqual(current, expected)
+                self.assertEqual(sum(call.args[0][0] == "docker" for call in run.call_args_list), 1)
+            messages = summary.read_text(encoding="utf-8")
+            self.assertIn(f"Advanced `{alias}` from `{older}` to `{newer}`", messages)
+            self.assertIn(f"Skipped `{alias}` at `{newer}` because `{older}` does not descend from it", messages)
+            self.assertIn(f"Skipped `{alias}` because its current revision could not be determined", messages)
 
     def test_release_verifies_every_digest_against_the_tagged_commit(self):
         commit, tree = "a" * 40, "b" * 40
@@ -461,11 +575,11 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
                     images.verify_publication(path)
                 inspect.assert_not_called()
 
-    def test_workflow_restricts_writes_and_oidc_to_main_publish(self):
+    def test_workflow_restricts_package_writes_to_publish_and_aliases_and_oidc_to_publish(self):
         text = (ROOT / ".github/workflows/branch-image.yml").read_text()
         self.assertEqual(text.count("driver-opts: image=moby/buildkit:v0.26.3"), 1)
         self.assertNotIn("pull_request_target", text)
-        self.assertEqual(text.count("packages: write"), 1)
+        self.assertEqual(text.count("packages: write"), 2)
         self.assertEqual(text.count("id-token: write"), 1)
         self.assertNotIn("attestations: write", text)
         jobs = re.split(r"(?m)^  (\w+):\n", text.split("jobs:\n", 1)[1])
@@ -474,10 +588,9 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
             self.assertIn("runs-on: ubuntu-24.04", body)
             self.assertIn("HOSTED_KIND: ${{ runner.environment }}", body)
             self.assertIn('test "$HOSTED_KIND" = github-hosted', body)
-            if name != "publish":
-                self.assertNotIn("packages: write", body)
-                self.assertNotIn("id-token: write", body)
-                self.assertNotIn("secrets.GITHUB_TOKEN", body)
+            self.assertEqual("id-token: write" in body, name == "publish")
+            self.assertEqual("packages: write" in body, name in ("publish", "aliases"))
+            self.assertEqual("secrets.GITHUB_TOKEN" in body, name in ("publish", "aliases"))
         guard = ("github.event_name == 'push' && github.ref == 'refs/heads/main'"
                  " && github.repository == 'WasalX/wasalx-platform'")
         self.assertIn(guard, bodies["publish"])

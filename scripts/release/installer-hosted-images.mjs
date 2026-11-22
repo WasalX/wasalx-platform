@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { sha256 } from "./installer-artifacts.mjs";
+const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
 const source = "https://github.com/WasalX/wasalx-platform";
 const hostedPublisher = source + "/.github/workflows/branch-image.yml@refs/heads/main";
