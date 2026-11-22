@@ -3,7 +3,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { appendFileSync, existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire, registerHooks } from "node:module";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 
@@ -16,6 +16,7 @@ const parserCompiler = "typescript-eslint-compiler";
 const legacyPackage = workspaceRequire.resolve("typescript/package.json");
 const legacyCli = join(dirname(legacyPackage), "bin", "tsc");
 const nativeCli = join(dirname(toolsRequire.resolve("typescript-native/package.json")), "bin", "tsc");
+const nativePlatform = toolsRequire.resolve(`@typescript/typescript-${process.platform}-${process.arch}/package.json`);
 const fixture = fileURLToPath(new URL("./fixtures/typescript-diagnostics/tsconfig.json", import.meta.url));
 const pnpm = process.platform === "win32" ? "cmd.exe" : "pnpm";
 const buildArgs = process.platform === "win32" ? ["/d", "/s", "/c", "pnpm.cmd run build:services"] : ["run", "build:services"];
@@ -38,6 +39,19 @@ function compile(cli, args) {
   assert(diagnostics.every(line => /^(?:.+\(\d+,\d+\): )?error TS\d+: /u.test(line)), result.stdout);
   assert.equal(result.status === 0, diagnostics.length === 0, result.stdout);
   return { seconds, diagnostics };
+}
+
+function listProjectFiles(cli, libraryDirectory) {
+  const output = execFileSync(process.execPath, [cli, "--listFilesOnly", "--pretty", "false"], {
+    encoding: "utf8", maxBuffer: 16 * 1024 * 1024, windowsHide: true,
+  });
+  const paths = output.trim().split(/\r?\n/u);
+  assert(paths.every(isAbsolute), "Expected absolute paths from --listFilesOnly");
+  // Each compiler version ships its own standard library files.
+  const files = paths.filter(path => !/^lib(?:\.[^/\\]+)?\.d\.ts$/u.test(relative(libraryDirectory, path)))
+    .map(path => relative(process.cwd(), path).replaceAll(sep, "/"));
+  assert(files.length > 0, "Expected repository project files from --listFilesOnly");
+  return [...new Set(files)].sort();
 }
 
 function build(version) {
@@ -155,6 +169,11 @@ if (!clean || !seedMatches) {
     console.log(`TypeScript ${version} seeded diagnostics:\n${seeds[index].join("\n")}`);
   }
 }
+
+const legacyFiles = listProjectFiles(legacyCli, join(dirname(legacyPackage), "lib"));
+const nativeFiles = listProjectFiles(nativeCli, join(dirname(nativePlatform), "lib"));
+assert.deepEqual(nativeFiles, legacyFiles, "Repository TypeScript file sets differ");
+report(`Repository project file sets match (${legacyFiles.length} files).`);
 
 if (process.env.COMPARISON_TREE !== "main") compareEmit(outputs, emitManifest(outputs));
 
