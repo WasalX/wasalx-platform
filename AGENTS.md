@@ -4,7 +4,7 @@
 
 - Repository [WasalX/wasalx-platform](https://github.com/WasalX/wasalx-platform). The main branch is `main`.
 - The private [project board](https://github.com/orgs/WasalX/projects/1) has the pinned **Project brief**.
-- Environments are `ci`, `staging`, and `production`. Staging and production are not yet in service. DEV is the current shared test environment.
+- The GitHub environments are `dev`, `stg`, and `prod`. See [environment use and data rules](DELIVERY.md#environments).
 - Milestone is rc.1 (no date yet).
 - Lead threads are WasalX Master, WasalX Delivery, and WasalX Design.
 - [Delivery rules](DELIVERY.md) define how changes ship.
@@ -46,9 +46,7 @@ Live-provider qualification is a separate release milestone.
 
 ## Risk paths
 
-One independent full-diff review is required for the protected set in [CODEOWNERS](CODEOWNERS) and for migrations, identity and authorization, privacy and retention, and production configuration.
-
-The protected set includes CI and repository controls, Dockerfiles and Compose, infrastructure, image and installer tooling, CI and unit runners, release artifacts, the Zammad add-on pin, package manifests, workspace configuration, lockfiles, and patches.
+Require the [risk-path review](DELIVERY.md#branching-and-merging) for paths in [CODEOWNERS](CODEOWNERS), including `AGENTS.md`, `DELIVERY.md`, `CLAUDE.md`, and `tests/no-agent-instruction-files.test.mjs`. The same review applies to migrations, identity and authorization, privacy and retention, and production configuration.
 
 ## Data safety
 

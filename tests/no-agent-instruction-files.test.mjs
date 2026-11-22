@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
-import {lstatSync, readFileSync} from 'node:fs';
 import test from 'node:test';
 import {fileURLToPath} from 'node:url';
 
@@ -19,13 +18,19 @@ export function isAgentInstructionPath(path, claudeContents) {
 }
 
 test('tracked source excludes private agent instructions and tools', () => {
-  const result = spawnSync('git', ['ls-files', '-z'], {cwd: root, encoding: 'utf8', windowsHide: true});
+  const options = {cwd: root, encoding: 'utf8', windowsHide: true};
+  const result = spawnSync('git', ['ls-files', '--stage', '-z'], options);
   assert.equal(result.status, 0, 'Cannot verify the tracked source inventory');
-  const paths = result.stdout.split('\0').filter(Boolean);
-  const claude = new URL('../' + claudeFile, import.meta.url);
-  const claudeContents = paths.includes(claudeFile) && lstatSync(claude).isFile()
-    ? readFileSync(claude, 'utf8')
-    : undefined;
+  const entries = result.stdout.split('\0').filter(Boolean);
+  const paths = entries.map(entry => entry.slice(entry.indexOf('\t') + 1));
+  const claudeEntry = entries[paths.indexOf(claudeFile)];
+  let claudeContents;
+  if (claudeEntry) {
+    assert.match(claudeEntry, /^100(?:644|755) [0-9a-f]+ 0\t/, 'Expected a regular tracked instruction include');
+    const shim = spawnSync('git', ['show', ':' + claudeFile], options);
+    assert.equal(shim.status, 0, 'Cannot read the tracked instruction include');
+    claudeContents = shim.stdout;
+  }
   assert.equal(paths.filter(path => isAgentInstructionPath(path, claudeContents)).length, 0, 'Private agent instruction paths are tracked');
 });
 

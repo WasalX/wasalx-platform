@@ -1,4 +1,8 @@
 /CODEOWNERS                                 @WasalX/maintainers
+/AGENTS.md                                  @WasalX/maintainers
+/DELIVERY.md                                @WasalX/maintainers
+/CLAUDE.md                                  @WasalX/maintainers
+/tests/no-agent-instruction-files.test.mjs   @WasalX/maintainers
 /.github/                                   @WasalX/maintainers
 /Dockerfile.*                               @WasalX/maintainers
 /infra/                                     @WasalX/maintainers
