@@ -144,8 +144,8 @@ export function rehearsalImageSource(project, commit, runGit) {
   assert.equal(process.env.GITHUB_ACTIONS, "true", "installer rehearsal requires GitHub Actions");
   assert.equal(project, "wasalx-nightly", "installer rehearsal requires its disposable project");
   assert.match(commit, shaPattern, "rehearsal main commit is invalid");
-  assert.ok(commit === runGit(["rev-parse", "HEAD"]) || commit === runGit(["rev-parse", "HEAD^1"]),
-    "rehearsal image source must be the checked out main commit or PR merge base");
+  assert.ok(runGit(["rev-list", "--first-parent", "HEAD"]).split(/\r?\n/u).includes(commit),
+    "rehearsal image source must be in the checkout's first-parent history");
   const tree = runGit(["rev-parse", `${commit}^{tree}`]);
   assert.match(tree, shaPattern, "rehearsal main tree is invalid");
   return { commit, tree };
