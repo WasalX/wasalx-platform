@@ -26,7 +26,8 @@ ASSET = "images-manifest.json"
 CENSUS = "Confirm census PASS"
 SHA = re.compile(r"[0-9a-f]{40}")
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
-RC = re.compile(r"v[A-Za-z0-9_.-]{0,120}-rc\.[A-Za-z0-9_.-]{1,32}")
+# Keep this grammar identical to the D1 consumer's RC tag grammar.
+RC = re.compile(r"v[A-Za-z0-9_.-]{0,108}-rc\.[A-Za-z0-9_.-]{1,16}")
 IMAGE_NAME = r"[a-z0-9]+(?:[._-][a-z0-9]+)*(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)*"
 REF = re.compile(rf"(?!docker\.io/){IMAGE_NAME}@{DIGEST.pattern}")
 COMPOSE_REF = re.compile(
@@ -423,7 +424,7 @@ def tick(api, outbox, state, config):
     releases = cache_releases(api, state)
     for release in releases:
         tag = release["tag_name"]
-        if not (len(tag) <= 128 and RC.fullmatch(tag) and release["prerelease"] is True and release["draft"] is False):
+        if not (RC.fullmatch(tag) and release["prerelease"] is True and release["draft"] is False):
             continue
         digest = release_asset(release)
         if digest:
