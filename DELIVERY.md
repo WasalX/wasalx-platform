@@ -30,7 +30,7 @@ WasalX Delivery owns this document. Change it through a reviewed PR.
 
 ## Privacy checks
 
-Before every push, run the private privacy check on the diff, commits, branch name, PR title and body, and any public issue text. Require zero blocking findings and a finished scan. Report counts only. A public required CI privacy check is planned.
+Before every push, run the private privacy check on the diff, commits, branch name, PR title and body, and any public issue text. Require zero blocking findings and a finished scan. Report counts only. See the [CI privacy check deviation](#deviations).
 
 ## Environments
 
@@ -87,4 +87,11 @@ Keep these performance targets independent of the merge result. Address misses t
 
 ## Deviations
 
-None.
+| Rule | Reason | Review date |
+| --- | --- | --- |
+| §4 CI privacy check on every push and in the queue | Hosted runners cannot use the private list without exposing it. Every agent push runs the pre-push privacy check. A public required check is planned. | 2026-12-14 |
+| §4/§8 Record job time limits with p95 × 1.25 samples | Samples are pending. | 2026-12-14 |
+| §4 Local pre-commit and pre-push hooks | Agents run the checks in their push workflow. Repository hooks are pending. | 2026-12-14 |
+| §4 Runner pickup under 5 s | Measured hosted-runner pickup makes 60 s the working target. Tracked in [#181](https://github.com/WasalX/wasalx-platform/issues/181). | 2026-12-14 |
+| §2 Attest artifacts with `actions/attest-build-provenance` and verify with `gh attestation verify` | Images are signed with Cosign and carry BuildKit provenance. The installer verifies them. | 2026-12-14 |
+| §4 Run the full suite on main and merge groups | Main pushes skip PR checks and queue image builds because the merge queue already qualified the exact tree. | 2026-12-14 |
