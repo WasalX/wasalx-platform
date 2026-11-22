@@ -7,6 +7,8 @@
 - The GitHub environments are `dev`, `stg`, and `prod`. See [environment use and data rules](DELIVERY.md#environments).
 - Milestones: v0.1.0 due 2026-11-30 (current), v0.2.0 due 2026-12-14 (next). See the [repo milestones](https://github.com/WasalX/wasalx-platform/milestones).
 - Lead threads are WasalX Master, WasalX Delivery, and WasalX Design.
+- UI project: yes
+- Other repos: WasalX/wasalx-zammad-addon
 - [Delivery rules](DELIVERY.md) define how changes ship.
 - The owner decides only money (any paid service), access only the owner can grant, production deployments, destructive operations on real data, making private things public, and closing a project. Project leads decide everything else within their scopes.
 
