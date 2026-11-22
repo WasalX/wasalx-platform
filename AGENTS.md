@@ -8,6 +8,7 @@
 - Milestone is rc.1 (no date yet).
 - Lead threads are WasalX Master, WasalX Delivery, and WasalX Design.
 - [Delivery rules](DELIVERY.md) define how changes ship.
+- The owner decides only money (any paid service), access only the owner can grant, production deployments, destructive operations on real data, making private things public, and closing a project. Project leads decide everything else within their scopes.
 
 ## Product and current goal
 
@@ -53,7 +54,7 @@ The protected set includes CI and repository controls, Dockerfiles and Compose, 
 
 - Use additive, compatible migrations and test existing-data upgrades, tenant isolation, failure recovery, and rollback. Keep applied migration history intact.
 - Before changing persistent data, confirm the affected tenancy and recovery path. Verify a restorable backup before replacing state.
-- Obtain owner approval for destructive data operations. Use synthetic fixtures and disposable infrastructure for tests.
+- Obtain owner approval for destructive operations on real data. Use synthetic fixtures and disposable infrastructure for tests.
 
 ## Privacy
 
