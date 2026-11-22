@@ -135,23 +135,9 @@ jobs:
       - name: Check browser runner network contracts
         if: matrix.mode == 'lint'
         run: python3 -B tests/playwright-network-native.test.py
-      - name: Enable pinned pnpm
-        run: |
-          corepack enable
-          for attempt in 1 2 3; do
-            if corepack install; then break; fi
-            test "$attempt" != 3
-            sleep "$attempt"
-          done
-          store=$(pnpm store path --silent)
-          echo "PNPM_STORE_PATH=$store" >> "$GITHUB_ENV"
-      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        id: pnpm-cache
-        with:
-          path: ${{ env.PNPM_STORE_PATH }}
-          key: pnpm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', 'package.json', 'patches/**') }}
-          restore-keys: pnpm-${{ runner.os }}-${{ runner.arch }}-
-      - run: pnpm install --frozen-lockfile --fetch-retries=2
+      - name: Set up pnpm dependencies
+        id: pnpm
+        uses: ./.github/actions/ci-pnpm
       - name: Install Ruby test prerequisites
         if: matrix.mode == 'unit' || matrix.mode == 'collection'
         run: |
@@ -163,9 +149,14 @@ jobs:
         if: matrix.mode == 'unit' || matrix.mode == 'collection' || matrix.mode == 'typecheck'
         env:
           GIT_TERMINAL_PROMPT: '0'
-        run: |
-          pnpm run zammad:package
-          pnpm run build:services
+        run: pnpm run zammad:package
+      - name: Build service prerequisites
+        if: matrix.mode != 'lint'
+        uses: ./.github/actions/ci-pnpm
+        with:
+          task: build
+          dependency-key: ${{ steps.pnpm.outputs.dependency-key }}
+          force-build: ${{ github.event_name == 'merge_group' && matrix.mode == 'typecheck' }}
       - name: Check add-on session state
         if: matrix.mode == 'unit' && matrix.shard == 1
         run: ruby tests/fixtures/native-session-state-contract.rb
@@ -210,28 +201,11 @@ jobs:
         with:
           node-version: '24.13.1'
           package-manager-cache: false
-      - name: Enable pinned pnpm
-        run: |
-          corepack enable
-          for attempt in 1 2 3; do
-            if corepack install; then break; fi
-            test "$attempt" != 3
-            sleep "$attempt"
-          done
-          store=$(pnpm store path --silent)
-          echo "PNPM_STORE_PATH=$store" >> "$GITHUB_ENV"
-      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        id: pnpm-cache
+      - name: Set up pnpm dependencies
+        id: pnpm
+        uses: ./.github/actions/ci-pnpm
         with:
-          path: ${{ env.PNPM_STORE_PATH }}
-          key: pnpm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', 'package.json', 'patches/**') }}
-          restore-keys: pnpm-${{ runner.os }}-${{ runner.arch }}-
-      - run: pnpm install --frozen-lockfile --fetch-retries=2
-      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        if: steps.pnpm-cache.outputs.cache-hit != 'true'
-        with:
-          path: ${{ env.PNPM_STORE_PATH }}
-          key: ${{ steps.pnpm-cache.outputs.cache-primary-key }}
+          seed-dependencies: 'true'
       - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         id: eslint-cache
         with:
@@ -274,22 +248,9 @@ jobs:
         with:
           node-version: '24.13.1'
           package-manager-cache: false
-      - name: Enable pinned pnpm
-        run: |
-          corepack enable
-          for attempt in 1 2 3; do
-            if corepack install; then break; fi
-            test "$attempt" != 3
-            sleep "$attempt"
-          done
-          store=$(pnpm store path --silent)
-          echo "PNPM_STORE_PATH=$store" >> "$GITHUB_ENV"
-      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ env.PNPM_STORE_PATH }}
-          key: pnpm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', 'package.json', 'patches/**') }}
-          restore-keys: pnpm-${{ runner.os }}-${{ runner.arch }}-
-      - run: pnpm install --frozen-lockfile --fetch-retries=2
+      - name: Set up pnpm dependencies
+        id: pnpm
+        uses: ./.github/actions/ci-pnpm
       - name: Test native installer preimage capture
         run: >-
           node --experimental-strip-types --import ./tests/helpers/operator-input-fixtures.mjs --test --test-concurrency=1
@@ -298,7 +259,14 @@ jobs:
         env:
           DATABASE_ADMIN_URL: postgresql://postgres:wasalx-ci-admin@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/wasalx_ci
           DATABASE_APP_URL: postgresql://wasalx_runtime:wasalx-test-app@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/wasalx_ci
+          WASALX_SERVICE_BUILD_MODE: --build
         run: pnpm run test:postgres
+      - name: Save service build cache
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: ./.github/actions/ci-pnpm
+        with:
+          task: save-build
+          dependency-key: ${{ steps.pnpm.outputs.dependency-key }}
       - name: Build the portal
         run: pnpm run build
       - name: Prepare browser fixtures

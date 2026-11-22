@@ -406,6 +406,55 @@ test("CI gates integration and infrastructure and runs portal integration files 
   }
 });
 
+test("CI seeds pnpm caches on main and builds cleanly in the merge queue", async () => {
+  const { jobs } = parse(await read(".github/workflows/ci.yml"));
+  const actionPath = "./.github/actions/ci-pnpm";
+  const action = parse(await read(".github/actions/ci-pnpm/action.yml"));
+
+  for (const job of [jobs.checks, jobs["lint-on-push"], jobs.integration]) {
+    assert.equal(job.steps.find(step => step.id === "pnpm")?.uses, actionPath);
+  }
+  const modules = action.runs.steps.find(step => step.id === "modules");
+  const store = action.runs.steps.find(step => step.id === "store");
+  assert(action.runs.steps.indexOf(modules) < action.runs.steps.indexOf(store));
+  assert(store?.if.includes("steps.modules.outputs.cache-hit != 'true'"));
+
+  const mainOnly = "github.event_name == 'push' && github.ref == 'refs/heads/main'";
+  const saveSteps = action.runs.steps.filter(step => step.uses?.startsWith("actions/cache/save@"));
+  assert.equal(saveSteps.length, 3);
+  for (const step of saveSteps) {
+    assert(step.if.includes(mainOnly));
+    assert(step.if.includes("github.repository == 'WasalX/wasalx-platform'"));
+  }
+
+  const build = jobs.checks.steps.find(step => step.with?.task === "build");
+  assert.equal(build?.with["force-build"], "${{ github.event_name == 'merge_group' && matrix.mode == 'typecheck' }}");
+  const restore = action.runs.steps.find(step => step.id === "services");
+  assert(restore?.if.includes("inputs.force-build != 'true'"));
+  assert(restore.if.includes("github.event_name == 'merge_group'"));
+  assert(restore.if.includes("github.event_name == 'pull_request'"));
+  assert.match(restore.with["restore-keys"], /github\.event_name == 'pull_request'/u);
+
+  const commands = name => 'pnpm() { printf "%s\\n" "$*"; }\n' + action.runs.steps.find(step => step.name === name).run;
+  for (const [hit, flags] of [["true", "--offline"], ["", "--fetch-retries=2"]]) {
+    const result = runWorkflowScript(commands("Install workspace dependencies"), { MODULES_HIT: hit });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout.trim(), `install --frozen-lockfile ${flags}`);
+  }
+  for (const [force, exact, matched, suffix] of [
+    ["true", "", "", " --force"],
+    ["false", "true", "main-key", " --build"],
+    ["false", "", "", " --build"],
+    ["false", "false", "main-key", " --incremental"],
+  ]) {
+    const result = runWorkflowScript(commands("Build services"), {
+      FORCE_BUILD: force, EXACT_BUILD: exact, MATCHED_BUILD: matched,
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout.trim(), `run build:services${suffix}`);
+  }
+});
+
 test("PR image results are advisory while the merge queue requires the full image matrix", async t => {
   const { jobs } = parse(await read(".github/workflows/ci.yml"));
   const { images, "pr-images": prImages, "pr-image-results": report, "ci-gate": gate, publish } = jobs;
