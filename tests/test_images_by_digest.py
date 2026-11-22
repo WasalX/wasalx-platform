@@ -1,4 +1,5 @@
 from unittest import mock
+from contextlib import redirect_stdout
 import subprocess
 import os
 import copy
@@ -8,6 +9,8 @@ import gzip
 import json
 from pathlib import Path
 import re
+import runpy
+import sys
 import tarfile
 import tempfile
 import unittest
@@ -143,7 +146,7 @@ class ImagePublicationTests(unittest.TestCase):
         catalog = [row["image"] for row in images.matrix()["include"]]
         self.assertEqual(re.findall(r"(?m)^          - ([a-z-]+)$", publish), catalog)
 
-    def test_pull_request_matrix_selects_literal_context_inputs_and_falls_back_to_all(self):
+    def test_pull_request_matrix_selects_union_of_literal_context_inputs(self):
         rows = images.matrix()["include"]
         narrow = {
             "Dockerfile.foundation-postgres": "foundation-postgres",
@@ -156,25 +159,58 @@ class ImagePublicationTests(unittest.TestCase):
         }
         for path, image in narrow.items():
             with self.subTest(path=path):
-                self.assertEqual(images.matrix([path])["include"], [row for row in rows if row["image"] == image])
-        self.assertEqual([row["image"] for row in images.matrix(["app/page.tsx", "Dockerfile.foundation-postgres",
-                                                               "docs/image.md"])["include"]],
-                         ["portal", "foundation-postgres"])
-        self.assertEqual(images.matrix(["README.md", "docs/guide/intro.md", ".github/dependabot.yml"]), {"include": []})
-        for path in ["pnpm-lock.yaml", "packages/core/src/index.ts", "zammad-addon.json", ".dockerignore",
-                     ".github/workflows/ci.yml", ".github/workflows/branch-image.yml", "unmapped/new-file"]:
-            with self.subTest(path=path):
-                self.assertEqual(images.matrix([path])["include"], rows)
+                self.assertEqual(images.matrix([path], pull_request=True)["include"],
+                                 [row for row in rows if row["image"] == image])
+        paths = ["packages/core/src/index.ts", "Dockerfile.foundation-postgres", "unmapped/new-file"]
+        self.assertEqual([row["image"] for row in images.matrix(paths, pull_request=True)["include"]],
+                         ["portal", "control-api", "connector-worker", "foundation-postgres"])
+        self.assertEqual(images.matrix(["docs/guide/intro.md", "unmapped/new-file"], pull_request=True),
+                         {"include": []})
 
-    def test_merge_group_diff_uses_the_event_base_and_falls_back_to_all_images(self):
+    def test_pull_request_matrix_reruns_all_for_shared_build_inputs(self):
+        rows = images.matrix()["include"]
+        for path in ["scripts/release/images-by-digest.py", ".github/workflows/ci.yml",
+                     ".github/workflows/branch-image.yml", ".dockerignore", ".gitattributes",
+                     "scripts/release/.gitattributes", "scripts/release/product-images.json",
+                     "zammad-addon.json", "scripts/fetch-zammad-addon.mjs"]:
+            with self.subTest(path=path):
+                self.assertEqual(images.matrix(["app/page.tsx", path], pull_request=True)["include"], rows)
+
+    def test_pull_request_matrix_reruns_all_if_a_dockerfile_cannot_be_mapped(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(images, "ROOT", Path(directory)):
+            rows = [{"image": "known", "dockerfile": "Dockerfile.known"},
+                    {"image": "unknown", "dockerfile": "Dockerfile.unknown"}]
+            (images.ROOT / "Dockerfile.known").write_text("COPY app /app")
+            (images.ROOT / "Dockerfile.unknown").write_text('COPY ["src", "/src"]')
+            self.assertEqual(images.changed_images(rows, ["unmapped/new-file"], pull_request=True), rows)
+
+    def test_matrix_command_keeps_merge_group_selection_and_full_push_matrix(self):
         base = "a" * 40
-        command = ["git", "diff", "--name-only", "-z", "--no-ext-diff", "--no-renames", base, "HEAD", "--"]
-        with patch.object(subprocess, "check_output", return_value=b"app/page.tsx\0") as git:
-            selected = images.matrix(images.changed_paths(base))["include"]
-            self.assertEqual([row["image"] for row in selected], ["portal"])
-            git.assert_called_once_with(command, cwd=ROOT)
-        with patch.object(subprocess, "check_output", side_effect=subprocess.CalledProcessError(128, command)):
-            self.assertEqual(images.matrix(images.changed_paths(base)), images.matrix())
+        script = ROOT / "scripts/release/images-by-digest.py"
+        all_images = [row["image"] for row in images.catalog()]
+        self.assertEqual(len(all_images), 21)
+        for flags, diff_base, diff, expected in [
+            (["--pull-request"], "HEAD^1", b"packages/core/src/index.ts\0",
+             ["portal", "control-api", "connector-worker"]),
+            (["--base-sha", base], base, b"app/page.tsx\0", ["portal"]),
+            (["--base-sha", base], base, b"packages/core/src/index.ts\0", all_images),
+            (["--base-sha", base], base, b"unmapped/new-file\0", all_images),
+            (["--base-sha", base], base, b"docs/image.md\0", []),
+            (["--base-sha", base], base, subprocess.CalledProcessError(128, "git diff"), all_images),
+            ([], None, None, all_images),
+        ]:
+            with (self.subTest(flags=flags, diff=diff), io.StringIO() as stdout, redirect_stdout(stdout),
+                  patch.object(sys, "argv", [str(script), "matrix", *flags]),
+                  patch.object(subprocess, "check_output", return_value=diff,
+                               side_effect=diff if isinstance(diff, Exception) else None) as git):
+                runpy.run_path(str(script), run_name="__main__")
+                self.assertEqual([row["image"] for row in json.loads(stdout.getvalue())["include"]], expected)
+                if diff_base is None:
+                    git.assert_not_called()
+                else:
+                    git.assert_called_once_with(
+                        ["git", "diff", "--name-only", "-z", "--no-ext-diff", "--no-renames", diff_base, "HEAD", "--"],
+                        cwd=ROOT)
 
     def test_context_map_handles_copy_continuations_and_refuses_unknown_context_syntax(self):
         self.assertEqual(images.context_sources("COPY\t./a//b \\\n  # Comment\n  local/ /app/\n"
