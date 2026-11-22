@@ -100,6 +100,12 @@ updates:
     ignore:
       - dependency-name: "node"
         update-types: ["version-update:semver-major"]
+      # Plan the Postgres major upgrade with pg_upgrade because 18 moves PGDATA to /var/lib/postgresql/18/docker and our volumes mount /var/lib/postgresql/data.
+      - dependency-name: "postgres"
+        update-types: ["version-update:semver-major"]
+      # Upgrade Elasticsearch with Zammad because stored index data cannot be downgraded.
+      - dependency-name: "elasticsearch"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
       # Keep the same manual Keycloak upgrade hold as the Docker ecosystem.
       - dependency-name: "keycloak/keycloak"
       # Upgrade with the promtool pin in scripts/validate-infra.sh and the infra contract test.

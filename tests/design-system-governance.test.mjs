@@ -56,6 +56,11 @@ test("Dependabot groups Docker, Docker Compose and GitHub Actions version update
     cooldown: docker[0].cooldown,
     ignore: [
       { "dependency-name": "node", "update-types": ["version-update:semver-major"] },
+      { "dependency-name": "postgres", "update-types": ["version-update:semver-major"] },
+      {
+        "dependency-name": "elasticsearch",
+        "update-types": ["version-update:semver-major", "version-update:semver-minor"],
+      },
       { "dependency-name": "keycloak/keycloak" },
       { "dependency-name": "prom/prometheus" },
       { "dependency-name": "minio/minio" },
