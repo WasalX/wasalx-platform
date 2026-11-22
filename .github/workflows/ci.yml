@@ -63,13 +63,10 @@ jobs:
       - id: matrix
         env:
           EVENT: ${{ github.event_name }}
-          BASE_SHA: ${{ github.event.merge_group.base_sha }}
         run: |
           args=()
           if [ "$EVENT" = pull_request ]; then
             args+=(--pull-request)
-          elif [ "$EVENT" = merge_group ]; then
-            args+=(--base-sha "$BASE_SHA")
           fi
           matrix=$(python3 scripts/release/images-by-digest.py matrix "${args[@]}")
           images=$(jq '.include | length > 0' <<< "$matrix")
