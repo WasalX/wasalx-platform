@@ -74,6 +74,12 @@ tmp="$(mktemp -- "$MARKER.XXXXXX")"
 printf '%s %s %s\n' "$(date -u +%FT%TZ)" "$LEASE_UNIT" "$TOOLING_SHA" > "$tmp"
 chmod 0644 "$tmp"
 mv -T -- "$tmp" "$MARKER"
+now="$(date -u +%s)"
+if [ "$((limit-now))" -le "$runtime" ]; then
+    /bin/bash "$FINISH" "$END" "$LEASE_UNIT"
+    echo HOLD_LEASE_WINDOW_TOO_SHORT
+    exit 75
+fi
 if ! systemd-run --unit="$LEASE_UNIT" --setenv="LEASE_UNIT=$LEASE_UNIT" --setenv="TMPDIR=$STATE" \
     -p CPUQuota=800% -p MemoryMax=8G -p MemorySwapMax=0 -p CPUWeight=10 -p IOWeight=10 \
     -p Nice=19 -p IOSchedulingClass=idle -p UMask=0077 -p RuntimeMaxSec="$runtime" \

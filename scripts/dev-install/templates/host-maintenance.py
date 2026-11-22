@@ -31,6 +31,7 @@ def lease_budgets(receipts):
     worst = {}
     worst_work = {"qemu-commit": 0, "top-restore": 0}
     hash_ns_per_gb = 0
+    legacy_commit = False
     for receipt in receipts:
         pending = {}
         completed = {}
@@ -52,7 +53,7 @@ def lease_budgets(receipts):
             saw_timing = True
             if step not in ("lease", "full-top-hash", *worst_work):
                 continue
-            if (step == "full-top-hash") != (size is not None):
+            if step != "qemu-commit" and (step == "full-top-hash") != (size is not None):
                 raise ValueError(f"invalid phase timing: {phase}/{step}")
             key = (phase, step)
             tick = int(value)
@@ -66,22 +67,29 @@ def lease_budgets(receipts):
             if tick <= started or size != started_size:
                 raise ValueError(f"invalid phase timing: {phase}/{step}")
             duration = tick - started
-            if step == "full-top-hash":
+            if step == "qemu-commit" and size is None:
+                legacy_commit = True
+                continue
+            if size is not None:
                 size = int(size)
-                hash_ns_per_gb = max(hash_ns_per_gb, (duration * GB + size - 1) // size)
+                duration = (duration * GB + size - 1) // size
+            if step == "full-top-hash":
+                hash_ns_per_gb = max(hash_ns_per_gb, duration)
             else:
-                completed.setdefault(phase, {})[step] = duration
+                steps = completed.setdefault(phase, {})
+                steps[step] = max(steps.get(step, 0), duration)
         if not saw_timing:
             raise ValueError("lease input must be a raw host receipt with timing stamps")
     measured = REVIEWED_RESERVATIONS.keys() <= worst.keys() and hash_ns_per_gb > 0
     budgets = {phase: with_margin(worst[phase]) for phase in REVIEWED_RESERVATIONS} if measured else REVIEWED_RESERVATIONS
-    commit_work = sum(worst_work.values()) if hash_ns_per_gb and all(worst_work.values()) else 0
+    commit_measured = hash_ns_per_gb > 0 and all(worst_work.values()) and not legacy_commit
     return {
         "INSTALL_SECONDS": budgets["install"], "DISCARD_SECONDS": budgets["rollback"],
         "INSTALL_DISCARD_BUDGET_SOURCE": "measured-receipts" if measured else "reviewed-reservations",
-        "HASH_NS_PER_GB": hash_ns_per_gb, "COMMIT_WORK_NS": commit_work,
-        "COMMIT_FALLBACK_SECONDS": 0 if commit_work else COMMIT_FALLBACK_S,
-        "LEASE_BUDGET_SOURCE": "measured-receipts" if commit_work else "fallback-commit",
+        "HASH_NS_PER_GB": hash_ns_per_gb, "QEMU_COMMIT_NS_PER_GB": worst_work["qemu-commit"],
+        "TOP_RESTORE_NS": worst_work["top-restore"],
+        "COMMIT_FALLBACK_SECONDS": 0 if commit_measured else COMMIT_FALLBACK_S,
+        "LEASE_BUDGET_SOURCE": "measured-receipts" if commit_measured else "fallback-commit",
     }
 
 
@@ -92,17 +100,32 @@ def with_margin(ns):
 
 def lease_runtime(mode, env):
     fallback = int(env["COMMIT_FALLBACK_SECONDS"])
-    if mode == "commit" and fallback:
-        return fallback
+    if mode == "commit" and fallback and not all(
+        int(env.get(key, 0)) for key in ("HASH_NS_PER_GB", "QEMU_COMMIT_NS_PER_GB", "TOP_RESTORE_NS")
+    ):
+        return max(COMMIT_FALLBACK_S, fallback)
     measured = env["INSTALL_DISCARD_BUDGET_SOURCE"] == "measured-receipts"
     hash_ns = 0
     if measured or mode == "commit":
         top = Path(env["TOP"]).lstat()
         if not stat.S_ISREG(top.st_mode) or top.st_nlink != 1 or top.st_size <= 0:
             raise ValueError("invalid TOP for lease sizing")
-        hash_ns = (int(env["HASH_NS_PER_GB"]) * top.st_size + GB - 1) // GB
+        hash_rate = int(env["HASH_NS_PER_GB"])
+        hash_ns = (hash_rate * top.st_size + GB - 1) // GB
     if mode == "commit":
-        return with_margin(2 * hash_ns + int(env["COMMIT_WORK_NS"]))
+        try:
+            overlay = Path(env["OVERLAY"]).lstat()
+        except FileNotFoundError:
+            # A resumed commit may already have archived the overlay.
+            overlay_bytes = 0
+        else:
+            if not stat.S_ISREG(overlay.st_mode) or overlay.st_nlink != 1 or overlay.st_size <= 0:
+                raise ValueError("invalid OVERLAY for lease sizing")
+            overlay_bytes = overlay.st_size
+        post_hash_ns = (hash_rate * (top.st_size + overlay_bytes) + GB - 1) // GB
+        qemu_ns = (int(env["QEMU_COMMIT_NS_PER_GB"]) * overlay_bytes + GB - 1) // GB
+        measured_ns = hash_ns + post_hash_ns + qemu_ns + int(env["TOP_RESTORE_NS"])
+        return max(COMMIT_FALLBACK_S, fallback, with_margin(measured_ns))
     discard = int(env["DISCARD_SECONDS"]) + with_margin(hash_ns)
     return int(env["INSTALL_SECONDS"]) + discard if mode == "install" else discard
 

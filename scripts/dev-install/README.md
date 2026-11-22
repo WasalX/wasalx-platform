@@ -43,10 +43,11 @@ PASS, a stamped discard PASS and a full-hash measurement, the packet uses the
 reviewed reservations of 13,400 seconds for install and 11,400 seconds for discard.
 
 Register an approved commit with `register.sh commit "$STATE"`. Its lease reserves
-125% of two full hashes at the current TOP size, the longest successful
-`qemu-img commit` step, and the longest successful TOP restore. The whole lease
-must fit before `DISCARD_LIMIT`. When the receipts lack any measured component,
-registration reports `LEASE_BUDGET_SOURCE=fallback-commit` and uses 25,050 seconds.
+125% of a hash at the current TOP size, a hash at TOP plus overlay size, the
+slowest successful `qemu-img commit` rate scaled to the overlay size, and the
+longest successful TOP restore. The lease has a 25,050-second minimum and must
+fit before `DISCARD_LIMIT`. Missing measurements or a commit timing without
+overlay bytes select `LEASE_BUDGET_SOURCE=fallback-commit`.
 The 2026-11-22 DEV cycle measurements put a full hash of ~115 GB at 2,880 seconds
 (~40 MB/s). The fallback allows two hashes, one assumed full-disk commit pass
 of 2,880 seconds, and the reviewed 11,400-second discard/restore reservation,

@@ -228,26 +228,47 @@ class LeaseBudgetTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "invalid phase timing"):
             maintenance.lease_budgets([inconsistent])
 
-    def test_commit_reserves_two_scaled_hashes_and_the_longest_successful_work(self):
-        def commit(qemu, restore):
-            steps = timing("commit", "full-top-hash", 8 * SECOND, 100)
-            steps += timing("commit", "qemu-commit", qemu * SECOND)
+    def test_commit_reserves_scaled_hashes_and_commit_work_with_a_fallback_floor(self):
+        def commit(qemu, size, restore):
+            steps = timing("commit", "full-top-hash", 3_000 * SECOND, 100)
+            steps += timing("commit", "qemu-commit", qemu * SECOND, size)
             steps += timing("commit", "top-restore", restore * SECOND)
-            return lease_receipt("commit", 90 * SECOND, steps)
+            return lease_receipt("commit", 50_000 * SECOND, steps)
 
-        first = commit(20, 20)
-        second = commit(12, 45)
-        interrupted = commit(70, 70).rsplit("\n", 1)[0]
+        first = commit(8_000, 50, 2_000)
+        second = commit(12_000, 100, 6_500)
+        interrupted = commit(30_000, 50, 10_000).rsplit("\n", 1)[0]
         with tempfile.TemporaryDirectory() as directory:
             top = Path(directory) / "top.qcow2"
+            overlay = Path(directory) / "overlay.qcow2"
             top.write_bytes(bytes(100))
             budget = maintenance.lease_budgets([first, second, interrupted])
             self.assertEqual(budget["LEASE_BUDGET_SOURCE"], "measured-receipts")
-            env = {**budget, "TOP": top}
-            self.assertEqual(maintenance.lease_runtime("commit", env), 102)
+            env = {**budget, "TOP": top, "OVERLAY": overlay}
+            overlay.write_bytes(bytes(25))
+            self.assertEqual(maintenance.lease_runtime("commit", env), 25_050)
+            overlay.write_bytes(bytes(50))
+            self.assertEqual(maintenance.lease_runtime("commit", env), 27_500)
+            overlay.write_bytes(bytes(100))
+            self.assertEqual(maintenance.lease_runtime("commit", env), 39_375)
+            legacy = commit(8_000, None, 2_000)
+            mixed = maintenance.lease_budgets([first, second, legacy])
+            self.assertEqual(mixed["LEASE_BUDGET_SOURCE"], "fallback-commit")
+            self.assertEqual(maintenance.lease_runtime("commit", {**env, **mixed}), 39_375)
             top.write_bytes(bytes(200))
-            self.assertEqual(maintenance.lease_runtime("commit", env), 122)
+            self.assertEqual(maintenance.lease_runtime("commit", env), 46_875)
+            overlay.unlink()
+            self.assertEqual(maintenance.lease_runtime("commit", env), 25_050)
             self.assertEqual(maintenance.lease_runtime("commit", maintenance.lease_budgets([interrupted])), 25_050)
+
+    def test_unsized_commit_timing_forces_fallback(self):
+        hashes = timing("commit", "full-top-hash", 8 * SECOND, 100)
+        restore = timing("commit", "top-restore", 45 * SECOND)
+        legacy = lease_receipt("commit", 90 * SECOND,
+                               hashes + timing("commit", "qemu-commit", 20 * SECOND) + restore)
+        budget = maintenance.lease_budgets([legacy])
+        self.assertEqual(budget["LEASE_BUDGET_SOURCE"], "fallback-commit")
+        self.assertEqual(maintenance.lease_runtime("commit", budget), 25_050)
 
     @unittest.skipUnless(hasattr(maintenance.os, "geteuid"), "Linux directory custody")
     def test_archive_needs_bound_terminal_pass_and_is_resumable(self):

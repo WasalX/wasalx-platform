@@ -259,12 +259,13 @@ class FrozenDisk:
 
     def commit(self, overlay, run_id):
         receipt = self.frozen_check(overlay=overlay, audit=True)
+        overlay_bytes = identity(overlay)["size"]
         self.save({**receipt, "phase": "committing", "run_id": run_id})
         run("chattr", "-i", "--", self.top)
         self.top.chmod(0o600)
-        timing_stamp("qemu-commit", "start")
+        timing_stamp("qemu-commit", "start", overlay_bytes)
         run("qemu-img", "commit", "-f", "qcow2", "-b", self.top, "-d", overlay)
-        timing_stamp("qemu-commit", "pass")
+        timing_stamp("qemu-commit", "pass", overlay_bytes)
         self.top.chmod(0o400)
         run("chattr", "+i", "--", self.top)
         require(same_inode(identity(self.top), receipt["identity"]), "DISK_INODE")

@@ -144,13 +144,16 @@ disk preboot "$overlay"
 qemu-io -f qcow2 -c 'write -P 0xa5 1M 512' "$overlay" >/dev/null
 disk record-overlay-stop "$overlay" "$DISK_STATE/retained.json"
 before_bytes="$(stat -c %s "$top")"
+overlay_bytes="$(stat -c %s "$overlay")"
 commit_log="$(PHASE_TIMING_MODE=commit disk commit "$overlay" "$run_id")"
 after_bytes="$(stat -c %s "$top")"
 test "$after_bytes" -gt "$before_bytes"
 test "$(grep -c '^PHASE_TIMING phase=commit step=full-top-hash event=pass ' <<< "$commit_log")" = 2
 grep -q "^PHASE_TIMING phase=commit step=full-top-hash event=pass .* bytes=$before_bytes$" <<< "$commit_log"
 grep -q "^PHASE_TIMING phase=commit step=full-top-hash event=pass .* bytes=$after_bytes$" <<< "$commit_log"
-grep -q '^PHASE_TIMING phase=commit step=qemu-commit event=pass ' <<< "$commit_log"
+for event in start pass; do
+    grep -q "^PHASE_TIMING phase=commit step=qemu-commit event=$event .* bytes=$overlay_bytes$" <<< "$commit_log"
+done
 disk committed "$run_id"
 disk verify
 qemu-io -r -f qcow2 -c 'read -P 0xa5 1M 512' "$top" >/dev/null
@@ -159,7 +162,7 @@ disk archive-overlay "$overlay" "$overlay.retained" "$DISK_STATE/retained.json"
 echo 'COMMIT_FIXTURE=PASS'
 
 test_commit_registration() (
-    local state="$work/registration" templates="$repo/scripts/dev-install/templates"
+    local state="$mountpoint/registration" templates="$repo/scripts/dev-install/templates"
     mkdir -p -- "$state/markers" "$state/staging"
     export LEASE_RECORD="$state/systemd-run.args"
     systemctl() { if [ "$1" = show ] && [ "${2:-}" = -p ]; then echo not-found; fi; }
@@ -179,14 +182,20 @@ export MARKER_DIRECTORY=$state/markers STAGING=$state/staging
 export ENGINE_FREE=/bin/true ENGINE_RUN=$run_id ROOT_FLOOR_BYTES=1
 export INSTALL_NOT_BEFORE=$(date -u -d '1 hour ago' +%FT%TZ)
 export INSTALL_CUTOFF=$(date -u -d '+1 hour' +%FT%TZ)
-export DISCARD_LIMIT=$(date -u -d '+8 hours' +%FT%TZ)
+export DISCARD_LIMIT=$(date -u -d '+6 hours' +%FT%TZ)
 export COMMIT_FALLBACK_SECONDS=25050 INSTALL_DISCARD_BUDGET_SOURCE=reviewed-reservations
 export LEASE_BUDGET_SOURCE=fallback-commit
 EOF
+    local result=0 output
+    output="$(bash "$templates/register.sh" commit "$state")" || result=$?
+    test "$result" = 75
+    test "$output" = HOLD_LEASE_WINDOW_TOO_SHORT
+    test ! -e "$LEASE_RECORD"
+    printf 'export DISCARD_LIMIT=%s\n' "$(date -u -d '+8 hours' +%FT%TZ)" >> "$state/host.env"
     bash "$templates/register.sh" commit "$state" | grep -Fx 'LEASE_BUDGET_SOURCE=fallback-commit mode=commit runtime_seconds=25050'
     grep -Fx 'RuntimeMaxSec=25050' "$LEASE_RECORD"
     test "$(tail -n 1 "$LEASE_RECORD")" = commit
-    local result=0 output
+    result=0
     output="$(bash "$state/install-or-discard.sh" "$state" commit)" || result=$?
     test "$result" = 75
     test "$output" = ACTION=commit
