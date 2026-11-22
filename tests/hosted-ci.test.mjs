@@ -455,6 +455,7 @@ test "$INFRA" = success || {
 
 test("PR image results are advisory while the merge queue requires the full image matrix", async t => {
   const { jobs } = parse(await read(".github/workflows/ci.yml"));
+  const branch = parse(await read(".github/workflows/branch-image.yml")).jobs;
   const { images, "pr-images": prImages, "pr-image-results": report, "ci-gate": gate, publish } = jobs;
   assert.equal(gate.if, "always() && (github.event_name == 'pull_request' || github.event_name == 'merge_group')");
   assert(gate.needs.includes("images"));
@@ -464,8 +465,9 @@ test("PR image results are advisory while the merge queue requires the full imag
   assert.deepEqual(prImages.needs, images.needs);
   assert.equal(images.if, "${{ !cancelled() && github.event_name == 'merge_group' && needs.changes.outputs.images == 'true' }}");
   assert.equal(prImages.if, "${{ !cancelled() && github.event_name == 'pull_request' && needs.changes.outputs.images == 'true' }}");
-  assert.deepEqual(prImages.strategy, images.strategy);
-  assert.deepEqual(prImages.steps, images.steps);
+  assert.equal(images.strategy["max-parallel"], 21);
+  assert.deepEqual(prImages.strategy, { ...images.strategy, "max-parallel": 8 });
+  assert.equal(prImages.steps, images.steps);
   assert.equal(images["continue-on-error"], undefined);
   assert.equal(prImages["continue-on-error"], undefined);
   assert.equal(report.if, "always() && github.event_name == 'pull_request'");
@@ -475,6 +477,12 @@ test("PR image results are advisory while the merge queue requires the full imag
   assert.equal(publish.needs, "lint-on-push");
   assert.equal(publish.if, "${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'WasalX/wasalx-platform' }}");
   assert.equal(publish.uses, "./.github/workflows/branch-image.yml");
+  assert.deepEqual(publish.concurrency, { group: "release-${{ github.sha }}", "cancel-in-progress": false });
+  assert.equal(branch.publish.strategy["max-parallel"], 21);
+  assert.equal(branch.manifest.needs, "publish");
+  assert.equal(branch.manifest.concurrency, undefined);
+  assert.equal(branch.aliases.needs, "manifest");
+  assert.deepEqual(branch.aliases.concurrency, { group: "release-main", queue: "max" });
 
   const directory = await mkdtemp(join(tmpdir(), "wasalx-ci-image-results-"));
   t.after(() => rm(directory, { recursive: true, force: true }));

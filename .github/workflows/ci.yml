@@ -420,9 +420,9 @@ jobs:
     name: Build ${{ matrix.image }}${{ matrix.pending && ' (pending add-on source)' || '' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
-    strategy: &image-strategy
+    strategy:
       fail-fast: false
-      max-parallel: 8
+      max-parallel: 21
       matrix: ${{ fromJSON(needs.changes.outputs.matrix) }}
     steps: &image-steps
       - name: Require GitHub-hosted execution
@@ -469,7 +469,10 @@ jobs:
     name: Build ${{ matrix.image }}${{ matrix.pending && ' (pending add-on source)' || '' }} (advisory)
     runs-on: ubuntu-24.04
     timeout-minutes: 15
-    strategy: *image-strategy
+    strategy:
+      fail-fast: false
+      max-parallel: 8
+      matrix: ${{ fromJSON(needs.changes.outputs.matrix) }}
     steps: *image-steps
 
   pr-image-results:
@@ -494,7 +497,7 @@ jobs:
     needs: lint-on-push
     if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'WasalX/wasalx-platform' }}
     concurrency:
-      group: release-${{ github.ref_name }}
+      group: release-${{ github.sha }}
       cancel-in-progress: false
     permissions:
       contents: read
