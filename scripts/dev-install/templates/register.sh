@@ -4,7 +4,7 @@ umask 077
 MODE="$1"
 STATE="$2"
 test "$(stat -c '%F:%u:%a' -- "$STATE")" = directory:0:700
-case "$MODE" in install|rollback) ;; *) echo HOLD_LEASE_MODE; exit 75 ;; esac
+case "$MODE" in install|rollback|commit) ;; *) echo HOLD_LEASE_MODE; exit 75 ;; esac
 # shellcheck source=/dev/null
 source "$STATE/host.env"
 ATTEMPT="$(cat "$STATE/run-id")"
@@ -36,11 +36,24 @@ test -f "$STATE/install-or-discard.sh" || { echo HOLD_LEASE_ENTRY; exit 75; }
 now="$(date -u +%s)"
 cutoff="$(date -u -d "$INSTALL_CUTOFF" +%s)"
 earliest="$(date -u -d "$INSTALL_NOT_BEFORE" +%s)"
-limit="$cutoff"; [ "$MODE" = rollback ] && limit="$(date -u -d "$DISCARD_LIMIT" +%s)"
+limit="$cutoff"; [ "$MODE" = install ] || limit="$(date -u -d "$DISCARD_LIMIT" +%s)"
 test "$now" -ge "$earliest" && test "$now" -lt "$limit" || { echo HOLD_TIME_WINDOW; exit 75; }
-runtime="$DISCARD_SECONDS"
-if [ "$MODE" = install ]; then runtime=$((INSTALL_SECONDS + DISCARD_SECONDS)); fi
+test "$(df -B1 --output=avail / | awk 'NR==2 {print $1}')" -ge "$ROOT_FLOOR_BYTES" || { echo HOLD_ROOT_FLOOR; exit 75; }
+"$ENGINE_FREE" "$ENGINE_RUN" || { echo HOLD_ENGINE_BUSY; exit 75; }
+runtime="$(/usr/bin/python3 -I -B "$STATE/host-maintenance.py" lease-runtime "$MODE")"
+now="$(date -u +%s)"
+if [ "$MODE" = install ]; then
+    if [ "$now" -ge "$3" ]; then
+        (set -o noclobber; printf 'dispatch deadline expired %s\n' "$(date -u +%FT%TZ)" > "$STATE/install-dispatch-timeout")
+        echo HOLD_DISPATCH_TIMEOUT
+        exit 75
+    fi
+    test "$((cutoff-now))" -ge "$runtime" || { echo HOLD_INSTALL_WINDOW_TOO_SHORT; exit 75; }
+fi
 test "$((limit-now))" -ge "$runtime" || { echo HOLD_LEASE_WINDOW_TOO_SHORT; exit 75; }
+budget_source="$INSTALL_DISCARD_BUDGET_SOURCE"
+if [ "$MODE" = commit ]; then budget_source="$LEASE_BUDGET_SOURCE"; fi
+printf 'LEASE_BUDGET_SOURCE=%s mode=%s runtime_seconds=%s\n' "$budget_source" "$MODE" "$runtime"
 cat > "$FINISH" <<'SH'
 #!/usr/bin/env bash
 set -eu
@@ -55,23 +68,18 @@ chmod 0644 "$tmp"
 mv -T -- "$tmp" "$end"
 SH
 chmod 0700 "$FINISH"
-test "$(df -B1 --output=avail / | awk 'NR==2 {print $1}')" -ge "$ROOT_FLOOR_BYTES" || { echo HOLD_ROOT_FLOOR; exit 75; }
-"$ENGINE_FREE" "$ENGINE_RUN" || { echo HOLD_ENGINE_BUSY; exit 75; }
-if [ "$MODE" = install ]; then
-    now="$(date -u +%s)"
-    if [ "$now" -ge "$3" ]; then
-        (set -o noclobber; printf 'dispatch deadline expired %s\n' "$(date -u +%FT%TZ)" > "$STATE/install-dispatch-timeout")
-        echo HOLD_DISPATCH_TIMEOUT
-        exit 75
-    fi
-    test "$((cutoff-now))" -ge "$runtime" || { echo HOLD_INSTALL_WINDOW_TOO_SHORT; exit 75; }
-fi
 mkdir -- "$STATE/$MODE-registration" || { echo HOLD_LEASE_ALREADY_CLAIMED; exit 75; }
 cat /proc/sys/kernel/random/boot_id > "$STATE/$MODE-registration/boot-id"
 tmp="$(mktemp -- "$MARKER.XXXXXX")"
 printf '%s %s %s\n' "$(date -u +%FT%TZ)" "$LEASE_UNIT" "$TOOLING_SHA" > "$tmp"
 chmod 0644 "$tmp"
 mv -T -- "$tmp" "$MARKER"
+now="$(date -u +%s)"
+if [ "$((limit-now))" -le "$runtime" ]; then
+    /bin/bash "$FINISH" "$END" "$LEASE_UNIT"
+    echo HOLD_LEASE_WINDOW_TOO_SHORT
+    exit 75
+fi
 if ! systemd-run --unit="$LEASE_UNIT" --setenv="LEASE_UNIT=$LEASE_UNIT" --setenv="TMPDIR=$STATE" \
     -p CPUQuota=800% -p MemoryMax=8G -p MemorySwapMax=0 -p CPUWeight=10 -p IOWeight=10 \
     -p Nice=19 -p IOSchedulingClass=idle -p UMask=0077 -p RuntimeMaxSec="$runtime" \

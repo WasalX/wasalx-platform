@@ -107,8 +107,8 @@ echo 'INSTALL_FIXTURE=FORCED_FAILURE'
 disk record-overlay-stop "$overlay" "$DISK_STATE/retained.json"
 overdue_audit match
 audit_log="$(PHASE_TIMING_MODE=rollback disk verify)"
-grep -q '^PHASE_TIMING phase=rollback step=daily-base-hash event=start ' <<< "$audit_log"
-grep -q '^PHASE_TIMING phase=rollback step=daily-base-hash event=pass ' <<< "$audit_log"
+grep -q '^PHASE_TIMING phase=rollback step=full-top-hash event=start .* bytes=[1-9][0-9]*$' <<< "$audit_log"
+grep -q '^PHASE_TIMING phase=rollback step=full-top-hash event=pass .* bytes=[1-9][0-9]*$' <<< "$audit_log"
 disk restore-mode "$run_id"
 disk archive-overlay "$overlay" "$overlay.retained" "$DISK_STATE/retained.json"
 disk archive-overlay "$overlay" "$overlay.retained" "$DISK_STATE/retained.json"
@@ -119,7 +119,9 @@ disk begin-writable "$run_id"
 guard_stub "$top"
 disk finish-writable "$run_id"
 qemu-io -r -f qcow2 -c 'read -P 0x00 1M 512' "$top" >/dev/null
-disk freeze "$run_id"
+seal_log="$(PHASE_TIMING_MODE=install disk freeze "$run_id")"
+grep -q "^PHASE_TIMING phase=install step=full-top-hash event=pass .* bytes=$(stat -c %s "$top")$" <<< "$seal_log"
+test -z "$(PHASE_TIMING_MODE=install disk freeze "$run_id")"
 disk audit
 echo 'DISCARD_FIXTURE=PASS overdue_audit=PASS offline_recovery=PASS'
 
@@ -141,13 +143,64 @@ fixture commit
 disk preboot "$overlay"
 qemu-io -f qcow2 -c 'write -P 0xa5 1M 512' "$overlay" >/dev/null
 disk record-overlay-stop "$overlay" "$DISK_STATE/retained.json"
-disk commit "$overlay" "$run_id"
+before_bytes="$(stat -c %s "$top")"
+overlay_bytes="$(stat -c %s "$overlay")"
+commit_log="$(PHASE_TIMING_MODE=commit disk commit "$overlay" "$run_id")"
+after_bytes="$(stat -c %s "$top")"
+test "$after_bytes" -gt "$before_bytes"
+test "$(grep -c '^PHASE_TIMING phase=commit step=full-top-hash event=pass ' <<< "$commit_log")" = 2
+grep -q "^PHASE_TIMING phase=commit step=full-top-hash event=pass .* bytes=$before_bytes$" <<< "$commit_log"
+grep -q "^PHASE_TIMING phase=commit step=full-top-hash event=pass .* bytes=$after_bytes$" <<< "$commit_log"
+for event in start pass; do
+    grep -q "^PHASE_TIMING phase=commit step=qemu-commit event=$event .* bytes=$overlay_bytes$" <<< "$commit_log"
+done
 disk committed "$run_id"
 disk verify
 qemu-io -r -f qcow2 -c 'read -P 0xa5 1M 512' "$top" >/dev/null
 disk restore-mode "$run_id"
 disk archive-overlay "$overlay" "$overlay.retained" "$DISK_STATE/retained.json"
 echo 'COMMIT_FIXTURE=PASS'
+
+test_commit_registration() (
+    local state="$mountpoint/registration" templates="$repo/scripts/dev-install/templates"
+    mkdir -p -- "$state/markers" "$state/staging"
+    export LEASE_RECORD="$state/systemd-run.args"
+    systemctl() { if [ "$1" = show ] && [ "${2:-}" = -p ]; then echo not-found; fi; }
+    systemd-run() { printf '%s\n' "$@" > "$LEASE_RECORD"; }
+    export -f systemctl systemd-run
+    cp -- "$templates/host-maintenance.py" "$templates/install-or-discard.sh" "$state/"
+    printf '%s\n' "$run_id" > "$state/run-id"
+    cat > "$state/overlay-action.sh" <<'SH'
+printf 'ACTION=%s\n' "$1"
+exit 75
+SH
+    cp -- "$state/overlay-action.sh" "$state/staging/"
+    (cd "$state/staging" && sha256sum overlay-action.sh > DEV-SHA256SUMS)
+    cat > "$state/host.env" <<EOF
+export LEASE_PREFIX=fixture MARKER_PREFIX=fixture TOOLING_SHA=fixture
+export MARKER_DIRECTORY=$state/markers STAGING=$state/staging
+export ENGINE_FREE=/bin/true ENGINE_RUN=$run_id ROOT_FLOOR_BYTES=1
+export INSTALL_NOT_BEFORE=$(date -u -d '1 hour ago' +%FT%TZ)
+export INSTALL_CUTOFF=$(date -u -d '+1 hour' +%FT%TZ)
+export DISCARD_LIMIT=$(date -u -d '+6 hours' +%FT%TZ)
+export COMMIT_FALLBACK_SECONDS=25050 INSTALL_DISCARD_BUDGET_SOURCE=reviewed-reservations
+export LEASE_BUDGET_SOURCE=fallback-commit
+EOF
+    local result=0 output
+    output="$(bash "$templates/register.sh" commit "$state")" || result=$?
+    test "$result" = 75
+    test "$output" = HOLD_LEASE_WINDOW_TOO_SHORT
+    test ! -e "$LEASE_RECORD"
+    printf 'export DISCARD_LIMIT=%s\n' "$(date -u -d '+8 hours' +%FT%TZ)" >> "$state/host.env"
+    bash "$templates/register.sh" commit "$state" | grep -Fx 'LEASE_BUDGET_SOURCE=fallback-commit mode=commit runtime_seconds=25050'
+    grep -Fx 'RuntimeMaxSec=25050' "$LEASE_RECORD"
+    test "$(tail -n 1 "$LEASE_RECORD")" = commit
+    result=0
+    output="$(bash "$state/install-or-discard.sh" "$state" commit)" || result=$?
+    test "$result" = 75
+    test "$output" = ACTION=commit
+)
+test_commit_registration
 
 expect_hold() {
     local name="$1" reason="$2" output

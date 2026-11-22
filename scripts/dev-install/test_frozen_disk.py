@@ -26,26 +26,32 @@ maintenance = load("host-maintenance")
 SECOND = 10**9
 
 
-def timing(phase, step, duration):
+def timing(phase, step, duration, size=None):
     start = 1_700_000_000 * SECOND
+    byte_count = f" bytes={size}" if size is not None else ""
     return (
-        f"PHASE_TIMING phase={phase} step={step} event=start epoch_ns={start} at=2023-11-14T22:13:20Z\n"
-        f"PHASE_TIMING phase={phase} step={step} event=pass epoch_ns={start + duration} at=2023-11-14T22:13:21Z\n"
+        f"PHASE_TIMING phase={phase} step={step} event=start epoch_ns={start} at=2023-11-14T22:13:20Z{byte_count}\n"
+        f"PHASE_TIMING phase={phase} step={step} event=pass epoch_ns={start + duration} at=2023-11-14T22:13:21Z{byte_count}\n"
     )
 
 
-def lease_receipt(phase, duration, hash_timing=""):
-    terminal = "DEV_SIGNED_INSTALL=PASS release=HELD" if phase == "install" else "DISCARD_OVERLAY=PASS TOP_RESTORED"
+def lease_receipt(phase, duration, steps=""):
+    terminal = {
+        "install": "DEV_SIGNED_INSTALL=PASS release=HELD 2023-11-14T22:13:21Z",
+        "rollback": "DISCARD_OVERLAY=PASS TOP_RESTORED 2023-11-14T22:13:21Z",
+        "commit": "COMMIT_PASS 2023-11-14T22:13:21Z overlay_retained=fixture.qcow2",
+    }
     start, end = timing(phase, "lease", duration).splitlines(keepends=True)
-    return start + hash_timing + end + f"{terminal} 2023-11-14T22:13:21Z"
+    return start + steps + end + terminal[phase]
 
 
 class HostPacketTest(unittest.TestCase):
-    def render(self, packet, *lease_args):
-        here = Path(__file__).parent
-        identity = here / "fixtures" / "host-identity.example.json"
+    here = Path(__file__).parent
+    example = here / "fixtures" / "host-identity.example.json"
+
+    def render(self, packet, *lease_args, identity=None):
         return subprocess.run([
-            sys.executable, "-I", "-B", here / "render.py", "--host-identity", identity,
+            sys.executable, "-I", "-B", self.here / "render.py", "--host-identity", identity or self.example,
             "--run-id", "20000101T000000Z", "--commit", "1" * 40, "--output", packet,
             *lease_args,
         ], capture_output=True, text=True, timeout=10)
@@ -54,12 +60,17 @@ class HostPacketTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             parent = Path(directory)
             install = parent / "install.raw"
-            install.write_text(lease_receipt("install", 24 * SECOND, timing("install", "base-freeze", 8 * SECOND)),
+            install.write_text(lease_receipt("install", 24 * SECOND, timing("install", "full-top-hash", 8 * SECOND, 2 * SECOND)),
                                encoding="utf-8")
             rollback = parent / "rollback.raw"
             rollback.write_text(lease_receipt("rollback", 7 * SECOND), encoding="utf-8")
+            receipt_hashes = [hashlib.sha256(path.read_bytes()).hexdigest() for path in (install, rollback)]
+            identity = parent / "identity.json"
+            identity.write_text(json.dumps({**json.loads(self.example.read_bytes()),
+                                            "LEASE_RECEIPT_SHA256S": receipt_hashes}), encoding="utf-8")
             packet = parent / "packet"
-            result = self.render(packet, "--lease-receipt", install, "--lease-receipt", rollback)
+            args = ("--lease-receipt", install, "--lease-receipt", rollback)
+            result = self.render(packet, *args, identity=identity)
             self.assertEqual(result.returncode, 0, result.stderr)
             hashes = dict(line.split("  ", 1)[::-1] for line in (packet / "SHA256SUMS").read_text().splitlines())
             self.assertEqual(set(hashes), {file.name for file in packet.iterdir()} - {"SHA256SUMS"})
@@ -69,8 +80,19 @@ class HostPacketTest(unittest.TestCase):
                 self.assertEqual(hashlib.sha256((packet / name).read_bytes()).hexdigest(), sha256)
             env = (packet / "host.env").read_text()
             self.assertIn("export INSTALL_SECONDS=30", env)
-            self.assertIn("export DISCARD_SECONDS=19", env)
-            self.assertIn("export LEASE_BUDGET_SOURCE=measured-receipts", env)
+            self.assertIn("export DISCARD_SECONDS=9", env)
+            self.assertIn("export HASH_NS_PER_GB=4000000000", env)
+            self.assertIn("export INSTALL_DISCARD_BUDGET_SOURCE=measured-receipts", env)
+            self.assertIn(f"export LEASE_RECEIPT_SHA256S='{json.dumps(receipt_hashes)}'", env)
+
+            rejected = parent / "rejected"
+            missing = self.render(rejected, *args)
+            self.assertIn("expected SHA-256 hashes", missing.stderr)
+            install.write_bytes(install.read_bytes().replace(b"step=full-top-hash", b"step=base-freeze"))
+            result = self.render(rejected, *args, identity=identity)
+            self.assertIn("lease receipt SHA-256 mismatch", result.stderr)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertFalse(rejected.exists())
 
     def test_renderer_seals_reviewed_reservations_and_refuses_hand_typed_budgets(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -81,7 +103,9 @@ class HostPacketTest(unittest.TestCase):
             env = (packet / "host.env").read_text()
             self.assertIn("export INSTALL_SECONDS=13400", env)
             self.assertIn("export DISCARD_SECONDS=11400", env)
-            self.assertIn("export LEASE_BUDGET_SOURCE=reviewed-reservations", env)
+            self.assertIn("export INSTALL_DISCARD_BUDGET_SOURCE=reviewed-reservations", env)
+            self.assertIn("export COMMIT_FALLBACK_SECONDS=25050", env)
+            self.assertIn("export LEASE_BUDGET_SOURCE=fallback-commit", env)
 
             budgets = parent / "budgets.json"
             budgets.write_text('{"install": 30, "rollback": 19}', encoding="utf-8")
@@ -171,23 +195,80 @@ class DiskProofTest(unittest.TestCase):
 
 
 class LeaseBudgetTest(unittest.TestCase):
-    def test_p100_and_rounded_margin_includes_slowest_full_hash_in_discard(self):
-        install = lease_receipt("install", 8_000 * SECOND + 1, timing("install", "base-freeze", 2_000 * SECOND))
+    def test_p100_and_rounded_margin_scale_hashes_with_current_top_size(self):
+        install = lease_receipt("install", 8_000 * SECOND + 1, timing("install", "full-top-hash", 10 * SECOND + 1, 100))
         rollback = lease_receipt("rollback", 3_000 * SECOND, timing("rollback", "disk-recovery", 2_500 * SECOND))
-        audit = timing("audit", "daily-base-hash", 2_880 * SECOND + 1)
-        budget, source = maintenance.lease_budgets([lease_receipt("install", 5_000 * SECOND), install, rollback, audit])
-        self.assertEqual(budget, {"install": 10_001, "rollback": 7_351})
-        self.assertEqual(source, "measured-receipts")
+        audit = timing("audit", "full-top-hash", 12 * SECOND, 200)
+        budget = maintenance.lease_budgets([lease_receipt("install", 5_000 * SECOND), install, rollback, audit])
+        self.assertEqual(budget["INSTALL_DISCARD_BUDGET_SOURCE"], "measured-receipts")
+        with tempfile.TemporaryDirectory() as directory:
+            top = Path(directory) / "top.qcow2"
+            top.write_bytes(bytes(100))
+            env = {**budget, "TOP": top}
+            self.assertEqual(maintenance.lease_runtime("rollback", env), 3_763)
+            top.write_bytes(bytes(200))
+            self.assertEqual(maintenance.lease_runtime("rollback", env), 3_776)
+            self.assertEqual(maintenance.lease_runtime("install", env), 13_777)
 
     def test_falls_back_without_both_bound_passes_and_a_hash_measurement(self):
-        install = lease_receipt("install", SECOND, timing("install", "base-freeze", SECOND))
+        install = lease_receipt("install", SECOND, timing("install", "full-top-hash", SECOND, 100))
         rollback = lease_receipt("rollback", SECOND)
-        for receipts in ([], [install], [rollback], [lease_receipt("install", SECOND), rollback]):
+        legacy = lease_receipt("install", SECOND, timing("install", "base-freeze", SECOND))
+        for receipts in ([], [install], [rollback], [legacy, rollback]):
             with self.subTest(receipts=len(receipts)):
-                self.assertEqual(maintenance.lease_budgets(receipts),
-                                 ({"install": 13_400, "rollback": 11_400}, "reviewed-reservations"))
+                budget = maintenance.lease_budgets(receipts)
+                self.assertEqual(budget["INSTALL_DISCARD_BUDGET_SOURCE"], "reviewed-reservations")
+                self.assertEqual(maintenance.lease_runtime("install", budget), 24_800)
+                self.assertEqual(maintenance.lease_runtime("rollback", budget), 11_400)
+                self.assertEqual(maintenance.lease_runtime("commit", budget), 25_050)
+                self.assertEqual(budget["LEASE_BUDGET_SOURCE"], "fallback-commit")
         with self.assertRaisesRegex(ValueError, "unbound"):
             maintenance.lease_budgets(["DISCARD_OVERLAY=PASS TOP_RESTORED test"])
+        inconsistent = timing("audit", "full-top-hash", SECOND, 100).replace("21Z bytes=100", "21Z bytes=200")
+        with self.assertRaisesRegex(ValueError, "invalid phase timing"):
+            maintenance.lease_budgets([inconsistent])
+
+    def test_commit_reserves_scaled_hashes_and_commit_work_with_a_fallback_floor(self):
+        def commit(qemu, size, restore):
+            steps = timing("commit", "full-top-hash", 3_000 * SECOND, 100)
+            steps += timing("commit", "qemu-commit", qemu * SECOND, size)
+            steps += timing("commit", "top-restore", restore * SECOND)
+            return lease_receipt("commit", 50_000 * SECOND, steps)
+
+        first = commit(8_000, 50, 2_000)
+        second = commit(12_000, 100, 6_500)
+        interrupted = commit(30_000, 50, 10_000).rsplit("\n", 1)[0]
+        with tempfile.TemporaryDirectory() as directory:
+            top = Path(directory) / "top.qcow2"
+            overlay = Path(directory) / "overlay.qcow2"
+            top.write_bytes(bytes(100))
+            budget = maintenance.lease_budgets([first, second, interrupted])
+            self.assertEqual(budget["LEASE_BUDGET_SOURCE"], "measured-receipts")
+            env = {**budget, "TOP": top, "OVERLAY": overlay}
+            overlay.write_bytes(bytes(25))
+            self.assertEqual(maintenance.lease_runtime("commit", env), 25_050)
+            overlay.write_bytes(bytes(50))
+            self.assertEqual(maintenance.lease_runtime("commit", env), 27_500)
+            overlay.write_bytes(bytes(100))
+            self.assertEqual(maintenance.lease_runtime("commit", env), 39_375)
+            legacy = commit(8_000, None, 2_000)
+            mixed = maintenance.lease_budgets([first, second, legacy])
+            self.assertEqual(mixed["LEASE_BUDGET_SOURCE"], "fallback-commit")
+            self.assertEqual(maintenance.lease_runtime("commit", {**env, **mixed}), 39_375)
+            top.write_bytes(bytes(200))
+            self.assertEqual(maintenance.lease_runtime("commit", env), 46_875)
+            overlay.unlink()
+            self.assertEqual(maintenance.lease_runtime("commit", env), 25_050)
+            self.assertEqual(maintenance.lease_runtime("commit", maintenance.lease_budgets([interrupted])), 25_050)
+
+    def test_unsized_commit_timing_forces_fallback(self):
+        hashes = timing("commit", "full-top-hash", 8 * SECOND, 100)
+        restore = timing("commit", "top-restore", 45 * SECOND)
+        legacy = lease_receipt("commit", 90 * SECOND,
+                               hashes + timing("commit", "qemu-commit", 20 * SECOND) + restore)
+        budget = maintenance.lease_budgets([legacy])
+        self.assertEqual(budget["LEASE_BUDGET_SOURCE"], "fallback-commit")
+        self.assertEqual(maintenance.lease_runtime("commit", budget), 25_050)
 
     @unittest.skipUnless(hasattr(maintenance.os, "geteuid"), "Linux directory custody")
     def test_archive_needs_bound_terminal_pass_and_is_resumable(self):

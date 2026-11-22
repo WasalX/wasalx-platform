@@ -32,6 +32,9 @@ rollback)
     fi
     printf 'DISCARD_ONLY=START %s\n' "$(date -u +%FT%TZ)"
     ;;
+commit)
+    exec bash "$action" commit "$state"
+    ;;
 *) exit 75 ;;
 esac
 if [ ! -f "$state/overlay-verification-armed" ]; then
