@@ -368,6 +368,10 @@ jobs:
           done
       - name: Test portal and tenant integration
         # Keep Docker fixture network changes out of Chromium page loads.
+        env:
+          # The dedicated runner executes these files serially. Stay outside Linux's ephemeral range.
+          WASALX_E2E_CONTROL_PORT: '14101'
+          WASALX_E2E_PORTAL_PORT: '14102'
         run: >-
           node --test --test-concurrency=1 tests/multitenant-e2e.test.mjs tests/platform-invitation-e2e.test.mjs
           tests/portal-security-headers.test.mjs tests/rendered-html.test.mjs

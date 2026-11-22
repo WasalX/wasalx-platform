@@ -298,6 +298,7 @@ test("CI gates integration and infrastructure and runs portal integration files 
   assert.equal(dryrun.if, "${{ !cancelled() && github.event_name == 'pull_request' && needs.changes.outputs.dev-install != 'false' }}");
   const portalIntegration = portal.steps.find(step => step.name === "Test portal and tenant integration");
   assert.match(portalIntegration?.run, /^node --test --test-concurrency=1 /u);
+  assert.deepEqual(portalIntegration.env, { WASALX_E2E_CONTROL_PORT: "14101", WASALX_E2E_PORTAL_PORT: "14102" });
   for (const job of ["integration", "portal-integration", "integration-coverage"]) assert(gate.needs.includes(job));
   assert(gate.needs.includes("dev-install-dryrun"));
   const [gateStep] = gate.steps;
