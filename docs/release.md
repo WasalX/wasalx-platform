@@ -43,5 +43,6 @@ source separately from the installer tree and fails if the bounded search
 finds no eligible publication.
 
 Live-provider qualification with real WhatsApp or Meta services and real
-customers is a separate milestone that requires owner approval. A stable
+customers is a separate milestone that requires the owner's approval for the
+paid provider accounts and access it needs. A stable
 release proves the platform end to end in its own environments.
