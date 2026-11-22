@@ -106,6 +106,9 @@ updates:
       # Upgrade Elasticsearch with Zammad because stored index data cannot be downgraded.
       - dependency-name: "elasticsearch"
         update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      # Grafana's Jaeger data source still calls the v1 query API that Jaeger 2.21 removed (grafana-jaeger-datasource#87).
+      - dependency-name: "jaegertracing/jaeger"
+        versions: [">=2.21.0"]
       # Keep the same manual Keycloak upgrade hold as the Docker ecosystem.
       - dependency-name: "keycloak/keycloak"
       # Upgrade with the promtool pin in scripts/validate-infra.sh and the infra contract test.

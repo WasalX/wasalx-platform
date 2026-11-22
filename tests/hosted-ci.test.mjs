@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, posix } from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -38,6 +38,13 @@ function referencesFile(source, file) {
 
 const tofuFile = file => /^infra\/terraform\/tests\/[^/]+\.tftest\.(?:hcl|json)$/u.test(file);
 const postgresFile = file => /^tests\/.*(?:-postgres(?:-check)?|-real-schema-check)\.mjs$/u.test(file);
+
+function runWorkflowScript(script, env) {
+  const bash = process.platform === "win32" ? "C:/Program Files/Git/bin/bash.exe" : "bash";
+  return spawnSync(bash, ["--noprofile", "--norc", "-e", "-o", "pipefail", "-c", script], {
+    env: { ...process.env, ...env }, encoding: "utf8", timeout: 10_000, windowsHide: true,
+  });
+}
 
 test("tracked tests belong to a named CI runner or the test allowlist", async () => {
   const tracked = execFileSync("git", ["ls-files", "-z", "--", "tests", "infra/terraform/tests", "scripts", ".github/workflows",
@@ -193,6 +200,87 @@ test("nightly MinIO mirrors retain the full installer content digests", async ()
   }
 });
 
+test("nightly selects the newest complete publication within five first-parent commits", async t => {
+  const directory = await mkdtemp(join(tmpdir(), "nightly-publication-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const options = { cwd: directory, encoding: "utf8", windowsHide: true };
+  const git = (...args) => execFileSync("git", args, options).trim();
+  git("init", "--quiet", "--template=");
+  git("config", "user.name", "Fixture");
+  git("config", "user.email", "fixture@example.invalid");
+  for (let i = 0; i < 6; i += 1) {
+    git("commit", "--quiet", "--allow-empty", "-m", "fixture " + i);
+  }
+  const tree = git("rev-parse", "HEAD^{tree}");
+  const parent = git("rev-parse", "HEAD^1");
+  const side = git("commit-tree", tree, "-p", parent, "-m", "side branch");
+  const base = git("commit-tree", tree, "-p", parent, "-p", side, "-m", "base merge");
+  const commits = git("rev-list", "--first-parent", base).split(/\r?\n/u);
+  await mkdir(join(directory, "scripts", "release"), { recursive: true });
+  await writeFile(join(directory, "scripts", "release", "product-images.json"), '[{"image":"zammad"}]');
+  await writeFile(join(directory, "image-manifest.sh"), await read("scripts/release/image-manifest.sh"));
+  const fixture = String.raw`
+gh() {
+  case "$1 $2" in
+    "api repos/$GITHUB_REPOSITORY/compare/$BASE...main") echo ahead ;;
+    'run list')
+      [[ "$*" == *"--workflow ci.yml --branch main --event push --commit "*"--status success --limit 1"* ]] || return 2
+      while [[ "$1" != --commit ]]; do shift; done
+      printf '%s\n' "$2" >> lookups
+      case "$2" in
+        "$LOOKUP_ERROR") return 17 ;;
+        "$READY") echo 101 ;;
+        "$INCOMPLETE") echo 102 ;;
+        "$EXPIRED") echo 103 ;;
+        "$NO_JOB") echo 104 ;;
+      esac
+      ;;
+    'run view') if [[ "$3" == 104 ]]; then echo 0; else echo 1; fi ;;
+    "api repos/$GITHUB_REPOSITORY/actions/runs/103/artifacts?name=images-manifest") echo 0 ;;
+    "api repos/$GITHUB_REPOSITORY/actions/runs/"*"/artifacts?name=images-manifest") echo 1 ;;
+    'run download')
+      local commit=$READY images='{"zammad":{}}' pending='{}' complete=true
+      [[ "$3" != 102 ]] || { commit=$INCOMPLETE; images='{}'; pending='{"zammad":{}}'; complete=false; }
+      [[ "$INVALID" != true ]] || commit=$BASE
+      printf '{"schemaVersion":1,"repository":"%s","platform":"linux/amd64","commit":"%s","tree":"%s","images":%s,"pending":%s,"publicationComplete":%s}\n' \
+        "$GITHUB_REPOSITORY" "$commit" "$(git rev-parse "$commit^{tree}")" "$images" "$pending" "$complete" > images-manifest.json
+      ;;
+    *) return 2 ;;
+  esac
+}
+source ./image-manifest.sh
+"$RESOLVER" "$BASE" .
+`;
+  const cases = [
+    { ready: base, selected: base, lookups: commits.slice(0, 1), reason: "requested base has a complete publication" },
+    { ready: commits[4], incomplete: commits[1], expired: commits[2], noJob: commits[3],
+      selected: commits[4], lookups: commits.slice(0, 5), reason: "newest complete first-parent publication" },
+    { ready: commits[5], lookups: commits.slice(0, 5), reason: "No complete green main publication" },
+    { ready: side, lookups: commits.slice(0, 5), reason: "No complete green main publication" },
+    { ready: commits[1], lookupError: base, lookups: commits.slice(0, 1), status: 17 },
+    { ready: commits[1], invalid: true, lookups: commits.slice(0, 2), status: 5, reason: "Invalid nightly publication manifest" },
+    { ready: commits[1], exact: true, lookups: commits.slice(0, 1), reason: "No green main CI push run for the commit" },
+  ];
+  const bash = process.platform === "win32" ? "C:/Program Files/Git/bin/bash.exe" : "bash";
+  for (const { ready, selected, incomplete = "", expired = "", noJob = "", lookupError = "", invalid = false,
+    exact = false, lookups, status = selected ? 0 : 1, reason } of cases) {
+    await writeFile(join(directory, "lookups"), "");
+    const result = spawnSync(bash, ["--noprofile", "--norc", "-euo", "pipefail", "-c", fixture], {
+      ...options, timeout: 10_000, env: {
+        ...process.env, GITHUB_REPOSITORY: "fixture/nightly", BASE: base, READY: ready, INCOMPLETE: incomplete,
+        EXPIRED: expired, NO_JOB: noJob, LOOKUP_ERROR: lookupError, INVALID: String(invalid),
+        RESOLVER: exact ? "download_main_image_manifest" : "download_nightly_image_manifest",
+      },
+    });
+    assert.ifError(result.error);
+    assert.equal(result.status, status, result.stdout + result.stderr);
+    if (!exact) assert.equal(result.stdout.trim(), selected ?? "");
+    if (reason) assert.ok((result.stdout + result.stderr).includes(reason), result.stderr);
+    if (selected) assert.equal(JSON.parse(await readFile(join(directory, "images-manifest.json"), "utf8")).commit, selected);
+    assert.deepEqual((await readFile(join(directory, "lookups"), "utf8")).trim().split(/\r?\n/u), lookups);
+  }
+});
+
 test("MinIO mirror is dispatch-only on main and verifies the raw manifest digest", async t => {
   const { on, permissions, jobs } = parse(await read(".github/workflows/mirror-images.yml"));
   const { mirror } = jobs;
@@ -309,9 +397,11 @@ test("CI gates integration and infrastructure and runs portal integration files 
   assert.equal(gateStep.env.DEV_INSTALL_NEEDED, "${{ needs.changes.outputs.dev-install }}");
   assert.equal(gateStep.env.DEV_INSTALL, "${{ needs.dev-install-dryrun.result }}");
   assert.equal(gateStep.run, `test "$CHANGES" = success && test "$CHECKS" = success || exit 1
-case "$EVENT:$REVIEW:$IMAGES_NEEDED:$IMAGES" in
-  pull_request:success:false:skipped|pull_request:success:true:success) ;;
-  merge_group:skipped:false:skipped|merge_group:skipped:true:success) ;;
+case "$EVENT:$REVIEW:$IMAGES" in
+  pull_request:success:*)
+    echo 'See PR image results (advisory) for image build outcomes.' >> "$GITHUB_STEP_SUMMARY"
+    ;;
+  merge_group:skipped:success) ;;
   *) exit 1 ;;
 esac
 case "$EVENT:$INTEGRATION_NEEDED:$INTEGRATION:$PORTAL_INTEGRATION:$INTEGRATION_COVERAGE" in
@@ -329,6 +419,56 @@ test "$INFRA" = success || {
   for (const job of [jobs.changes, jobs.checks]) {
     assert.equal(job.if, "github.event_name == 'pull_request' || github.event_name == 'merge_group'");
   }
+});
+
+test("PR image results are advisory while the merge queue requires the full image matrix", async t => {
+  const { jobs } = parse(await read(".github/workflows/ci.yml"));
+  const { images, "pr-images": prImages, "pr-image-results": report, "ci-gate": gate, publish } = jobs;
+  assert.equal(gate.if, "always() && (github.event_name == 'pull_request' || github.event_name == 'merge_group')");
+  assert(gate.needs.includes("images"));
+  assert(!gate.needs.includes("pr-images"));
+  assert(!gate.needs.includes("pr-image-results"));
+  assert.deepEqual(images.needs, ["changes"]);
+  assert.deepEqual(prImages.needs, images.needs);
+  assert.equal(images.if, "${{ !cancelled() && github.event_name == 'merge_group' && needs.changes.outputs.images == 'true' }}");
+  assert.equal(prImages.if, "${{ !cancelled() && github.event_name == 'pull_request' && needs.changes.outputs.images == 'true' }}");
+  assert.deepEqual(prImages.strategy, images.strategy);
+  assert.deepEqual(prImages.steps, images.steps);
+  assert.equal(images["continue-on-error"], undefined);
+  assert.equal(prImages["continue-on-error"], undefined);
+  assert.equal(report.if, "always() && github.event_name == 'pull_request'");
+  assert.equal(report.needs, "pr-images");
+  assert.equal(report.steps[0].env.IMAGES, "${{ needs.pr-images.result }}");
+  assert.equal(gate.steps[0].env.IMAGES, "${{ needs.images.result }}");
+  assert.equal(publish.needs, "lint-on-push");
+  assert.equal(publish.if, "${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'WasalX/wasalx-platform' }}");
+  assert.equal(publish.uses, "./.github/workflows/branch-image.yml");
+
+  const directory = await mkdtemp(join(tmpdir(), "wasalx-ci-image-results-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  for (const imageResult of ["success", "failure", "skipped", "cancelled"]) {
+    const summary = join(directory, imageResult).replaceAll("\\", "/");
+    const advisory = runWorkflowScript(report.steps[0].run, { IMAGES: imageResult, GITHUB_STEP_SUMMARY: summary });
+    assert.equal(advisory.status, ["success", "skipped"].includes(imageResult) ? 0 : 1, advisory.stderr);
+    assert.equal((await readFile(summary, "utf8")).trim(), `PR image builds (advisory): ${imageResult}`);
+    if (imageResult === "failure") assert.match(advisory.stdout, /::warning::Advisory PR image builds: failure/u);
+
+    const result = runWorkflowScript(gate.steps[0].run, {
+      EVENT: "merge_group", CHANGES: "success", CHECKS: "success", REVIEW: "skipped",
+      IMAGES: imageResult, INTEGRATION: "success", PORTAL_INTEGRATION: "success",
+      INTEGRATION_COVERAGE: "success", DEV_INSTALL: "skipped", INFRA: "success",
+    });
+    assert.equal(result.status, imageResult === "success" ? 0 : 1, `merge_group/${imageResult}: ${result.stderr}`);
+  }
+  const summary = join(directory, "gate").replaceAll("\\", "/");
+  const result = runWorkflowScript(gate.steps[0].run, {
+    EVENT: "pull_request", CHANGES: "success", CHECKS: "success", REVIEW: "success",
+    IMAGES: "skipped", INTEGRATION_NEEDED: "false", INTEGRATION: "skipped",
+    PORTAL_INTEGRATION: "skipped", INTEGRATION_COVERAGE: "skipped", DEV_INSTALL_NEEDED: "false", DEV_INSTALL: "skipped",
+    INFRA_NEEDED: "false", INFRA: "skipped", GITHUB_STEP_SUMMARY: summary,
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert((await readFile(summary, "utf8")).includes(report.name));
 });
 
 test("optional PR lanes run on diff errors and gate their applicable checks", async t => {
@@ -354,12 +494,9 @@ test("optional PR lanes run on diff errors and gate their applicable checks", as
     "compose.full.yaml", "tests/fixtures/production-backup-alerts.yaml", "tests/secret-adapter-readiness.test.rb",
     ".github/workflows/ci.yml",
   ].join(" ");
-  const bash = process.platform === "win32" ? "C:/Program Files/Git/bin/bash.exe" : "bash";
-  const run = (script, env) => spawnSync(bash, ["--noprofile", "--norc", "-e", "-o", "pipefail", "-c", script], {
-    env: { ...process.env, ...env }, encoding: "utf8", timeout: 10_000, windowsHide: true,
-  });
   const directory = await mkdtemp(join(tmpdir(), "wasalx-infra-validate-changes-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
+  const summary = join(directory, "gate-summary").replaceAll("\\", "/");
   for (const [id, diffPaths] of [
     ["infra", paths],
     ["dev-install", ["scripts/dev-install/", "scripts/release/installer-stages.mjs",
@@ -372,7 +509,7 @@ test("optional PR lanes run on diff errors and gate their applicable checks", as
     assert.equal(detector.if, "github.event_name == 'pull_request'");
     for (const [status, needed] of [[0, false], [1, true], [128, true]]) {
       const outputFile = join(directory, `${id}-${status}`);
-      const result = run(`git() {
+      const result = runWorkflowScript(`git() {
   test "$*" = "diff --quiet --no-ext-diff --no-renames HEAD^1 HEAD -- $DIFF_PATHS" || exit 99
   return "$DIFF_STATUS"
 }
@@ -393,13 +530,13 @@ ${detector.run}`, { GITHUB_OUTPUT: outputFile.replaceAll("\\", "/"), DIFF_PATHS:
     ["merge_group", "", "failure", 1],
   ]) {
     const pr = event === "pull_request";
-    const result = run(gateStep.run, {
+    const result = runWorkflowScript(gateStep.run, {
       EVENT: event, CHANGES: "success", CHECKS: "success", REVIEW: pr ? "success" : "skipped",
-      IMAGES_NEEDED: "false", IMAGES: "skipped", INTEGRATION_NEEDED: "false",
+      IMAGES: pr ? "skipped" : "success", INTEGRATION_NEEDED: "false",
       INTEGRATION: pr ? "skipped" : "success", PORTAL_INTEGRATION: pr ? "skipped" : "success",
       INTEGRATION_COVERAGE: pr ? "skipped" : "success",
       DEV_INSTALL_NEEDED: "false", DEV_INSTALL: "skipped",
-      INFRA_NEEDED: needed, INFRA: jobResult,
+      INFRA_NEEDED: needed, INFRA: jobResult, GITHUB_STEP_SUMMARY: summary,
     });
     assert.equal(result.status, status, `${event}/${needed}/${jobResult}: ${result.error?.message ?? result.stderr}`);
   }
@@ -407,11 +544,12 @@ ${detector.run}`, { GITHUB_OUTPUT: outputFile.replaceAll("\\", "/"), DIFF_PATHS:
     ["true", "success", 0], ["false", "skipped", 0], ["true", "skipped", 1], ["", "skipped", 1],
     ["true", "failure", 1], ["true", "cancelled", 1],
   ]) {
-    const result = run(gateStep.run, {
+    const result = runWorkflowScript(gateStep.run, {
       EVENT: "pull_request", CHANGES: "success", CHECKS: "success", REVIEW: "success",
-      IMAGES_NEEDED: "false", IMAGES: "skipped", INTEGRATION_NEEDED: "false",
+      IMAGES: "skipped", INTEGRATION_NEEDED: "false",
       INTEGRATION: "skipped", PORTAL_INTEGRATION: "skipped", INTEGRATION_COVERAGE: "skipped",
       DEV_INSTALL_NEEDED: needed, DEV_INSTALL: jobResult, INFRA_NEEDED: "false", INFRA: "skipped",
+      GITHUB_STEP_SUMMARY: summary,
     });
     assert.equal(result.status, status, `dev-install/${needed}/${jobResult}: ${result.error?.message ?? result.stderr}`);
   }
@@ -425,10 +563,10 @@ ${detector.run}`, { GITHUB_OUTPUT: outputFile.replaceAll("\\", "/"), DIFF_PATHS:
     ["merge_group", "", "success", "success", "skipped", 1],
   ]) {
     const pr = event === "pull_request";
-    const result = run(gateStep.run, {
+    const result = runWorkflowScript(gateStep.run, {
       EVENT: event, CHANGES: "success", CHECKS: "success", REVIEW: pr ? "success" : "skipped",
-      IMAGES_NEEDED: "false", IMAGES: "skipped", DEV_INSTALL_NEEDED: "false", DEV_INSTALL: "skipped",
-      INFRA_NEEDED: "true", INFRA: "success", INTEGRATION_NEEDED: needed,
+      IMAGES: pr ? "skipped" : "success", DEV_INSTALL_NEEDED: "false", DEV_INSTALL: "skipped",
+      INFRA_NEEDED: "true", INFRA: "success", INTEGRATION_NEEDED: needed, GITHUB_STEP_SUMMARY: summary,
       INTEGRATION: postgres, PORTAL_INTEGRATION: portal, INTEGRATION_COVERAGE: coverage,
     });
     assert.equal(result.status, status, [event, needed, postgres, portal, coverage].join("/"));
