@@ -1,0 +1,23 @@
+[Unit]
+Description=Report eligible WasalX DEV releases
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=wasalx-dev-pull
+Group=wasalx-dev-pull
+StateDirectory=wasalx-dev-pull
+StateDirectoryMode=0700
+LoadCredential=pull-config:@INSTALL_DIR@/pull-config.json
+LoadCredential=receipt-key:@RECEIPT_KEY@
+ExecStart=/usr/bin/python3 -I -B @INSTALL_DIR@/pull-agent.py --config %d/pull-config --key %d/receipt-key
+UMask=0077
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+ReadWritePaths=@STAGING_DIR@
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+KillMode=control-group
+TimeoutStartSec=150min

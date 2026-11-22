@@ -11,6 +11,11 @@ import re
 
 
 TEMPLATES = Path(__file__).with_name("templates")
+ROOT = TEMPLATES.parents[2]
+PULL_PATHS = ("install_dir", "receipt_key", "staging_dir", "staging_mount", "stage_guard",
+              "lane_lock", "cosign", "trusted_root")
+PULL_SERVICE = "wasalx-dev-pull.service"
+PULL_TIMER = "wasalx-dev-pull.timer"
 SCRIPTS = ("dispatch.py", "probe.py", "receive.py")
 PATH_FIELDS = ("probe_home", "original_env", "ssh_key", "ssh_known_hosts")
 PATTERNS = {
@@ -61,26 +66,74 @@ def render(identity, run, bundle):
 
     files = {name: (TEMPLATES / name).read_text(encoding="utf-8").encode() for name in SCRIPTS}
     files["packet.json"] = (json.dumps({"identity": identity, "run": run}, indent=2, sort_keys=True) + "\n").encode()
+    write_bundle(bundle, files)
+
+
+def render_pull(identity, bundle):
+    if not isinstance(identity, dict) or set(identity) != {*PULL_PATHS, "trusted_root_sha256", "mode"}:
+        raise ValueError("invalid pull identity fields")
+    if identity["mode"] != "report" or not re.fullmatch(r"[0-9a-f]{64}", identity["trusted_root_sha256"]):
+        raise ValueError("invalid pull mode or trust pin")
+    for field in PULL_PATHS:
+        value = identity[field]
+        if (not isinstance(value, str) or not re.fullmatch(r"/[a-zA-Z0-9_./-]+", value)
+                or value.startswith("//") or str(PurePosixPath(value)) != value
+                or ".." in PurePosixPath(value).parts):
+            raise ValueError(f"invalid pull path: {field}")
+    config = {key: value for key, value in identity.items() if key not in {"receipt_key", "install_dir"}}
+    service = (TEMPLATES / PULL_SERVICE).read_text(encoding="utf-8")
+    for field in ("install_dir", "receipt_key", "staging_dir"):
+        service = service.replace(f"@{field.upper()}@", identity[field])
+    files = {
+        "pull-agent.py": (TEMPLATES / "pull-agent.py").read_text(encoding="utf-8").encode(),
+        PULL_SERVICE: service.encode(),
+        PULL_TIMER: (TEMPLATES / PULL_TIMER).read_text(encoding="utf-8").encode(),
+        "pull-config.json": (json.dumps(config, indent=2, sort_keys=True) + "\n").encode(),
+    }
+    catalog = "scripts/release/product-images.json"
+    dockerfiles = [row["dockerfile"] for row in json.loads((ROOT / catalog).read_bytes())]
+    for name in (
+        "scripts/dev-install/pull-verify.mjs", "scripts/dev-install/host-staging.sh", "scripts/dev-install/host-staging.py",
+        "scripts/release/installer-hosted-images.mjs", "scripts/release/images-by-digest.py",
+        "release/installer-images.json", catalog, *dockerfiles,
+    ):
+        files[name] = (ROOT / name).read_bytes()
+    write_bundle(bundle, files)
+
+
+def write_bundle(bundle, files):
     files["SHA256SUMS"] = "".join(
         f"{hashlib.sha256(data).hexdigest()}  {name}\n" for name, data in sorted(files.items())
     ).encode("ascii")
-    os.umask(int(identity["private_umask"], 8))
+    os.umask(0o077)
     bundle.mkdir(parents=True, exist_ok=False)
     for name, data in files.items():
-        with (bundle / name).open("xb") as output:
+        path = bundle / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("xb") as output:
             output.write(data)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--identity", type=Path, required=True)
+    identity = parser.add_mutually_exclusive_group(required=True)
+    identity.add_argument("--identity", type=Path)
+    identity.add_argument("--pull-identity", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     for name in ("tag", "commit", "tree", "env-sha256"):
-        parser.add_argument(f"--{name}", required=True)
+        parser.add_argument(f"--{name}")
     args = vars(parser.parse_args())
-    identity = load_identity(args.pop("identity"))
+    identity = args.pop("identity")
+    pull_identity = args.pop("pull_identity")
     bundle = args.pop("output")
-    render(identity, args, bundle)
+    if pull_identity:
+        if any(args.values()):
+            parser.error("run coordinates apply only to --identity")
+        render_pull(json.loads(pull_identity.read_bytes()), bundle)
+    else:
+        if not all(args.values()):
+            parser.error("--identity requires all run coordinates")
+        render(load_identity(identity), args, bundle)
 
 
 if __name__ == "__main__":

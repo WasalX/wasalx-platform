@@ -40,6 +40,18 @@ jobs:
             needed=false
           fi
           echo "needed=$needed" >> "$GITHUB_OUTPUT"
+          if ! git diff --quiet --no-ext-diff --no-renames HEAD^1 HEAD -- \
+            scripts/dev-install/templates/pull-agent.py scripts/dev-install/templates/wasalx-dev-pull.service \
+            scripts/dev-install/templates/wasalx-dev-pull.timer scripts/dev-install/render.py \
+            scripts/dev-install/test_pull_agent.py scripts/dev-install/pull-verify.mjs \
+            scripts/dev-install/host-staging.sh scripts/dev-install/host-staging.py \
+            scripts/release/images-by-digest.py scripts/release/installer-hosted-images.mjs \
+            .github/workflows/nightly-install.yml; then
+            echo 'pull=true' >> "$GITHUB_OUTPUT"
+          fi
+      - name: Test the DEV pull report agent
+        if: steps.changes.outputs.needed != 'false'
+        run: python3 -I -B scripts/dev-install/test_pull_agent.py
       - name: Download the exact main publication manifest
         id: publication
         if: steps.changes.outputs.needed != 'false'
@@ -71,6 +83,20 @@ jobs:
           root="$TUF_ROOT/tuf-repo-cdn.sigstore.dev/targets/trusted_root.json"
           test -f "$root"
           echo "root=$root" >> "$GITHUB_OUTPUT"
+      - name: Verify the PR pull tooling against public GitHub, GHCR and Sigstore
+        if: github.event_name == 'pull_request' && steps.changes.outputs.pull == 'true'
+        timeout-minutes: 10
+        env:
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          TRUSTED_ROOT: ${{ steps.trust.outputs.root }}
+        run: |
+          work="$RUNNER_TEMP/wasalx-nightly"
+          test "$(git rev-parse HEAD^2)" = "$PR_HEAD"
+          git worktree add --detach "$work/pr-head" "$PR_HEAD"
+          cosign=$(command -v cosign)
+          cd "$work/pr-head"
+          python3 -I -B scripts/dev-install/test_pull_agent.py --live --candidate "$PR_HEAD" \
+            --manifest "$work/images-manifest.json" --cosign "$cosign" --trust "$TRUSTED_ROOT"
       - name: Rehearse full installation and controlled recreation
         if: steps.changes.outputs.needed != 'false'
         timeout-minutes: 47
@@ -78,6 +104,9 @@ jobs:
           MAIN_SHA: ${{ steps.publication.outputs.commit }}
           TRUSTED_ROOT: ${{ steps.trust.outputs.root }}
         run: bash scripts/release/installer-nightly.sh
+      - name: Confirm census PASS
+        if: steps.changes.outputs.needed != 'false'
+        run: grep -Fxq 'probe-scan services=37 rerendered_hashes=37 census=PASS' "$RUNNER_TEMP/wasalx-nightly/diagnostics/phases.log"
       - name: Tear down the disposable stack and volumes
         if: always() && steps.changes.outputs.needed != 'false'
         timeout-minutes: 4
