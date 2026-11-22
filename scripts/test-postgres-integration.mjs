@@ -14,6 +14,7 @@ import { verifyMetaDeletionPostgres } from "../tests/meta-deletion-postgres.mjs"
 import { execFileSync } from 'node:child_process';
 import { designationResults } from '../tests/group-designation-evidence.mjs';
 import assert from "node:assert/strict";
+import { parsePostgresShardArgs, scenarioShard, verifyPostgresShard } from "./postgres-scenario-registry.mjs";
 import { createHash } from "node:crypto";
 import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -68,6 +69,17 @@ import { verifyNativeMembership } from "../tests/native-membership-postgres.mjs"
 import { verifyNativeRouting } from "../tests/native-routing-postgres.mjs";
 import {verifyWahaRenewal} from '../tests/waha-renewal-postgres.mjs';
 import {verifyRoutingReconnect} from '../tests/routing-reconnect-postgres.mjs';
+
+const { shard, report } = parsePostgresShardArgs(process.argv.slice(2));
+const executed = [];
+function shouldRun(name) {
+  const assigned = scenarioShard(name);
+  return shard === undefined || shard === assigned;
+}
+function runRegisteredScenario(name, run) {
+  executed.push(name);
+  return timeScenario(name, run);
+}
 
 const adminUrl=required("DATABASE_ADMIN_URL");const appUrl=required("DATABASE_APP_URL");
 // Synthetic provider fixtures exercise normal admission; scoped scenarios set their own allowlist.
@@ -190,7 +202,9 @@ const tenantForeignKeys=[
 ];
 let metaIdentityRoutingHistory;
 const metaLifecycleFailures=[];
+async function prepareDatabase(){
 const migrationStartedAt=performance.now();
+const qualifyMigrations=shouldRun("migrations");
 const admin=new Client({connectionString:adminUrl});await admin.connect();
 try{
   await admin.query(`DO $$
@@ -247,6 +261,11 @@ try{
     GRANT wasalx_metering_ingest_client TO wasalx_metering_ingest_runtime;
     GRANT wasalx_platform_operations_client TO wasalx_platform_operations_runtime;
   END $$;`);
+  if(!qualifyMigrations){
+    await migrate(controlMigrationsPath);
+    return;
+  }
+  executed.push("migrations");
   await timeScenario("freshMigrationResume",proveFreshMigrationResume);
   const appliedBeforeOwnership=migrationFiles.filter(file=>file<"0112_secret_cleanup_reference_ownership.sql");
   for(const file of appliedBeforeOwnership){
@@ -679,9 +698,12 @@ try{
   }catch(error){await admin.query("ROLLBACK");throw error}
 }finally{
   await admin.end();
-  printScenarioTiming("migrations",migrationStartedAt);
+  if(qualifyMigrations)printScenarioTiming("migrations",migrationStartedAt);
+}
 }
 
+async function runSharedCore(){
+executed.push("sharedCore");
 const sharedCoreStartedAt=performance.now();
 const app=new Client({connectionString:appUrl});await app.connect();
 const cleanup=new Client({connectionString:cleanupUrl.toString()});await cleanup.connect();
@@ -5926,20 +5948,29 @@ try{
 }
 if(sharedCoreCleanupFailures.length)throw new AggregateError([...metaLifecycleFailures,...sharedCoreCleanupFailures],"Shared PostgreSQL cleanup failed; independent suites are blocked");
 if(!sharedCorePrerequisitesPassed)throw sharedCoreFailure;
+return sharedCoreSummary;
+}
+
+await prepareDatabase();
+const sharedCoreSummary=shouldRun("sharedCore")?await runSharedCore():undefined;
 
 // Independent suites own their clients/tenants; prerequisite or cleanup failure never reaches this boundary.
-try{process.stdout.write(`${JSON.stringify(await timeScenario("currentOperatorLocks",()=>verifyCurrentOperatorLocks(adminUrl,appUrl,connectorWorkerConfig)))}\n`)}catch(error){metaLifecycleFailures.push(error);console.error("Current operator lock PostgreSQL failed",error)}
-try{process.stdout.write(`${JSON.stringify(await timeScenario("nativeMembership",()=>verifyNativeMembership(adminUrl)))}\n`)}catch(error){metaLifecycleFailures.push(error);console.error("Native membership PostgreSQL failed",error)}
-try{process.stdout.write(`${JSON.stringify(await timeScenario("nativeRouting",()=>verifyNativeRouting(adminUrl)))}\n`)}catch(error){metaLifecycleFailures.push(error);console.error("Native routing PostgreSQL failed",error)}
+if(shouldRun("currentOperatorLocks"))try{process.stdout.write(`${JSON.stringify(await runRegisteredScenario("currentOperatorLocks",()=>verifyCurrentOperatorLocks(adminUrl,appUrl,connectorWorkerConfig)))}\n`)}catch(error){metaLifecycleFailures.push(error);console.error("Current operator lock PostgreSQL failed",error)}
+if(shouldRun("nativeMembership"))try{process.stdout.write(`${JSON.stringify(await runRegisteredScenario("nativeMembership",()=>verifyNativeMembership(adminUrl)))}\n`)}catch(error){metaLifecycleFailures.push(error);console.error("Native membership PostgreSQL failed",error)}
+if(shouldRun("nativeRouting"))try{process.stdout.write(`${JSON.stringify(await runRegisteredScenario("nativeRouting",()=>verifyNativeRouting(adminUrl)))}\n`)}catch(error){metaLifecycleFailures.push(error);console.error("Native routing PostgreSQL failed",error)}
   // Lifecycle rotation retains append-only audit fixtures until the owned database is removed.
   // Run them after shared scheduler inventory assertions so no fixture changes their expected work set.
   for(const [name,verify] of [
     ["worker",()=>verifyMetaLifecycleWorker(adminUrl,connectorWorkerConfig)],
     ["consumers",()=>verifyMetaLifecycleConsumers(adminUrl,connectorWorkerConfig,appUrl)],
     ["ingress",()=>verifyMetaLifecycleIngress(adminUrl,appUrl)],
-  ]){try{console.log(JSON.stringify({metaLifecycle:name,result:await timeScenario("metaLifecycle/"+name,verify)}))}catch(error){metaLifecycleFailures.push(error);console.error(`Meta lifecycle ${name} failed`,error)}}
-  try { console.log(JSON.stringify({ metaNumberRelease: await timeScenario("metaNumberRelease",()=>verifyMetaNumberRelease(adminUrl,appUrl,connectorWorkerConfig,cleanupUrl.toString())) })); } catch(error) { metaLifecycleFailures.push(error); console.error("Meta number release PostgreSQL failed",error); }
-  try { console.log(JSON.stringify({ metaSignup: await timeScenario("metaSignup",()=>verifyMetaSignup(adminUrl,appUrl,connectorWorkerConfig,cleanupUrl.toString())) })); } catch(error) { metaLifecycleFailures.push(error); console.error("Meta signup PostgreSQL failed",error); }
+  ]){
+    const scenario="metaLifecycle/"+name;
+    if(!shouldRun(scenario))continue;
+    try{console.log(JSON.stringify({metaLifecycle:name,result:await runRegisteredScenario(scenario,verify)}))}catch(error){metaLifecycleFailures.push(error);console.error(`Meta lifecycle ${name} failed`,error)}
+  }
+  if(shouldRun("metaNumberRelease"))try { console.log(JSON.stringify({ metaNumberRelease: await runRegisteredScenario("metaNumberRelease",()=>verifyMetaNumberRelease(adminUrl,appUrl,connectorWorkerConfig,cleanupUrl.toString())) })); } catch(error) { metaLifecycleFailures.push(error); console.error("Meta number release PostgreSQL failed",error); }
+  if(shouldRun("metaSignup"))try { console.log(JSON.stringify({ metaSignup: await runRegisteredScenario("metaSignup",()=>verifyMetaSignup(adminUrl,appUrl,connectorWorkerConfig,cleanupUrl.toString())) })); } catch(error) { metaLifecycleFailures.push(error); console.error("Meta signup PostgreSQL failed",error); }
   // One explicit synthetic registry is shared only as immutable fixture input.
   const managedRuntimeEvidence=syntheticMetaManagedRuntimeEvidence();
   const metaCostOptions={adminUrl,workerConfig:connectorWorkerConfig,appUrl,
@@ -5981,9 +6012,22 @@ try{process.stdout.write(`${JSON.stringify(await timeScenario("nativeRouting",()
     ["metaTemplatePreparation",()=>verifyMetaTemplatePreparation({adminUrl,workerConfig:connectorWorkerConfig,appUrl,cleanupUrl:cleanupUrl.toString(),platformOperationsUrl:platformOperationsUrl.toString(),runtimeEvidence:managedRuntimeEvidence})],
     ["metaLegacyMigration",()=>verifyMetaLegacyMigration({adminUrl,workerConfig:connectorWorkerConfig,appUrl,cleanupUrl:cleanupUrl.toString(),platformOperationsUrl:platformOperationsUrl.toString(),runtimeEvidence:managedRuntimeEvidence})],
     ["metaTransitionOperatorReviews",()=>verifyMetaTransitionOperatorReviews({adminUrl,workerConfig:connectorWorkerConfig,appUrl,cleanupUrl:cleanupUrl.toString(),platformOperationsUrl:platformOperationsUrl.toString(),runtimeEvidence:syntheticMetaManagedRuntimeEvidence()})],
-  ]){try{console.log(JSON.stringify({[name]:await timeScenario(name,verify)}))}catch(error){metaLifecycleFailures.push(error);console.error(`Meta PostgreSQL ${name} failed`,error)}}
+  ]){
+    if(!shouldRun(name))continue;
+    try{console.log(JSON.stringify({[name]:await runRegisteredScenario(name,verify)}))}catch(error){metaLifecycleFailures.push(error);console.error(`Meta PostgreSQL ${name} failed`,error)}
+  }
   if(metaLifecycleFailures.length)throw new AggregateError(metaLifecycleFailures,"Canonical shared/native/Meta PostgreSQL failure union");
-process.stdout.write(`${sharedCoreSummary}\n`);
+if(sharedCoreSummary!==undefined)process.stdout.write(`${sharedCoreSummary}\n`);
+
+if(shard!==undefined){
+  if(shouldRun("postgresLoadRecovery")){
+    await runRegisteredScenario("postgresLoadRecovery",()=>execFileSync(
+      process.execPath,["--test","tests/postgres-load-recovery.test.mjs"],{stdio:"inherit",windowsHide:true},
+    ));
+  }
+  verifyPostgresShard(shard,executed);
+  if(report!==undefined)await writeFile(report,JSON.stringify({shard,scenarios:executed})+"\n");
+}
 
 
 function printScenarioTiming(scenario, startedAt) {

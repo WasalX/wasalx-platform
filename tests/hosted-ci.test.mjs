@@ -12,6 +12,7 @@ import { unitAllowlist, unitFiles } from "../scripts/test-unit.mjs";
 import { addonSkips, skipPattern } from "../scripts/hosted-ci-policy.mjs";
 import { generateBaseline } from "../scripts/generate-hosted-ci-baseline.mjs";
 import baseline from "../scripts/hosted-ci-baseline.mjs";
+import { parsePostgresShardArgs, postgresScenarioGroups, verifyPostgresReports } from "../scripts/postgres-scenario-registry.mjs";
 
 const repository = fileURLToPath(new URL("../", import.meta.url));
 const read = file => readFile(join(repository, file), "utf8");
@@ -21,7 +22,9 @@ const words = text => Array.from(text.matchAll(/"([^"]*)"|'([^']*)'|([^\s"'()]+)
 
 function runsFile(text, file, option) {
   return commands(text).some(command => {
-    const [exe, ...args] = words(command);
+    let w = words(command);
+    if (w[0] === "sudo") w = w.slice(1);
+    const [exe, ...args] = w;
     if (!["node", "python", "python3", "ruby", "bash"].includes(exe) || (option && !args.includes(option))) return false;
     const paths = args.map(arg => arg.replace(/^\.\//u, ""));
     if (args.includes("unittest") && args.includes("discover")) {
@@ -83,9 +86,11 @@ test("tracked tests belong to a named CI runner or the test allowlist", async ()
 
   const unitWrappers = await Promise.all(["tests/application-e2e-harness.test.mjs", "tests/ci-phase-admission.test.mjs",
     "tests/simulation-native-isolation.test.mjs"].filter(file => units.has(file)).map(read));
+  const postgresHarness = "scripts/test-postgres-integration.mjs";
+  const postgresSource = await read(postgresHarness);
   const postgresImports = new Set();
-  if (runsFile(runnerText("test:postgres"), "scripts/test-postgres-integration.mjs")) {
-    postgresImports.add("scripts/test-postgres-integration.mjs");
+  if (runsFile(runnerText("integration"), postgresHarness, "--shard")) {
+    postgresImports.add(postgresHarness);
     for (const entry of postgresImports) {
       for (const [, relative] of (await read(entry)).matchAll(/^import\s+(?:[^;]*?\sfrom\s+)?["'](\.{1,2}\/[^"']+)["']/gmu)) {
         const dependency = posix.join(posix.dirname(entry), relative);
@@ -110,8 +115,10 @@ test("tracked tests belong to a named CI runner or the test allowlist", async ()
       case "infra-validate":
         return commands(command).includes("bash scripts/validate-infra.sh")
           && (runsFile(validation, file) || (runsTofu && tofuFile(file)));
-      case "test:postgres":
-        return postgresImports.has(file);
+      case "integration":
+        return postgresImports.has(file) || (postgresImports.has(postgresHarness)
+          && file === "tests/postgres-load-recovery.test.mjs"
+          && postgresSource.includes('process.execPath,["--test","tests/postgres-load-recovery.test.mjs"]'));
       case "images": {
         const copiedPath = `/tmp/${posix.basename(file)}`;
         return runsFile(command, "scripts/release/images-by-digest.py", "build")
@@ -376,31 +383,64 @@ ${copy.run}`], {
 
 test("CI gates integration and infrastructure and runs portal integration files serially", async () => {
   const { on, jobs } = parse(await read(".github/workflows/ci.yml"));
-  const { integration, "ci-gate": gate, "dev-install-dryrun": dryrun } = jobs;
+  const { integration, "integration-coverage": coverage, "portal-integration": portal,
+    "ci-gate": gate, "dev-install-dryrun": dryrun } = jobs;
   assert(Object.hasOwn(on, "workflow_dispatch"));
   assert(Object.hasOwn(on, "merge_group"));
   assert.deepEqual(on.push.branches, ["main"]);
-  assert.equal(integration.if, "github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')");
+  assert.equal(integration.needs, "changes");
+  assert.equal(integration.if, "${{ !cancelled() && (github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && (needs.changes.result != 'success' || needs.changes.outputs.integration != 'false'))) }}");
+  assert.equal(portal.needs, "changes");
+  assert.equal(portal.if, integration.if);
+  assert.equal(coverage.needs, "integration");
+  assert.deepEqual(integration.strategy, { "fail-fast": false, matrix: { shard: [1, 2, 3, 4] } });
+  assert.match(integration.services.postgres.options, /--tmpfs /u);
+  assert(coverage.steps.some(step => runsFile(step.run ?? "", "scripts/postgres-scenario-registry.mjs")));
+  assert(integration.steps.some(step => runsFile(step.run ?? "", "scripts/test-postgres-integration.mjs", "--shard")));
   assert.equal(integration["timeout-minutes"], 25);
   assert.deepEqual(integration.permissions, { contents: "read" });
   assert.match(integration.services.postgres.image, /^postgres:[^@]+@sha256:[a-f0-9]{64}$/u);
   const devPreflightFile = "tests/installer-dev-recreatability.test.mjs";
   const devPreflight = jobs.checks.steps.find(step => runsFile(step.run ?? "", devPreflightFile));
   assert.equal(devPreflight?.if, "github.event_name == 'pull_request' && matrix.mode == 'unit' && matrix.shard == 1");
-  assert(integration.steps.some(step => !step.if && runsFile(step.run ?? "", devPreflightFile)));
+  assert(portal.steps.some(step => !step.if && runsFile(step.run ?? "", devPreflightFile)));
   const dryrunFile = "scripts/dev-install/test_dryrun.py";
-  assert(integration.steps.some(step => !step.if && runsFile(step.run ?? "", dryrunFile, "--container")));
+  assert(portal.steps.some(step => step.if === "github.event_name != 'pull_request'" && runsFile(step.run ?? "", dryrunFile, "--container")));
   assert(dryrun.steps.some(step => !step.if && runsFile(step.run ?? "", dryrunFile, "--container")));
   assert.equal(dryrun.needs, "changes");
   assert.equal(dryrun.if, "${{ !cancelled() && github.event_name == 'pull_request' && needs.changes.outputs.dev-install != 'false' }}");
-  const portalIntegration = integration.steps.find(step => step.name === "Test portal and tenant integration");
+  const portalIntegration = portal.steps.find(step => step.name === "Test portal and tenant integration");
   assert.match(portalIntegration?.run, /^node --test --test-concurrency=1 /u);
-  assert(gate.needs.includes("integration"));
+  assert.deepEqual(portalIntegration.env, { WASALX_E2E_CONTROL_PORT: "14101", WASALX_E2E_PORTAL_PORT: "14102" });
+  for (const job of ["integration", "portal-integration", "integration-coverage"]) assert(gate.needs.includes(job));
   assert(gate.needs.includes("dev-install-dryrun"));
   const [gateStep] = gate.steps;
+  assert.equal(gateStep.env.INTEGRATION_NEEDED, "${{ needs.changes.outputs.integration }}");
   assert.equal(gateStep.env.INTEGRATION, "${{ needs.integration.result }}");
+  assert.equal(gateStep.env.PORTAL_INTEGRATION, "${{ needs.portal-integration.result }}");
+  assert.equal(gateStep.env.INTEGRATION_COVERAGE, "${{ needs.integration-coverage.result }}");
   assert.equal(gateStep.env.DEV_INSTALL_NEEDED, "${{ needs.changes.outputs.dev-install }}");
   assert.equal(gateStep.env.DEV_INSTALL, "${{ needs.dev-install-dryrun.result }}");
+  assert.equal(gateStep.run, `test "$CHANGES" = success && test "$CHECKS" = success || exit 1
+case "$EVENT:$REVIEW:$IMAGES" in
+  pull_request:success:*)
+    echo 'See PR image results (advisory) for image build outcomes.' >> "$GITHUB_STEP_SUMMARY"
+    ;;
+  merge_group:skipped:success) ;;
+  *) exit 1 ;;
+esac
+case "$EVENT:$INTEGRATION_NEEDED:$INTEGRATION:$PORTAL_INTEGRATION:$INTEGRATION_COVERAGE" in
+  pull_request:false:skipped:skipped:skipped|pull_request:*:success:success:success|merge_group:*:success:success:success) ;;
+  *) exit 1 ;;
+esac
+case "$EVENT:$DEV_INSTALL_NEEDED:$DEV_INSTALL" in
+  pull_request:*:success|pull_request:false:skipped|merge_group:*:skipped) ;;
+  *) exit 1 ;;
+esac
+test "$INFRA" = success || {
+  test "$EVENT" = pull_request && test "$INFRA_NEEDED" = false && test "$INFRA" = skipped
+}
+`);
   for (const job of [jobs.changes, jobs.checks]) {
     assert.equal(job.if, "github.event_name == 'pull_request' || github.event_name == 'merge_group'");
   }
@@ -440,14 +480,16 @@ test("PR image results are advisory while the merge queue requires the full imag
 
     const result = runWorkflowScript(gate.steps[0].run, {
       EVENT: "merge_group", CHANGES: "success", CHECKS: "success", REVIEW: "skipped",
-      IMAGES: imageResult, INTEGRATION: "success", DEV_INSTALL: "skipped", INFRA: "success",
+      IMAGES: imageResult, INTEGRATION: "success", PORTAL_INTEGRATION: "success",
+      INTEGRATION_COVERAGE: "success", DEV_INSTALL: "skipped", INFRA: "success",
     });
     assert.equal(result.status, imageResult === "success" ? 0 : 1, `merge_group/${imageResult}: ${result.stderr}`);
   }
   const summary = join(directory, "gate").replaceAll("\\", "/");
   const result = runWorkflowScript(gate.steps[0].run, {
     EVENT: "pull_request", CHANGES: "success", CHECKS: "success", REVIEW: "success",
-    IMAGES: "skipped", INTEGRATION: "skipped", DEV_INSTALL_NEEDED: "false", DEV_INSTALL: "skipped",
+    IMAGES: "skipped", INTEGRATION_NEEDED: "false", INTEGRATION: "skipped",
+    PORTAL_INTEGRATION: "skipped", INTEGRATION_COVERAGE: "skipped", DEV_INSTALL_NEEDED: "false", DEV_INSTALL: "skipped",
     INFRA_NEEDED: "false", INFRA: "skipped", GITHUB_STEP_SUMMARY: summary,
   });
   assert.equal(result.status, 0, result.stderr);
@@ -471,6 +513,7 @@ test("optional PR lanes run on diff errors and gate their applicable checks", as
   assert.equal(gateStep.env.INFRA_NEEDED, "${{ needs.changes.outputs.infra }}");
   assert.equal(changes.outputs.infra, "${{ steps.infra.outputs.needed }}");
   assert.equal(changes.outputs["dev-install"], "${{ steps.dev-install.outputs.needed }}");
+  assert.equal(changes.outputs.integration, "${{ steps.integration.outputs.needed }}");
   const paths = [
     "infra/helm/", "infra/terraform/", ":(glob)scripts/validate-*", "scripts/release/fetch-verified-asset.sh",
     "compose.full.yaml", "tests/fixtures/production-backup-alerts.yaml", "tests/secret-adapter-readiness.test.rb",
@@ -484,6 +527,8 @@ test("optional PR lanes run on diff errors and gate their applicable checks", as
     ["dev-install", ["scripts/dev-install/", "scripts/release/installer-stages.mjs",
       "scripts/release/installer-stack.mjs", "scripts/release/compose-stage-lock.mjs",
       "scripts/release/compose-stage-config.json", ".github/workflows/ci.yml"].join(" ")],
+    ["integration", [".github/workflows/ci.yml", "scripts/test-postgres-integration.mjs",
+      "scripts/postgres-scenario-registry.mjs", ":(glob)tests/*postgres*.mjs"].join(" ")],
   ]) {
     const detector = changes.steps.find(step => step.id === id);
     assert.equal(detector.if, "github.event_name == 'pull_request'");
@@ -512,7 +557,9 @@ ${detector.run}`, { GITHUB_OUTPUT: outputFile.replaceAll("\\", "/"), DIFF_PATHS:
     const pr = event === "pull_request";
     const result = runWorkflowScript(gateStep.run, {
       EVENT: event, CHANGES: "success", CHECKS: "success", REVIEW: pr ? "success" : "skipped",
-      IMAGES: pr ? "skipped" : "success", INTEGRATION: pr ? "skipped" : "success",
+      IMAGES: pr ? "skipped" : "success", INTEGRATION_NEEDED: "false",
+      INTEGRATION: pr ? "skipped" : "success", PORTAL_INTEGRATION: pr ? "skipped" : "success",
+      INTEGRATION_COVERAGE: pr ? "skipped" : "success",
       DEV_INSTALL_NEEDED: "false", DEV_INSTALL: "skipped",
       INFRA_NEEDED: needed, INFRA: jobResult, GITHUB_STEP_SUMMARY: summary,
     });
@@ -524,12 +571,51 @@ ${detector.run}`, { GITHUB_OUTPUT: outputFile.replaceAll("\\", "/"), DIFF_PATHS:
   ]) {
     const result = runWorkflowScript(gateStep.run, {
       EVENT: "pull_request", CHANGES: "success", CHECKS: "success", REVIEW: "success",
-      IMAGES: "skipped", INTEGRATION: "skipped",
+      IMAGES: "skipped", INTEGRATION_NEEDED: "false",
+      INTEGRATION: "skipped", PORTAL_INTEGRATION: "skipped", INTEGRATION_COVERAGE: "skipped",
       DEV_INSTALL_NEEDED: needed, DEV_INSTALL: jobResult, INFRA_NEEDED: "false", INFRA: "skipped",
       GITHUB_STEP_SUMMARY: summary,
     });
     assert.equal(result.status, status, `dev-install/${needed}/${jobResult}: ${result.error?.message ?? result.stderr}`);
   }
+  for (const [event, needed, postgres, portal, coverage, status] of [
+    ["pull_request", "true", "success", "success", "success", 0],
+    ["pull_request", "true", "skipped", "skipped", "skipped", 1],
+    ["pull_request", "", "skipped", "skipped", "skipped", 1],
+    ["merge_group", "", "success", "success", "success", 0],
+    ["merge_group", "", "failure", "success", "success", 1],
+    ["merge_group", "", "success", "skipped", "success", 1],
+    ["merge_group", "", "success", "success", "skipped", 1],
+  ]) {
+    const pr = event === "pull_request";
+    const result = runWorkflowScript(gateStep.run, {
+      EVENT: event, CHANGES: "success", CHECKS: "success", REVIEW: pr ? "success" : "skipped",
+      IMAGES: pr ? "skipped" : "success", DEV_INSTALL_NEEDED: "false", DEV_INSTALL: "skipped",
+      INFRA_NEEDED: "true", INFRA: "success", INTEGRATION_NEEDED: needed, GITHUB_STEP_SUMMARY: summary,
+      INTEGRATION: postgres, PORTAL_INTEGRATION: portal, INTEGRATION_COVERAGE: coverage,
+    });
+    assert.equal(result.status, status, [event, needed, postgres, portal, coverage].join("/"));
+  }
+});
+
+test("PostgreSQL coverage requires an exact report from every shard", async t => {
+  assert.deepEqual(parsePostgresShardArgs(["--shard", "3/4", "--report", "report.json"]), { shard: 3, report: "report.json" });
+  for (const selection of ["0/4", "5/4", "1/3", "1/4x"]) assert.throws(() => parsePostgresShardArgs(["--shard", selection]));
+  const directory = await mkdtemp(join(tmpdir(), "postgres-scenario-coverage-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const report = (index, scenarios) => writeFile(join(directory, "postgres-shard-" + index + ".json"),
+    JSON.stringify({ shard: index, scenarios }));
+  for (const [index, names] of postgresScenarioGroups.entries()) await report(index + 1, names);
+  assert.equal(await verifyPostgresReports(directory), postgresScenarioGroups.flat().length);
+  const [first, second] = postgresScenarioGroups;
+  await report(1, first.slice(1));
+  await assert.rejects(verifyPostgresReports(directory), /coverage in PostgreSQL shard 1/u);
+  await report(1, [...first, first[0]]);
+  await assert.rejects(verifyPostgresReports(directory), /coverage in PostgreSQL shard 1/u);
+  await report(1, [...first.slice(1), second[0]]);
+  await assert.rejects(verifyPostgresReports(directory), /coverage in PostgreSQL shard 1/u);
+  await rm(join(directory, "postgres-shard-1.json"));
+  await assert.rejects(verifyPostgresReports(directory), /one report from each PostgreSQL shard/u);
 });
 
 test("shards cover each file once regardless of inventory order or duplicates", () => {
