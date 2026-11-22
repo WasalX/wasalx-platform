@@ -278,6 +278,7 @@ jobs:
         with:
           task: build
           dependency-key: ${{ steps.pnpm.outputs.dependency-key }}
+          force-build: 'true'
       - name: Test PostgreSQL integration
         env:
           SHARD: ${{ matrix.shard }}
@@ -291,6 +292,7 @@ jobs:
           path: postgres-shard-${{ matrix.shard }}.json
           if-no-files-found: error
           retention-days: 7
+      # Save after shard 1 passes without waiting for shards 2-4 because the cache holds only build outputs.
       - name: Save service build cache
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && matrix.shard == 1
         uses: ./.github/actions/ci-pnpm
