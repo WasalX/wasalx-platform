@@ -31,15 +31,20 @@ Keep the JSON report private. The nightly logs only the counts and census result
 
 ## Signed host packet
 
-Generate install and discard budgets from complete, successful host receipts. The
-generator takes the maximum elapsed time for each phase and rounds 125% of that
-time up to whole seconds. The install registration reserves both budgets.
+Render the host lease budgets directly from raw host receipts. The renderer takes
+125% of the longest successful install and discard lease for each phase, then adds
+125% of the slowest completed full-hash step to discard. Each component is rounded
+up to whole seconds. Install registration reserves both budgets.
+
+Omit the receipt arguments for the first packet. Until there is a stamped install
+PASS, a stamped discard PASS and a full-hash measurement, the packet uses the
+reviewed reservations of 13,400 seconds for install and 11,400 seconds for discard.
+The sealed host environment records which source supplied the budget.
 
 ```sh
-python3 -I -B scripts/dev-install/templates/host-maintenance.py lease-budgets \
-  "$INSTALL_RAW" "$DISCARD_RAW" > "$LEASE_BUDGETS"
 python3 -I -B scripts/dev-install/render.py --host-identity "$HOST_IDENTITY" \
-  --lease-budgets "$LEASE_BUDGETS" --run-id "$RUN_ID" --commit "$COMMIT" --output "$HOST_PACKET"
+  --lease-receipt "$INSTALL_RAW" --lease-receipt "$DISCARD_RAW" \
+  --run-id "$RUN_ID" --commit "$COMMIT" --output "$HOST_PACKET"
 ```
 
 The host identity fields are in `fixtures/host-identity.example.json`. The signed
@@ -48,15 +53,19 @@ guest payload and `DEV-SHA256SUMS`. Keep the host packet private and separate
 from the guest packet. Use a root-owned mode-0700 `DISK_STATE` directory that
 persists across runs, outside the support directories.
 
-- The post-create, pre-boot gate requires the immutable flag, exact TOP identity,
-  `qemu-img check` and the pinned backing chain. It checks identity before and
-  after the QEMU commands. The hash is recorded when a new offline generation
-  is sealed and checked again before a commit.
-- Schedule `overlay-action.sh audit "$STATE"` daily under the approved host
-  lease while the generation is frozen. An audit overdue by 24 hours blocks
-  the disk proof. TOP can run writable after a guarded restore. Its next clean
-  shutdown starts a new generation. A persistent `frozen-top.hold` blocks new
-  proof attempts until the recorded failure is resolved.
+- The post-create, pre-boot gate requires the immutable flag, exact identity for TOP
+  and every backing layer, `qemu-img check` and the pinned backing chain.
+  It checks identity before and after the QEMU commands. The TOP hash is recorded
+  when a new offline generation is sealed and checked again before a commit.
+- When the frozen TOP audit is more than 24 hours old, the next proof hashes TOP
+  inline. Discard can continue if that hash matches. A mismatch creates
+  `frozen-top.hold`, which blocks restore and further proof attempts until the
+  failure is resolved. TOP can run writable after a guarded restore. Its next clean
+  shutdown starts a new generation.
+- The immutable flag and filesystem identity checks protect against accidental
+  changes. Privileged access can forge ctime. The daily audit, commit or recovery
+  hash is the only way to detect raw block-device writes to TOP that leave its
+  filesystem metadata unchanged.
 - The operation journal records intent before clearing immutability. A restarted
   rollback re-proves a parked TOP with its recorded hash or re-proves the running
   TOP drive, guard and held state. An interrupted commit without a completed

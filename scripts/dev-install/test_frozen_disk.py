@@ -23,27 +23,74 @@ disk = load("frozen-disk")
 maintenance = load("host-maintenance")
 
 
+SECOND = 10**9
+
+
+def timing(phase, step, duration):
+    start = 1_700_000_000 * SECOND
+    return (
+        f"PHASE_TIMING phase={phase} step={step} event=start epoch_ns={start} at=2023-11-14T22:13:20Z\n"
+        f"PHASE_TIMING phase={phase} step={step} event=pass epoch_ns={start + duration} at=2023-11-14T22:13:21Z\n"
+    )
+
+
+def lease_receipt(phase, duration, hash_timing=""):
+    terminal = "DEV_SIGNED_INSTALL=PASS release=HELD" if phase == "install" else "DISCARD_OVERLAY=PASS TOP_RESTORED"
+    start, end = timing(phase, "lease", duration).splitlines(keepends=True)
+    return start + hash_timing + end + f"{terminal} 2023-11-14T22:13:21Z"
+
+
 class HostPacketTest(unittest.TestCase):
-    def test_renderer_seals_host_files_and_leaves_guest_files_out(self):
+    def render(self, packet, *lease_args):
         here = Path(__file__).parent
         identity = here / "fixtures" / "host-identity.example.json"
+        return subprocess.run([
+            sys.executable, "-I", "-B", here / "render.py", "--host-identity", identity,
+            "--run-id", "20000101T000000Z", "--commit", "1" * 40, "--output", packet,
+            *lease_args,
+        ], capture_output=True, text=True, timeout=10)
+
+    def test_renderer_seals_host_files_and_derives_measured_leases(self):
         with tempfile.TemporaryDirectory() as directory:
             parent = Path(directory)
-            budgets = parent / "lease-budgets.json"
-            budgets.write_text('{"install": 30, "rollback": 19}', encoding="utf-8")
+            install = parent / "install.raw"
+            install.write_text(lease_receipt("install", 24 * SECOND, timing("install", "base-freeze", 8 * SECOND)),
+                               encoding="utf-8")
+            rollback = parent / "rollback.raw"
+            rollback.write_text(lease_receipt("rollback", 7 * SECOND), encoding="utf-8")
             packet = parent / "packet"
-            subprocess.run([
-                sys.executable, "-I", "-B", here / "render.py", "--host-identity", identity,
-                "--lease-budgets", budgets, "--run-id", "20000101T000000Z",
-                "--commit", "1" * 40, "--output", packet,
-            ], check=True, timeout=10)
+            result = self.render(packet, "--lease-receipt", install, "--lease-receipt", rollback)
+            self.assertEqual(result.returncode, 0, result.stderr)
             hashes = dict(line.split("  ", 1)[::-1] for line in (packet / "SHA256SUMS").read_text().splitlines())
             self.assertEqual(set(hashes), {file.name for file in packet.iterdir()} - {"SHA256SUMS"})
             self.assertTrue({"overlay-action.sh", "frozen-disk.py", "register.sh", "host.env"}.issubset(hashes))
             self.assertFalse({"packet.json", "receive.py", "dispatch.py"}.intersection(hashes))
             for name, sha256 in hashes.items():
                 self.assertEqual(hashlib.sha256((packet / name).read_bytes()).hexdigest(), sha256)
-            self.assertIn("export INSTALL_SECONDS=30", (packet / "host.env").read_text())
+            env = (packet / "host.env").read_text()
+            self.assertIn("export INSTALL_SECONDS=30", env)
+            self.assertIn("export DISCARD_SECONDS=19", env)
+            self.assertIn("export LEASE_BUDGET_SOURCE=measured-receipts", env)
+
+    def test_renderer_seals_reviewed_reservations_and_refuses_hand_typed_budgets(self):
+        with tempfile.TemporaryDirectory() as directory:
+            parent = Path(directory)
+            packet = parent / "packet"
+            result = self.render(packet)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            env = (packet / "host.env").read_text()
+            self.assertIn("export INSTALL_SECONDS=13400", env)
+            self.assertIn("export DISCARD_SECONDS=11400", env)
+            self.assertIn("export LEASE_BUDGET_SOURCE=reviewed-reservations", env)
+
+            budgets = parent / "budgets.json"
+            budgets.write_text('{"install": 30, "rollback": 19}', encoding="utf-8")
+            for option in ("--lease-budgets", "--lease-receipt"):
+                with self.subTest(option=option):
+                    rejected = parent / "rejected"
+                    result = self.render(rejected, option, budgets)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertFalse(rejected.exists())
 
 
 class DiskProofTest(unittest.TestCase):
@@ -51,6 +98,7 @@ class DiskProofTest(unittest.TestCase):
         self.top = Path("/fixture/top.qcow2")
         self.frozen = disk.FrozenDisk.__new__(disk.FrozenDisk)
         self.frozen.top = self.top
+        self.frozen.paths = [str(self.top)]
         self.identity = {
             "device": 1, "inode": 2, "owner": 0, "group": 0, "size": 100,
             "mtime": 123, "ctime": 456, "mode": 0o400,
@@ -81,20 +129,32 @@ class DiskProofTest(unittest.TestCase):
         structure.assert_called_once_with(overlay)
         hash_bytes.assert_not_called()
 
-    def test_daily_audit_requires_sha_and_pending_commit_cannot_proceed(self):
-        current = {**self.identity, "mode": 0o600}
-        receipt = {"phase": "sealed", "identity": self.identity, "sha256": "1" * 64, "audited_ns": 1}
+    def test_overdue_audit_hashes_and_only_saves_on_a_match(self):
+        for matches in (True, False):
+            receipt = {"phase": "sealed", "identity": self.identity, "sha256": "1" * 64, "audited_ns": 1}
+            with (self.subTest(matches=matches), patch.object(self.frozen, "load", return_value=receipt),
+                  patch.object(self.frozen, "check_identity"), patch.object(self.frozen, "structural_proof"),
+                  patch.object(self.frozen, "save") as save,
+                  patch.object(disk, "digest", return_value=("1" if matches else "2") * 64) as hash_bytes):
+                if matches:
+                    self.frozen.frozen_check()
+                    save.assert_called_once_with(receipt)
+                    self.assertGreater(receipt["audited_ns"], 1)
+                else:
+                    with self.assertRaisesRegex(disk.Hold, "DISK_SHA256"):
+                        self.frozen.frozen_check()
+                    save.assert_not_called()
+                    self.assertEqual(receipt["audited_ns"], 1)
+                hash_bytes.assert_called_once_with(self.top)
+
+    def test_pending_commit_cannot_proceed(self):
+        run_id = "20000101T000000Z"
+        receipt = {"phase": "committing", "identity": self.identity, "run_id": run_id}
         with (patch.object(self.frozen, "load", return_value=receipt),
-              patch.object(self.frozen, "check_identity"), patch.object(self.frozen, "structural_proof"),
-              patch.object(disk, "digest", return_value="2" * 64),
-              patch.object(disk, "identity", return_value=current)):
-            with self.assertRaisesRegex(disk.Hold, "DAILY_AUDIT_DUE"):
-                self.frozen.frozen_check()
-            with self.assertRaisesRegex(disk.Hold, "DISK_SHA256"):
-                self.frozen.frozen_check(audit=True)
-            receipt.update(phase="committing", run_id="20000101T000000Z")
+              patch.object(self.frozen, "structural_proof"),
+              patch.object(disk, "identity", return_value=self.identity)):
             with self.assertRaisesRegex(disk.Hold, "INTERRUPTED_DISK_WRITE"):
-                self.frozen.recover_offline("committing", "20000101T000000Z")
+                self.frozen.recover_offline("committing", run_id)
 
     def test_chain_requires_full_expected_path_and_backing_format(self):
         paths = ["/fixture/overlay", "/fixture/top"]
@@ -111,23 +171,21 @@ class DiskProofTest(unittest.TestCase):
 
 
 class LeaseBudgetTest(unittest.TestCase):
-    def receipt(self, phase, duration):
-        start = 1_700_000_000_000_000_000
-        terminal = "DEV_SIGNED_INSTALL=PASS release=HELD" if phase == "install" else "DISCARD_OVERLAY=PASS TOP_RESTORED"
-        return (
-            f"PHASE_TIMING phase={phase} step=lease event=start epoch_ns={start} at=test\n"
-            f"PHASE_TIMING phase={phase} step=lease event=pass epoch_ns={start + duration} at=test\n"
-            f"{terminal} test"
-        )
+    def test_p100_and_rounded_margin_includes_slowest_full_hash_in_discard(self):
+        install = lease_receipt("install", 8_000 * SECOND + 1, timing("install", "base-freeze", 2_000 * SECOND))
+        rollback = lease_receipt("rollback", 3_000 * SECOND, timing("rollback", "disk-recovery", 2_500 * SECOND))
+        audit = timing("audit", "daily-base-hash", 2_880 * SECOND + 1)
+        budget, source = maintenance.lease_budgets([lease_receipt("install", 5_000 * SECOND), install, rollback, audit])
+        self.assertEqual(budget, {"install": 10_001, "rollback": 7_351})
+        self.assertEqual(source, "measured-receipts")
 
-    def test_p100_and_rounded_margin_with_multiple_receipts(self):
-        receipts = [self.receipt("install", 5_000_000_000), self.receipt("install", 8_000_000_001),
-                    self.receipt("rollback", 3_000_000_000)]
-        self.assertEqual(maintenance.lease_budgets(receipts), {"install": 11, "rollback": 4})
-
-    def test_requires_complete_pass_for_both_phases(self):
-        with self.assertRaisesRegex(ValueError, "complete"):
-            maintenance.lease_budgets([self.receipt("install", 1_000_000_000)])
+    def test_falls_back_without_both_bound_passes_and_a_hash_measurement(self):
+        install = lease_receipt("install", SECOND, timing("install", "base-freeze", SECOND))
+        rollback = lease_receipt("rollback", SECOND)
+        for receipts in ([], [install], [rollback], [lease_receipt("install", SECOND), rollback]):
+            with self.subTest(receipts=len(receipts)):
+                self.assertEqual(maintenance.lease_budgets(receipts),
+                                 ({"install": 13_400, "rollback": 11_400}, "reviewed-reservations"))
         with self.assertRaisesRegex(ValueError, "unbound"):
             maintenance.lease_budgets(["DISCARD_OVERLAY=PASS TOP_RESTORED test"])
 

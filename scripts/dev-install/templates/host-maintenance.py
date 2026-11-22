@@ -8,22 +8,27 @@ from pathlib import Path
 import re
 import stat
 import subprocess
+import sys
 
 
 PHASES = {
     "install": re.compile(r"DEV_SIGNED_INSTALL=PASS release=HELD \S+"),
     "rollback": re.compile(r"DISCARD_OVERLAY=PASS TOP_RESTORED \S+"),
 }
-TIMING = re.compile(r"PHASE_TIMING phase=(install|rollback) step=lease event=(start|pass)"
+TIMING = re.compile(r"PHASE_TIMING phase=(install|rollback|audit|commit)"
+                    r" step=(lease|base-freeze|disk-recovery|daily-base-hash) event=(start|pass)"
                     r" epoch_ns=([0-9]{19}) at=\S+")
+REVIEWED_RESERVATIONS = {"install": 13_400, "rollback": 11_400}
 RUN_ID = re.compile(r"[0-9]{8}T[0-9]{6}Z")
 
 
 def lease_budgets(receipts):
     worst = {}
+    slowest_hash = 0
     for receipt in receipts:
         pending = {}
         completed = {}
+        saw_timing = False
         for line in receipt.splitlines():
             match = TIMING.fullmatch(line)
             if not match:
@@ -34,21 +39,35 @@ def lease_budgets(receipts):
                             raise ValueError(f"unbound terminal receipt: {phase}")
                         worst[phase] = max(worst.get(phase, 0), duration)
                 continue
-            phase, event, value = match.groups()
+            phase, step, event, value = match.groups()
+            saw_timing = True
+            key = (phase, step)
             tick = int(value)
             if event == "start":
-                # A resumed lease is usable only as its own complete measured sample.
-                pending[phase] = tick
-                completed.pop(phase, None)
-            else:
-                started = pending.pop(phase, None)
-                if started is None or tick <= started:
-                    raise ValueError(f"invalid phase timing: {phase}")
+                pending[key] = tick
+                if step == "lease":
+                    # A resumed lease is usable only as its own complete measured sample.
+                    completed.pop(phase, None)
+                continue
+            started = pending.pop(key, None)
+            if started is None or tick <= started:
+                raise ValueError(f"invalid phase timing: {phase}/{step}")
+            if step == "lease":
                 completed[phase] = tick - started
-    if worst.keys() != PHASES.keys():
-        raise ValueError("complete install and rollback receipts are required")
+            else:
+                slowest_hash = max(slowest_hash, tick - started)
+        if not saw_timing:
+            raise ValueError("lease input must be a raw host receipt with timing stamps")
+    if worst.keys() != PHASES.keys() or not slowest_hash:
+        return REVIEWED_RESERVATIONS.copy(), "reviewed-reservations"
+    budgets = {phase: with_margin(ns) for phase, ns in worst.items()}
+    budgets["rollback"] += with_margin(slowest_hash)
+    return budgets, "measured-receipts"
+
+
+def with_margin(ns):
     # Round p100 * 1.25 up to whole seconds.
-    return {phase: (ns * 5 + 4_000_000_000 - 1) // 4_000_000_000 for phase, ns in worst.items()}
+    return (ns * 5 + 4_000_000_000 - 1) // 4_000_000_000
 
 
 def private_directory(path):
@@ -103,7 +122,9 @@ def main():
     archive.add_argument("receipt_name")
     args = parser.parse_args()
     if args.action == "lease-budgets":
-        print(json.dumps(lease_budgets(path.read_text(encoding="utf-8") for path in args.receipts), sort_keys=True))
+        budgets, source = lease_budgets(path.read_text(encoding="utf-8") for path in args.receipts)
+        print(f"LEASE_BUDGET_SOURCE={source}", file=sys.stderr)
+        print(json.dumps(budgets, sort_keys=True))
     else:
         archive_support(args.source, args.archive, args.run_id, args.receipt_name)
         print(f"SUPPORT_ARCHIVE=PASS run_id={args.run_id}")

@@ -17,7 +17,7 @@ ORIGINAL="$STATE/original-dropin.conf"
 ROLLBACK_KEPT="$DIR/disk-install-$RUN.rolled-back.$RUN.qcow2"
 COMMIT_KEPT="$DIR/disk-install-$RUN.committed.$RUN.qcow2"
 
-disk() { /usr/bin/python3 -I -B "$STATE/frozen-disk.py" "$@"; }
+disk() { PHASE_TIMING_MODE="$MODE" /usr/bin/python3 -I -B "$STATE/frozen-disk.py" "$@"; }
 stamp() {
     local tick utc
     read -r tick utc < <(date -u '+%s%N %FT%TZ')

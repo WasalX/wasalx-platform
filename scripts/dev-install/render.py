@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import re
+from runpy import run_path
 import shlex
 
 
@@ -99,7 +100,7 @@ def absolute_path(value):
             and PurePosixPath(value).anchor == "/")
 
 
-def render_host(identity, run_id, commit, leases, bundle):
+def render_host(identity, run_id, commit, receipts, bundle):
     fields = set(HOST_PATHS) | HOST_PATTERNS.keys() | set(HOST_NUMBERS) | {"TOP_CHAIN"}
     if not isinstance(identity, dict) or set(identity) != fields:
         raise ValueError("invalid host identity fields")
@@ -125,8 +126,8 @@ def render_host(identity, run_id, commit, leases, bundle):
         raise ValueError("invalid TOP chain")
     if not re.fullmatch(r"[0-9]{8}T[0-9]{6}Z", run_id or "") or not re.fullmatch(r"[0-9a-f]{40}", commit or ""):
         raise ValueError("invalid host run identity")
-    if not isinstance(leases, dict) or set(leases) != {"install", "rollback"}:
-        raise ValueError("missing measured host leases")
+    lease_budgets = run_path(str(TEMPLATES / "host-maintenance.py"))["lease_budgets"]
+    leases, source = lease_budgets(path.read_text(encoding="utf-8") for path in receipts)
     for phase, seconds in leases.items():
         if type(seconds) is not int or not 0 < seconds < 2**31:
             raise ValueError(f"invalid lease duration: {phase}")
@@ -134,6 +135,7 @@ def render_host(identity, run_id, commit, leases, bundle):
     env = {
         **identity, "TOP_CHAIN": json.dumps(chain), "REV": commit,
         "INSTALL_SECONDS": leases["install"], "DISCARD_SECONDS": leases["rollback"],
+        "LEASE_BUDGET_SOURCE": source,
     }
     files = {name: (TEMPLATES / name).read_text(encoding="utf-8").encode() for name in HOST_SCRIPTS}
     files["run-id"] = (run_id + "\n").encode()
@@ -159,18 +161,18 @@ def main():
     kind.add_argument("--identity", type=Path)
     kind.add_argument("--host-identity", type=Path)
     parser.add_argument("--run-id")
-    parser.add_argument("--lease-budgets", type=Path)
+    parser.add_argument("--lease-receipt", type=Path, action="append", default=[])
     parser.add_argument("--output", type=Path, required=True)
     for name in ("tag", "commit", "tree", "env-sha256"):
         parser.add_argument(f"--{name}")
     args = parser.parse_args()
     if args.host_identity:
-        if not args.lease_budgets or args.tag or args.tree or args.env_sha256:
-            parser.error("host packets require --lease-budgets, --run-id and --commit")
+        if not args.run_id or not args.commit or args.tag or args.tree or args.env_sha256:
+            parser.error("host packets require --run-id and --commit and accept raw --lease-receipt inputs")
         render_host(json.loads(args.host_identity.read_bytes()), args.run_id, args.commit,
-                    json.loads(args.lease_budgets.read_bytes()), args.output)
+                    args.lease_receipt, args.output)
     else:
-        if args.run_id or args.lease_budgets or not all((args.tag, args.commit, args.tree, args.env_sha256)):
+        if args.run_id or args.lease_receipt or not all((args.tag, args.commit, args.tree, args.env_sha256)):
             parser.error("guest packets require --tag, --commit, --tree and --env-sha256")
         run = {key: getattr(args, key) for key in ("tag", "commit", "tree", "env_sha256")}
         render(load_identity(args.identity), run, args.output)

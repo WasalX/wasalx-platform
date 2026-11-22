@@ -92,6 +92,11 @@ def digest(path):
         return hashlib.file_digest(file, "sha256").hexdigest()
 
 
+def audit_stamp(phase, event, tick):
+    at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(tick // 10**9))
+    print(f"PHASE_TIMING phase={phase} step=daily-base-hash event={event} epoch_ns={tick} at={at}", flush=True)
+
+
 class FrozenDisk:
     def __init__(self, state, paths, virtual_size):
         st = state.lstat()
@@ -107,6 +112,7 @@ class FrozenDisk:
         receipt = read_receipt(self.receipt)
         require(receipt["chain"] == self.paths and receipt["virtual_size"] == self.virtual_size,
                 "DISK_CHAIN_BINDING")
+        self.check_backing(receipt.get("backing_identities", []))
         return receipt
 
     def save(self, receipt):
@@ -116,6 +122,12 @@ class FrozenDisk:
         check_chain(self.paths, self.virtual_size)
         if overlay is not None:
             check_chain([str(overlay), *self.paths], self.virtual_size, overlay=True)
+
+    def backing_identities(self):
+        return [identity(Path(path)) for path in self.paths[1:]]
+
+    def check_backing(self, expected):
+        require(self.backing_identities() == expected, "BACKING_DISK_IDENTITY")
 
     def check_identity(self, expected):
         require(locked(self.top), "IMMUTABLE_FLAG")
@@ -133,12 +145,18 @@ class FrozenDisk:
         self.check_identity(expected)
         self.structural_proof(overlay)
         now = time.time_ns()
+        # The explicit audit is already timed by the host action.
+        inline_phase = os.environ.get("PHASE_TIMING_MODE") if not audit else None
+        audit = audit or not 0 <= now - receipt["audited_ns"] <= 86_400 * 10**9
         if audit:
+            if inline_phase:
+                audit_stamp(inline_phase, "start", now)
             require(digest(self.top) == receipt["sha256"], "DISK_SHA256")
             receipt["audited_ns"] = time.time_ns()
-        else:
-            require(0 <= now - receipt["audited_ns"] <= 86_400 * 10**9, "DAILY_AUDIT_DUE")
+            if inline_phase:
+                audit_stamp(inline_phase, "pass", receipt["audited_ns"])
         self.check_identity(expected)
+        self.check_backing(receipt.get("backing_identities", []))
         if audit:
             self.save(receipt)
         return receipt
@@ -153,6 +171,7 @@ class FrozenDisk:
                 "generation": previous.get("generation", 0) + 1,
             }
         self.check_identity(before)
+        self.check_backing(previous.get("backing_identities", []))
         self.save({**previous, "identity": before, "phase": "sealed"})
 
     def freeze(self, run_id):
@@ -165,13 +184,16 @@ class FrozenDisk:
         require(current["mode"] == 0o600 and not locked(self.top), "WRITABLE_TOP_MODE")
         if previous:
             require(same_inode(current, previous["identity"]), "DISK_INODE")
-        self.save({**previous, "phase": "sealing", "run_id": run_id, "identity": current})
+        backing = previous.get("backing_identities", []) if previous else self.backing_identities()
+        self.save({**previous, "phase": "sealing", "run_id": run_id, "identity": current,
+                   "backing_identities": backing})
         self.top.chmod(0o400)
         run("chattr", "+i", "--", self.top)
         after = identity(self.top)
         require(same_inode(after, current)
                 and all(after[key] == current[key] for key in ("size", "mtime")), "FREEZE_DISK_IDENTITY")
-        self.seal({key: previous[key] for key in ("generation",) if key in previous}, new_generation=True)
+        self.seal({"generation": previous.get("generation", 0), "backing_identities": backing},
+                  new_generation=True)
 
     def restore_mode(self, run_id):
         receipt = self.frozen_check()
@@ -197,6 +219,7 @@ class FrozenDisk:
         prior = receipt["identity"]
         require(not locked(self.top) and same_inode(after, prior)
                 and all(after[key] == prior[key] for key in ("size", "mtime", "mode")), "BOOT_DISK_IDENTITY")
+        self.check_backing(receipt.get("backing_identities", []))
 
     def writable_receipt(self, run_id):
         receipt = self.load()
@@ -225,6 +248,7 @@ class FrozenDisk:
         self.structural_proof()
         require(digest(self.top) == receipt["sha256"], "RECOVERY_DISK_SHA256")
         self.check_identity(confirmed)
+        self.check_backing(receipt.get("backing_identities", []))
         self.save({**receipt, "phase": "sealed", "identity": confirmed, "audited_ns": time.time_ns()})
 
     def commit(self, overlay, run_id):
@@ -236,7 +260,8 @@ class FrozenDisk:
         self.top.chmod(0o400)
         run("chattr", "+i", "--", self.top)
         require(same_inode(identity(self.top), receipt["identity"]), "DISK_INODE")
-        self.seal({"generation": receipt["generation"], "committed_run": run_id}, new_generation=True)
+        self.seal({"generation": receipt["generation"], "committed_run": run_id,
+                   "backing_identities": receipt.get("backing_identities", [])}, new_generation=True)
 
 
 def verify_stopped_overlay(source, target, receipt_path):
@@ -304,8 +329,7 @@ def main():
             raise Hold("DISK_ACTION")
     except (OSError, ValueError, KeyError, subprocess.CalledProcessError, Hold) as error:
         code = str(error) if isinstance(error, Hold) else "DISK_COMMAND_OR_RECEIPT"
-        if code != "DAILY_AUDIT_DUE":
-            write_receipt(disk.hold, {"reason": code, "observed_ns": time.time_ns()})
+        write_receipt(disk.hold, {"reason": code, "observed_ns": time.time_ns()})
         raise Hold(code) from None
     return 0
 

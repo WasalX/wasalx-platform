@@ -57,7 +57,16 @@ with open(sys.argv[1], "wb") as disk:
     disk.write(bytes.fromhex("55 aa"))
     disk.truncate(8388608)
 PY
-    qemu-img convert -f raw -O qcow2 "$dir/disk.raw" "$top"
+    if [ "${2:-}" = backing ]; then
+        base="$dir/base.qcow2"
+        local middle="$dir/middle.qcow2"
+        qemu-img convert -f raw -O qcow2 "$dir/disk.raw" "$base"
+        qemu-img create -q -f qcow2 -F qcow2 -b "$base" "$middle"
+        qemu-img create -q -f qcow2 -F qcow2 -b "$middle" "$top"
+        printf -v TOP_CHAIN '["%s","%s","%s"]' "$top" "$middle" "$base"
+    else
+        qemu-img convert -f raw -O qcow2 "$dir/disk.raw" "$top"
+    fi
     chmod 0600 "$top"
     disk freeze "$run_id"
     qemu-img create -q -f qcow2 -F qcow2 -b "$top" "$overlay"
@@ -75,14 +84,32 @@ guard_stub() {
     echo 'GUARD_STUB=PASS'
 }
 
+overdue_audit() {
+    python3 -I -B - "$DISK_STATE/frozen-top.json" "$1" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+receipt = json.loads(path.read_bytes())
+receipt["audited_ns"] = 1
+if sys.argv[2] == "mismatch":
+    receipt["sha256"] = "0" * 64
+path.write_text(json.dumps(receipt), encoding="utf-8")
+PY
+}
+
 fixture discard
 disk preboot "$overlay"
 qemu-io -f qcow2 -c 'write -P 0xa5 1M 512' "$overlay" >/dev/null
 guard_stub "$overlay"
 echo 'INSTALL_FIXTURE=FORCED_FAILURE'
-disk verify
-disk restore-mode "$run_id"
 disk record-overlay-stop "$overlay" "$DISK_STATE/retained.json"
+overdue_audit match
+audit_log="$(PHASE_TIMING_MODE=rollback disk verify)"
+grep -q '^PHASE_TIMING phase=rollback step=daily-base-hash event=start ' <<< "$audit_log"
+grep -q '^PHASE_TIMING phase=rollback step=daily-base-hash event=pass ' <<< "$audit_log"
+disk restore-mode "$run_id"
 disk archive-overlay "$overlay" "$overlay.retained" "$DISK_STATE/retained.json"
 disk archive-overlay "$overlay" "$overlay.retained" "$DISK_STATE/retained.json"
 disk begin-writable "$run_id"
@@ -94,7 +121,21 @@ disk finish-writable "$run_id"
 qemu-io -r -f qcow2 -c 'read -P 0x00 1M 512' "$top" >/dev/null
 disk freeze "$run_id"
 disk audit
-echo 'DISCARD_FIXTURE=PASS offline_recovery=PASS'
+echo 'DISCARD_FIXTURE=PASS overdue_audit=PASS offline_recovery=PASS'
+
+fixture discard-audit-mismatch
+guard_stub "$overlay"
+disk record-overlay-stop "$overlay" "$DISK_STATE/retained.json"
+overdue_audit mismatch
+if audit_log="$(disk verify 2>&1)"; then
+    echo 'DISCARD_AUDIT_MISMATCH=FAIL' >&2
+    exit 1
+fi
+test "$audit_log" = HOLD_DISK_SHA256
+test -f "$DISK_STATE/frozen-top.hold"
+test "$(disk restore-mode "$run_id" 2>&1 || true)" = HOLD_DISK_HOLD
+test "$(stat -c '%a' "$top")" = 400
+echo 'DISCARD_AUDIT_MISMATCH=PASS restore=HELD'
 
 fixture commit
 disk preboot "$overlay"
@@ -140,3 +181,8 @@ fixture broken-chain
 qemu-img create -q -f qcow2 "$alternate" "$VIRTUAL_BYTES"
 qemu-img rebase -u -f qcow2 -F qcow2 -b "$alternate" "$overlay"
 expect_hold broken-chain BACKING_CHAIN
+
+fixture swapped-lower backing
+cp -p -- "$base" "$base.replacement"
+mv -T -- "$base.replacement" "$base"
+expect_hold swapped-lower BACKING_DISK_IDENTITY
