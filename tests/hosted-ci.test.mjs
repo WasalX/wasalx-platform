@@ -476,6 +476,10 @@ test("CI seeds pnpm caches on main and builds cleanly in the merge queue", async
 
   const build = jobs.checks.steps.find(step => step.with?.task === "build");
   assert.equal(build?.with["force-build"], "${{ github.event_name == 'merge_group' && matrix.mode == 'typecheck' }}");
+  for (const job of [jobs.integration, jobs["portal-integration"]]) {
+    const build = job.steps.find(step => step.uses === actionPath && step.with?.task === "build");
+    assert.equal(build?.with["force-build"], "true");
+  }
   const restore = action.runs.steps.find(step => step.id === "services");
   assert(restore?.if.includes("inputs.force-build != 'true'"));
   assert(restore.if.includes("github.event_name == 'merge_group'"));
