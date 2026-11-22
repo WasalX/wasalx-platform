@@ -348,9 +348,10 @@ ruby scripts/validate-secret-adapter-render.rb "$TOOLS_DIR/rendered-secret-adapt
 "$HELM" template wasalx infra/helm/wasalx --values "$PRODUCTION_VALUES_FILE" \
   "${assisted_alpha_values[@]}" "${secret_adapter_values[@]}" > "$TOOLS_DIR/rendered-assisted-secret-adapter.yaml"
 ruby scripts/validate-secret-adapter-render.rb "$TOOLS_DIR/rendered-assisted-secret-adapter.yaml"
+scoped_namespace=release-fixture-production
 "$HELM" template wasalx infra/helm/wasalx --values "$PRODUCTION_VALUES_FILE" "${secret_adapter_values[@]}" \
-  --namespace wasalx-production --set-string secretSidecarUrl=https://secrets-agent.wasalx-production.svc.cluster.local:8443 \
-  --set-string productionSecretSidecar.storeNamespace=wasalx-production-secrets > "$TOOLS_DIR/rendered-secret-adapter-scoped.yaml"
+  --namespace "$scoped_namespace" --set-string "secretSidecarUrl=https://secrets-agent.${scoped_namespace}.svc.cluster.local:8443" \
+  --set-string "productionSecretSidecar.storeNamespace=${scoped_namespace}-secrets" > "$TOOLS_DIR/rendered-secret-adapter-scoped.yaml"
 ruby scripts/validate-secret-adapter-render.rb "$TOOLS_DIR/rendered-secret-adapter-scoped.yaml"
 ruby tests/secret-adapter-readiness.test.rb "$TOOLS_DIR/rendered-secret-adapter.yaml"
 if "$HELM" template wasalx infra/helm/wasalx --values "$PRODUCTION_VALUES_FILE" "${secret_adapter_values[@]}" \

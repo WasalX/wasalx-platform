@@ -1,6 +1,10 @@
 {{- if and .Values.observability.enabled .Values.observability.prometheusRule.enabled }}
 {{- $runbook := trimSuffix "/" .Values.observability.prometheusRule.runbookBaseUrl -}}
-{{- $rules := replace "__RUNBOOK_BASE_URL__" $runbook (.Files.Get "files/observability-rules.yaml") -}}
+{{- $rules := .Files.Get "files/observability-rules.yaml" -}}
+{{- if eq $runbook "https://github.com/WasalX/wasalx-platform/tree/main/docs/runbooks" -}}
+{{- $rules = regexReplaceAll "__RUNBOOK_BASE_URL__#[a-z0-9-]+" $rules "__RUNBOOK_BASE_URL__" -}}
+{{- end -}}
+{{- $rules = replace "__RUNBOOK_BASE_URL__" $runbook $rules -}}
 {{- if eq .Values.deploymentProfile "assisted-alpha" }}
 apiVersion: v1
 kind: ConfigMap

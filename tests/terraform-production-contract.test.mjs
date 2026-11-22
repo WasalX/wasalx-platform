@@ -53,7 +53,8 @@ test("native OpenTofu plan exercises the production root without credentials", a
   assert.match(planTest, /mock_provider "helm" \{\}/u);
   assert.match(planTest, /run "production_plan" \{[\s\S]*?command = plan/u);
   assert.match(planTest, /plan_options \{[\s\S]*?refresh = false/u);
-  assert.match(planTest, /kubernetes_namespace\.wasalx\.metadata\[0\]\.name == "wasalx-production"/u);
+  assert.match(planTest, /^\s*namespace\s*=\s*"release-fixture"\r?$/mu);
+  assert.match(planTest, /kubernetes_namespace\.wasalx\.metadata\[0\]\.name == "\$\{var\.namespace\}-\$\{var\.environment\}"/u);
   assert.match(planTest, /kubernetes_network_policy_v1\.bootstrap_default_deny/u);
   assert.match(planTest, /kubernetes_network_policy_v1\.control_migration_egress/u);
   assert.match(planTest, /kubernetes_network_policy_v1\.workspace_migration_egress/u);
