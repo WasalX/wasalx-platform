@@ -13,27 +13,27 @@
   ],
   "unitAllowlist": {
     "tests/installer-preimage.test.mjs": {
-      "runner": "integration",
+      "runner": "portal-integration",
       "reason": "Uses Docker Compose to render and hash native service configurations."
     },
     "tests/multitenant-e2e.test.mjs": {
-      "runner": "integration",
+      "runner": "portal-integration",
       "reason": "Requires Chromium and a running portal, PostgreSQL, and Redis."
     },
     "tests/platform-invitation-e2e.test.mjs": {
-      "runner": "integration",
+      "runner": "portal-integration",
       "reason": "Requires Chromium and a running portal, PostgreSQL, and Redis."
     },
     "tests/portal-security-headers.test.mjs": {
-      "runner": "integration",
+      "runner": "portal-integration",
       "reason": "Starts the built portal to check HTTP response headers."
     },
     "tests/postgres-load-recovery.test.mjs": {
-      "runner": "test:postgres",
+      "runner": "integration",
       "reason": "Requires a PostgreSQL instance with separate admin and application roles."
     },
     "tests/rendered-html.test.mjs": {
-      "runner": "integration",
+      "runner": "portal-integration",
       "reason": "Starts the built portal to check server-rendered HTML."
     },
     "tests/storybook-static-contract.test.mjs": {
