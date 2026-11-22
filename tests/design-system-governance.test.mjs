@@ -54,7 +54,15 @@ test("Dependabot groups Docker, Docker Compose and GitHub Actions version update
     "open-pull-requests-limit": docker[0]["open-pull-requests-limit"],
     schedule: docker[0].schedule,
     cooldown: docker[0].cooldown,
-    ignore: docker[0].ignore,
+    ignore: [
+      { "dependency-name": "node", "update-types": ["version-update:semver-major"] },
+      { "dependency-name": "keycloak/keycloak" },
+      { "dependency-name": "prom/prometheus" },
+      { "dependency-name": "minio/minio" },
+      { "dependency-name": "minio/mc" },
+      { "dependency-name": "devlikeapro/waha" },
+      { "dependency-name": "wasalx/*" },
+    ],
     groups: { "docker-compose-version-updates": { patterns: ["*"] } },
   }]);
   assert.deepEqual(actions.map(update => update.directory), ["/"]);
