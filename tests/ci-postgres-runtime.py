@@ -22,6 +22,12 @@ mode=os.environ['MODE']
 with (root/'owned-pids').open('a') as log:
     stat=pathlib.Path(f'/proc/{os.getpid()}/stat').read_text().split()
     log.write(json.dumps([os.getpid(),stat[21]])+'\\n')
+
+def mark_ready():
+    pending=root/'ready.tmp'
+    pending.write_text(f'{os.getpid()}\\n')
+    pending.replace(root/'ready')
+
 if kind=='timeout':
     if args[:2]==['--kill-after=2s','25m']:
         (root/'payload-timeout').write_text(json.dumps(args))
@@ -42,7 +48,7 @@ if kind=='node':
         os.kill(parent, signal.SIGTERM)
     if mode.startswith('cancel-'):
         if mode=='cancel-resistant': signal.signal(signal.SIGTERM, signal.SIG_IGN)
-        (root/'ready').write_text(str(os.getpid()))
+        mark_ready()
         time.sleep(30)
     if mode.startswith('timeout-'):
         if mode=='timeout-kill': signal.signal(signal.SIGTERM, signal.SIG_IGN)
@@ -53,7 +59,7 @@ if args[0]=='create':
     (root/'container').write_text('owned')
     if mode=='cancel-create':
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
-        (root/'ready').write_text(str(os.getpid()))
+        mark_ready()
         time.sleep(30)
     if mode=='create-no-cid': sys.exit(1)
     pathlib.Path(args[args.index('--cidfile')+1]).write_text('b'*64)
@@ -125,17 +131,21 @@ class PostgresLifecycle(unittest.TestCase):
             if external_signal is None:
                 result = subprocess.run(command, env=env, text=True, capture_output=True, timeout=40)
             else:
+                ready = root / "ready"
+                (root / "owned-pids").touch()
                 process = subprocess.Popen(command, env=env, text=True, stdout=subprocess.PIPE,
                                            stderr=subprocess.PIPE, start_new_session=True)
                 timed_out = False
                 child_pid = None
                 started = time.monotonic()
                 try:
-                    deadline = time.monotonic() + 5
-                    while not (root / "ready").exists() and process.poll() is None and time.monotonic() < deadline:
+                    deadline = time.monotonic() + 10
+                    while not ready.exists() and process.poll() is None and time.monotonic() < deadline:
                         time.sleep(0.01)
-                    self.assertTrue((root / "ready").exists(), "owned child must be alive before external cancellation")
-                    child_pid = int((root / "ready").read_text())
+                    self.assertTrue(ready.exists(), f"{mode}: owned child did not publish its PID before exit or the 10s readiness deadline")
+                    pid_line = ready.read_text()
+                    self.assertRegex(pid_line, r"\A[1-9][0-9]*\n\Z", f"{mode}: readiness must contain one complete PID line")
+                    child_pid = int(pid_line)
                     os.kill(child_pid, 0)
                     started = time.monotonic()
                     os.kill(process.pid, external_signal)
