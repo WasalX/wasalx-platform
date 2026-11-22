@@ -5,11 +5,12 @@
 - Repository [WasalX/wasalx-platform](https://github.com/WasalX/wasalx-platform). The main branch is `main`.
 - The private [project board](https://github.com/orgs/WasalX/projects/1) has the pinned **Project brief**.
 - The GitHub environments are `dev`, `stg`, and `prod`. See [environment use and data rules](DELIVERY.md#environments).
-- Milestones: v0.1.0 due 2026-11-30 (current), v0.2.0 due 2026-12-14 (next). See the [repo milestones](https://github.com/WasalX/wasalx-platform/milestones).
+- Milestones: v0.1.0 (current) and v0.2.0 (next). Dates and scope are on the [repo milestones](https://github.com/WasalX/wasalx-platform/milestones).
 - Lead threads are WasalX Master, WasalX Delivery, and WasalX Design.
 - UI project: yes
 - Other repos: WasalX/wasalx-zammad-addon
 - [Delivery rules](DELIVERY.md) define how changes ship.
+- **Links** — [DELIVERY.md](DELIVERY.md) and [DESIGN.md](DESIGN.md). The project follows the portfolio engineering standard and delivery-orchestration skill, both private. Every rule contributors must follow is stated in `AGENTS.md` and `DELIVERY.md`.
 - The owner decides only money (any paid service), access only the owner can grant, production deployments, destructive operations on real data, making private things public, and closing a project. Project leads decide everything else within their scopes.
 
 ## Product and current goal
@@ -37,7 +38,7 @@ Live-provider qualification is a separate release milestone.
 - UI design tokens — [app/design-system/tokens.css](app/design-system/tokens.css).
 - Release acceptance — [docs/release.md](docs/release.md).
 
-## Definition of done
+## Coding rules and definition of done
 
 - Keep each PR independently reviewable. Name its issue when one exists and describe the scope, checks, and evidence tied to its head.
 - Reuse the existing shared boundary. Keep routing, rules, flows, handoff, privacy, and audit provider-neutral. Keep tenant configuration versioned and immutable after activation.
