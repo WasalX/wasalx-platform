@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, posix } from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -185,6 +185,87 @@ test("nightly MinIO mirrors retain the full installer content digests", async ()
     assert.equal(repository, `ghcr.io/wasalx/${repositoryName}`);
     assert.match(digest, /^sha256:[0-9a-f]{64}$/u);
     assert.equal(digest, full[service].image.split("@")[1]);
+  }
+});
+
+test("nightly selects the newest complete publication within five first-parent commits", async t => {
+  const directory = await mkdtemp(join(tmpdir(), "nightly-publication-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const options = { cwd: directory, encoding: "utf8", windowsHide: true };
+  const git = (...args) => execFileSync("git", args, options).trim();
+  git("init", "--quiet", "--template=");
+  git("config", "user.name", "Fixture");
+  git("config", "user.email", "fixture@example.invalid");
+  for (let i = 0; i < 6; i += 1) {
+    git("commit", "--quiet", "--allow-empty", "-m", "fixture " + i);
+  }
+  const tree = git("rev-parse", "HEAD^{tree}");
+  const parent = git("rev-parse", "HEAD^1");
+  const side = git("commit-tree", tree, "-p", parent, "-m", "side branch");
+  const base = git("commit-tree", tree, "-p", parent, "-p", side, "-m", "base merge");
+  const commits = git("rev-list", "--first-parent", base).split(/\r?\n/u);
+  await mkdir(join(directory, "scripts", "release"), { recursive: true });
+  await writeFile(join(directory, "scripts", "release", "product-images.json"), '[{"image":"zammad"}]');
+  await writeFile(join(directory, "image-manifest.sh"), await read("scripts/release/image-manifest.sh"));
+  const fixture = String.raw`
+gh() {
+  case "$1 $2" in
+    "api repos/$GITHUB_REPOSITORY/compare/$BASE...main") echo ahead ;;
+    'run list')
+      [[ "$*" == *"--workflow ci.yml --branch main --event push --commit "*"--status success --limit 1"* ]] || return 2
+      while [[ "$1" != --commit ]]; do shift; done
+      printf '%s\n' "$2" >> lookups
+      case "$2" in
+        "$LOOKUP_ERROR") return 17 ;;
+        "$READY") echo 101 ;;
+        "$INCOMPLETE") echo 102 ;;
+        "$EXPIRED") echo 103 ;;
+        "$NO_JOB") echo 104 ;;
+      esac
+      ;;
+    'run view') if [[ "$3" == 104 ]]; then echo 0; else echo 1; fi ;;
+    "api repos/$GITHUB_REPOSITORY/actions/runs/103/artifacts?name=images-manifest") echo 0 ;;
+    "api repos/$GITHUB_REPOSITORY/actions/runs/"*"/artifacts?name=images-manifest") echo 1 ;;
+    'run download')
+      local commit=$READY images='{"zammad":{}}' pending='{}' complete=true
+      [[ "$3" != 102 ]] || { commit=$INCOMPLETE; images='{}'; pending='{"zammad":{}}'; complete=false; }
+      [[ "$INVALID" != true ]] || commit=$BASE
+      printf '{"schemaVersion":1,"repository":"%s","platform":"linux/amd64","commit":"%s","tree":"%s","images":%s,"pending":%s,"publicationComplete":%s}\n' \
+        "$GITHUB_REPOSITORY" "$commit" "$(git rev-parse "$commit^{tree}")" "$images" "$pending" "$complete" > images-manifest.json
+      ;;
+    *) return 2 ;;
+  esac
+}
+source ./image-manifest.sh
+"$RESOLVER" "$BASE" .
+`;
+  const cases = [
+    { ready: base, selected: base, lookups: commits.slice(0, 1), reason: "requested base has a complete publication" },
+    { ready: commits[4], incomplete: commits[1], expired: commits[2], noJob: commits[3],
+      selected: commits[4], lookups: commits.slice(0, 5), reason: "newest complete first-parent publication" },
+    { ready: commits[5], lookups: commits.slice(0, 5), reason: "No complete green main publication" },
+    { ready: side, lookups: commits.slice(0, 5), reason: "No complete green main publication" },
+    { ready: commits[1], lookupError: base, lookups: commits.slice(0, 1), status: 17 },
+    { ready: commits[1], invalid: true, lookups: commits.slice(0, 2), status: 5, reason: "Invalid nightly publication manifest" },
+    { ready: commits[1], exact: true, lookups: commits.slice(0, 1), reason: "No green main CI push run for the commit" },
+  ];
+  const bash = process.platform === "win32" ? "C:/Program Files/Git/bin/bash.exe" : "bash";
+  for (const { ready, selected, incomplete = "", expired = "", noJob = "", lookupError = "", invalid = false,
+    exact = false, lookups, status = selected ? 0 : 1, reason } of cases) {
+    await writeFile(join(directory, "lookups"), "");
+    const result = spawnSync(bash, ["--noprofile", "--norc", "-euo", "pipefail", "-c", fixture], {
+      ...options, timeout: 10_000, env: {
+        ...process.env, GITHUB_REPOSITORY: "fixture/nightly", BASE: base, READY: ready, INCOMPLETE: incomplete,
+        EXPIRED: expired, NO_JOB: noJob, LOOKUP_ERROR: lookupError, INVALID: String(invalid),
+        RESOLVER: exact ? "download_main_image_manifest" : "download_nightly_image_manifest",
+      },
+    });
+    assert.ifError(result.error);
+    assert.equal(result.status, status, result.stdout + result.stderr);
+    if (!exact) assert.equal(result.stdout.trim(), selected ?? "");
+    if (reason) assert.ok((result.stdout + result.stderr).includes(reason), result.stderr);
+    if (selected) assert.equal(JSON.parse(await readFile(join(directory, "images-manifest.json"), "utf8")).commit, selected);
+    assert.deepEqual((await readFile(join(directory, "lookups"), "utf8")).trim().split(/\r?\n/u), lookups);
   }
 });
 
