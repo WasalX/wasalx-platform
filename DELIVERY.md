@@ -8,6 +8,7 @@ WasalX Delivery owns this document. Change it through a reviewed PR.
 - If the PR head changes after auto-merge is enabled or a review sends the PR back, disable auto-merge and remove the PR from the merge queue. Check queue membership directly because a queued PR shows no auto-merge request.
 - For the risk paths defined in the agent instructions, require one Opus 5.5 high verdict at the exact head from an independent review of the full diff. Reuse it for a merge-only base update with the same reviewed diff or a same-tree re-cut. Review substantive diff changes again. The queue qualifies the exact combined tree.
 - Other PRs land on green. Keep `main` protected and update it only through the queue.
+- Run agent pushes, PR operations, merges, reruns, and issue and board writes only through the project's reviewed GitHub App helper. Never print its installation token. Use the owner login only for approved settings changes.
 
 ## Checks
 
@@ -16,6 +17,7 @@ WasalX Delivery owns this document. Change it through a reviewed PR.
 - The advisory [TypeScript comparison](.github/workflows/typescript-comparison.yml) compares TypeScript 5 and 7 diagnostics, compiler time, and service output on the PR candidate and its main baseline. It runs the unit suite on TypeScript 7 output when the emitted files differ.
 - The [pnpm cache action](.github/actions/ci-pnpm/action.yml) saves pnpm dependency and service build caches on main pushes only. PostgreSQL integration and portal integration always force clean service builds.
 - Run CI on GitHub-hosted runners. Prohibit `pull_request_target`. Fork PRs receive no secrets.
+- For every workflow-changing PR, verify the SHA-256 of the pinned actionlint 1.7.12 binary before running it. Require zero new findings compared with the base branch. Older 1.7.x versions misread YAML anchors.
 
 ## Test policy
 
@@ -47,7 +49,8 @@ Before every push, run the private privacy check on the diff, commits, branch na
 - The stager and relay are planned host-side components run by the Servers lead, outside this repo.
 - Before changing state, verify the backup is restorable and retain the previous installed state. Require a real-stack rehearsal for the exact candidate before any probe or pre-arm code reaches DEV. Run health checks after replacement and record the deployed commit, digests, and result.
 - On DEV, install on an overlay over the frozen base. On failure, use the authorized discard path to restore the previous base and verify its health. Preserve the rollback receipt. See the [installer runbook](scripts/dev-install/README.md).
-- WasalX Delivery approves non-production deployments and DEV host steps. Staging rehearses the RC. Obtain explicit owner approval for the production deployment of a stable release. Record health and recovery evidence for the target environment.
+- Any DEV configuration change must pass the installer's native preflight on the new configuration before acceptance.
+- WasalX Delivery approves non-production deployments except for DEV host steps. DEV host steps require a Portfolio GO record until pull-based deployment replaces them. WasalX Delivery prepares the DEV host packets. Staging rehearses the RC. Obtain explicit owner approval for the production deployment of a stable release. Record health and recovery evidence for the target environment.
 
 ## DEV safety rules
 
