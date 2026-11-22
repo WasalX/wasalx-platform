@@ -28,7 +28,8 @@ spec = importlib.util.spec_from_file_location("render", HERE / "render.py")
 render = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(render)
 COMMIT, TREE, TAG, MOVED = "1" * 40, "2" * 40, "v1.2.3-rc.1", "4" * 40
-COMPOSE_REF = "postgres:17@sha256:" + "5" * 64
+COMPOSE_DIGEST = "sha256:" + "ab" * 32
+COMPOSE_REF = f"postgres@{COMPOSE_DIGEST}"
 PRODUCT_DIGEST = "sha256:" + "6" * 64
 CATALOG = json.loads((HERE.parents[1] / "release/installer-images.json").read_bytes())
 PUBLISHER = f"https://github.com/{agent.REPO}/.github/workflows/branch-image.yml@refs/heads/main"
@@ -172,6 +173,22 @@ class PullTest(unittest.TestCase):
         self.assertFalse(any("/blobs/" in req.full_url for req in self.fake.requests))
         self.assertTrue(any(req.get_header("If-none-match") == '"listing"' for req in self.fake.requests))
 
+    def test_handover_normalizes_and_sorts_unique_compose_refs(self):
+        second_digest = "sha256:" + "c" * 64
+        self.fake.compose += (
+            f"    image: docker.io/vendor/image:stable@{COMPOSE_DIGEST}\n"
+            f"    image: quay.io/vendor/image:Release_1@sha256:{'AB' * 32}\n"
+            f"    image: docker.io/library/postgres:17@{COMPOSE_DIGEST}\n"
+            f"    image: docker.io/postgres@{COMPOSE_DIGEST}\n"
+            f"    image: postgres:18@{second_digest}\n"
+        )
+        offer = self.make_offer()
+        self.assertEqual(offer["counts"], {"product": 21, "compose": 4})
+        self.assertEqual([row["ref"] for row in offer["refs"]], sorted([
+            *PRODUCT_REFS, COMPOSE_REF, f"postgres@{second_digest}",
+            f"quay.io/vendor/image@{COMPOSE_DIGEST}", f"vendor/image@{COMPOSE_DIGEST}",
+        ]))
+
     def test_only_latest_tag_push_with_successful_census_qualifies(self):
         cases = {
             "no tag run": ([], "success"),
@@ -288,6 +305,27 @@ class PullTest(unittest.TestCase):
                         record | {"refs": [record["refs"][0], *record["refs"]]}):
             with self.assertRaises(ValueError):
                 agent.validate_handover(altered)
+
+    def test_schema_refuses_noncanonical_or_unsorted_refs(self):
+        self.outbox.add(self.make_offer())
+        record = json.loads(self.records()[0].read_bytes())
+        for ref in (f"postgres:17@{COMPOSE_DIGEST}", f"docker.io/library/{COMPOSE_REF}",
+                    f"docker.io/{COMPOSE_REF}", f"postgres@sha256:{'AB' * 32}"):
+            with self.subTest(ref=ref), self.assertRaisesRegex(ValueError, "invalid hand-over ref"):
+                refs = [row | {"ref": ref} if row["origin"] == "compose" else row for row in record["refs"]]
+                agent.validate_handover(record | {"refs": sorted(refs, key=lambda row: row["ref"])})
+        with self.assertRaisesRegex(ValueError, "invalid hand-over ref"):
+            agent.validate_handover(record | {"refs": list(reversed(record["refs"]))})
+
+    def test_schema_requires_b2_release_asset_digest(self):
+        self.outbox.add(self.make_offer())
+        record = json.loads(self.records()[0].read_bytes())
+        for value in (None, "sha256:" + "A" * 64):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "invalid hand-over identity"):
+                agent.validate_handover(record | {"release_asset_digest": value})
+        del record["release_asset_digest"]
+        with self.assertRaisesRegex(ValueError, "invalid hand-over identity"):
+            agent.validate_handover(record)
 
     def test_canonical_chain_survives_restart_and_verifies_ed25519(self):
         self.assertEqual(agent.json_bytes({"z": 1, "a": "\u00e9"}), b'{"a":"\\u00e9","z":1}')
