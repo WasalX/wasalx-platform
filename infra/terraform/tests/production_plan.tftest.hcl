@@ -3,7 +3,7 @@ mock_provider "helm" {}
 
 variables {
   environment = "production"
-  namespace   = "wasalx"
+  namespace   = "release-fixture"
 
   portal_image                    = "example.test/portal@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
   control_api_image               = "example.test/control-api@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
@@ -34,7 +34,7 @@ variables {
     public_webhook_base_url        = "https://release.home.arpa"
     control_api_url                = "https://release.home.arpa"
     portal_public_origin           = "https://release.home.arpa"
-    secret_sidecar_url             = "https://secrets-agent.wasalx-production.svc.cluster.local:8443"
+    secret_sidecar_url             = "https://secrets-agent.release-fixture-production.svc.cluster.local:8443"
     waha_base_url                  = "https://release.home.arpa"
     waha_admin_secret_reference    = "secret://platform/waha/admin"
     otlp_endpoint                  = "https://release.home.arpa:4318"
@@ -144,7 +144,7 @@ variables {
     control_plane_url          = "https://wasalx-api.wasalx.svc.cluster.local:3001"
     ingress_class_name         = "nginx"
     ingress_namespace          = "ingress-nginx"
-    cluster_issuer             = "wasalx-production"
+    cluster_issuer             = "release-fixture-issuer"
     storage_class_name         = "encrypted-block"
     package_version            = "1.0.0"
     package_sha256             = "8888888888888888888888888888888888888888888888888888888888888888"
@@ -162,17 +162,17 @@ run "production_plan" {
   }
 
   assert {
-    condition     = kubernetes_namespace.wasalx.metadata[0].name == "wasalx-production"
+    condition     = kubernetes_namespace.wasalx.metadata[0].name == "${var.namespace}-${var.environment}"
     error_message = "The production namespace must be explicit and environment-scoped."
   }
 
   assert {
     condition = (
-      kubernetes_network_policy_v1.bootstrap_default_deny.metadata[0].namespace == "wasalx-production" &&
+      kubernetes_network_policy_v1.bootstrap_default_deny.metadata[0].namespace == kubernetes_namespace.wasalx.metadata[0].name &&
       toset(kubernetes_network_policy_v1.bootstrap_default_deny.spec[0].policy_types) == toset(["Ingress", "Egress"]) &&
-      kubernetes_network_policy_v1.control_migration_egress.metadata[0].namespace == "wasalx-production" &&
+      kubernetes_network_policy_v1.control_migration_egress.metadata[0].namespace == kubernetes_namespace.wasalx.metadata[0].name &&
       length(kubernetes_network_policy_v1.control_migration_egress.spec[0].egress) > 0 &&
-      kubernetes_network_policy_v1.workspace_migration_egress.metadata[0].namespace == "wasalx-production" &&
+      kubernetes_network_policy_v1.workspace_migration_egress.metadata[0].namespace == kubernetes_namespace.wasalx.metadata[0].name &&
       length(kubernetes_network_policy_v1.workspace_migration_egress.spec[0].egress) > 0
     )
     error_message = "Deny-by-default and migration egress policies must exist before Helm receives database credentials."
@@ -181,7 +181,7 @@ run "production_plan" {
   assert {
     condition = (
       helm_release.control_plane.name == "wasalx-control-plane" &&
-      helm_release.control_plane.namespace == "wasalx-production" &&
+      helm_release.control_plane.namespace == kubernetes_namespace.wasalx.metadata[0].name &&
       helm_release.control_plane.skip_crds &&
       !helm_release.control_plane.atomic &&
       !helm_release.control_plane.cleanup_on_fail &&
@@ -233,13 +233,13 @@ run "production_secret_adapter" {
   }
   assert {
     condition = (
-      kubernetes_namespace.secret_store[0].metadata[0].name == "wasalx-production-secrets" &&
-      kubernetes_role_v1.secret_adapter[0].metadata[0].namespace == "wasalx-production-secrets" &&
+      kubernetes_namespace.secret_store[0].metadata[0].name == "${kubernetes_namespace.wasalx.metadata[0].name}-secrets" &&
+      kubernetes_role_v1.secret_adapter[0].metadata[0].namespace == kubernetes_namespace.secret_store[0].metadata[0].name &&
       toset(kubernetes_role_v1.secret_adapter[0].rule[0].verbs) == toset(["get", "create", "update", "delete"]) &&
       toset(kubernetes_role_v1.secret_adapter[0].rule[0].resources) == toset(["secrets"]) &&
-      kubernetes_role_binding_v1.secret_adapter[0].subject[0].namespace == "wasalx-production" &&
+      kubernetes_role_binding_v1.secret_adapter[0].subject[0].namespace == kubernetes_namespace.wasalx.metadata[0].name &&
       !kubernetes_service_account_v1.secret_adapter[0].automount_service_account_token &&
-      yamldecode(helm_release.control_plane.values[0]).productionSecretSidecar.storeNamespace == "wasalx-production-secrets" &&
+      yamldecode(helm_release.control_plane.values[0]).productionSecretSidecar.storeNamespace == kubernetes_namespace.secret_store[0].metadata[0].name &&
       yamldecode(helm_release.control_plane.values[0]).productionSecretSidecar.enabled
     )
     error_message = "The adapter must receive scoped secret-store access and an environment-specific Helm handoff."
