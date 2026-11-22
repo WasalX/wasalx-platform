@@ -7,6 +7,8 @@ on:
   pull_request:
     branches: [main]
     types: [opened, synchronize, reopened]
+  push:
+    tags: ['v*-rc.*']
 
 permissions:
   contents: read
@@ -17,7 +19,10 @@ concurrency:
 
 jobs:
   nightly-install:
-    if: github.repository == 'WasalX/wasalx-platform' && (github.event_name == 'pull_request' || github.ref == 'refs/heads/main')
+    if: >-
+      github.repository == 'WasalX/wasalx-platform' &&
+      (github.event_name == 'pull_request' || github.ref == 'refs/heads/main' ||
+      (github.event_name == 'push' && github.ref_type == 'tag'))
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     # The built-in token needs artifact read access for main CI's cross-run download.
@@ -68,7 +73,13 @@ jobs:
           work="$RUNNER_TEMP/wasalx-nightly"
           install -d -m 0700 "$work/diagnostics"
           source scripts/release/image-manifest.sh
-          commit=$(download_nightly_image_manifest "$base" "$work")
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            commit=$(git rev-parse HEAD)
+            require_tag_commit "$GITHUB_REF" "$commit"
+            download_main_image_manifest "$commit" "$work"
+          else
+            commit=$(download_nightly_image_manifest "$base" "$work")
+          fi
           echo "commit=$commit" >> "$GITHUB_OUTPUT"
       - if: steps.changes.outputs.needed != 'false'
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
