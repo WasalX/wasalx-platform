@@ -4,10 +4,10 @@ WasalX Delivery owns this document. Change it through a reviewed PR.
 
 ## Branching and merging
 
-- Use short-lived branches and open PRs against trunk `main`. WasalX Delivery enables auto-merge to enter the protected merge queue after the exact PR head is green and any applicable review is complete. Squash through the queue.
+- Use short-lived branches and open PRs against trunk `main`. Enable auto-merge into the protected merge queue once checks pass at the exact PR head and any required risk-path review gives a passing verdict. Squash through the queue.
+- For the [risk paths defined in the agent instructions](AGENTS.md#risk-paths), require one independent Opus 5.5 high verdict on the full diff at the exact PR head. Reuse the verdict for a merge-only base update with the same reviewed diff (same patch-id) or a same-tree re-cut. Review substantive diff changes again. [CODEOWNERS](CODEOWNERS) marks risk paths only. Code-owner and lead approvals are not required.
 - If the PR head changes after auto-merge is enabled or a review sends the PR back, disable auto-merge and remove the PR from the merge queue. Check queue membership directly because a queued PR shows no auto-merge request.
-- For the risk paths defined in the agent instructions, require one Opus 5.5 high verdict at the exact head from an independent review of the full diff. Reuse it for a merge-only base update with the same reviewed diff or a same-tree re-cut. Review substantive diff changes again. The queue qualifies the exact combined tree.
-- Other PRs land on green. Keep `main` protected and update it only through the queue.
+- Keep `main` protected and update it only through the queue. The queue qualifies the exact combined tree.
 - Run agent pushes, PR operations, merges, reruns, and issue and board writes only through the project's reviewed GitHub App helper. Never print its installation token. Use the owner login only for approved settings changes.
 
 ## Checks
@@ -45,12 +45,13 @@ Before every push, run the private privacy check on the diff, commits, branch na
 
 ## Deploys
 
-- To record a DEV deployment, manually dispatch [deploy.yml](.github/workflows/deploy.yml) from `main` with environment `dev` and a 40-hex SHA for a `main` commit.
-- The stager and relay are planned host-side components run by the Servers lead, outside this repo.
-- Before changing state, verify the backup is restorable and retain the previous installed state. Require a real-stack rehearsal for the exact candidate before any probe or pre-arm code reaches DEV. Run health checks after replacement and record the deployed commit, digests, and result.
+- DEV host steps, the `stg` RC rehearsal, and the `prod` stable-release deploy each run through a gate. Review each gate once and record one Portfolio GO. For `prod`, the owner's yes is that GO.
+- After its GO, the gate automatically releases every change that passes and writes an audit row with the deployed commit, image digests, result, and the gate's GO reference. A new kind of change or a change to the gate requires a new GO.
+- WasalX Delivery prepares the DEV host packets. Host work runs through the Servers lead, including the planned stager and relay outside this repo.
+- For the DEV GitHub environment record, dispatch [deploy.yml](.github/workflows/deploy.yml) from `main` with environment `dev` and a 40-hex SHA for a `main` commit.
+- Before changing state, verify the backup is restorable and retain the previous installed state. Require a real-stack rehearsal for the exact candidate before any probe or pre-arm code reaches DEV. Run health checks after replacement and record health and recovery evidence for the target environment.
 - On DEV, install on an overlay over the frozen base. On failure, use the authorized discard path to restore the previous base and verify its health. Preserve the rollback receipt. See the [installer runbook](scripts/dev-install/README.md).
 - Any DEV configuration change must pass the installer's native preflight on the new configuration before acceptance.
-- WasalX Delivery approves non-production deployments except for DEV host steps. DEV host steps require a Portfolio GO record until pull-based deployment replaces them. WasalX Delivery prepares the DEV host packets. Staging rehearses the RC. Obtain explicit owner approval for the production deployment of a stable release. Record health and recovery evidence for the target environment.
 
 ## DEV safety rules
 
@@ -60,7 +61,7 @@ Before every push, run the private privacy check on the diff, commits, branch na
 
 ## Hotfixes
 
-Open an issue, submit a PR to `main`, obtain the independent risk review, and pass the same queue gate. Cut an RC tag for the tested fix and validate it. Obtain the owner's approval before shipping the stable fix to production.
+Open an issue and follow the [merge rules](#branching-and-merging) for the PR to `main`. Cut an RC tag for the tested fix and validate it. Ship the stable fix through the [production deploy gate](#deploys).
 
 ## Security
 
