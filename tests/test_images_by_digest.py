@@ -117,11 +117,12 @@ class ImagePublicationTests(unittest.TestCase):
             rows = images.matrix()["include"]
         self.assertEqual(len(rows), 21)
         self.assertFalse(any(r["pending"] for r in rows))
-        self.assertEqual([r["addonSource"] for r in rows if r["image"] == "zammad"], [source])
+        addon_sources = {"zammad": source, "workspace-configurator": source}
+        self.assertEqual({r["image"]: r["addonSource"] for r in rows if r["addonSource"]}, addon_sources)
         with patch.dict(images.os.environ, {"PUBLIC_ADDON_SOURCE": json.dumps(source)}):
             rows = images.matrix()["include"]
         self.assertFalse(any(r["pending"] for r in rows))
-        self.assertEqual([r["addonSource"] for r in rows if r["image"] == "zammad"], [source])
+        self.assertEqual({r["image"]: r["addonSource"] for r in rows if r["addonSource"]}, addon_sources)
         for bad in [{**source, "repository": "https://user:password@github.com/example/addon"},
                     {**source, "commit": "main"}, {**source, "extra": "value"},
                     {**source, "commit": "a" * 40}, {**source, "repository": "https://github.com/example/addon"}]:
@@ -154,8 +155,8 @@ class ImagePublicationTests(unittest.TestCase):
             "services/invitation-mailer/src/removed.ts": "invitation-mailer",
             "scripts/release/patch-keycloak-jackson.py": "foundation-keycloak",
             "tools/dev-secret-sidecar.mjs": "secret-sidecar",
-            "tests/zammad-redis-tls.test.rb": "zammad",
-            "zammad-package/product.rb": "workspace-configurator",
+            "infra/docker/Dockerfile.zammad": "zammad",
+            "infra/docker/full/zammad/entrypoint.rb": "zammad",
         }
         for path, image in narrow.items():
             with self.subTest(path=path):
@@ -167,14 +168,35 @@ class ImagePublicationTests(unittest.TestCase):
         self.assertEqual(images.matrix(["docs/guide/intro.md", "unmapped/new-file"], pull_request=True),
                          {"include": []})
 
+    def test_pull_request_matrix_selects_addon_staging_inputs(self):
+        addon_images = {"zammad", "workspace-configurator"}
+        for path, expected in {
+            "tests/fixtures/portal-mail-native/followup-body.txt": addon_images,
+            "tests/portal-delegation-test.rb": addon_images,
+            "tests/zammad-redis-tls.test.rb": addon_images,
+            "zammad-package/product.rb": addon_images,
+            "build/zammad/wasalx.zpm": addon_images | {"portal"},
+            "build/addon-licenses/LICENSE": addon_images | {"portal"},
+            "scripts/fetch-zammad-addon.mjs": addon_images,
+        }.items():
+            with self.subTest(path=path):
+                rows = images.matrix([path], pull_request=True)["include"]
+                self.assertEqual({row["image"] for row in rows}, expected)
+
     def test_pull_request_matrix_reruns_all_for_shared_build_inputs(self):
         rows = images.matrix()["include"]
         for path in ["scripts/release/images-by-digest.py", ".github/workflows/ci.yml",
-                     ".github/workflows/branch-image.yml", ".dockerignore", ".gitattributes",
-                     "scripts/release/.gitattributes", "scripts/release/product-images.json",
-                     "zammad-addon.json", "scripts/fetch-zammad-addon.mjs"]:
+                     ".dockerignore", ".gitattributes", "scripts/release/.gitattributes",
+                     "Dockerfile.portal.dockerignore", "infra/docker/Dockerfile.zammad.dockerignore",
+                     "infra/docker/.gitattributes", "scripts/release/product-images.json", "zammad-addon.json"]:
             with self.subTest(path=path):
                 self.assertEqual(images.matrix(["app/page.tsx", path], pull_request=True)["include"], rows)
+
+    def test_pull_request_matrix_ignores_publish_workflow(self):
+        paths = [".github/workflows/branch-image.yml"]
+        self.assertEqual(images.matrix(paths, pull_request=True), {"include": []})
+        self.assertEqual(images.matrix(paths + ["app/page.tsx"], pull_request=True),
+                         images.matrix(["app/page.tsx"], pull_request=True))
 
     def test_pull_request_matrix_reruns_all_if_a_dockerfile_cannot_be_mapped(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(images, "ROOT", Path(directory)):
@@ -184,7 +206,7 @@ class ImagePublicationTests(unittest.TestCase):
             (images.ROOT / "Dockerfile.unknown").write_text('COPY ["src", "/src"]')
             self.assertEqual(images.changed_images(rows, ["unmapped/new-file"], pull_request=True), rows)
 
-    def test_matrix_command_keeps_merge_group_selection_and_full_push_matrix(self):
+    def test_matrix_command_selects_images_for_diff_and_full_push(self):
         base = "a" * 40
         script = ROOT / "scripts/release/images-by-digest.py"
         all_images = [row["image"] for row in images.catalog()]
@@ -323,13 +345,14 @@ class ImagePublicationTests(unittest.TestCase):
                    for r in images.catalog()]
         self.assertEqual(len(images.assemble(records)["images"]), 21)
         pending = copy.deepcopy(records)
+        addon_images = {"zammad", "workspace-configurator"}
         for index, row in enumerate(pending):
-            if row["image"] in images.ADDON_IMAGES:
+            if row["image"] in addon_images:
                 pending[index] = {k: row[k] for k in ["image", "commit", "tree"]}
                 pending[index]["status"] = "pending add-on source"
         manifest = images.assemble(pending)
         self.assertEqual(len(manifest["images"]), 19)
-        self.assertEqual(set(manifest["pending"]), images.ADDON_IMAGES)
+        self.assertEqual(set(manifest["pending"]), addon_images)
         self.assertFalse(manifest["publicationComplete"])
         pending[0] = {"image": "portal", "commit": "a" * 40, "tree": "b" * 40, "status": "pending add-on source"}
         with self.assertRaises(ValueError):

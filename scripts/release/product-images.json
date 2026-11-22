@@ -37,7 +37,8 @@
   },
   {
     "image": "workspace-configurator",
-    "dockerfile": "Dockerfile.workspace-configurator"
+    "dockerfile": "Dockerfile.workspace-configurator",
+    "stagesAddon": true
   },
   {
     "image": "foundation-postgres",
@@ -81,6 +82,7 @@
   },
   {
     "image": "zammad",
-    "dockerfile": "infra/docker/Dockerfile.zammad"
+    "dockerfile": "infra/docker/Dockerfile.zammad",
+    "stagesAddon": true
   }
 ]
