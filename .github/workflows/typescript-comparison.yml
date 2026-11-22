@@ -74,5 +74,6 @@ jobs:
             sudo apt-get -o Acquire::Retries=2 update
             sudo apt-get -o Acquire::Retries=2 install -y ruby ruby-minitest
           fi
+          pnpm --dir .zammad-addon install --frozen-lockfile --fetch-retries=2
           # The package script would rebuild these files with TypeScript 5.
           node scripts/test-unit.mjs
