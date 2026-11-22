@@ -205,6 +205,10 @@ restore_definition() {
     check_drive "$TOP_DRIVE"
 }
 
+if [ "$MODE" = commit ]; then
+    # Commit is a separate offline slot after explicit WasalX approval.
+    grep -Fq "$REV held_smoke=PASS fence=PASS release=HELD" "$STATE/install.done"
+fi
 disk_phase="$(disk phase)"
 case "$disk_phase" in
     mode-restore|sealing|committing)
@@ -353,7 +357,7 @@ rollback)
     else
         stop_overlay
         step frozen-proof frozen_check verify
-        restore_top "$ROLLBACK_KEPT"
+        step top-restore restore_top "$ROLLBACK_KEPT"
     fi
     printf 'ROLLBACK_PASS %s overlay_retained=%s\n' "$(date -u +%FT%TZ)" "$ROLLBACK_KEPT"
     stamp https-readiness start
@@ -365,8 +369,6 @@ rollback)
     stamp lease pass
     ;;
 commit)
-    # Run only after explicit WasalX approval of commit, in a separate offline slot.
-    grep -Fq "$REV held_smoke=PASS fence=PASS release=HELD" "$STATE/install.done"
     if test "$(disk phase)" = writable && test "$(value MainPID)" -ne 0; then
         disk committed "$RUN"
         step recovered-top-drive check_drive "$TOP_DRIVE"
@@ -385,8 +387,9 @@ commit)
             step committed-base disk commit "$OVERLAY" "$RUN"
         fi
         test "$(value MainPID)" = 0
-        restore_top "$COMMIT_KEPT"
+        step top-restore restore_top "$COMMIT_KEPT"
     fi
+    stamp lease pass
     printf 'COMMIT_PASS %s overlay_retained=%s\n' "$(date -u +%FT%TZ)" "$COMMIT_KEPT"
     ;;
 esac

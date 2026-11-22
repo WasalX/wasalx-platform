@@ -102,7 +102,7 @@ def absolute_path(value):
 
 def render_host(identity, run_id, commit, receipts, bundle):
     fields = set(HOST_PATHS) | HOST_PATTERNS.keys() | set(HOST_NUMBERS) | {"TOP_CHAIN"}
-    if not isinstance(identity, dict) or set(identity) != fields:
+    if not isinstance(identity, dict) or set(identity) - {"LEASE_RECEIPT_SHA256S"} != fields:
         raise ValueError("invalid host identity fields")
     for key in HOST_PATHS:
         if not absolute_path(identity[key]):
@@ -126,16 +126,22 @@ def render_host(identity, run_id, commit, receipts, bundle):
         raise ValueError("invalid TOP chain")
     if not re.fullmatch(r"[0-9]{8}T[0-9]{6}Z", run_id or "") or not re.fullmatch(r"[0-9a-f]{40}", commit or ""):
         raise ValueError("invalid host run identity")
+    expected = identity.get("LEASE_RECEIPT_SHA256S", [])
+    if not isinstance(expected, list) or not all(isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value)
+                                                for value in expected) or len(expected) != len(receipts):
+        raise ValueError("lease receipts require an ordered list of expected SHA-256 hashes")
+    raw_receipts = [path.read_bytes() for path in receipts]
+    if [hashlib.sha256(raw).hexdigest() for raw in raw_receipts] != expected:
+        raise ValueError("lease receipt SHA-256 mismatch")
     lease_budgets = run_path(str(TEMPLATES / "host-maintenance.py"))["lease_budgets"]
-    leases, source = lease_budgets(path.read_text(encoding="utf-8") for path in receipts)
-    for phase, seconds in leases.items():
-        if type(seconds) is not int or not 0 < seconds < 2**31:
-            raise ValueError(f"invalid lease duration: {phase}")
+    leases = lease_budgets(raw.decode("utf-8") for raw in raw_receipts)
+    for key in ("INSTALL_SECONDS", "DISCARD_SECONDS"):
+        if not 0 < leases[key] < 2**31:
+            raise ValueError(f"invalid lease duration: {key}")
 
     env = {
-        **identity, "TOP_CHAIN": json.dumps(chain), "REV": commit,
-        "INSTALL_SECONDS": leases["install"], "DISCARD_SECONDS": leases["rollback"],
-        "LEASE_BUDGET_SOURCE": source,
+        **identity, **leases, "TOP_CHAIN": json.dumps(chain), "REV": commit,
+        "LEASE_RECEIPT_SHA256S": json.dumps(expected),
     }
     files = {name: (TEMPLATES / name).read_text(encoding="utf-8").encode() for name in HOST_SCRIPTS}
     files["run-id"] = (run_id + "\n").encode()

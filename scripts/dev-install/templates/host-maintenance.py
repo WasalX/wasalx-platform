@@ -14,17 +14,23 @@ import sys
 PHASES = {
     "install": re.compile(r"DEV_SIGNED_INSTALL=PASS release=HELD \S+"),
     "rollback": re.compile(r"DISCARD_OVERLAY=PASS TOP_RESTORED \S+"),
+    "commit": re.compile(r"COMMIT_PASS \S+ overlay_retained=\S+"),
 }
 TIMING = re.compile(r"PHASE_TIMING phase=(install|rollback|audit|commit)"
-                    r" step=(lease|base-freeze|disk-recovery|daily-base-hash) event=(start|pass)"
-                    r" epoch_ns=([0-9]{19}) at=\S+")
+                    r" step=([a-z-]+) event=(start|pass) epoch_ns=([0-9]{19}) at=\S+"
+                    r"(?: bytes=([1-9][0-9]{0,18}))?")
 REVIEWED_RESERVATIONS = {"install": 13_400, "rollback": 11_400}
+# DEV cycle timings (2026-11-22): 2,880 s per ~115 GB hash at ~40 MB/s.
+# Reserve two hashes, one assumed full-disk pass for qemu-img commit, and 11,400 s for restore, plus 25%.
+COMMIT_FALLBACK_S = 25_050
+GB = 10**9
 RUN_ID = re.compile(r"[0-9]{8}T[0-9]{6}Z")
 
 
 def lease_budgets(receipts):
     worst = {}
-    slowest_hash = 0
+    worst_work = {"qemu-commit": 0, "top-restore": 0}
+    hash_ns_per_gb = 0
     for receipt in receipts:
         pending = {}
         completed = {}
@@ -34,40 +40,71 @@ def lease_budgets(receipts):
             if not match:
                 for phase, terminal in PHASES.items():
                     if terminal.fullmatch(line):
-                        duration = completed.pop(phase, 0)
+                        steps = completed.pop(phase, {})
+                        duration = steps.get("lease", 0)
                         if duration <= 0:
                             raise ValueError(f"unbound terminal receipt: {phase}")
                         worst[phase] = max(worst.get(phase, 0), duration)
+                        for step in worst_work:
+                            worst_work[step] = max(worst_work[step], steps.get(step, 0))
                 continue
-            phase, step, event, value = match.groups()
+            phase, step, event, value, size = match.groups()
             saw_timing = True
+            if step not in ("lease", "full-top-hash", *worst_work):
+                continue
+            if (step == "full-top-hash") != (size is not None):
+                raise ValueError(f"invalid phase timing: {phase}/{step}")
             key = (phase, step)
             tick = int(value)
             if event == "start":
-                pending[key] = tick
+                pending[key] = tick, size
                 if step == "lease":
                     # A resumed lease is usable only as its own complete measured sample.
                     completed.pop(phase, None)
                 continue
-            started = pending.pop(key, None)
-            if started is None or tick <= started:
+            started, started_size = pending.pop(key, (tick, None))
+            if tick <= started or size != started_size:
                 raise ValueError(f"invalid phase timing: {phase}/{step}")
-            if step == "lease":
-                completed[phase] = tick - started
+            duration = tick - started
+            if step == "full-top-hash":
+                size = int(size)
+                hash_ns_per_gb = max(hash_ns_per_gb, (duration * GB + size - 1) // size)
             else:
-                slowest_hash = max(slowest_hash, tick - started)
+                completed.setdefault(phase, {})[step] = duration
         if not saw_timing:
             raise ValueError("lease input must be a raw host receipt with timing stamps")
-    if worst.keys() != PHASES.keys() or not slowest_hash:
-        return REVIEWED_RESERVATIONS.copy(), "reviewed-reservations"
-    budgets = {phase: with_margin(ns) for phase, ns in worst.items()}
-    budgets["rollback"] += with_margin(slowest_hash)
-    return budgets, "measured-receipts"
+    measured = REVIEWED_RESERVATIONS.keys() <= worst.keys() and hash_ns_per_gb > 0
+    budgets = {phase: with_margin(worst[phase]) for phase in REVIEWED_RESERVATIONS} if measured else REVIEWED_RESERVATIONS
+    commit_work = sum(worst_work.values()) if hash_ns_per_gb and all(worst_work.values()) else 0
+    return {
+        "INSTALL_SECONDS": budgets["install"], "DISCARD_SECONDS": budgets["rollback"],
+        "INSTALL_DISCARD_BUDGET_SOURCE": "measured-receipts" if measured else "reviewed-reservations",
+        "HASH_NS_PER_GB": hash_ns_per_gb, "COMMIT_WORK_NS": commit_work,
+        "COMMIT_FALLBACK_SECONDS": 0 if commit_work else COMMIT_FALLBACK_S,
+        "LEASE_BUDGET_SOURCE": "measured-receipts" if commit_work else "fallback-commit",
+    }
 
 
 def with_margin(ns):
     # Round p100 * 1.25 up to whole seconds.
     return (ns * 5 + 4_000_000_000 - 1) // 4_000_000_000
+
+
+def lease_runtime(mode, env):
+    fallback = int(env["COMMIT_FALLBACK_SECONDS"])
+    if mode == "commit" and fallback:
+        return fallback
+    measured = env["INSTALL_DISCARD_BUDGET_SOURCE"] == "measured-receipts"
+    hash_ns = 0
+    if measured or mode == "commit":
+        top = Path(env["TOP"]).lstat()
+        if not stat.S_ISREG(top.st_mode) or top.st_nlink != 1 or top.st_size <= 0:
+            raise ValueError("invalid TOP for lease sizing")
+        hash_ns = (int(env["HASH_NS_PER_GB"]) * top.st_size + GB - 1) // GB
+    if mode == "commit":
+        return with_margin(2 * hash_ns + int(env["COMMIT_WORK_NS"]))
+    discard = int(env["DISCARD_SECONDS"]) + with_margin(hash_ns)
+    return int(env["INSTALL_SECONDS"]) + discard if mode == "install" else discard
 
 
 def private_directory(path):
@@ -115,6 +152,8 @@ def main():
     action = parser.add_subparsers(dest="action", required=True)
     budget = action.add_parser("lease-budgets")
     budget.add_argument("receipts", type=Path, nargs="+")
+    runtime = action.add_parser("lease-runtime")
+    runtime.add_argument("mode", choices=("install", "rollback", "commit"))
     archive = action.add_parser("archive-support")
     archive.add_argument("source", type=Path)
     archive.add_argument("archive", type=Path)
@@ -122,9 +161,13 @@ def main():
     archive.add_argument("receipt_name")
     args = parser.parse_args()
     if args.action == "lease-budgets":
-        budgets, source = lease_budgets(path.read_text(encoding="utf-8") for path in args.receipts)
-        print(f"LEASE_BUDGET_SOURCE={source}", file=sys.stderr)
+        budgets = lease_budgets(path.read_text(encoding="utf-8") for path in args.receipts)
         print(json.dumps(budgets, sort_keys=True))
+    elif args.action == "lease-runtime":
+        seconds = lease_runtime(args.mode, os.environ)
+        if not 0 < seconds < 2**31:
+            raise ValueError("invalid lease duration")
+        print(seconds)
     else:
         archive_support(args.source, args.archive, args.run_id, args.receipt_name)
         print(f"SUPPORT_ARCHIVE=PASS run_id={args.run_id}")
@@ -133,5 +176,5 @@ def main():
 if __name__ == "__main__":
     try:
         main()
-    except (OSError, ValueError, subprocess.CalledProcessError) as error:
+    except (OSError, ValueError, KeyError, subprocess.CalledProcessError) as error:
         raise SystemExit(f"HOLD_HOST_MAINTENANCE: {error}") from None

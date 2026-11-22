@@ -33,6 +33,13 @@ function runsFile(text, file, option) {
   });
 }
 
+test("runner ownership recognizes a bare sudo interpreter", () => {
+  const file = "scripts/example.sh";
+  assert(runsFile(`sudo bash ${file}`, file));
+  assert(!runsFile(`sudo apt-get ${file}`, file));
+  assert(!runsFile(`sudo -u x bash ${file}`, file));
+});
+
 function referencesFile(source, file) {
   return source.includes(`"${file}"`) || source.includes(`'${file}'`);
 }
