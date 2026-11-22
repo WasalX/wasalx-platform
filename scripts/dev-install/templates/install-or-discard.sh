@@ -6,6 +6,9 @@ mode="$2"
 test "$(stat -c '%F:%u:%a' -- "$state")" = directory:0:700
 # shellcheck source=/dev/null
 source "$state/host.env"
+# shellcheck source=/dev/null
+source "$state/dev-step-lock.sh"
+hold_dev_step_lock
 p="$STAGING"
 action="$state/overlay-action.sh"
 (cd "$p" && sha256sum --check --strict --quiet DEV-SHA256SUMS)

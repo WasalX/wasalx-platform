@@ -5,6 +5,9 @@ phase="$1"
 state="$2"
 # shellcheck source=/dev/null
 source "$state/host.env"
+# shellcheck source=/dev/null
+source "$state/dev-step-lock.sh"
+hold_dev_step_lock
 P="$STAGING"
 ssh_guest=(ssh -F /dev/null -T -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes
   -o "UserKnownHostsFile=$GUEST_KNOWN_HOSTS" -o ConnectTimeout=12 -i "$GUEST_KEY"

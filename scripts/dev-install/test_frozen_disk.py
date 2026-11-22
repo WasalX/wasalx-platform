@@ -56,6 +56,35 @@ class HostPacketTest(unittest.TestCase):
             *lease_args,
         ], capture_output=True, text=True, timeout=10)
 
+    def test_host_steps_share_the_rendered_lock(self):
+        with tempfile.TemporaryDirectory() as directory:
+            packet = Path(directory) / "packet"
+            result = self.render(packet)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            marker = "/run/ot3/wasalx-dev-step.active"
+            env = (packet / "host.env").read_text()
+            self.assertEqual([line for line in env.splitlines() if marker in line],
+                             [f"export DEV_STEP_LOCK={marker}"])
+            helper = (packet / "dev-step-lock.sh").read_text()
+            self.assertIn('exec 7>>"$DEV_STEP_LOCK"', helper)
+            self.assertIn("flock -n -E 75 7", helper)
+            self.assertNotIn(marker, helper)
+            for name, state, lock, first_action in (
+                ("register.sh", "STATE", "(hold_dev_step_lock)", 'exec 9>"$STATE/install-registration.lock"'),
+                ("install-or-discard.sh", "state", "hold_dev_step_lock", "sha256sum --check"),
+                ("overlay-action.sh", "STATE", "hold_dev_step_lock", "stamp lease start"),
+                ("dev-guest-phase.sh", "state", "hold_dev_step_lock", "stamp ssh-ready start"),
+            ):
+                with self.subTest(step=name):
+                    script = (packet / name).read_text()
+                    acquisition = f'source "${state}/dev-step-lock.sh"\n{lock}\n'
+                    if name == "register.sh":
+                        self.assertIn('source "$STATE/dev-step-lock.sh"\n', script)
+                        self.assertIn('/bin/bash "$STATE/install-or-discard.sh" "$STATE" "$MODE"', script)
+                        acquisition = f"\n{lock}\n"
+                    self.assertLess(script.index(acquisition), script.index(first_action))
+                    self.assertNotIn(marker, script)
+
     def test_renderer_seals_host_files_and_derives_measured_leases(self):
         with tempfile.TemporaryDirectory() as directory:
             parent = Path(directory)
