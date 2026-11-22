@@ -344,15 +344,15 @@ jobs:
 
   images:
     needs: [changes]
-    if: ${{ !cancelled() && needs.changes.outputs.images == 'true' }}
+    if: ${{ !cancelled() && github.event_name == 'merge_group' && needs.changes.outputs.images == 'true' }}
     name: Build ${{ matrix.image }}${{ matrix.pending && ' (pending add-on source)' || '' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
-    strategy:
+    strategy: &image-strategy
       fail-fast: false
       max-parallel: 8
       matrix: ${{ fromJSON(needs.changes.outputs.matrix) }}
-    steps:
+    steps: &image-steps
       - name: Require GitHub-hosted execution
         env:
           HOSTED_KIND: ${{ runner.environment }}
@@ -390,6 +390,34 @@ jobs:
           path: records/${{ matrix.image }}.json
           if-no-files-found: error
 
+  pr-images:
+    # Keep the PR matrix outside the required gate's dependency graph.
+    needs: [changes]
+    if: ${{ !cancelled() && github.event_name == 'pull_request' && needs.changes.outputs.images == 'true' }}
+    name: Build ${{ matrix.image }}${{ matrix.pending && ' (pending add-on source)' || '' }} (advisory)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy: *image-strategy
+    steps: *image-steps
+
+  pr-image-results:
+    name: PR image results (advisory)
+    if: always() && github.event_name == 'pull_request'
+    needs: pr-images
+    runs-on: ubuntu-slim
+    timeout-minutes: 2
+    permissions: {}
+    steps:
+      - name: Report PR image builds
+        env:
+          IMAGES: ${{ needs.pr-images.result }}
+        run: |
+          echo "PR image builds (advisory): $IMAGES" >> "$GITHUB_STEP_SUMMARY"
+          case "$IMAGES" in
+            success|skipped) ;;
+            *) echo "::warning::Advisory PR image builds: $IMAGES"; exit 1 ;;
+          esac
+
   publish:
     needs: lint-on-push
     if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'WasalX/wasalx-platform' }}
@@ -415,7 +443,6 @@ jobs:
           CHANGES: ${{ needs.changes.result }}
           CHECKS: ${{ needs.checks.result }}
           REVIEW: ${{ needs.dependency-review.result }}
-          IMAGES_NEEDED: ${{ needs.changes.outputs.images }}
           IMAGES: ${{ needs.images.result }}
           INTEGRATION: ${{ needs.integration.result }}
           INFRA_NEEDED: ${{ needs.changes.outputs.infra }}
@@ -424,9 +451,11 @@ jobs:
           DEV_INSTALL: ${{ needs.dev-install-dryrun.result }}
         run: |
           test "$CHANGES" = success && test "$CHECKS" = success || exit 1
-          case "$EVENT:$REVIEW:$IMAGES_NEEDED:$IMAGES:$INTEGRATION" in
-            pull_request:success:false:skipped:skipped|pull_request:success:true:success:skipped) ;;
-            merge_group:skipped:false:skipped:success|merge_group:skipped:true:success:success) ;;
+          case "$EVENT:$REVIEW:$IMAGES:$INTEGRATION" in
+            pull_request:success:*:skipped)
+              echo 'See PR image results (advisory) for image build outcomes.' >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            merge_group:skipped:success:success) ;;
             *) exit 1 ;;
           esac
           case "$EVENT:$DEV_INSTALL_NEEDED:$DEV_INSTALL" in
