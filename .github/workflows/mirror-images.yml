@@ -27,6 +27,12 @@ jobs:
       - name: Mirror and verify the full installer MinIO digests
         shell: bash
         run: |
+          manifest_digest() {
+            local checksum
+            checksum=$(docker buildx imagetools inspect --raw "$1" | sha256sum) || return
+            printf 'sha256:%s\n' "${checksum%% *}"
+          }
+
           for image in minio mc; do
             digest=$(sed -nE "s|^[[:space:]]+image: quay\.io/minio/$image(:[^@]+)?@(sha256:[0-9a-f]{64})[[:space:]]*$|\2|p" compose.full.yaml)
             if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
@@ -44,8 +50,8 @@ jobs:
               docker buildx imagetools create --prefer-index=false --tag "$tag" "$source"
             fi
 
-            source_digest=$(docker buildx imagetools inspect --format '{{.Manifest.Digest}}' "$source")
-            mirrored_digest=$(docker buildx imagetools inspect --format '{{.Manifest.Digest}}' "$tag")
+            source_digest=$(manifest_digest "$source")
+            mirrored_digest=$(manifest_digest "$tag")
             if [[ "$source_digest" != "$digest" || "$mirrored_digest" != "$digest" ]]; then
               echo "::error::Digest mismatch for $repository (expected $digest, source $source_digest, mirror $mirrored_digest)"
               exit 1

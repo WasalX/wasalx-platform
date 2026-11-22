@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, posix } from "node:path";
@@ -185,7 +186,7 @@ test("nightly MinIO mirrors retain the full installer content digests", async ()
   }
 });
 
-test("MinIO mirror is dispatch-only on main and verifies the copied digest", async () => {
+test("MinIO mirror is dispatch-only on main and verifies the raw manifest digest", async t => {
   const { on, permissions, jobs } = parse(await read(".github/workflows/mirror-images.yml"));
   const { mirror } = jobs;
   assert.deepEqual(on, { workflow_dispatch: null });
@@ -202,8 +203,25 @@ test("MinIO mirror is dispatch-only on main and verifies the copied digest", asy
 
   const copy = mirror.steps.find(step => step.run);
   assert.equal(copy.shell, "bash");
+  const index = JSON.stringify({ schemaVersion: 2, mediaType: "application/vnd.oci.image.index.v1+json", manifests: [
+    { digest: `sha256:${"a".repeat(64)}`, platform: { architecture: "amd64", os: "linux" } },
+    { digest: `sha256:${"b".repeat(64)}`, platform: { architecture: "arm64", os: "linux" } },
+  ] }, null, 2);
+  const manifest = '{"schemaVersion":2, "mediaType":"application/vnd.oci.image.manifest.v1+json", "layers":[]}';
+  const digest = raw => `sha256:${createHash("sha256").update(raw).digest("hex")}`;
+  const directory = await mkdtemp(join(tmpdir(), "wasalx-minio-mirror-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  await writeFile(join(directory, "compose.full.yaml"), `services:
+  minio:
+    image: quay.io/minio/minio:release@${digest(index)}
+  minio-bootstrap:
+    image: quay.io/minio/mc:release@${digest(manifest)}
+`);
+
   const bash = process.platform === "win32" ? "C:/Program Files/Git/bin/bash.exe" : "bash";
-  for (const [scenario, expectedStatus] of [["quay", 0], ["fallback", 0], ["source-mismatch", 1], ["mirror-mismatch", 1]]) {
+  for (const [scenario, expectedStatus] of [
+    ["quay", 0], ["fallback", 0], ["source-mismatch", 1], ["mirror-mismatch", 1], ["inspect-failure", 7],
+  ]) {
     const result = spawnSync(bash, ["--noprofile", "--norc", "-e", "-o", "pipefail", "-c", `docker() {
   [[ "$1 $2" == 'buildx imagetools' ]] || exit 98
   local reference="\${!#}"
@@ -213,24 +231,31 @@ test("MinIO mirror is dispatch-only on main and verifies the copied digest", asy
       echo "Copy $reference"
       [[ "$SCENARIO" != fallback || "$reference" == ghcr.io/netvark/* ]]
       ;;
-    inspect:ghcr.io/wasalx/*:sha256-*)
-      [[ "$4 $5" == '--format {{.Manifest.Digest}}' ]] || exit 98
-      if [[ "$SCENARIO" == mirror-mismatch ]]; then echo wrong; else echo "sha256:\${reference##*sha256-}"; fi
-      ;;
-    inspect:*@sha256:*)
-      [[ "$4 $5" == '--format {{.Manifest.Digest}}' ]] || exit 98
-      if [[ "$SCENARIO" == source-mismatch ]]; then echo wrong; else echo "\${reference##*@}"; fi
+    inspect:ghcr.io/wasalx/*:sha256-*|inspect:*@sha256:*)
+      [[ "$# $4" == '5 --raw' ]] || exit 98
+      case "$reference:$SCENARIO" in
+        ghcr.io/wasalx/*:mirror-mismatch|*@sha256:*:source-mismatch) printf '%s' wrong; return ;;
+      esac
+      case "$reference" in
+        */minio[@:]*) printf '%s' "$RAW_INDEX" ;;
+        */mc[@:]*) printf '%s' "$RAW_MANIFEST" ;;
+        *) exit 98 ;;
+      esac
+      if [[ "$SCENARIO" == inspect-failure ]]; then return 7; fi
       ;;
     *) exit 98 ;;
   esac
 }
-${copy.run}`], { cwd: repository, env: { ...process.env, SCENARIO: scenario }, encoding: "utf8", timeout: 10_000, windowsHide: true });
+${copy.run}`], {
+      cwd: directory, env: { ...process.env, SCENARIO: scenario, RAW_INDEX: index, RAW_MANIFEST: manifest },
+      encoding: "utf8", timeout: 10_000, windowsHide: true,
+    });
     assert.equal(result.status, expectedStatus, result.error?.message ?? result.stdout);
     assert.equal(result.stdout.includes("Copy ghcr.io/netvark/"), scenario === "fallback");
     if (expectedStatus === 0) {
-      assert.match(result.stdout, /Verified ghcr\.io\/wasalx\/minio@sha256:[0-9a-f]{64}/u);
-      assert.match(result.stdout, /Verified ghcr\.io\/wasalx\/mc@sha256:[0-9a-f]{64}/u);
-    } else {
+      assert(result.stdout.includes(`Verified ghcr.io/wasalx/minio@${digest(index)}`));
+      assert(result.stdout.includes(`Verified ghcr.io/wasalx/mc@${digest(manifest)}`));
+    } else if (expectedStatus === 1) {
       assert.match(result.stdout, /::error::Digest mismatch/u);
     }
   }
