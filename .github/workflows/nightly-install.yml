@@ -18,6 +18,37 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  frozen-disk-qemu:
+    if: github.repository == 'WasalX/wasalx-platform' && (github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Select changed frozen-disk inputs
+        id: changes
+        if: github.event_name == 'pull_request'
+        run: |
+          needed=true
+          if git diff --quiet --no-ext-diff --no-renames HEAD^1 HEAD -- scripts/dev-install/ .github/workflows/nightly-install.yml; then
+            needed=false
+          fi
+          echo "needed=$needed" >> "$GITHUB_OUTPUT"
+      - name: Test disk proof and lease inputs
+        if: steps.changes.outputs.needed != 'false'
+        run: python3 -I -B scripts/dev-install/test_frozen_disk.py
+      - name: Rehearse immutable TOP and discard with real QEMU
+        if: steps.changes.outputs.needed != 'false'
+        run: |
+          sudo apt-get -qq update
+          sudo apt-get -qq install --no-install-recommends qemu-system-x86 qemu-utils seabios
+          sudo bash scripts/dev-install/test_frozen_disk_qemu.sh
+
   nightly-install:
     if: >-
       github.repository == 'WasalX/wasalx-platform' &&

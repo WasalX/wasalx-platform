@@ -21,7 +21,9 @@ const words = text => Array.from(text.matchAll(/"([^"]*)"|'([^']*)'|([^\s"'()]+)
 
 function runsFile(text, file, option) {
   return commands(text).some(command => {
-    const [exe, ...args] = words(command);
+    let w = words(command);
+    if (w[0] === "sudo") w = w.slice(1);
+    const [exe, ...args] = w;
     if (!["node", "python", "python3", "ruby", "bash"].includes(exe) || (option && !args.includes(option))) return false;
     const paths = args.map(arg => arg.replace(/^\.\//u, ""));
     if (args.includes("unittest") && args.includes("discover")) {
