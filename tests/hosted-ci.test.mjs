@@ -156,12 +156,18 @@ test("tracked tests belong to a named CI runner or the test allowlist", async ()
 
 test("nightly install is report-only, read-only and fails open on PR diff errors", async () => {
   const path = ".github/workflows/nightly-install.yml";
-  const { on, permissions, jobs } = parse(await read(path));
+  const { on, permissions, concurrency, jobs } = parse(await read(path));
   const job = jobs["nightly-install"];
   assert.deepEqual(on, {
     schedule: [{ cron: "30 3 * * *" }],
     workflow_dispatch: null,
     pull_request: { branches: ["main"], types: ["opened", "synchronize", "reopened"] },
+    push: { tags: ["v*-rc.*"] },
+  });
+  assert.match(job.if, /\(github\.event_name == 'push' && github\.ref_type == 'tag'\)/u);
+  assert.deepEqual(concurrency, {
+    group: "nightly-${{ github.event.pull_request.number || github.run_id }}",
+    "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
   });
   assert.deepEqual(permissions, { contents: "read" });
   assert.deepEqual(job.permissions, { contents: "read", actions: "read" });
@@ -170,7 +176,9 @@ test("nightly install is report-only, read-only and fails open on PR diff errors
   assert(actions.every(step => /@[0-9a-f]{40}$/u.test(step.uses)));
   assert.equal(actions.find(step => step.uses.startsWith("actions/checkout@")).with["persist-credentials"], false);
   assert(!JSON.stringify(job).includes("secrets."));
-  const changes = job.steps.find(step => step.id === "changes").run;
+  const changeSelection = job.steps.find(step => step.id === "changes");
+  assert.equal(changeSelection.if, "github.event_name == 'pull_request'");
+  const changes = changeSelection.run;
   assert.match(changes, /needed=true\nif git diff --quiet[^]*; then\n {2}needed=false\nfi/u);
   for (const input of ["scripts/release/installer-*", "scripts/dev-install/**", "compose*.yaml", path, "release/installer-images.json",
     "scripts/release/compose-stage-lock.mjs", "scripts/release/compose-stage-config.json", "scripts/release/simulation-rails-json.mjs",
@@ -195,7 +203,7 @@ test("nightly MinIO mirrors retain the full installer content digests", async ()
   }
 });
 
-test("nightly selects the newest complete publication within five first-parent commits", async t => {
+test("nightly selects the newest complete publication within five first-parent commits and requires an exact publication on tags", async t => {
   const directory = await mkdtemp(join(tmpdir(), "nightly-publication-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const options = { cwd: directory, encoding: "utf8", windowsHide: true };
@@ -211,10 +219,19 @@ test("nightly selects the newest complete publication within five first-parent c
   const side = git("commit-tree", tree, "-p", parent, "-m", "side branch");
   const base = git("commit-tree", tree, "-p", parent, "-p", side, "-m", "base merge");
   const commits = git("rev-list", "--first-parent", base).split(/\r?\n/u);
+  const tag = "v0.0.0-rc.1";
+  git("tag", "-a", tag, base, "-m", "fixture tag");
+  git("checkout", "--quiet", "--detach", base);
+  git("remote", "add", "origin", ".");
+  const { jobs } = parse(await read(".github/workflows/nightly-install.yml"));
+  const publication = jobs["nightly-install"].steps.find(step => step.id === "publication");
   await mkdir(join(directory, "scripts", "release"), { recursive: true });
   await writeFile(join(directory, "scripts", "release", "product-images.json"), '[{"image":"zammad"}]');
-  await writeFile(join(directory, "image-manifest.sh"), await read("scripts/release/image-manifest.sh"));
-  const fixture = String.raw`
+  await writeFile(join(directory, "scripts", "release", "image-manifest.sh"), await read("scripts/release/image-manifest.sh"));
+  const ghFixture = String.raw`
+install() {
+  [[ "$1 $2 $3" == '-d -m 0700' ]] && mkdir -p "$4"
+}
 gh() {
   case "$1 $2" in
     "api repos/$GITHUB_REPOSITORY/compare/$BASE...main") echo ahead ;;
@@ -237,14 +254,13 @@ gh() {
       local commit=$READY images='{"zammad":{}}' pending='{}' complete=true
       [[ "$3" != 102 ]] || { commit=$INCOMPLETE; images='{}'; pending='{"zammad":{}}'; complete=false; }
       [[ "$INVALID" != true ]] || commit=$BASE
+      while [[ "$1" != --dir ]]; do shift; done
       printf '{"schemaVersion":1,"repository":"%s","platform":"linux/amd64","commit":"%s","tree":"%s","images":%s,"pending":%s,"publicationComplete":%s}\n' \
-        "$GITHUB_REPOSITORY" "$commit" "$(git rev-parse "$commit^{tree}")" "$images" "$pending" "$complete" > images-manifest.json
+        "$GITHUB_REPOSITORY" "$commit" "$(git rev-parse "$commit^{tree}")" "$images" "$pending" "$complete" > "$2/images-manifest.json"
       ;;
     *) return 2 ;;
   esac
 }
-source ./image-manifest.sh
-"$RESOLVER" "$BASE" .
 `;
   const cases = [
     { ready: base, selected: base, lookups: commits.slice(0, 1), reason: "requested base has a complete publication" },
@@ -254,24 +270,31 @@ source ./image-manifest.sh
     { ready: side, lookups: commits.slice(0, 5), reason: "No complete green main publication" },
     { ready: commits[1], lookupError: base, lookups: commits.slice(0, 1), status: 17 },
     { ready: commits[1], invalid: true, lookups: commits.slice(0, 2), status: 5, reason: "Invalid nightly publication manifest" },
+    { ready: base, exact: true, selected: base, lookups: commits.slice(0, 1) },
     { ready: commits[1], exact: true, lookups: commits.slice(0, 1), reason: "No green main CI push run for the commit" },
   ];
   const bash = process.platform === "win32" ? "C:/Program Files/Git/bin/bash.exe" : "bash";
   for (const { ready, selected, incomplete = "", expired = "", noJob = "", lookupError = "", invalid = false,
     exact = false, lookups, status = selected ? 0 : 1, reason } of cases) {
     await writeFile(join(directory, "lookups"), "");
-    const result = spawnSync(bash, ["--noprofile", "--norc", "-euo", "pipefail", "-c", fixture], {
+    await writeFile(join(directory, "publication-output"), "");
+    const result = spawnSync(bash, ["--noprofile", "--norc", "-euo", "pipefail", "-c", ghFixture + publication.run], {
       ...options, timeout: 10_000, env: {
         ...process.env, GITHUB_REPOSITORY: "fixture/nightly", BASE: base, READY: ready, INCOMPLETE: incomplete,
         EXPIRED: expired, NO_JOB: noJob, LOOKUP_ERROR: lookupError, INVALID: String(invalid),
-        RESOLVER: exact ? "download_main_image_manifest" : "download_nightly_image_manifest",
+        GITHUB_EVENT_NAME: exact ? "push" : "schedule", GITHUB_REF_TYPE: exact ? "tag" : "branch",
+        GITHUB_REF: exact ? `refs/tags/${tag}` : "refs/heads/main",
+        GITHUB_SHA: base, GITHUB_OUTPUT: "publication-output", RUNNER_TEMP: ".",
       },
     });
     assert.ifError(result.error);
     assert.equal(result.status, status, result.stdout + result.stderr);
-    if (!exact) assert.equal(result.stdout.trim(), selected ?? "");
+    assert.equal((await readFile(join(directory, "publication-output"), "utf8")).trim(), selected ? `commit=${selected}` : "");
     if (reason) assert.ok((result.stdout + result.stderr).includes(reason), result.stderr);
-    if (selected) assert.equal(JSON.parse(await readFile(join(directory, "images-manifest.json"), "utf8")).commit, selected);
+    if (selected) {
+      const manifest = join(directory, "wasalx-nightly", "images-manifest.json");
+      assert.equal(JSON.parse(await readFile(manifest, "utf8")).commit, selected);
+    }
     assert.deepEqual((await readFile(join(directory, "lookups"), "utf8")).trim().split(/\r?\n/u), lookups);
   }
 });
