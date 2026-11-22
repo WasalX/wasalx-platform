@@ -78,10 +78,19 @@ jobs:
             scripts/release/compose-stage-lock.mjs scripts/release/compose-stage-config.json scripts/release/simulation-rails-json.mjs \
             scripts/release/preflight-full-env.mjs scripts/release/generate-simulation-env.py \
             scripts/release/images-by-digest.py scripts/release/product-images.json scripts/release/image-manifest.sh \
+            tests/pull-verify.test.mjs \
             .github/workflows/nightly-install.yml; then
             needed=false
           fi
           echo "needed=$needed" >> "$GITHUB_OUTPUT"
+          if ! git diff --quiet --no-ext-diff --no-renames HEAD^1 HEAD -- \
+            scripts/dev-install/templates/pull-agent.py scripts/dev-install/templates/wasalx-dev-pull.service \
+            scripts/dev-install/templates/wasalx-dev-pull.timer scripts/dev-install/render.py \
+            scripts/dev-install/test_pull_agent.py scripts/dev-install/pull-verify.mjs \
+            tests/pull-verify.test.mjs scripts/release/installer-hosted-images.mjs \
+            .github/workflows/nightly-install.yml; then
+            echo 'pull=true' >> "$GITHUB_OUTPUT"
+          fi
       - name: Resolve and download a complete main publication manifest
         id: publication
         if: steps.changes.outputs.needed != 'false'
@@ -107,6 +116,11 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22.23.4
+      - name: Test the DEV pull report agent
+        if: steps.changes.outputs.needed != 'false'
+        run: |
+          python3 -I -B scripts/dev-install/test_pull_agent.py
+          node --test tests/pull-verify.test.mjs
       - if: steps.changes.outputs.needed != 'false'
         uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
         with:
@@ -121,6 +135,20 @@ jobs:
           root="$TUF_ROOT/tuf-repo-cdn.sigstore.dev/targets/trusted_root.json"
           test -f "$root"
           echo "root=$root" >> "$GITHUB_OUTPUT"
+      - name: Verify the PR pull tooling against public GitHub, GHCR and Sigstore
+        if: github.event_name == 'pull_request' && steps.changes.outputs.pull == 'true'
+        timeout-minutes: 10
+        env:
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          TRUSTED_ROOT: ${{ steps.trust.outputs.root }}
+        run: |
+          work="$RUNNER_TEMP/wasalx-nightly"
+          test "$(git rev-parse HEAD^2)" = "$PR_HEAD"
+          git worktree add --detach "$work/pr-head" "$PR_HEAD"
+          cosign=$(command -v cosign)
+          cd "$work/pr-head"
+          python3 -I -B scripts/dev-install/test_pull_agent.py --live --candidate "$PR_HEAD" \
+            --manifest "$work/images-manifest.json" --cosign "$cosign" --trust "$TRUSTED_ROOT"
       - name: Rehearse full installation and controlled recreation
         if: steps.changes.outputs.needed != 'false'
         timeout-minutes: 47
@@ -128,6 +156,14 @@ jobs:
           MAIN_SHA: ${{ steps.publication.outputs.commit }}
           TRUSTED_ROOT: ${{ steps.trust.outputs.root }}
         run: bash scripts/release/installer-nightly.sh
+      - name: Confirm census PASS
+        if: steps.changes.outputs.needed != 'false' && steps.publication.outputs.commit == github.sha
+        env:
+          COMMIT: ${{ github.sha }}
+        run: |
+          log="$RUNNER_TEMP/wasalx-nightly/diagnostics/phases.log"
+          grep -Fxq "installer=$COMMIT tree=$(git rev-parse 'HEAD^{tree}') images=$COMMIT" "$log"
+          grep -Fxq 'probe-scan services=37 rerendered_hashes=37 census=PASS' "$log"
       - name: Tear down the disposable stack and volumes
         if: always() && steps.changes.outputs.needed != 'false'
         timeout-minutes: 4

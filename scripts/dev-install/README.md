@@ -76,3 +76,49 @@ persists across runs, outside the support directories.
 
 The real-QEMU nightly uses a scratch ext4 filesystem and a boot-sector guard stub.
 Use the signed host qualification to measure the live phase budgets.
+
+## DEV pull report agent
+
+Render the report packet from the reviewed checkout with a private pull identity.
+
+```sh
+python3 -I -B scripts/dev-install/render.py --pull-identity "$PULL_IDENTITY" --output "$PACKET"
+```
+
+The pull identity supplies these fields.
+
+- `mode` set to `report`.
+- `install_dir` for the installed packet, `receipt_key` for the Servers-generated Ed25519 key, and
+  `cosign`, `trusted_root`, and `trusted_root_sha256` for the pinned Linux amd64 verification tools.
+
+Servers verifies `SHA256SUMS` before installing the root-owned packet and units. The
+`wasalx-dev-pull` account needs read access to the installed tools and trust root.
+Keep `pull-config.json` and the receipt key root-only. Systemd loads them as private
+credentials. Keep the account out of the Docker group. Discovery and verification
+use anonymous public endpoints and a pinned Sigstore trust root.
+
+The timer checks at ten-minute calendar boundaries. D1 owns image blob downloads,
+staging windows, disk admission and the DEV-step marker. Servers provisions
+`/run/ot3` for D1 via `tmpfiles.d`. The report agent does not acquire the marker.
+
+The agent publishes one numbered `<20-digit-seq>.json` file per verified tag in
+`handover-outbox` under the unit's `StateDirectory`. The
+`ot3.wasalx.d1-handover/v1` receipt identifies the tag, exact commit and tree, release
+asset digest, and successful nightly run and attempt. The sorted image references
+contain the 21 verified product digests and the digest-pinned third-party Compose
+references at that commit. Each row records its origin and its manifest media type
+when available from an anonymous registry HEAD.
+
+The first receipt starts at sequence 1 with a null previous hash. Each subsequent
+receipt hashes the entire prior canonical JSON object, including its signature.
+The embedded signature is base64 of the armored Ed25519 SSHSIG over canonical JSON
+without the signature field. Canonical JSON uses sorted keys, compact separators,
+ASCII escaping, UTF-8 encoding, and no trailing newline. D1 verifies with namespace
+`wasalx-dev-receipt` and principal `wasalx-dev-pull` using its pinned allowed-signers
+file. Keep the receipt files in sequence.
+
+The nightly PR leg binds the exact PR head and its tree through the anonymous GitHub
+API and independently verifies real GHCR/Sigstore bytes for the recorded main
+publication. The release path requires the RC asset and a successful census on the
+latest nightly push run for that tag and commit. The census step checks the installer
+commit, tree and published image commit against the rehearsal log.
