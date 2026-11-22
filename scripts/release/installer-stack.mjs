@@ -277,6 +277,12 @@ export function activeServiceNames(compose, profiles = []) {
     .sort();
 }
 
+export function oneShotServiceNames(model, active) {
+  return [...new Set(active.flatMap((name) => Object.entries(model.services[name].depends_on ?? {})
+    .filter(([, dependency]) => dependency?.condition === "service_completed_successfully")
+    .map(([dependency]) => dependency)))].filter((name) => active.includes(name)).sort();
+}
+
 export function verifyCandidateScope(catalog, candidateIds, requiredIds, fullCatalog = false) {
   const catalogIds = new Set(catalog.images.map(({ id }) => id));
   assert.equal(catalogIds.size, catalog.images.length, "release catalog image ids must be unique");
@@ -305,10 +311,7 @@ export function projectStack({ compose, containers, imageInspections, catalog, c
   assert.equal(new Set(activeServices).size, activeServices.length, "active Compose services must be unique");
   assert.ok(activeServices.every((name) => services[name]), "active Compose service is missing from the rendered model");
   assert.deepEqual(containers.map((container) => container.service).sort(), activeServices, "Compose service inventory is incomplete or duplicated");
-  const oneShotServices = [...new Set(activeServices.flatMap((name) => Object.entries(services[name].depends_on ?? {})
-    .filter(([, dependency]) => dependency?.condition === "service_completed_successfully")
-    .map(([dependency]) => dependency)))]
-    .filter((name) => activeServices.includes(name)).sort();
+  const oneShotServices = oneShotServiceNames(compose, activeServices);
   if (devPreimages) assertDevInstallPreimages(devPreimages, {
     candidateSha, candidateTree, project: devPreimages.project, machineIdSha256: devPreimages.machineIdSha256, activeServices, model: compose,
   });

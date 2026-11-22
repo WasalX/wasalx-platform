@@ -188,12 +188,12 @@ export async function composePreimage(row, context, image, version, rows) {
   const rendered = JSON.parse(await context.command("docker", [...arguments_, "config", "--format", "json"], environment));
   assert.ok(rendered.services?.[service], "original rendered service unavailable");
   const { hash, references } = await composeServiceHash(context, { arguments_, rendered, environment }, service, rows);
+  for (const input of [...inputs, ...environments, ...serviceEnvironmentFiles]) {
+    assert.equal(await fileDigest(input.path), input.sha256, "Compose input changed during capture");
+  }
   if (hash !== labels["com.docker.compose.config-hash"]) {
     const families = [...new Set(Object.keys(references).map((field) => field.split(".")[0]))];
     refuse([`${service}.compose.config-hash`, ...families.map((field) => `${service}.${field}`)], "actual Compose chain changed");
-  }
-  for (const input of [...inputs, ...environments, ...serviceEnvironmentFiles]) {
-    assert.equal(await fileDigest(input.path), input.sha256, "Compose input changed during capture");
   }
   return { workingDirectory, files: inputs, environmentFiles: environments, arguments_, rendered, environment,
     version, serviceReferences: references, serviceEnvironmentFiles };
@@ -213,10 +213,16 @@ export async function preserveReplacement(context) {
       assert.ok(row.HostConfig && Array.isArray(row.Mounts), "complete private container preimage unavailable");
       const images = JSON.parse(await context.command("docker", ["image", "inspect", row.Image], context.environment));
       assert.equal(images[0]?.Id, row.Image, "old image preimage unavailable");
-      containers.push({ id: row.Id, image: row.Image, service: row.Config.Labels["com.docker.compose.service"],
+      const service = row.Config.Labels["com.docker.compose.service"];
+      const reportDiff = context.imageSource && Object.hasOwn(context.model.services, service);
+      const started = performance.now();
+      if (reportDiff) process.stdout.write(`native docker diff service=${service} started\n`);
+      const rootfsChanges = String(await context.command("docker", ["diff", row.Id], context.environment)).trim();
+      if (reportDiff) process.stdout.write(`native docker diff service=${service} elapsed=${Math.round(performance.now() - started)}ms\n`);
+      containers.push({ id: row.Id, image: row.Image, service,
         running: row.State.Running, exitCode: row.State.ExitCode, inspect: row, imageInspect: images[0],
         rollbackTag: rollbackTag(context.project, row.Id),
-        rootfsChanges: String(await context.command("docker", ["diff", row.Id], context.environment)).trim(),
+        rootfsChanges,
         networks: await Promise.all(Object.keys(row.NetworkSettings?.Networks ?? {}).map(async (name) => ({ name,
           inspect: JSON.parse(await context.command("docker", ["network", "inspect", name], context.environment))[0] }))),
         compose: await composePreimage(row, context, images[0], version, rows) });

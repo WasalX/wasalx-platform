@@ -22,3 +22,9 @@ before invoking its scripts with `python3 -I -B`.
 
 The signed runbook owns approval, transport, and engine actions. These scripts provide the
 checkout and preflight steps for that runbook.
+
+The read-only running-stack scan is `node scripts/dev-install/probe.mjs --project-name "$PROJECT" --env-file "$FULL_ENV"`.
+Run it as root from the candidate checkout, with the deployed Compose inputs in a separate tree.
+Use `--repository` to select the candidate checkout and repeat `--compose-file` to add overlays.
+`--held-services` overrides the DEV hold set with a comma-separated list. Nightly passes an empty list.
+Keep the JSON report private. The nightly logs only the counts and census result or a sanitized failure.
