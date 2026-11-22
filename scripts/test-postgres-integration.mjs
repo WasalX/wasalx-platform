@@ -2987,7 +2987,9 @@ try{
     foreignTenantId:"20000000-0000-4000-8000-000000000002",botAssignmentId:botAssignment.assignment_id,botFlowVersionId:botV1.id,
     userId:botPrincipal.userId,adminUrl,existingConversationId:botConversation.id,
   }));await timeScenario("teamNumberValidation",()=>verifyTeamNumberValidation(quoteAdmin,botPrincipal.tenantId));await timeScenario("participantIdentityProjection",()=>verifyParticipantIdentityProjection(quoteAdmin,botPrincipal.tenantId));await timeScenario("groupParticipantDedup",()=>verifyGroupParticipantDedup(quoteAdmin,botPrincipal.tenantId));await timeScenario("groupQuoteProjection",()=>verifyGroupQuoteProjection(quoteAdmin,botPrincipal.tenantId));await timeScenario("ticketEventTargets",()=>verifyTicketEventTargets(quoteAdmin,botPrincipal.tenantId,{userId:botPrincipal.userId,foreignTenantId:"20000000-0000-4000-8000-000000000002",botAssignmentId:botAssignment.assignment_id,botFlowVersionId:botV1.id}));const designationStartedAt=new Date().toISOString();
-  await timeScenario("groupWorkspaceReceipts",()=>verifyGroupWorkspaceReceipts(quoteAdmin,appUrl));
+  await timeScenario("groupWorkspaceReceipts", async () => {
+    await verifyGroupWorkspaceReceipts(quoteAdmin,appUrl);
+  });
   const designationProof=await timeScenario("groupDesignation",()=>verifyGroupDesignation(quoteAdmin,appUrl));
   const designationFinishedAt=new Date().toISOString();
   const migrationRows=(await quoteAdmin.query('SELECT name,checksum_sha256 FROM wasalx_schema_migrations ORDER BY name')).rows;
