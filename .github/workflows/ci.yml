@@ -346,8 +346,7 @@ jobs:
         run: bash scripts/validate-infra.sh --terraform-test-only
 
   images:
-    # Stage checks and builds within the eight-slot budget for this run.
-    needs: [changes, checks]
+    needs: [changes]
     if: ${{ !cancelled() && needs.changes.outputs.images == 'true' }}
     name: Build ${{ matrix.image }}${{ matrix.pending && ' (pending add-on source)' || '' }}
     runs-on: ubuntu-24.04
