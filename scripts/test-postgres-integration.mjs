@@ -190,6 +190,7 @@ const tenantForeignKeys=[
 ];
 let metaIdentityRoutingHistory;
 const metaLifecycleFailures=[];
+const migrationStartedAt=performance.now();
 const admin=new Client({connectionString:adminUrl});await admin.connect();
 try{
   await admin.query(`DO $$
@@ -246,7 +247,7 @@ try{
     GRANT wasalx_metering_ingest_client TO wasalx_metering_ingest_runtime;
     GRANT wasalx_platform_operations_client TO wasalx_platform_operations_runtime;
   END $$;`);
-  await proveFreshMigrationResume();
+  await timeScenario("freshMigrationResume",proveFreshMigrationResume);
   const appliedBeforeOwnership=migrationFiles.filter(file=>file<"0112_secret_cleanup_reference_ownership.sql");
   for(const file of appliedBeforeOwnership){
     const sql=await readFile(new URL(`../services/control-api/migrations/${file}`,import.meta.url),"utf8");await executeMigrationSql(admin,sql);
@@ -461,7 +462,7 @@ try{
       {relation:'meta_connection_account_bindings',validated:true,source_columns:['tenant_id','connection_id','provider_session_id'],target_columns:['tenant_id','connection_id','id']},
       {relation:'meta_template_safety_markers',validated:true,source_columns:['tenant_id','source_connection_id','source_session_id'],target_columns:['tenant_id','connection_id','id']},
     ],'Session references must preserve the exact tenant and connection pair');
-    try{console.log(JSON.stringify({metaRoutingLegacyUpgrade:await verifyMetaRoutingLegacyUpgrade(admin,routingUpgrade,appUrl)}))}catch(error){
+    try{console.log(JSON.stringify({metaRoutingLegacyUpgrade:await timeScenario("metaRoutingLegacyUpgrade",()=>verifyMetaRoutingLegacyUpgrade(admin,routingUpgrade,appUrl))}))}catch(error){
       // Collect isolated deterministic failures only after rollback, client close and public readback.
       if(error?.metaRoutingLegacyUpgradeCleanupConfirmed!==true
         || !(error.code==='ERR_ASSERTION'||/^(22|23|42|44|P0)[0-9A-Z]{3}$/u.test(error.code??'')||error.code==='55000'))throw error;
@@ -676,8 +677,12 @@ try{
     assert.equal((await admin.query("SELECT count(*)::integer AS count FROM zammad_service_assertion_jtis WHERE tenant_id=$1",[disposableTenant])).rows[0].count,0);
     await admin.query("ROLLBACK");
   }catch(error){await admin.query("ROLLBACK");throw error}
-}finally{await admin.end()}
+}finally{
+  await admin.end();
+  printScenarioTiming("migrations",migrationStartedAt);
+}
 
+const sharedCoreStartedAt=performance.now();
 const app=new Client({connectionString:appUrl});await app.connect();
 const cleanup=new Client({connectionString:cleanupUrl.toString()});await cleanup.connect();
 const provisioning=new Client({connectionString:provisioningUrl.toString()});await provisioning.connect();
@@ -1442,7 +1447,7 @@ try{
     (SELECT new_value->>'changed' FROM audit_events WHERE action='client_routing.source_synced' AND request_id=$1::text) AS changed,
     (SELECT last_success_at IS NOT NULL FROM client_routing_source_state WHERE source_id='crm' AND state='ACTIVE') AS live`,[noOpJob.job_id]));
   assert.deepEqual(noOpProof.rows,[{routing_version_count:2,snapshot_revision:"1",job_result:`SUCCEEDED:${syncedRouting.routing_version_id}`,changed:"false",live:true}]);
-  await verifyRoutingReconnect(app);
+  await timeScenario("routingReconnect",()=>verifyRoutingReconnect(app));
   const revokedBindingRequest=(await tenant("10000000-0000-4000-8000-000000000001",()=>app.query(
     "SELECT * FROM app.request_client_routing_source_sync($1,$2,$3,$4)",
     ["crm",1,"10100000-0000-4000-8000-000000000001","f".repeat(64)],
@@ -2872,7 +2877,7 @@ try{
       'GOWS',interval '5 minutes'
     )`));
   assert.deepEqual(assignment.rows,[{worker_key:"postgres-gows-a",engine:"GOWS",assignment_fencing_token:"1"}]);
-  await verifyWahaRenewal({app,registry:wahaRegistry,admin:fixtureAdmin,adminUrl});
+  await timeScenario("wahaRenewal",()=>verifyWahaRenewal({app,registry:wahaRegistry,admin:fixtureAdmin,adminUrl}));
   const dependencyRepository=new InboundRepository(new Pool(connectorWorkerConfig));
   const dependencyAdmin=new Client({connectionString:adminUrl});await dependencyAdmin.connect();
   try{
@@ -2956,12 +2961,14 @@ try{
     assert.deepEqual(resumedPin,{flow_version_id:botV1.id,current_node_id:"hello"});
   }finally{await botDatabase.onModuleDestroy();if(botDatabaseUrl===undefined)delete process.env.DATABASE_URL;else process.env.DATABASE_URL=botDatabaseUrl}
   const quoteAdmin=new Client({connectionString:adminUrl});await quoteAdmin.connect();
-  try{await verifyDirectKeepOpenConstraints(quoteAdmin,botPrincipal.tenantId,{
+  try{await timeScenario("directKeepOpenConstraints",()=>verifyDirectKeepOpenConstraints(quoteAdmin,botPrincipal.tenantId,{
     foreignTenantId:"20000000-0000-4000-8000-000000000002",botAssignmentId:botAssignment.assignment_id,botFlowVersionId:botV1.id,
     userId:botPrincipal.userId,adminUrl,existingConversationId:botConversation.id,
-  });await verifyTeamNumberValidation(quoteAdmin,botPrincipal.tenantId);await verifyParticipantIdentityProjection(quoteAdmin,botPrincipal.tenantId);await verifyGroupParticipantDedup(quoteAdmin,botPrincipal.tenantId);await verifyGroupQuoteProjection(quoteAdmin,botPrincipal.tenantId);await verifyTicketEventTargets(quoteAdmin,botPrincipal.tenantId,{userId:botPrincipal.userId,foreignTenantId:"20000000-0000-4000-8000-000000000002",botAssignmentId:botAssignment.assignment_id,botFlowVersionId:botV1.id});const designationStartedAt=new Date().toISOString();
-  await verifyGroupWorkspaceReceipts(quoteAdmin,appUrl);
-  const designationProof=await verifyGroupDesignation(quoteAdmin,appUrl);
+  }));await timeScenario("teamNumberValidation",()=>verifyTeamNumberValidation(quoteAdmin,botPrincipal.tenantId));await timeScenario("participantIdentityProjection",()=>verifyParticipantIdentityProjection(quoteAdmin,botPrincipal.tenantId));await timeScenario("groupParticipantDedup",()=>verifyGroupParticipantDedup(quoteAdmin,botPrincipal.tenantId));await timeScenario("groupQuoteProjection",()=>verifyGroupQuoteProjection(quoteAdmin,botPrincipal.tenantId));await timeScenario("ticketEventTargets",()=>verifyTicketEventTargets(quoteAdmin,botPrincipal.tenantId,{userId:botPrincipal.userId,foreignTenantId:"20000000-0000-4000-8000-000000000002",botAssignmentId:botAssignment.assignment_id,botFlowVersionId:botV1.id}));const designationStartedAt=new Date().toISOString();
+  await timeScenario("groupWorkspaceReceipts", async () => {
+    await verifyGroupWorkspaceReceipts(quoteAdmin,appUrl);
+  });
+  const designationProof=await timeScenario("groupDesignation",()=>verifyGroupDesignation(quoteAdmin,appUrl));
   const designationFinishedAt=new Date().toISOString();
   const migrationRows=(await quoteAdmin.query('SELECT name,checksum_sha256 FROM wasalx_schema_migrations ORDER BY name')).rows;
   const currentMigrationChecksums=new Map(await Promise.all(migrationFiles.map(async name=>[name,createHash('sha256').update(await readFile(new URL('../services/control-api/migrations/'+name,import.meta.url))).digest('hex')])));
@@ -2970,7 +2977,7 @@ try{
   const git=args=>execFileSync('git',args,{cwd:repositoryRoot,encoding:'utf8'}).trim();
   const designationSourceFiles=['tests/group-designation-postgres.mjs','tests/group-designation-evidence.mjs','scripts/test-postgres-integration.mjs'];
   const designationSourceHashes=Object.fromEntries(await Promise.all(designationSourceFiles.map(async name=>[name,createHash('sha256').update(await readFile(resolve(repositoryRoot,name))).digest('hex')])));
-  console.log(JSON.stringify({kind:'postgres-designation-proof',evidenceMode:'simulated',candidateSha:git(['rev-parse','HEAD']),treeSha:git(['rev-parse','HEAD^{tree}']),trackedWorktreeChanges:git(['status','--porcelain','--untracked-files=no'])!=='',sourceHashes:designationSourceHashes,migrations:migrationRows,database:(await quoteAdmin.query('SELECT current_database() AS name')).rows[0].name,results:designationResults(designationProof,{startedAt:designationStartedAt,finishedAt:designationFinishedAt}),acceptance:'Supporting proof; complete canonical PostgreSQL gate exit and candidate admission still required'}));await verifyOwnedWorkRestoration(quoteAdmin,appUrl)}finally{await quoteAdmin.end()}
+  console.log(JSON.stringify({kind:'postgres-designation-proof',evidenceMode:'simulated',candidateSha:git(['rev-parse','HEAD']),treeSha:git(['rev-parse','HEAD^{tree}']),trackedWorktreeChanges:git(['status','--porcelain','--untracked-files=no'])!=='',sourceHashes:designationSourceHashes,migrations:migrationRows,database:(await quoteAdmin.query('SELECT current_database() AS name')).rows[0].name,results:designationResults(designationProof,{startedAt:designationStartedAt,finishedAt:designationFinishedAt}),acceptance:'Supporting proof; complete canonical PostgreSQL gate exit and candidate admission still required'}));await timeScenario("ownedWorkRestoration",()=>verifyOwnedWorkRestoration(quoteAdmin,appUrl))}finally{await quoteAdmin.end()}
   const crossTenantBot=await tenant("20000000-0000-4000-8000-000000000002",()=>app.query(
     "SELECT count(*)::integer AS count FROM bot_flow_versions",
   ));
@@ -5915,23 +5922,24 @@ try{
   for(const key of Object.keys(process.env))if(!(key in sharedCoreEnvironment))delete process.env[key];
   Object.assign(process.env,sharedCoreEnvironment);
   sharedCoreCleanupFailures=closed.filter(result=>result.status==="rejected").map(result=>result.reason);
+  printScenarioTiming("sharedCore",sharedCoreStartedAt);
 }
 if(sharedCoreCleanupFailures.length)throw new AggregateError([...metaLifecycleFailures,...sharedCoreCleanupFailures],"Shared PostgreSQL cleanup failed; independent suites are blocked");
 if(!sharedCorePrerequisitesPassed)throw sharedCoreFailure;
 
 // Independent suites own their clients/tenants; prerequisite or cleanup failure never reaches this boundary.
-try{process.stdout.write(`${JSON.stringify(await verifyCurrentOperatorLocks(adminUrl,appUrl,connectorWorkerConfig))}\n`)}catch(error){metaLifecycleFailures.push(error);console.error("Current operator lock PostgreSQL failed",error)}
-try{process.stdout.write(`${JSON.stringify(await verifyNativeMembership(adminUrl))}\n`)}catch(error){metaLifecycleFailures.push(error);console.error("Native membership PostgreSQL failed",error)}
-try{process.stdout.write(`${JSON.stringify(await verifyNativeRouting(adminUrl))}\n`)}catch(error){metaLifecycleFailures.push(error);console.error("Native routing PostgreSQL failed",error)}
+try{process.stdout.write(`${JSON.stringify(await timeScenario("currentOperatorLocks",()=>verifyCurrentOperatorLocks(adminUrl,appUrl,connectorWorkerConfig)))}\n`)}catch(error){metaLifecycleFailures.push(error);console.error("Current operator lock PostgreSQL failed",error)}
+try{process.stdout.write(`${JSON.stringify(await timeScenario("nativeMembership",()=>verifyNativeMembership(adminUrl)))}\n`)}catch(error){metaLifecycleFailures.push(error);console.error("Native membership PostgreSQL failed",error)}
+try{process.stdout.write(`${JSON.stringify(await timeScenario("nativeRouting",()=>verifyNativeRouting(adminUrl)))}\n`)}catch(error){metaLifecycleFailures.push(error);console.error("Native routing PostgreSQL failed",error)}
   // Lifecycle rotation retains append-only audit fixtures until the owned database is removed.
   // Run them after shared scheduler inventory assertions so no fixture changes their expected work set.
   for(const [name,verify] of [
     ["worker",()=>verifyMetaLifecycleWorker(adminUrl,connectorWorkerConfig)],
     ["consumers",()=>verifyMetaLifecycleConsumers(adminUrl,connectorWorkerConfig,appUrl)],
     ["ingress",()=>verifyMetaLifecycleIngress(adminUrl,appUrl)],
-  ]){try{console.log(JSON.stringify({metaLifecycle:name,result:await verify()}))}catch(error){metaLifecycleFailures.push(error);console.error(`Meta lifecycle ${name} failed`,error)}}
-  try { console.log(JSON.stringify({ metaNumberRelease: await verifyMetaNumberRelease(adminUrl,appUrl,connectorWorkerConfig,cleanupUrl.toString()) })); } catch(error) { metaLifecycleFailures.push(error); console.error("Meta number release PostgreSQL failed",error); }
-  try { console.log(JSON.stringify({ metaSignup: await verifyMetaSignup(adminUrl,appUrl,connectorWorkerConfig,cleanupUrl.toString()) })); } catch(error) { metaLifecycleFailures.push(error); console.error("Meta signup PostgreSQL failed",error); }
+  ]){try{console.log(JSON.stringify({metaLifecycle:name,result:await timeScenario("metaLifecycle/"+name,verify)}))}catch(error){metaLifecycleFailures.push(error);console.error(`Meta lifecycle ${name} failed`,error)}}
+  try { console.log(JSON.stringify({ metaNumberRelease: await timeScenario("metaNumberRelease",()=>verifyMetaNumberRelease(adminUrl,appUrl,connectorWorkerConfig,cleanupUrl.toString())) })); } catch(error) { metaLifecycleFailures.push(error); console.error("Meta number release PostgreSQL failed",error); }
+  try { console.log(JSON.stringify({ metaSignup: await timeScenario("metaSignup",()=>verifyMetaSignup(adminUrl,appUrl,connectorWorkerConfig,cleanupUrl.toString())) })); } catch(error) { metaLifecycleFailures.push(error); console.error("Meta signup PostgreSQL failed",error); }
   // One explicit synthetic registry is shared only as immutable fixture input.
   const managedRuntimeEvidence=syntheticMetaManagedRuntimeEvidence();
   const metaCostOptions={adminUrl,workerConfig:connectorWorkerConfig,appUrl,
@@ -5973,10 +5981,23 @@ try{process.stdout.write(`${JSON.stringify(await verifyNativeRouting(adminUrl))}
     ["metaTemplatePreparation",()=>verifyMetaTemplatePreparation({adminUrl,workerConfig:connectorWorkerConfig,appUrl,cleanupUrl:cleanupUrl.toString(),platformOperationsUrl:platformOperationsUrl.toString(),runtimeEvidence:managedRuntimeEvidence})],
     ["metaLegacyMigration",()=>verifyMetaLegacyMigration({adminUrl,workerConfig:connectorWorkerConfig,appUrl,cleanupUrl:cleanupUrl.toString(),platformOperationsUrl:platformOperationsUrl.toString(),runtimeEvidence:managedRuntimeEvidence})],
     ["metaTransitionOperatorReviews",()=>verifyMetaTransitionOperatorReviews({adminUrl,workerConfig:connectorWorkerConfig,appUrl,cleanupUrl:cleanupUrl.toString(),platformOperationsUrl:platformOperationsUrl.toString(),runtimeEvidence:syntheticMetaManagedRuntimeEvidence()})],
-  ]){try{console.log(JSON.stringify({[name]:await verify()}))}catch(error){metaLifecycleFailures.push(error);console.error(`Meta PostgreSQL ${name} failed`,error)}}
+  ]){try{console.log(JSON.stringify({[name]:await timeScenario(name,verify)}))}catch(error){metaLifecycleFailures.push(error);console.error(`Meta PostgreSQL ${name} failed`,error)}}
   if(metaLifecycleFailures.length)throw new AggregateError(metaLifecycleFailures,"Canonical shared/native/Meta PostgreSQL failure union");
 process.stdout.write(`${sharedCoreSummary}\n`);
 
+
+function printScenarioTiming(scenario, startedAt) {
+  console.log(JSON.stringify({ kind: "postgres-scenario-timing", scenario, durationMs: Math.round(performance.now() - startedAt) }));
+}
+
+async function timeScenario(scenario, run) {
+  const startedAt = performance.now();
+  try {
+    return await run();
+  } finally {
+    printScenarioTiming(scenario, startedAt);
+  }
+}
 
 function required(name){const value=process.env[name];if(!value)throw new Error(`${name} is required`);return value}
 function runtimeUrl(username,password){const value=new URL(appUrl);value.username=username;value.password=password;return value}
