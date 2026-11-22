@@ -107,6 +107,8 @@ smoke() {
 
 phase fresh-install 10m "${installer[@]}" replace "${stage[@]}" "${hosted[@]}" --drained
 smoke fresh-smoke
+# The fresh Grafana database uses the admin credentials from this Compose model.
+"${compose[@]}" config --format json grafana | node scripts/release/installer-nightly-grafana.mjs
 inventory > "$work/fresh.ids"
 test -s "$work/fresh.ids"
 resources installed

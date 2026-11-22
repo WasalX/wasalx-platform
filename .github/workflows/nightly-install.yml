@@ -36,7 +36,8 @@ jobs:
             release/installer-images.json scripts/installer-evidence.mjs ':(glob)infra/docker/full/**' \
             scripts/release/compose-stage-lock.mjs scripts/release/compose-stage-config.json scripts/release/simulation-rails-json.mjs \
             scripts/release/preflight-full-env.mjs scripts/release/generate-simulation-env.py \
-            scripts/release/images-by-digest.py scripts/release/image-manifest.sh .github/workflows/nightly-install.yml; then
+            scripts/release/images-by-digest.py scripts/release/image-manifest.sh \
+            tests/installer-nightly-grafana.test.mjs .github/workflows/nightly-install.yml; then
             needed=false
           fi
           echo "needed=$needed" >> "$GITHUB_OUTPUT"
@@ -77,7 +78,9 @@ jobs:
         env:
           MAIN_SHA: ${{ steps.publication.outputs.commit }}
           TRUSTED_ROOT: ${{ steps.trust.outputs.root }}
-        run: bash scripts/release/installer-nightly.sh
+        run: |
+          node --test tests/installer-nightly-grafana.test.mjs
+          bash scripts/release/installer-nightly.sh
       - name: Tear down the disposable stack and volumes
         if: always() && steps.changes.outputs.needed != 'false'
         timeout-minutes: 4
