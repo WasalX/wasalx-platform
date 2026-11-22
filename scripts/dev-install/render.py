@@ -17,14 +17,13 @@ ROOT = TEMPLATES.parents[2]
 PULL_PATHS = ("install_dir", "receipt_key", "cosign", "trusted_root")
 PULL_SERVICE = "wasalx-dev-pull.service"
 PULL_TIMER = "wasalx-dev-pull.timer"
-DEV_STEP_LOCK = "/run/ot3/wasalx-dev-step.active"
 SCRIPTS = ("dispatch.py", "probe.py", "receive.py")
 HOST_SCRIPTS = (
     "dev-guest-phase.sh", "dev-step-lock.sh", "frozen-disk.py", "host-maintenance.py",
     "install-or-discard.sh", "overlay-action.sh", "probe-up.py", "register.sh",
 )
 HOST_PATHS = (
-    "ALLOW_START", "DIR", "DISK_MOUNT_SOURCE", "DISK_STATE", "DROPIN", "ENGINE_FREE", "GUEST_KEY",
+    "ALLOW_START", "DEV_STEP_LOCK", "DIR", "DISK_MOUNT_SOURCE", "DISK_STATE", "DROPIN", "ENGINE_FREE", "GUEST_KEY",
     "GUEST_KNOWN_HOSTS", "GUEST_RUN_SCRIPT", "GUEST_VOLUME_SOURCE", "HOST_EXPORT_RECEIPT",
     "HOST_STAGING_RECEIPT", "MARKER_DIRECTORY", "OVERLAY", "POWEROFF_HELPER", "QMP", "STAGING",
     "STATE_MOUNT_SOURCE", "TOP",
@@ -147,7 +146,6 @@ def render_host(identity, run_id, commit, receipts, bundle):
     env = {
         **identity, **leases, "TOP_CHAIN": json.dumps(chain), "REV": commit,
         "LEASE_RECEIPT_SHA256S": json.dumps(expected),
-        "DEV_STEP_LOCK": DEV_STEP_LOCK,
     }
     files = {name: (TEMPLATES / name).read_text(encoding="utf-8").encode() for name in HOST_SCRIPTS}
     files["run-id"] = (run_id + "\n").encode()

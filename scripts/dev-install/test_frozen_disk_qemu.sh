@@ -163,6 +163,7 @@ echo 'COMMIT_FIXTURE=PASS'
 
 test_commit_registration() (
     local state="$mountpoint/registration" templates="$repo/scripts/dev-install/templates"
+    local marker="$state/locks/active"
     mkdir -p -- "$state/markers" "$state/staging"
     export LEASE_RECORD="$state/systemd-run.args"
     systemctl() { if [ "$1" = show ] && [ "${2:-}" = -p ]; then echo not-found; fi; }
@@ -186,7 +187,7 @@ SH
     cat > "$state/host.env" <<EOF
 export LEASE_PREFIX=fixture MARKER_PREFIX=fixture TOOLING_SHA=fixture
 export MARKER_DIRECTORY=$state/markers STAGING=$state/staging
-export DEV_STEP_LOCK=$state/locks/dev-step.active
+export DEV_STEP_LOCK=$marker
 export ENGINE_FREE=/bin/true ENGINE_RUN=$run_id ROOT_FLOOR_BYTES=1
 export INSTALL_NOT_BEFORE=$(date -u -d '1 hour ago' +%FT%TZ)
 export INSTALL_CUTOFF=$(date -u -d '+1 hour' +%FT%TZ)
@@ -201,6 +202,14 @@ EOF
     test ! -e "$state/locks"
     test ! -e "$LEASE_RECORD"
     mkdir -- "$state/locks"
+    result=0
+    output="$(bash "$templates/register.sh" commit "$state")" || result=$?
+    test "$result" = 75
+    test "$output" = HOLD_DEV_STEP_MARKER
+    test ! -e "$marker"
+    test ! -e "$LEASE_RECORD"
+    touch -- "$marker"
+    chmod 0444 -- "$marker"
     result=0
     output="$(bash "$templates/register.sh" commit "$state")" || result=$?
     test "$result" = 75
@@ -236,7 +245,7 @@ EOF
         expect_busy "${lease[@]}"
         expect_busy bash "$templates/overlay-action.sh" audit "$state"
         expect_busy bash "$templates/dev-guest-phase.sh" prove "$state"
-        if flock -n "$state/locks/dev-step.active" true; then
+        if flock -n "$marker" true; then
             echo 'DEV_STEP_LOCK=FAIL probe admitted during lease' >&2
             exit 1
         fi
@@ -250,7 +259,8 @@ EOF
             wait "$holder"
         fi
         holder=
-        flock -n "$state/locks/dev-step.active" true
+        flock -n "$marker" true
+        test ! -s "$marker"
     done
     echo 'DEV_STEP_LOCK=PASS contention=75 release_after_exit=PASS release_after_kill=PASS'
 )

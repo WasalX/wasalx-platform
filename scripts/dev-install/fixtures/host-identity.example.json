@@ -1,5 +1,6 @@
 {
   "ALLOW_START": "/run/dev-vm/allow-start",
+  "DEV_STEP_LOCK": "/fixture/dev-step/active",
   "DIR": "/fixture/vm",
   "DISCARD_LIMIT": "2000-01-01T21:40:00Z",
   "DISK_MOUNT_SOURCE": "/dev/vdb1",

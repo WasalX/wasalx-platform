@@ -61,12 +61,12 @@ class HostPacketTest(unittest.TestCase):
             packet = Path(directory) / "packet"
             result = self.render(packet)
             self.assertEqual(result.returncode, 0, result.stderr)
-            marker = "/run/ot3/wasalx-dev-step.active"
+            marker = json.loads(self.example.read_bytes())["DEV_STEP_LOCK"]
             env = (packet / "host.env").read_text()
             self.assertEqual([line for line in env.splitlines() if marker in line],
                              [f"export DEV_STEP_LOCK={marker}"])
             helper = (packet / "dev-step-lock.sh").read_text()
-            self.assertIn('exec 7>>"$DEV_STEP_LOCK"', helper)
+            self.assertIn('exec 7<"$DEV_STEP_LOCK"', helper)
             self.assertIn("flock -n -E 75 7", helper)
             self.assertNotIn(marker, helper)
             for name, state, lock, first_action in (
@@ -77,13 +77,29 @@ class HostPacketTest(unittest.TestCase):
             ):
                 with self.subTest(step=name):
                     script = (packet / name).read_text()
-                    acquisition = f'source "${state}/dev-step-lock.sh"\n{lock}\n'
+                    acquisition = script.index(f"\n{lock}\n")
+                    self.assertLess(script.index(f'source "${state}/dev-step-lock.sh"'), acquisition)
                     if name == "register.sh":
-                        self.assertIn('source "$STATE/dev-step-lock.sh"\n', script)
                         self.assertIn('/bin/bash "$STATE/install-or-discard.sh" "$STATE" "$MODE"', script)
-                        acquisition = f"\n{lock}\n"
-                    self.assertLess(script.index(acquisition), script.index(first_action))
+                    self.assertLess(acquisition, script.index(first_action))
                     self.assertNotIn(marker, script)
+
+    def test_host_identity_requires_an_absolute_marker_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            parent = Path(directory)
+            identity = parent / "host-identity.json"
+            packet = parent / "packet"
+            fields = json.loads(self.example.read_bytes())
+            fields.pop("DEV_STEP_LOCK")
+            for invalid_fields, error in (
+                (fields, "invalid host identity fields"),
+                ({**fields, "DEV_STEP_LOCK": "relative/active"}, "invalid host path: DEV_STEP_LOCK"),
+            ):
+                identity.write_text(json.dumps(invalid_fields), encoding="utf-8")
+                result = self.render(packet, identity=identity)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(error, result.stderr)
+                self.assertFalse(packet.exists())
 
     def test_renderer_seals_host_files_and_derives_measured_leases(self):
         with tempfile.TemporaryDirectory() as directory:

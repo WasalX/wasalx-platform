@@ -96,14 +96,16 @@ Use the signed host qualification to measure the live phase budgets.
 
 ## DEV step lock
 
-WasalX holds an exclusive, nonblocking `flock` on `/run/ot3/wasalx-dev-step.active`
-from before the first action until the step exits, including if it is killed.
+Set `DEV_STEP_LOCK` in the private host identity to the absolute path of the
+host-provided marker. WasalX holds an exclusive, nonblocking `flock` on that
+path from before the first action until the step exits, including if it is killed.
 Lease units, install/discard, overlay actions and host-side guest phases share
 this lock. A competing step reports `HOLD_DEV_STEP_BUSY` and exits 75.
-D1 treats a failed `flock -n /run/ot3/wasalx-dev-step.active true` probe as busy.
-Leave the marker file in place between steps so every probe uses the same inode.
-The host provisions `/run/ot3` via `tmpfiles.d` with access for the step units
-and D1. A missing directory holds the step with `HOLD_DEV_STEP_MARKER_DIR`.
+D1 uses the same path and treats a failed `flock -n "$DEV_STEP_LOCK" true` probe as busy.
+The host provisions the dedicated root-owned mode-0755 directory and empty
+root-owned marker via `tmpfiles.d`. Steps open the marker read-only. Leave it
+in place between steps so every probe uses the same inode. A missing directory
+or marker holds the step with `HOLD_DEV_STEP_MARKER_DIR` or `HOLD_DEV_STEP_MARKER`.
 The pull report agent and standing services such as the VM and forwards never
 take this lock.
 
