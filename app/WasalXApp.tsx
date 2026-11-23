@@ -13,29 +13,17 @@ import {
 import type { ChatGPTUser } from "./chatgpt-auth";
 import type { MetaGroupsCapability, NativeAccountObservation } from "../lib/control-plane-data";
 import { LocaleSwitcher } from "./LocaleSwitcher";
-import { WorkspaceAccess } from "./WorkspaceAccess";
 import { NativeAccountStatus } from "./NativeAccountStatus";
 import { teamNativeAccountObservation } from "../lib/native-account-observation";
-import { MetaBillingDiagnostics } from "./MetaBillingDiagnostics";
-import { MetaCustomerPaymentPolicy } from "./MetaCustomerPaymentPolicy";
 import { InlineConfirmation, ModalDialog } from "./ModalDialog";
 import type { RuleMatch, TriggerRule } from "../lib/domain";
 import { describeRuleChange } from "../lib/rule-version-diff";
 import { useI18n, useRelativeClock } from "./I18nProvider";
-import { MetaSavedAccessActivation } from "./MetaSavedAccessActivation";
-import { MetaNumberRelease } from "./MetaNumberRelease";
-import { MetaSignup } from "./MetaSignup";
-import { MetaRoutingConfiguration } from "./MetaRouting";
-import { MetaCoexistence } from "./MetaCoexistence";
-import { MetaCostUsage } from "./MetaCostUsage";
-import { MetaTemplatePreparation } from "./MetaTemplatePreparation";
-import { MetaLegacyMigration } from "./MetaLegacyMigration";
 import { formatDateTime, formatDuration, formatNumber, formatPastRelativeTime, formatRelativeTime } from "../lib/i18n/format.ts";
 import { localizedUiError } from "../lib/ui-error.ts";
 import { fetchAccessCheck, installShellFetch, shouldCoverOnReturn, trackAccessCheck } from "../lib/shell-validation";
 import { operatorFailureMessage, operatorLocalFailure, confirmUnsavedNavigation, createLatestRequestFence, shouldPauseAutomaticRefresh, unmatchedReviewItems, visibleReviewMetadata, deliveryFailureGuidance } from "../lib/operator-ui.ts";
 import { useVisibleRefresh } from "./use-visible-refresh";
-import { NativeRoutingSync } from "./NativeRoutingSync";
 import { isAbortError } from "../lib/bot-conversations";
 import { can, isTenantRole, type TenantRole } from "../lib/tenant-permissions.ts";
 import { connectionAuthorizationState, connectionDisplayState, connectionInboundIsReady, connectionIsReady, connectionTransportIsReady } from "../lib/connection-readiness.ts";
@@ -45,6 +33,18 @@ import { rememberBoundaryTheme, useBoundaryPreferences } from "./boundary-prefer
 const InboxWorkspace = lazy(async () => ({ default: (await import("./InboxWorkspace")).InboxWorkspace }));
 const SupportTeams = lazy(async () => ({ default: (await import("./SupportTeams")).SupportTeams }));
 const MailboxAdministration = lazy(async () => ({ default: (await import("./MailboxAdministration")).MailboxAdministration }));
+const WorkspaceAccess = lazy(async () => ({ default: (await import("./WorkspaceAccess")).WorkspaceAccess }));
+const NativeRoutingSync = lazy(async () => ({ default: (await import("./NativeRoutingSync")).NativeRoutingSync }));
+const MetaCostUsage = lazy(async () => ({ default: (await import("./MetaCostUsage")).MetaCostUsage }));
+const MetaSignup = lazy(async () => ({ default: (await import("./MetaSignup")).MetaSignup }));
+const MetaNumberRelease = lazy(async () => ({ default: (await import("./MetaNumberRelease")).MetaNumberRelease }));
+const MetaTemplatePreparation = lazy(async () => ({ default: (await import("./MetaTemplatePreparation")).MetaTemplatePreparation }));
+const MetaLegacyMigration = lazy(async () => ({ default: (await import("./MetaLegacyMigration")).MetaLegacyMigration }));
+const MetaCoexistence = lazy(async () => ({ default: (await import("./MetaCoexistence")).MetaCoexistence }));
+const MetaBillingDiagnostics = lazy(async () => ({ default: (await import("./MetaBillingDiagnostics")).MetaBillingDiagnostics }));
+const MetaCustomerPaymentPolicy = lazy(async () => ({ default: (await import("./MetaCustomerPaymentPolicy")).MetaCustomerPaymentPolicy }));
+const MetaRoutingConfiguration = lazy(async () => ({ default: (await import("./MetaRouting")).MetaRoutingConfiguration }));
+const MetaSavedAccessActivation = lazy(async () => ({ default: (await import("./MetaSavedAccessActivation")).MetaSavedAccessActivation }));
 
 const BotAutomation = lazy(async () => ({
   default: (await import("./BotAutomation")).BotAutomation,
@@ -1653,7 +1653,7 @@ function TenantWasalXApp({
                 canConfigure={canConfigure}
                 mutationHeaders={mutationHeaders}
               />
-              {!isPrivateDemo&&can(role,"billing:read")?<MetaCostUsage key={String(initialData.tenant.id)} canExport={can(role,"billing:export")}/>:null}</>
+              {!isPrivateDemo&&can(role,"billing:read")?<Suspense fallback={<WorkspaceLoading />}><MetaCostUsage key={String(initialData.tenant.id)} canExport={can(role,"billing:export")}/></Suspense>:null}</>
             )}
             {view === "groups" && (
               <Groups
@@ -2882,9 +2882,9 @@ function ConnectionDetail({
               </div>
             </section>
 
-            {detail.provider === "META" && state === "REVOKED" && canConfigure && !sessionExpired ? <MetaNumberRelease
+            {detail.provider === "META" && state === "REVOKED" && canConfigure && !sessionExpired ? <Suspense fallback={<WorkspaceLoading />}><MetaNumberRelease
               tenantId={tenantId} actorId={actorId} connectionId={id} connectionName={String(detail.name ?? "")} mutationHeaders={mutationHeaders} busyChanged={setMetaNumberReleasePending}
-            /> : null}
+            /></Suspense> : null}
 
             {detail.action_reason && (detail.state !== "PAUSED" || duplicateIdentity) ? (
               <div className="connection-detail-alert connection-detail-alert-danger" role="alert">
@@ -3286,7 +3286,7 @@ function ConnectionDetail({
             ) : null}
 
             {detail.provider === "META" ? (
-              <>
+              <Suspense fallback={<WorkspaceLoading />}>
                 {!sessionExpired ? <MetaTemplatePreparation connectionId={id} tenantId={tenantId} actorId={actorId} canWrite={canConfigure} mutationHeaders={mutationHeaders} /> : null}
                 {!sessionExpired ? <MetaLegacyMigration connectionId={id} tenantId={tenantId} actorId={actorId} canWrite={canConfigure} mutationHeaders={mutationHeaders} /> : null}
                 {canConfigure && state !== "REVOKED" ? <div className="connection-detail-section">
@@ -3294,7 +3294,7 @@ function ConnectionDetail({
                     <h3 id="meta-reconnect-title">{t("tenant.metaSignup.reconnect.title")}</h3>
                     <p>{t("tenant.metaSignup.reconnect.body")}</p>
                   </div></div>}
-                  {metaReconnectOpen && !sessionExpired ? <MetaSignup
+                  {metaReconnectOpen && !sessionExpired ? <Suspense fallback={<WorkspaceLoading />}><MetaSignup
                     key={id} name={t("tenant.metaSignup.reconnect.title")} target={{ connectionId: id, name: String(detail.name ?? ""), canPrepare: state === "PAUSED" && !operationPending, canContinue: state === "PAUSED" }}
                     isTargetConnectionRevoked={() => metaReconnectTargetRevoked.current}
                     mutationHeaders={mutationHeaders} busyChanged={setMetaReconnectPending}
@@ -3307,7 +3307,7 @@ function ConnectionDetail({
                       setMetaReconnectOpen(false); setDraftDirty("reconnect", false);
                       restoreMetaReconnectFocus.current = true;
                     }}
-                  /> : <>
+                  /></Suspense> : <>
                     {metaReconnectReview && !sessionExpired ? <button ref={metaReconnectTrigger} type="button" className="button secondary"
                       disabled={actionPending || authorizationPending || dirtyDrafts.size > 0}
                       onClick={() => { setMetaReconnectOpen(true); setDraftDirty("reconnect", true); }}>
@@ -3342,7 +3342,7 @@ function ConnectionDetail({
                   draftChanged={(dirty) => setDraftDirty("group", dirty)}
                   committed={() => setDraftDirty("group", false)}
                 />
-              </>
+              </Suspense>
             ) : null}
 
             <section className="connection-detail-section" aria-labelledby="latest-operation-title">
@@ -4813,7 +4813,7 @@ function GroupConfigurationDrawer({
           <button ref={closeButton} type="button" onClick={requestClose} aria-label={t("tenant.group.configuration.closeLabel")}>×</button>
         </div>
 
-        <NativeRoutingSync canWrite={canConfigure} mutationHeaders={mutationHeaders} refreshKey={JSON.stringify(savedForm)} />
+        <Suspense fallback={<WorkspaceLoading />}><NativeRoutingSync canWrite={canConfigure} mutationHeaders={mutationHeaders} refreshKey={JSON.stringify(savedForm)} /></Suspense>
 
         {loading ? (
           <div className="group-drawer-loading" role="status" aria-live="polite">
@@ -6962,7 +6962,7 @@ function TeamAccess({ role, currentUserId, canManage, mutationHeaders }: { role:
   const active = data.members.filter((member) => member.state === "ACTIVE").length;
   const pending = data.invitations.filter((invitation) => invitation.state === "PENDING").length;
   return <div className="team-layout">
-    <WorkspaceAccess members={data.members} owner={role==="tenant_owner"} mutationHeaders={mutationHeaders} nativeObservations={nativeAccountRead.observations} nativeObservationUnavailable={nativeAccountRead.unavailable} beginNativeObservationRead={beginNativeObservationRead} completeNativeObservationRead={completeNativeObservationRead}/>
+    <Suspense fallback={<WorkspaceLoading />}><WorkspaceAccess members={data.members} owner={role==="tenant_owner"} mutationHeaders={mutationHeaders} nativeObservations={nativeAccountRead.observations} nativeObservationUnavailable={nativeAccountRead.unavailable} beginNativeObservationRead={beginNativeObservationRead} completeNativeObservationRead={completeNativeObservationRead}/></Suspense>
     <section className="team-summary" aria-label={t("tenant.team.summary.label")}><div><small>{t("tenant.team.summary.active")}</small><strong>{formatNumber(active, locale)}</strong><span>{t("tenant.team.summary.identities", { count: formatNumber(data.members.length, locale) })}</span></div><div><small>{t("tenant.team.summary.pending")}</small><strong className={data.capabilities.can_invite ? undefined : "team-role-value"}>{data.capabilities.can_invite ? formatNumber(pending, locale) : t("tenant.team.readOnly")}</strong><span>{t(data.capabilities.can_invite ? pending ? "tenant.team.summary.awaiting" : "tenant.team.summary.none" : "tenant.team.invitations.restrictedTitle")}</span></div><div><small>{t("tenant.team.summary.yourRole")}</small><strong className="team-role-value">{t(`tenant.role.${role}`)}</strong><span>{t(canManage ? "tenant.team.summary.management" : "tenant.team.summary.readOnly")}</span></div></section>
     {error ? <div className="settings-feedback error team-feedback" role="alert"><span>!</span><p>{error}</p><button className="button small" onClick={() => void load()}>{t("tenant.team.actions.reload")}</button></div> : null}
     {notice ? <div className="settings-feedback success team-feedback" role="status"><span>✓</span><p>{notice}</p></div> : null}
@@ -7202,9 +7202,9 @@ function ConnectionModal({
               <span>{t(`tenant.metaSignup.addAccess.purpose.${value}`)}</span>
             </label>)}
           </fieldset>
-          <MetaSignup name={name} purpose={metaPurpose} mutationHeaders={mutationHeaders} busyChanged={setCreating}
+          <Suspense fallback={<WorkspaceLoading />}><MetaSignup name={name} purpose={metaPurpose} mutationHeaders={mutationHeaders} busyChanged={setCreating}
             created={(id) => { closeGuard.resetDirty(); void dashboardChanged(); created(id); }}
-            back={() => setStep(1)} manual={() => setMetaManual(true)} />
+            back={() => setStep(1)} manual={() => setMetaManual(true)} /></Suspense>
           </>
         ) : step === 2 ? (
           <div className="meta-setup-step">
