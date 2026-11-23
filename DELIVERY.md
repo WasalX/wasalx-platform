@@ -20,10 +20,10 @@ WasalX Delivery owns this document, the merge queue, CI health and speed, releas
 - The `merge_group` run covers the full CI suite, including PostgreSQL, portal/browser, and infrastructure checks, and accounts for every image in the catalog with `max-parallel: 21`. `ci-gate` is the only required status check. Code scanning for high and critical findings is a separate ruleset requirement.
 - `ci-gate` always runs. A failed or cancelled required job fails the gate. Only jobs explicitly excluded by the workflow's event or path selection may be skipped.
 - The advisory [TypeScript comparison](.github/workflows/typescript-comparison.yml) compares TypeScript 5 and 7 diagnostics, compiler time, and service output on the PR candidate and its main baseline. It runs the unit suite on TypeScript 7 output when the emitted files differ.
-- The [nightly installer workflow](.github/workflows/nightly-install.yml) runs at 02:17 UTC, on RC tag pushes, and on PRs, where each job runs only when its inputs change. It rehearses the frozen-disk discard in QEMU and a full installation and recreation from a complete `main` publication.
+- The QEMU frozen-disk discard runs nightly at 02:17 UTC, on PRs, and on manual dispatch. The full install and recreation rehearsal uses a complete `main` publication and runs on the same schedule, on PRs, on manual dispatch from `main`, and when an RC tag is pushed. On PRs, each rehearsal runs only when its inputs change. See the [nightly installer workflow](.github/workflows/nightly-install.yml).
 - The [pnpm cache action](.github/actions/ci-pnpm/action.yml) saves pnpm dependency and service build caches on main pushes only. PostgreSQL integration and portal integration always force clean service builds.
 - Run CI on free GitHub-hosted runners. Cancel older CI runs only for the same PR. Keep workflow permissions read-only at the top level, grant writes per job, and pin actions by full commit SHA. Prohibit `pull_request_target`. Fork PRs receive no secrets.
-- Set job time limits from the measured p95 plus 25 percent and record the run sample here. Review limits monthly. A higher limit needs new measurements in a separate PR. See [Deviations](#deviations) for current sample coverage.
+- Set job time limits from the measured p95 plus 25 percent, rounded up to a whole minute. Review limits monthly. A higher limit needs new measurements in a separate PR. See the [CI timing sample](.github/ci-timings.json) and [current coverage](#deviations).
 - For every workflow-changing PR, verify the SHA-256 of the pinned actionlint 1.7.12 binary before running it. Require zero new findings compared with the base branch. Older 1.7.x versions misread YAML anchors.
 
 ## Test policy
@@ -55,7 +55,8 @@ Before every push, run the private privacy check on the diff, commits, branch na
 
 ## Deploys
 
-- DEV host steps and the `stg` RC rehearsal each run through a gate. Review each gate once and record one Portfolio GO. After its GO, the gate automatically releases every change that passes and writes an audit row with the deployed commit, image digests, result, and the gate's GO reference. A new kind of change or a change to the gate requires a new GO.
+- Require a reviewed gate and one Portfolio GO each for DEV host steps and the `stg` RC rehearsal. After its GO, the gate automatically releases changes that pass and must record the deployed commit, image digests, result, and GO reference. A new kind of change or a change to the gate requires a new GO.
+- GitHub keeps environment deployment records. The recording workflow writes the source commit, image digests, and any DEV receipt code to the Actions run summary. The full gate audit row with the GO reference is pending. See the [deployment recording workflow](.github/workflows/deploy.yml).
 - The owner is the `prod` environment's required reviewer and approves each production deployment there. Only that approval gives GO to release a deployment to production.
 - WasalX Delivery prepares the DEV host packets. Host work runs through the Servers lead, including the planned stager and relay outside this repo.
 - The `dev` GitHub environment accepts deployments only from `main`. The DEV relay records a receipt only by dispatching the workflow with dispatch ref `main`, environment `dev`, and a 40-hex SHA for a `main` commit. The relay authenticates exclusively through the project's reviewed GitHub App helper. Dispatches accept only the fixed receipt-code vocabulary defined in [deploy.yml](.github/workflows/deploy.yml).
@@ -112,12 +113,12 @@ Keep these performance targets independent of the merge result. Address misses t
 | Rule | Reason | Review date |
 | --- | --- | --- |
 | §4 CI privacy check on every push and in the queue | Hosted runners cannot use the private list without exposing it. Every agent push runs the pre-push privacy check. A public required check is planned. | 2026-12-14 |
-| §4/§8 Record job time limits with p95 × 1.25 samples | Samples are pending. | 2026-12-14 |
+| §4/§8 Measure job durations and cap timeouts from p95 | The [timing sample](.github/ci-timings.json) covers the jobs with timeouts in `ci.yml`. Those timeouts still exceed the measured limits. Sampling the other workflows and lowering timeouts are follow-ups. | 2026-12-14 |
 | §4 Local pre-commit and pre-push hooks | Agents run the checks in their push workflow. Repository hooks are pending. | 2026-12-14 |
 | §4 Runner pickup under 5 s | Measured hosted-runner pickup makes 60 s the working target. Tracked in [#181](https://github.com/WasalX/wasalx-platform/issues/181). | 2026-12-14 |
 | §2 Attest artifacts with `actions/attest-build-provenance` and verify with `gh attestation verify` | Images are signed with Cosign and carry BuildKit provenance. The installer verifies them. | 2026-12-14 |
 | §4 Run the full suite on main and merge groups | Main pushes skip PR checks and queue image builds because the merge queue already qualified the exact tree. | 2026-12-14 |
 | §6 Automatic production backups and quarterly restore tests | There is no production data yet. The [backup job](infra/helm/wasalx/templates/control-plane-backup.yaml) is disabled by default and the [restore rehearsal script](scripts/dr/rehearse-postgres-restore.mjs) is unwired. | 2026-12-14 |
-| §1 One formatter and one linter per language in CI | Ruby, Python and shell have no lint job, and only OpenTofu has a formatter check. | 2026-12-14 |
-| §1 URL and IP literal guard with a reasoned allowlist | The guard and allowlist have yet to be built. | 2026-12-14 |
+| §1 One formatter and one linter per language in CI | Ruby, Python, shell, SQL, and CSS lack CI linters. TypeScript and JavaScript use ESLint and still need a formatter. OpenTofu is the only language with a formatter check. | 2026-12-14 |
+| §1 URL and IP literal guard with a reasoned allowlist for source outside configuration, generated files, and tests. Loopback, unspecified, and reserved example or documentation hosts and addresses, hostless URLs, and standard namespace IDs are exempt. | The guard and allowlist have yet to be built. | 2026-12-14 |
 | §6 Staging rollback rehearsal for every release candidate | Staging is not in service. Once it is, deploy each RC, roll back to the previous release, verify health, and record the rehearsal in the deployment audit. | 2026-12-14 |
