@@ -109,6 +109,7 @@ The public pages (marketing, invitations, privacy) share the tokens but may be m
 - English and Arabic, with `dir` set on `<html>` from the locale (`app/layout.tsx`). Every layout must mirror correctly.
 - Density over whitespace: 12-14 px working text, 34-36 px controls, tables as the main pattern.
 - Tonal layering, not shadows, separates surfaces.
+- Accessibility target: WCAG 2.2 AA on every screen, in both themes and both languages.
 
 ## Colors
 
@@ -189,4 +190,10 @@ The target set is the primitives in `app/design-system/primitives.tsx` and `prim
 
 ## Speed
 
-Speed targets for screens are defined in DELIVERY.md once agreed (#183). Until then, first-load and key-interaction timings are recorded on DEV as a baseline, without a pass/fail mark.
+Page budgets for the portal. A miss becomes a board item.
+
+| Measure | Budget | How it is measured |
+| --- | --- | --- |
+| `/app` first-load JavaScript | At most 250,000 B gzip (210,000 B brotli) | Union of the client entry's dependencies and the static dependencies of every client reference `/app` renders, read from the production build's asset manifest (`dist/server/__vite_rsc_assets_manifest.js`); gzip level 9, brotli quality 11 (Node zlib) (#183, #213, #220) |
+| Largest Contentful Paint (LCP) | Under 2.5 s at p75 | On DEV, per screen |
+| Interaction to Next Paint (INP) | Under 200 ms at p75 | On DEV, per screen |
