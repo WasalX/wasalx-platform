@@ -2,7 +2,7 @@
 
 Follows engineering standard v1.10.
 
-WasalX Delivery owns this document. Change it through a reviewed PR.
+WasalX Delivery owns this document.
 
 ## Branching and merging
 

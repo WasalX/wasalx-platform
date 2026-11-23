@@ -63,7 +63,7 @@ Live-provider qualification is a separate release milestone.
 
 ## Risk paths
 
-Require the [risk-path review](DELIVERY.md#branching-and-merging) for paths in [CODEOWNERS](CODEOWNERS), including `AGENTS.md`, `DELIVERY.md`, `CLAUDE.md`, and `tests/no-agent-instruction-files.test.mjs`. The same review applies to migrations, identity and authorization, privacy and retention, and production configuration.
+Require the [risk-path review](DELIVERY.md#branching-and-merging) for the high-risk paths listed in [CODEOWNERS](CODEOWNERS). Also review changes to package scripts that control required checks or production builds, and UI or API changes that alter what personal data is exposed or who can see it.
 
 ## Data safety
 
