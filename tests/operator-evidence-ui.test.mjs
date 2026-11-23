@@ -11,7 +11,7 @@ test("workflow schema inspection is read-only and restricted to flow administrat
   assert.doesNotMatch(source, /bot\.flow\.schema\.[^\n]+<textarea/u);
 });
 
-test("automation screens show no raw flow definition or developer terms by default", async () => {
+test("automation and tenant screens show no raw flow definition or developer terms by default", async () => {
   const source = await read("app/BotAutomation.tsx");
   // The only raw definition sits in a disclosure that starts closed.
   assert.equal(source.match(/JSON\.stringify\(definition/gu)?.length, 1);
@@ -19,11 +19,13 @@ test("automation screens show no raw flow definition or developer terms by defau
   assert.doesNotMatch(source, /<details className="routing-raw"[^>]*\sopen/u);
   assert.doesNotMatch(await read("app/ClientRouting.tsx"), /placeholder="ACME-42"/u);
   const values = (text) => [...text.matchAll(/^ {2}"[^"]+": "((?:[^"\\]|\\.)*)",\r?$/gmu)].map((match) => match[1].replace(/\{[^}]+\}/gu, ""));
-  for (const value of values(await read("lib/i18n/messages/en/automation.ts"))) {
-    assert.doesNotMatch(value, /\b(?:revision|immutable|JSON|schema|payload)\b/iu, value);
-  }
-  for (const value of values(await read("lib/i18n/messages/ar/automation.ts"))) {
-    assert.doesNotMatch(value, /JSON|غير قابل/u, value);
+  for (const catalogue of ["automation", "tenant"]) {
+    for (const value of values(await read(`lib/i18n/messages/en/${catalogue}.ts`))) {
+      assert.doesNotMatch(value, /\b(?:revisions?|immutable|JSON|schemas?|payloads?)\b/iu, value);
+    }
+    for (const value of values(await read(`lib/i18n/messages/ar/${catalogue}.ts`))) {
+      assert.doesNotMatch(value, /JSON|غير قابل|حمول/u, value);
+    }
   }
 });
 
