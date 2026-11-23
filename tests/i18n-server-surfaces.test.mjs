@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import { getMessages } from "../lib/i18n/messages/index.ts";
+import { getBoundaryMessages } from "../lib/i18n/messages/boundary.ts";
 import { createTranslator } from "../lib/i18n/translate.ts";
 import { authorizationUrl, oidcLogoutUrl } from "../lib/oidc.ts";
 import { invitationAuthorizationUrl } from "../lib/invitation-oidc.ts";
@@ -90,7 +91,7 @@ test("global recovery follows the active locale and theme",async()=>{
   assert.match(source,/platform\.error\.heading/u);
   assert.match(source,/common\.boundary\.error\.heading/u);
   assert.match(source,/useBoundaryPreferences\(undefined,true\)/u);
-  assert.match(source,/type MessageKey/u);
+  assert.match(source,/type BoundaryMessageKey/u);
   assert.match(source,/lang="en" dir="ltr"/u);
   assert.match(source,/lang="ar" dir="rtl"/u);
   assert.match(source,/data-boundary-recovery/u);
@@ -116,6 +117,30 @@ test("global recovery follows the active locale and theme",async()=>{
   assert.match(platformError,/textDirection\(locale\)/u);
   assert.match(platformError,/aria-hidden="true"/u);
   assert.doesNotMatch(platformError,/error\.message/u);
+});
+
+test("error boundaries carry only their own catalogue-equal strings in both locales",async()=>{
+  const boundaryModule=new URL("../lib/i18n/messages/boundary.ts",import.meta.url);
+  const sources=await Promise.all([files.tenantError,files.platformError,files.globalError,boundaryModule].map(file=>readFile(file,"utf8")));
+  for (const source of sources) {
+    // A value import of the catalogue would put every English and Arabic string in the first load.
+    assert.doesNotMatch(source,/^import(?!\s+type\b)[^;]*messages\/(?:index|en\/|ar\/)/mu);
+    assert.doesNotMatch(source,/\bgetMessages\(/u);
+  }
+  const [tenantError,platformError,globalError]=sources;
+  for (const source of [tenantError,platformError,globalError]) assert.match(source,/getBoundaryMessages\(/u);
+  for (const locale of ["en","ar"]) {
+    const subset=getBoundaryMessages(locale);
+    const catalogue=getMessages(locale);
+    assert.ok(Object.keys(subset).length>0);
+    for (const [key,value] of Object.entries(subset)) {
+      assert.ok(value.trim(),`${locale} ${key} must have copy`);
+      assert.equal(value,catalogue[key],`${locale} ${key} must match the catalogue`);
+    }
+  }
+  assert.notEqual(getBoundaryMessages("ar")["tenant.boundary.error.heading"],getBoundaryMessages("en")["tenant.boundary.error.heading"]);
+  const usedKeys=new Set(sources.slice(0,3).join("\n").match(/"(?:common|tenant|platform)\.[A-Za-z.]+"/gu).map(key=>key.slice(1,-1)));
+  assert.deepEqual([...usedKeys].sort(),Object.keys(getBoundaryMessages("en")).sort());
 });
 
 test("tenant and platform sign-out hand off to the configured OIDC logout endpoint",async()=>{

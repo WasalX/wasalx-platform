@@ -2,19 +2,19 @@
 
 import {useMemo} from "react";
 import {textDirection} from "../lib/i18n/locales.ts";
-import {getMessages,type MessageKey} from "../lib/i18n/messages/index.ts";
+import {getBoundaryMessages,type BoundaryMessageKey} from "../lib/i18n/messages/boundary.ts";
 import {createTranslator} from "../lib/i18n/translate.ts";
 import {useBoundaryPreferences} from "./boundary-preferences.ts";
 import styles from "./platform/PlatformBoundary.module.css";
 
-const neutralEnglish=createTranslator(getMessages("en"));
-const neutralArabic=createTranslator(getMessages("ar"));
+const neutralEnglish=createTranslator(getBoundaryMessages("en"));
+const neutralArabic=createTranslator(getBoundaryMessages("ar"));
 
 export default function GlobalError({ reset }: { error: Error & { digest?: string }; reset: () => void }) {
   const {surface,locale,theme}=useBoundaryPreferences(undefined,true);
   const activeLocale=locale??"en";
-  const t=useMemo(()=>createTranslator(getMessages(activeLocale)),[activeLocale]);
-  const recovery:{heading:MessageKey;description:MessageKey;action:MessageKey;href:string}=surface==="platform"
+  const t=useMemo(()=>createTranslator(getBoundaryMessages(activeLocale)),[activeLocale]);
+  const recovery:{heading:BoundaryMessageKey;description:BoundaryMessageKey;action:BoundaryMessageKey;href:string}=surface==="platform"
     ?{heading:"platform.error.heading",description:"platform.error.description",action:"platform.error.signInAgain",href:"/platform/auth/login?return_to=/platform"}
     :surface==="tenant"
       ?{heading:"tenant.boundary.error.heading",description:"tenant.boundary.error.description",action:"tenant.session.signIn",href:"/auth/login?return_to=/app"}
