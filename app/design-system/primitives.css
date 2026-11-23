@@ -38,6 +38,19 @@
   outline-offset: 2px;
 }
 
+/* One keyboard focus ring for every form control and button; component rules may restyle it, never remove it. */
+:where(button, input, select, textarea):focus-visible {
+  outline: 2px solid var(--wx-color-accent);
+  outline-offset: 2px;
+}
+
+/* Forced colors drop box-shadow rings, so the outline is the focus indicator there. */
+@media (forced-colors: active) {
+  :where(button, input, select, textarea):focus-visible {
+    outline: 2px solid Highlight;
+  }
+}
+
 .wx-button:disabled {
   cursor: not-allowed;
   opacity: 0.56;

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import test from "node:test";
 import { parse } from "yaml";
 
@@ -148,6 +148,21 @@ test("new primitives consume tokens instead of feature-local color and spacing l
     const value = declaration[1].trim();
     assert.ok(value === "0" || value.includes("var(--wx-space-"), `spacing declaration must use a token: ${declaration[0]}`);
   }
+});
+
+test("form controls keep a visible keyboard focus ring, also in forced colors", async () => {
+  const primitives = await read("app/design-system/primitives.css");
+  assert.match(primitives, /:where\(button, input, select, textarea\):focus-visible\s*\{\s*outline:\s*2px solid var\(--wx-color-accent\)/u);
+  assert.match(primitives, /@media \(forced-colors: active\)\s*\{[^}]*:focus-visible\s*\{\s*outline:[^;}]*Highlight/u);
+  const removals = [];
+  for (const path of await readdir(new URL("app/", root), { recursive: true })) {
+    if (!path.endsWith(".css")) continue;
+    const css = await read(`app/${path.replaceAll("\\", "/")}`);
+    for (const [, selector] of css.matchAll(/([^{}]*)\{[^{}]*\boutline\s*:\s*(?:0(?:px)?|none)\b[^{}]*\}/gu)) {
+      if (/\b(?:input|select|textarea|button)\b/u.test(selector)) removals.push(`${path}: ${selector.trim()}`);
+    }
+  }
+  assert.deepEqual(removals, [], "form-control rules must not remove the shared focus outline");
 });
 
 test("the production portal consumes governed tokens without duplicate theme values", async () => {

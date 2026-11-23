@@ -175,7 +175,7 @@ The target set is the primitives in `app/design-system/primitives.tsx` and `prim
 - **Data panel** (`DataPanel`): bordered panel with a header row and a table; sparse or dense density.
 - **Dialog** (`ModalDialog.tsx`): at most 520 px, dialog radius, dialog shadow, scroll inside, focus trapped, Escape closes.
 - **Toast**: bottom, inline-end, inverted colors, at most 520 px.
-- **Inputs**: 34-38 px, raised background, `border-strong`; focus = violet border plus a 3 px `accent-wash` ring **and** a visible outline in forced colors (#185).
+- **Inputs**: 34-38 px, raised background, `border-strong`; focus = violet border, a 3 px `accent-wash` ring and the shared 2 px violet outline (`Highlight` in forced colors). A field inside a container with its own focus ring (the search box) hides its outline except in forced colors; a danger field uses a danger-colored outline.
 
 ## Do's and Don'ts
 
