@@ -142,7 +142,7 @@ test("fresh runtime bootstrap completes sample customer cleanup before marking s
     "setup must stay pending if sample customer cleanup fails");
 });
 
-test("fresh runtime bootstrap passes the configured or default display time zone to Zammad", () => {
+test("fresh runtime bootstrap requires the configured display time zone and passes it to Zammad", () => {
   const bootstrap = fileURLToPath(new URL("../infra/docker/full/zammad/bootstrap-runtime.rb", import.meta.url));
   const harness = `
     require 'pathname'
@@ -192,12 +192,18 @@ test("fresh runtime bootstrap passes the configured or default display time zone
     ZAMMAD_FQDN: "support.example.test",
     AUTOWIZARD_RELATIVE_PATH: "auto_wizard.json",
   });
-  for (const [configured, expected] of [[undefined, "Asia/Riyadh"], ["", "Asia/Riyadh"], ["Asia/Tokyo", "Asia/Tokyo"]]) {
+  for (const configured of ["Asia/Tokyo", undefined, ""]) {
     const result = spawnSync("ruby", ["-e", harness, bootstrap], {
       env: { ...env, WASALX_ZAMMAD_DISPLAY_TIMEZONE: configured }, encoding: "utf8", windowsHide: true,
     });
     assert.ifError(result.error);
-    assert.equal(result.status, 0, result.stderr);
-    assert.equal(result.stdout.trim(), expected, `configured display time zone: ${JSON.stringify(configured)}`);
+    if (configured) {
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.stdout.trim(), configured);
+    } else {
+      assert.equal(result.status, 1, result.stderr);
+      assert.equal(result.stdout, "");
+      assert.equal(result.stderr.trim(), "WASALX_ZAMMAD_BOOTSTRAP_CONFIGURATION_INVALID:WASALX_ZAMMAD_DISPLAY_TIMEZONE");
+    }
   }
 });

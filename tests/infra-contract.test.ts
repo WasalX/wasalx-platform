@@ -326,6 +326,35 @@ test("Compose services only set TZ to UTC", async () => {
   }
 });
 
+test("full Compose Zammad backup starts outside the nightly install window", async () => {
+  const [full, source] = await Promise.all([
+    readComposeEnvironments("compose.full.yaml"), read(".github/workflows/nightly-install.yml"),
+  ]);
+  const backup = full["zammad-backup"];
+  assert.equal(backup.TZ, "UTC");
+  const time = /^([01]\d|2[0-3]):([0-5]\d)$/u.exec(String(backup.BACKUP_TIME));
+  assert.ok(time, "expected a UTC backup time in HH:MM format");
+  const backupMinute = Number(time[1]) * 60 + Number(time[2]);
+
+  const workflow = parseYaml(source);
+  const duration = workflow.jobs["nightly-install"]["timeout-minutes"];
+  assert.ok(Number.isInteger(duration) && duration > 0, "expected a nightly install job timeout");
+  for (const { cron, timezone } of workflow.on.schedule) {
+    assert.equal(timezone ?? "UTC", "UTC");
+    const start = /^([0-5]?\d) ([01]?\d|2[0-3]) \* \* \*$/u.exec(cron);
+    assert.ok(start, "expected a daily nightly install schedule");
+    const startMinute = Number(start[2]) * 60 + Number(start[1]);
+    const minutesPerDay = 24 * 60;
+    const minutesAfterStart = (backupMinute - startMinute + minutesPerDay) % minutesPerDay;
+    assert.ok(minutesAfterStart >= duration, `backup ${backup.BACKUP_TIME} overlaps nightly install (${cron}, ${duration} minutes)`);
+  }
+});
+
+test("full Compose supplies the default Zammad display time zone", async () => {
+  const full = await readComposeEnvironments("compose.full.yaml");
+  assert.equal(full["zammad-runtime-bootstrap"].WASALX_ZAMMAD_DISPLAY_TIMEZONE, "${WASALX_FULL_ZAMMAD_DISPLAY_TIMEZONE:-Asia/Riyadh}");
+});
+
 function composeConnectionHosts(key: string, value: string): string[] {
   const connectionKey = /_(?:URL|DSN|HOST)$|^(?:PGHOST|MEMCACHE_SERVERS|ZAMMAD_FQDN)$/u.test(key);
   // Keep credentials and ports opaque. Inspect literal defaults only at endpoint or host positions.

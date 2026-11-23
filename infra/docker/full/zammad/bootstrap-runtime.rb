@@ -136,8 +136,7 @@ run_bootstrap = lambda do
 if fresh_database
   first_name, last_name = bootstrap_name.split(/\s+/, 2)
   last_name = 'Owner' if last_name.to_s.empty?
-  display_timezone = ENV.fetch('WASALX_ZAMMAD_DISPLAY_TIMEZONE', '')
-  display_timezone = 'Asia/Riyadh' if display_timezone.empty?
+  display_timezone = required_environment('WASALX_ZAMMAD_DISPLAY_TIMEZONE', maximum: 64)
   wizard_relative_path = ENV.fetch('AUTOWIZARD_RELATIVE_PATH', 'tmp/auto_wizard.json')
   abort('WASALX_ZAMMAD_BOOTSTRAP_WIZARD_PATH_INVALID') if Pathname.new(wizard_relative_path).absolute? || wizard_relative_path.split('/').include?('..')
   wizard_path = Rails.root.join(wizard_relative_path)

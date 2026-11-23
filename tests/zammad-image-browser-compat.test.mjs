@@ -224,6 +224,7 @@ services:
       WASALX_ZAMMAD_BOOTSTRAP_EMAIL: ${bootstrapEmail}
       WASALX_ZAMMAD_BOOTSTRAP_OIDC_SUBJECT: ${bootstrapSubject}
       WASALX_ZAMMAD_BOOTSTRAP_NAME: Compatibility Administrator
+      WASALX_ZAMMAD_DISPLAY_TIMEZONE: Asia/Riyadh
       WASALX_ZAMMAD_BOOTSTRAP_PASSWORD: ${bootstrapPassword}
       WASALX_ZAMMAD_BOOTSTRAP_PREVIOUS_EMAIL: ${legacyBootstrapEmail}
       WASALX_ZAMMAD_AGENT_EMAIL: ${agentEmail}
