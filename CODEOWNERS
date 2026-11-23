@@ -2,6 +2,8 @@
 /CODEOWNERS @WasalX/maintainers
 /.github/workflows/ @WasalX/maintainers
 /.github/actions/ci-pnpm/ @WasalX/maintainers
+/tests/no-agent-instruction-files.test.mjs @WasalX/maintainers
+/pnpm-workspace.yaml @WasalX/maintainers
 /scripts/hosted-ci.mjs @WasalX/maintainers
 /scripts/hosted-ci-config.json @WasalX/maintainers
 /scripts/hosted-ci-policy.mjs @WasalX/maintainers
@@ -16,6 +18,9 @@
 /services/control-api/src/migrate.ts @WasalX/maintainers
 /services/control-api/src/tenant-administration.controller.ts @WasalX/maintainers
 /services/control-api/src/meta-deletion*.ts @WasalX/maintainers
+/services/control-api/src/meta-number-release.ts @WasalX/maintainers
+/app/api/connections/*/meta/number-release/route.ts @WasalX/maintainers
+/lib/meta-number-release-intent.ts @WasalX/maintainers
 /services/control-api/src/privacy*.ts @WasalX/maintainers
 /services/connector-worker/src/*privacy*.ts @WasalX/maintainers
 /app/api/privacy/ @WasalX/maintainers
@@ -30,6 +35,10 @@
 /app/api/team/ @WasalX/maintainers
 /app/api/support-access/ @WasalX/maintainers
 /app/api/audit/export/ @WasalX/maintainers
+/app/api/audit/route.ts @WasalX/maintainers
+/services/control-api/src/audit.controller.ts @WasalX/maintainers
+/services/control-api/src/audit.ts @WasalX/maintainers
+/packages/observability/src/index.ts @WasalX/maintainers
 /app/api/inbox/attachment/ @WasalX/maintainers
 /app/api/inbox/group-media/ @WasalX/maintainers
 /app/api/platform-console/ @WasalX/maintainers
@@ -48,6 +57,8 @@
 /packages/core/src/service-auth.ts @WasalX/maintainers
 /packages/core/src/tenant-permissions.ts @WasalX/maintainers
 /packages/core/src/secret-reference.ts @WasalX/maintainers
+/services/control-api/src/app.module.ts @WasalX/maintainers
+/services/control-api/src/main.ts @WasalX/maintainers
 /services/control-api/src/*auth*.ts @WasalX/maintainers
 /services/control-api/src/permission.guard.ts @WasalX/maintainers
 /services/control-api/src/rbac.ts @WasalX/maintainers
@@ -60,12 +71,17 @@
 /services/control-api/src/*secret*.ts @WasalX/maintainers
 /services/control-api/src/meta-credential.service.ts @WasalX/maintainers
 /services/control-api/src/webhook-security.ts @WasalX/maintainers
+/services/control-api/src/webhook-ingress.controller.ts @WasalX/maintainers
 /services/connector-worker/src/tenant-job.ts @WasalX/maintainers
+/services/connector-worker/src/connection-operation-repository.ts @WasalX/maintainers
+/services/connector-worker/src/routing-sync-repository.ts @WasalX/maintainers
 /services/connector-worker/src/secrets.ts @WasalX/maintainers
 /services/identity-policy-activator/src/ @WasalX/maintainers
 /services/invitation-mailer/src/secrets.ts @WasalX/maintainers
+/services/invitation-mailer/src/repository.ts @WasalX/maintainers
 /services/tenant-provisioner/src/auth.ts @WasalX/maintainers
 /services/workspace-provider/src/auth.ts @WasalX/maintainers
+/services/workspace-provider/src/repository.ts @WasalX/maintainers
 /infra/docker/full/keycloak/*.mjs @WasalX/maintainers
 /infra/docker/full/keycloak/*realm.json @WasalX/maintainers
 /infra/docker/full/postgres/activate-zammad.sql @WasalX/maintainers
