@@ -82,7 +82,7 @@ Measure first attempts from GitHub Actions run and job timestamps. Record trends
 | Job pickup from creation to start | At most 60 seconds. Report longer waits and distinguish runner pickup from workflow dependency time. |
 | First-attempt green | Track the fraction of eligible exact heads and merge groups green on attempt one. Investigate each failure and retain it in the count. |
 | CI cost | Zero. Changes that would incur charges require owner approval. |
-| Portal `/app` first-load JavaScript | At most 430,000 B gzip (350,000 B brotli), measured from the production build's asset manifest. On DEV, LCP p75 under 2.5 s and INP p75 under 200 ms (Core Web Vitals 'good'). Misses become board items. |
+| Portal `/app` first-load JavaScript | At most 250,000 B gzip (210,000 B brotli), measured from the production build's asset manifest. On DEV, LCP p75 under 2.5 s and INP p75 under 200 ms (Core Web Vitals 'good'). Misses become board items. |
 
 Keep these performance targets independent of the merge result. Address misses through the board while preserving the required checks.
 
