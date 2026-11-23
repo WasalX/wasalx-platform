@@ -192,7 +192,8 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
                                  [row for row in rows if row["image"] == image])
         paths = ["packages/core/src/index.ts", "Dockerfile.foundation-postgres", "unmapped/new-file"]
         self.assertEqual([row["image"] for row in images.matrix(paths, pull_request=True)["include"]],
-                         ["portal", "control-api", "connector-worker", "foundation-postgres"])
+                         ["portal", "control-api", "connector-worker", "tenant-provisioner",
+                          "tenant-workspace-controller", "foundation-postgres"])
         self.assertEqual(images.matrix(["docs/guide/intro.md", "unmapped/new-file"], pull_request=True),
                          {"include": []})
 
@@ -241,7 +242,7 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
         self.assertEqual(len(all_images), 21)
         for flags, diff_base, diff, expected in [
             (["--pull-request"], "HEAD^1", b"packages/core/src/index.ts\0",
-             ["portal", "control-api", "connector-worker"]),
+             ["portal", "control-api", "connector-worker", "tenant-provisioner", "tenant-workspace-controller"]),
             (["--base-sha", base], base, b"app/page.tsx\0", ["portal"]),
             (["--base-sha", base], base, b"packages/core/src/index.ts\0", all_images),
             (["--base-sha", base], base, b"unmapped/new-file\0", all_images),

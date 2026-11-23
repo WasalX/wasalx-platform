@@ -281,11 +281,12 @@ function displayTimeZone(value: string) {
     throw new Error("WASALX_ZAMMAD_DISPLAY_TIMEZONE is invalid");
   }
   try {
-    new Intl.DateTimeFormat("en", { timeZone: value });
-  } catch {
-    throw new Error("WASALX_ZAMMAD_DISPLAY_TIMEZONE is invalid");
+    const canonical = new Intl.DateTimeFormat("en", { timeZone: value }).resolvedOptions().timeZone;
+    if (canonical === value) return value;
+  } catch (error) {
+    if (!(error instanceof RangeError)) throw error;
   }
-  return value;
+  throw new Error("WASALX_ZAMMAD_DISPLAY_TIMEZONE is invalid");
 }
 
 function required(value: string | undefined, name: string) { if (!value) throw new Error(`${name} is required`); return value; }

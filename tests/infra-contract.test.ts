@@ -8,6 +8,7 @@ import { createHash } from "node:crypto";
 import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parse as parseYaml } from "yaml";
+import { wasalxTimeZone } from "../packages/core/src/display-time-zone.ts";
 
 const read = (path: string) =>
   readFile(new URL(`../${path}`, import.meta.url), "utf8");
@@ -353,7 +354,7 @@ test("full Compose Zammad backup starts outside the nightly install window", asy
 test("full Compose supplies the default Zammad display time zone", async () => {
   const full = await readComposeEnvironments("compose.full.yaml");
   const timeZone = full["zammad-runtime-bootstrap"].WASALX_ZAMMAD_DISPLAY_TIMEZONE;
-  assert.equal(timeZone, "${WASALX_FULL_ZAMMAD_DISPLAY_TIMEZONE:-Asia/Riyadh}");
+  assert.equal(timeZone, `\${WASALX_FULL_ZAMMAD_DISPLAY_TIMEZONE:-${wasalxTimeZone}}`);
   assert.equal(full["tenant-workspace-controller"].WASALX_ZAMMAD_DISPLAY_TIMEZONE, timeZone);
 });
 

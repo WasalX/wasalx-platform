@@ -754,6 +754,7 @@ services:
       <<: *full-zammad-environment
       WASALX_ZAMMAD_BOOTSTRAP_EMAIL: ${WASALX_FULL_ZAMMAD_BOOTSTRAP_EMAIL:-fixture-0003@example.test}
       WASALX_ZAMMAD_BOOTSTRAP_NAME: Qualification Administrator
+      # The Compose contract test checks this fallback against the shared application default.
       WASALX_ZAMMAD_DISPLAY_TIMEZONE: &zammad-display-time-zone ${WASALX_FULL_ZAMMAD_DISPLAY_TIMEZONE:-Asia/Riyadh}
       WASALX_SERVICE_IDENTITY_MODE: ${WASALX_SERVICE_IDENTITY_MODE:-}
       WASALX_ZAMMAD_BOOTSTRAP_PASSWORD: ${WASALX_FULL_ZAMMAD_BOOTSTRAP_ADMIN_PASSWORD:?Set WASALX_FULL_ZAMMAD_BOOTSTRAP_ADMIN_PASSWORD}
