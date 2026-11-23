@@ -1,16 +1,16 @@
 # WasalX delivery
 
-Follows engineering standard v1.10.
+Follows engineering standard v1.20.
 
-WasalX Delivery owns this document. Change it through a reviewed PR.
+WasalX Delivery owns this document, the merge queue, CI health and speed, releases, deploys, rollback, and alerts.
 
 ## Branching and merging
 
 - Open PRs from short-lived branches against trunk `main`. Merge, split, or close each PR within two days of its first push. Delete merged branches and branches with no PR after seven days without a push.
-- Enable auto-merge into the protected merge queue once checks pass at the exact PR head and any required risk-path review gives a passing verdict. The queue squashes and requires every PR in a group to pass.
-- For the [risk paths defined in the agent instructions](AGENTS.md#risk-paths), require one independent Opus 5.5 high verdict on the full diff at the exact PR head. Reuse the verdict for a merge-only base update with the same reviewed diff (same patch-id) or a same-tree re-cut. Review substantive diff changes again. [CODEOWNERS](CODEOWNERS) marks risk paths only. Code-owner and lead approvals are not required.
-- Record the risk-path verdict on the PR.
-- If the PR head changes after auto-merge is enabled or a review sends the PR back, disable auto-merge and remove the PR from the merge queue. Check queue membership directly because a queued PR shows no auto-merge request.
+- Workers push their own branches and open PRs under the project's agent identity. For low-risk PRs, the worker enables auto-merge when opening the PR. The queue squashes and requires every PR in a group to pass.
+- High-risk changes can fail irreversibly, silently, or in public. They include data loss (migrations, deletes, and restores on real data), data exposure (sign-in, permissions, privacy, secrets, making anything public, and network or access controls), safety-critical rules, weakening a merge gate (CI, rulesets, required checks, and deny lists), and production configuration and deploys. See the [risk-path list](AGENTS.md#risk-paths).
+- For a high-risk PR, the worker first enables auto-merge after the independent reviewer posts a passing Opus 5.5 high verdict on the full diff and names the current PR head SHA in the PR comment. Each change gets one review. Verify fixes for review findings with tests.
+- Disable auto-merge before any further push. Check queue membership directly and remove the PR from the queue before pushing if it is queued. A push touching a high-risk path requires a new verdict that names the new head before the worker enables auto-merge again.
 - Update `main` only through the protected queue, which qualifies the exact combined tree. Never force-push or rewrite history.
 - Run agent pushes, PR operations, merges, reruns, and issue and board writes only through the project's reviewed GitHub App helper. Never print its installation token. Use the owner login only for approved settings changes and authorized tag creation.
 
