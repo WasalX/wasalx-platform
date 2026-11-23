@@ -12,6 +12,10 @@ on:
         description: Main commit SHA for dev, or the same tag used to dispatch for stg and prod
         required: true
         type: string
+      receipt_code:
+        description: Receipt code for dev only
+        required: false
+        type: string
 
 permissions: {contents: read}
 
@@ -35,7 +39,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           DEPLOY_ENVIRONMENT: ${{ inputs.environment }}
           DEPLOY_REF: ${{ inputs.ref }}
+          DEPLOY_RECEIPT_CODE: ${{ inputs.receipt_code }}
         run: |
+          receipt_code=${DEPLOY_RECEIPT_CODE:-}
+          if [[ -n "$receipt_code" ]]; then
+            [[ "$DEPLOY_ENVIRONMENT" == dev ]] || { echo '::error::Receipt codes require the dev environment'; exit 1; }
+            export LC_ALL=C
+            [[ "$receipt_code" =~ ^(STAGED|VERIFIED|INSTALL_PASS_HELD|DISCARD_PASS|CLASS_HALTED|HOLD_[A-Z][A-Z0-9_]{0,39})$ ]] || { echo '::error::Invalid DEV receipt code'; exit 1; }
+          fi
+
           source scripts/release/image-manifest.sh
           directory=$(mktemp -d "$RUNNER_TEMP/wasalx-deploy.XXXXXX")
           case "$DEPLOY_ENVIRONMENT" in
@@ -68,3 +80,9 @@ jobs:
           ' "$directory/images-manifest.json")
           printf '### Image digests for `%s` (%s)\n\nSource commit `%s`\n\n%s\n' \
             "$DEPLOY_REF" "$DEPLOY_ENVIRONMENT" "$commit" "$digests" >> "$GITHUB_STEP_SUMMARY"
+          if [[ -n "$receipt_code" ]]; then
+            printf '\nReceipt code `%s`\n' "$receipt_code" >> "$GITHUB_STEP_SUMMARY"
+            if [[ "$receipt_code" == HOLD_* || "$receipt_code" == CLASS_HALTED ]]; then
+              exit 1
+            fi
+          fi

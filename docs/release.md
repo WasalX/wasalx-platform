@@ -23,10 +23,9 @@ criteria below.
    [`deploy.yml`](../.github/workflows/deploy.yml) to record the staging tag
    and DEV commit in the respective GitHub environments. Complete a 24-hour
    soak with no new blocking findings.
-5. **Approved through the production gate.** The owner gives the one-time GO
-   for the `prod` deploy gate (see [Deploys](../DELIVERY.md#deploys)). Until the
-   `prod` GitHub environment's protection rule is changed by an approved
-   settings change, it still asks for an approval on each deployment.
+5. **Approved through the production gate.** The owner approves each production
+   deployment as the `prod` GitHub environment's required reviewer. That
+   approval gives GO for the deployment. See [Deploys](../DELIVERY.md#deploys).
 6. **Immutable.** GitHub release immutability is enabled and the `v*` tag
    ruleset blocks updates and deletions. Release notes must list the image
    digests. The release workflow attaches `images-manifest.json` with the
