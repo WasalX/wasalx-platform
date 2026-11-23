@@ -11,6 +11,22 @@ test("workflow schema inspection is read-only and restricted to flow administrat
   assert.doesNotMatch(source, /bot\.flow\.schema\.[^\n]+<textarea/u);
 });
 
+test("automation screens show no raw flow definition or developer terms by default", async () => {
+  const source = await read("app/BotAutomation.tsx");
+  // The only raw definition sits in a disclosure that starts closed.
+  assert.equal(source.match(/JSON\.stringify\(definition/gu)?.length, 1);
+  assert.match(source, /<details className="routing-raw">\s*<summary>\{t\("bot\.flow\.schema\.title"\)\}<\/summary>\s*<p>\{t\("bot\.flow\.schema\.help"\)\}<\/p>\s*<pre aria-label=\{t\("bot\.flow\.schema\.label"\)\}><code>\{JSON\.stringify\(definition/u);
+  assert.doesNotMatch(source, /<details className="routing-raw"[^>]*\sopen/u);
+  assert.doesNotMatch(await read("app/ClientRouting.tsx"), /placeholder="ACME-42"/u);
+  const values = (text) => [...text.matchAll(/^ {2}"[^"]+": "((?:[^"\\]|\\.)*)",\r?$/gmu)].map((match) => match[1].replace(/\{[^}]+\}/gu, ""));
+  for (const value of values(await read("lib/i18n/messages/en/automation.ts"))) {
+    assert.doesNotMatch(value, /\b(?:revision|immutable|JSON|schema|payload)\b/iu, value);
+  }
+  for (const value of values(await read("lib/i18n/messages/ar/automation.ts"))) {
+    assert.doesNotMatch(value, /JSON|غير قابل/u, value);
+  }
+});
+
 test("audit filtering searches only the role-safe presentation already shown on screen", async () => {
   const source = await read("app/WasalXApp.tsx");
   assert.match(source, /const filteredEntries = normalizedQuery\s*\? entries\.filter\(\(row\) => Object\.values\(presentation\(row\)\)/u);

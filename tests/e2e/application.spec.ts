@@ -366,7 +366,7 @@ function expectNetworkFailure(page: Page, pattern: RegExp) {
     if (new URL(request.url()).pathname.startsWith("/api/client-routing") && !["GET", "HEAD", "OPTIONS"].includes(request.method())) mutations.push(request.method());
   });
   await open(page, "routing");
-  await expect(page.getByText("Revision 8", { exact: true })).toBeVisible();
+  await expect(page.getByText("Version 8", { exact: true })).toBeVisible();
   await expect(page.locator(".bot-version-list button.selected .status")).toHaveText("Active");
   for (const mode of ["transport", "invalid-json"] as const) {
     let intercepted = 0;
@@ -384,7 +384,7 @@ function expectNetworkFailure(page: Page, pattern: RegExp) {
     await page.unroute("**/api/client-routing/sources");
     await alert.getByRole("button").click();
     await expect(alert).toHaveCount(0);
-    await expect(page.getByText("Revision 8", { exact: true })).toBeVisible();
+    await expect(page.getByText("Version 8", { exact: true })).toBeVisible();
   }
   expect(mutations).toEqual([]);
 });
@@ -1002,7 +1002,7 @@ test("one-to-one bot configuration, simulation, handoff, and role boundaries sta
   const clonedFlowVersions = new Map<number, string>();
   const saveClonedVersion = async (expectedVersion: number) => {
     const pending = page.waitForResponse(response => response.request().method() === "POST" && /^\/api\/bot-flows\/[^/]+\/clone$/u.test(new URL(response.url()).pathname));
-    await page.getByRole("button", { name: "Save immutable draft" }).click();
+    await page.getByRole("button", { name: "Save as new draft" }).click();
     const response = await pending;
     expect(response.ok()).toBe(true);
     const created = await response.json() as { id: string; version: number };
@@ -1195,7 +1195,7 @@ test("one-to-one bot configuration, simulation, handoff, and role boundaries sta
   await page.getByLabel("Example values").fill("{");
   await page.getByRole("button", { name: "Start simulation" }).click();
   await expect(page.getByLabel("Example values")).toHaveAttribute("aria-invalid", "true");
-  await expect(page.getByText("Enter example values as valid JSON with named fields.", { exact: true })).toBeVisible();
+  await expect(page.getByText("Check the example values. Keep the format of the starting example: each name and value in quotes, separated by commas.", { exact: true })).toBeVisible();
   await page.getByLabel("Example values").fill("{}");
   await page.getByRole("button", { name: "Start simulation" }).click();
   await page.getByRole("button", { name: "Share my location" }).click();
@@ -1206,7 +1206,7 @@ test("one-to-one bot configuration, simulation, handoff, and role boundaries sta
     await page.getByLabel("Starter").selectOption("lookup");
     await page.getByRole("button", { name: "New flow" }).click();
     await expect(page.getByLabel("Handoff destination")).toHaveValue("CLIENT_ESCALATION");
-    await page.getByRole("button", { name: "Save immutable draft" }).click();
+    await page.getByRole("button", { name: "Save as new draft" }).click();
     await page.getByRole("button", { name: /Order lookup/u }).last().click();
     await expect(page.getByLabel("Example values")).toHaveValue('{"message.text":"ORD-42","action.status":"shipped"}');
     await page.getByRole("button", { name: "Start simulation" }).click();
@@ -1228,7 +1228,7 @@ test("one-to-one bot configuration, simulation, handoff, and role boundaries sta
   await expect(page.getByRole("heading",{name:"Configuration sources"})).toBeVisible();
   await expect(page.getByText("Notion client directory",{exact:true})).toBeVisible();
   await expect(page.getByText("Last complete pull",{exact:true})).toBeVisible();
-  await expect(page.getByText("Revision 8",{exact:true})).toBeVisible();
+  await expect(page.getByText("Version 8",{exact:true})).toBeVisible();
   await expect(page.getByRole("button",{name:"Copy webhook endpoint"})).toHaveCount(canWrite?1:0);
   await expect(page.getByText("Acme Logistics",{exact:true})).toBeVisible();
   await expect(page.getByRole("region",{name:"Client routing table"})).toBeVisible();
@@ -1241,7 +1241,7 @@ test("one-to-one bot configuration, simulation, handoff, and role boundaries sta
   await expect(page.locator(".routing-result")).toContainText("Matched Acme Logistics");
   if(canWrite&&testInfo.project.name==="desktop"){
     await page.getByRole("button",{name:"New draft"}).click();
-    await expect(page.getByRole("heading",{name:"Create immutable routing draft"})).toBeFocused();
+    await expect(page.getByRole("heading",{name:"Create routing draft"})).toBeFocused();
     await expect(page.getByRole("group",{name:"Configuration sources"})).toBeVisible();
     await expect(page.getByRole("group",{name:"Clients and ownership"})).toBeVisible();
     await expect(page.getByLabel("Connector").first()).toHaveValue("MANUAL");
@@ -1272,9 +1272,9 @@ test("one-to-one bot configuration, simulation, handoff, and role boundaries sta
     await expect(matcher.getByLabel("Connection")).toBeVisible();
     expect(await matcher.getByLabel("Connection").locator("option").count()).toBeGreaterThan(1);
     await matcher.getByRole("button",{name:"Remove match"}).click();
-    await expect(page.getByText("Advanced raw configuration")).toBeVisible();
-    await page.getByText("Advanced raw configuration").click();
-    await expect(page.getByLabel("Validated routing JSON")).toBeVisible();
+    await expect(page.getByText("Advanced: edit as text")).toBeVisible();
+    await page.getByText("Advanced: edit as text").click();
+    await expect(page.getByLabel("Routing settings as text")).toBeVisible();
     // Use the existing request interceptor to read the actual server body;
     // the browser Response.body reader can remain pending after a successful save.
     let createdRouting: { id: string; version: number } | undefined;
@@ -1288,7 +1288,7 @@ test("one-to-one bot configuration, simulation, handoff, and role boundaries sta
     await createdRoutingResponse;
     expect(createdRouting).toBeDefined();
     if (!createdRouting) throw new Error("The created routing draft identity is missing");
-    await expect(page.getByText("Immutable routing draft created. Review it, then activate it.")).toBeVisible();
+    await expect(page.getByText("Routing draft created. Review it, then activate it.")).toBeVisible();
     await page.getByRole("button",{name:new RegExp(`^Version ${createdRouting.version} Created `,"u")}).click();
     await page.getByRole("button",{name:"Review activation"}).click();
     await expect(page.getByRole("heading",{name:`Activate routing version ${createdRouting.version}?`})).toBeVisible();

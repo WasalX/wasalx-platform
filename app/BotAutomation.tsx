@@ -2863,7 +2863,7 @@ function ActionForm({
           </legend>
           <FieldRows rows={mappingRows} setRows={setMappingRows} addLabel={t("plugins.form.addMapping")} keyLabel={t("plugins.form.variableName")} valueLabel={t("plugins.form.jsonPointer")} removeLabel={t("plugins.form.removeField")}/>
           <small>
-            {t("bot.actionForm.mappingHelp", { example: isolate(`{"action.status":"/status"}`) })}
+            {t("bot.actionForm.mappingHelp", { example: isolate("/order/status") })}
           </small>
         </fieldset>
       </div>
