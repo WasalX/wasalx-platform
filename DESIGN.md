@@ -194,6 +194,6 @@ Page budgets for the portal. A miss becomes a board item.
 
 | Measure | Budget | How it is measured |
 | --- | --- | --- |
-| `/app` first-load JavaScript | At most 250,000 B gzip (210,000 B brotli) | Sum of the client entry and the static dependencies of every client component `/app` renders, from the production build's asset manifest (#183, #213, #220) |
+| `/app` first-load JavaScript | At most 250,000 B gzip (210,000 B brotli) | Union of the client entry's dependencies and the static dependencies of every client reference `/app` renders, read from the production build's asset manifest (`dist/server/__vite_rsc_assets_manifest.js`); gzip level 9, brotli quality 11 (Node zlib) (#183, #213, #220) |
 | Largest Contentful Paint (LCP) | Under 2.5 s at p75 | On DEV, per screen |
 | Interaction to Next Paint (INP) | Under 200 ms at p75 | On DEV, per screen |
