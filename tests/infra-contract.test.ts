@@ -352,7 +352,9 @@ test("full Compose Zammad backup starts outside the nightly install window", asy
 
 test("full Compose supplies the default Zammad display time zone", async () => {
   const full = await readComposeEnvironments("compose.full.yaml");
-  assert.equal(full["zammad-runtime-bootstrap"].WASALX_ZAMMAD_DISPLAY_TIMEZONE, "${WASALX_FULL_ZAMMAD_DISPLAY_TIMEZONE:-Asia/Riyadh}");
+  const timeZone = full["zammad-runtime-bootstrap"].WASALX_ZAMMAD_DISPLAY_TIMEZONE;
+  assert.equal(timeZone, "${WASALX_FULL_ZAMMAD_DISPLAY_TIMEZONE:-Asia/Riyadh}");
+  assert.equal(full["tenant-workspace-controller"].WASALX_ZAMMAD_DISPLAY_TIMEZONE, timeZone);
 });
 
 function composeConnectionHosts(key: string, value: string): string[] {

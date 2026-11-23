@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { isIP } from "node:net";
+import { wasalxTimeZone } from "@wasalx/core/display-time-zone";
 import { privateKubernetesUrl } from "../config.js";
 
 export type ResourceProfile = {
@@ -35,6 +36,7 @@ export type ControllerConfig = {
   secureRedis: boolean;
   profiles: Record<"small" | "medium" | "large", ResourceProfile>;
   backupSchedule: string;
+  zammadDisplayTimeZone: string;
   backupEncryption: { mode: "SSE_KMS" } | { mode: "CLIENT_ENVELOPE"; ageRecipient: string };
   allowedEgress: Array<{ cidr: string; ports: number[] }>;
 };
@@ -163,6 +165,7 @@ export function loadControllerConfig(
     backupSchedule: cron(
       environment.ZAMMAD_BACKUP_SCHEDULE ?? "0 3 * * *",
     ),
+    zammadDisplayTimeZone: displayTimeZone(environment.WASALX_ZAMMAD_DISPLAY_TIMEZONE ?? wasalxTimeZone),
     allowedEgress: egress(environment.ZAMMAD_ALLOWED_EGRESS_JSON),
   };
 }
@@ -271,6 +274,18 @@ function validCidr(value: string) {
 function cron(value: string) {
   if (value.length > 100 || value.trim().split(/\s+/u).length !== 5 || /[\r\n]/u.test(value)) throw new Error("ZAMMAD_BACKUP_SCHEDULE is invalid");
   return value.trim();
+}
+
+function displayTimeZone(value: string) {
+  if (value.length > 64 || !/^[A-Za-z][A-Za-z0-9._+/-]*$/u.test(value)) {
+    throw new Error("WASALX_ZAMMAD_DISPLAY_TIMEZONE is invalid");
+  }
+  try {
+    new Intl.DateTimeFormat("en", { timeZone: value });
+  } catch {
+    throw new Error("WASALX_ZAMMAD_DISPLAY_TIMEZONE is invalid");
+  }
+  return value;
 }
 
 function required(value: string | undefined, name: string) { if (!value) throw new Error(`${name} is required`); return value; }

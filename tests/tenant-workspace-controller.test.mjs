@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import test from "node:test";
+import { wasalxTimeZone } from "../lib/i18n/locales.ts";
 import { createFakeWorkspaceProviderHandler } from "../tools/fake-workspace-provider.mjs";
 import { HttpWorkspaceProvider } from "../services/tenant-provisioner/dist/controller/provider.js";
 import { KubernetesControllerClient } from "../services/tenant-provisioner/dist/controller/kubernetes.js";
@@ -55,6 +56,7 @@ function controllerConfig(overrides = {}) {
       large: { cpu: "4", memory: "8Gi", storage: "100Gi", replicas: 3 },
     },
     backupSchedule: "0 3 * * *",
+    zammadDisplayTimeZone: "Asia/Tokyo",
     allowedEgress: [{ cidr: "10.0.0.0/8", ports: [443, 5432, 9200] }],
     ...overrides,
   };
@@ -163,6 +165,11 @@ test("controller configuration fails closed without private provider dependencie
     /safe failover margin/,
   );
   assert.equal(loadControllerConfig(base).ingressNamespace, "ingress-system");
+  assert.equal(loadControllerConfig(base).zammadDisplayTimeZone, wasalxTimeZone);
+  assert.equal(loadControllerConfig({ ...base, WASALX_ZAMMAD_DISPLAY_TIMEZONE: "Asia/Tokyo" }).zammadDisplayTimeZone, "Asia/Tokyo");
+  for (const invalid of ["", "+03:00", "Not/AZone"]) {
+    assert.throws(() => loadControllerConfig({ ...base, WASALX_ZAMMAD_DISPLAY_TIMEZONE: invalid }), /WASALX_ZAMMAD_DISPLAY_TIMEZONE is invalid/u);
+  }
   assert.deepEqual(loadControllerConfig(base).backupEncryption, { mode: "SSE_KMS" });
   const ageRecipient = `age1${"q".repeat(58)}`;
   assert.deepEqual(loadControllerConfig({ ...base, ZAMMAD_BACKUP_ENCRYPTION_MODE: "CLIENT_ENVELOPE", ZAMMAD_BACKUP_AGE_RECIPIENT: ageRecipient }).backupEncryption,
@@ -341,6 +348,10 @@ test("resource builder emits isolated runtime resources and only secret-manager 
   assert.equal(resources.initJob.spec.template.spec.containers[0].resources.requests.cpu, "500m");
   assert.doesNotMatch(rootInitializer.command[2], /wasalx-package-install|wasalx-runtime-bootstrap/u);
   assert.match(installContainer.command[2], /^wasalx-package-install && wasalx-runtime-bootstrap$/u);
+  assert.deepEqual(installContainer.env.filter(entry => entry.name === "WASALX_ZAMMAD_DISPLAY_TIMEZONE"),
+    [{ name: "WASALX_ZAMMAD_DISPLAY_TIMEZONE", value: controllerConfig().zammadDisplayTimeZone }]);
+  assert.notEqual(buildActiveResources(ws, controllerConfig({ zammadDisplayTimeZone: "UTC" })).initJob.metadata.name,
+    resources.initJob.metadata.name, "a changed display time zone requires a new immutable Job");
   assert.ok(installContainer.env.some((entry) => entry.name === "WASALX_PACKAGE_VERSION" && entry.value === "0.3.0"));
   assert.ok(installContainer.env.some((entry) => entry.name === "WASALX_PACKAGE_SHA256" && entry.value === packageSha));
   assert.ok(installContainer.env.some((entry) => entry.name === "ZAMMAD_SERVICE_TOKEN" && entry.valueFrom?.secretKeyRef?.key === "ZAMMAD_SERVICE_TOKEN"));

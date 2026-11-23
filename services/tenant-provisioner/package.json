@@ -10,6 +10,7 @@
     "start:controller": "node dist/controller-bootstrap.js"
   },
   "dependencies": {
+    "@wasalx/core": "workspace:*",
     "@wasalx/observability": "workspace:*",
     "jose": "^6.2.18"
   },

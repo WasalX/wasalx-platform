@@ -122,7 +122,7 @@ export function buildActiveResources(workspace: TenantWorkspace, config: Control
     ),
     deployment(workspace, names.memcached, 1, dependencyContainer("memcached", workspace.spec.zammad.memcachedImage, "memcached", 11211), profile, true),
   ];
-  const initJob = zammadInitJob(workspace, image, runtimeEnv, names.runtimeSecret, config.secureRedis);
+  const initJob = zammadInitJob(workspace, image, runtimeEnv, names.runtimeSecret, config);
   const ingress = resource(workspace, "networking.k8s.io/v1", "Ingress", names.ingress, {
     ingressClassName: config.ingressClassName,
     tls: [{ hosts: [workspace.spec.zammad.hostname], secretName: `${names.base}-tls` }],
@@ -413,7 +413,8 @@ function redisServerVolume(secretName: string) {
   };
 }
 
-function zammadInitJob(workspace: TenantWorkspace, image: string, environment: Array<Record<string, unknown>>, secretName: string, secureRedis: boolean) {
+function zammadInitJob(workspace: TenantWorkspace, image: string, environment: Array<Record<string, unknown>>, secretName: string, config: ControllerConfig) {
+  const { secureRedis, zammadDisplayTimeZone } = config;
   const suffix = createHash("sha256")
     .update(JSON.stringify([
       "init-contract-v5-native-setup-service-identity",
@@ -427,6 +428,7 @@ function zammadInitJob(workspace: TenantWorkspace, image: string, environment: A
       workspace.spec.oidc.issuer,
       workspace.spec.oidc.clientId,
       workspace.spec.defaults.initialGroup,
+      zammadDisplayTimeZone,
       secureRedis,
     ]))
     .digest("hex")
@@ -482,6 +484,7 @@ function zammadInitJob(workspace: TenantWorkspace, image: string, environment: A
             { name: "WASALX_ZAMMAD_BOOTSTRAP_EMAIL", value: workspace.spec.owner.email },
             { name: "WASALX_ZAMMAD_BOOTSTRAP_OIDC_SUBJECT", value: workspace.spec.owner.oidcSubject },
             { name: "WASALX_ZAMMAD_BOOTSTRAP_NAME", value: workspace.spec.owner.displayName },
+            { name: "WASALX_ZAMMAD_DISPLAY_TIMEZONE", value: zammadDisplayTimeZone },
             { name: "WASALX_SERVICE_IDENTITY_MODE", value: "fresh" },
             { name: "WASALX_BOOTSTRAP_OIDC_ISSUER", value: workspace.spec.oidc.issuer },
             { name: "WASALX_BOOTSTRAP_OIDC_CLIENT_ID", value: workspace.spec.oidc.clientId },
