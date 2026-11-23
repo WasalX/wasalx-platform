@@ -173,7 +173,7 @@ test("nightly install is report-only, read-only and fails open on PR diff errors
   const { on, permissions, concurrency, jobs } = parse(await read(path));
   const job = jobs["nightly-install"];
   assert.deepEqual(on, {
-    schedule: [{ cron: "30 3 * * *" }],
+    schedule: [{ cron: "17 2 * * *" }],
     workflow_dispatch: null,
     pull_request: { branches: ["main"], types: ["opened", "synchronize", "reopened"] },
     push: { tags: ["v*-rc.*"] },
