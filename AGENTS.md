@@ -10,7 +10,7 @@
 - UI project: yes
 - Other repos: WasalX/wasalx-zammad-addon
 - [Delivery rules](DELIVERY.md) define how changes ship.
-- **Links** — [DELIVERY.md](DELIVERY.md) and [DESIGN.md](DESIGN.md). The project follows the portfolio engineering standard and delivery-orchestration skill, both private. Contributor rules are in the repository docs.
+- **Links** — [DELIVERY.md](DELIVERY.md) and [DESIGN.md](DESIGN.md). The project follows the portfolio engineering standard and delivery-orchestration skill, both private. Contributor rules are in this file, [DELIVERY.md](DELIVERY.md) and [SECURITY.md](SECURITY.md).
 - The owner decides only money (any paid service), access only the owner can grant, production deployments, destructive operations on real data, making private things public, and closing a project. Project leads decide everything else within their scopes.
 
 ## Product and current goal
@@ -82,7 +82,7 @@ Require the [risk-path review](DELIVERY.md#branching-and-merging) for paths in [
 - **Outside processors** — The email provider receives invitee email addresses. WhatsApp providers receive recipients and message content.
 - **Logs** — Structured application logs identify people and records by ID and redact sensitive fields by key.
 
-Tenant retention settings keep resolved cases and media for 1 to 3,650 days, with a default of 90 days. Unmatched webhook diagnostics are eligible for purge within 24 hours, subject to legal holds. Privacy exports expire within 168 hours.
+Tenant retention settings keep resolved cases and media for 1 to 3,650 days, with a default of 90 days. Group history uses its own setting with the same range and default. Unmatched webhook diagnostics are eligible for purge within 24 hours, subject to legal holds. Privacy exports expire within 168 hours.
 
 Privacy deletion and export requests stay within the tenant and can target the tenant, a ticket, a reference, a participant, or a help-desk user. Active legal holds block applicable deletions. The WhatsApp provider's data-deletion callback also accepts requests.
 
