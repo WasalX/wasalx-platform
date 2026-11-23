@@ -757,8 +757,12 @@ test("dense operational tables are contained inside their own mobile scrollers",
 
 test("large tenant workspaces load only when their route is selected", async () => {
   const source = await read("app/WasalXApp.tsx");
-  for (const moduleName of ["BotAutomation", "ClientRouting", "CaseLifecycle"]) {
+  const viewModules = ["BotAutomation", "ClientRouting", "CaseLifecycle", "InboxWorkspace", "SupportTeams", "MailboxAdministration",
+    "WorkspaceAccess", "NativeRoutingSync", "MetaCostUsage", "MetaSignup", "MetaNumberRelease", "MetaTemplatePreparation", "MetaLegacyMigration",
+    "MetaCoexistence", "MetaBillingDiagnostics", "MetaCustomerPaymentPolicy", "MetaRouting", "MetaSavedAccessActivation"];
+  for (const moduleName of viewModules) {
     assert.match(source, new RegExp(`lazy\\(async \\(\\) => \\([\\s\\S]*import\\(\\"\\./${moduleName}\\"\\)`));
+    assert.doesNotMatch(source, new RegExp(`^import [^;]* from "\\./${moduleName}";`, "mu"), `${moduleName} must stay out of the first-load bundle`);
   }
   assert.doesNotMatch(source, /import \{ CaseLifecycle \} from "\.\/CaseLifecycle"/u);
   assert.doesNotMatch(source, /import \{ BotAutomation, PluginCatalog \} from "\.\/BotAutomation"/u);
