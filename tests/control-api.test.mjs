@@ -1,12 +1,76 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { BadRequestException, NotFoundException, UnauthorizedException } from "../services/control-api/node_modules/@nestjs/common/index.js";
+import { BadRequestException, ForbiddenException, NotFoundException, UnauthorizedException } from "../services/control-api/node_modules/@nestjs/common/index.js";
+import { METHOD_METADATA, MODULE_METADATA } from "../services/control-api/node_modules/@nestjs/common/constants.js";
+import { MetadataScanner, Reflector } from "../services/control-api/node_modules/@nestjs/core/index.js";
 import { signServiceJwt } from "../services/connector-worker/dist/packages/core/src/service-auth.js";
+import { AppModule } from "../services/control-api/dist/app.module.js";
+import { PUBLIC_ROUTE } from "../services/control-api/dist/auth.guard.js";
+import { HealthController } from "../services/control-api/dist/health.controller.js";
+import { PermissionGuard, Requires } from "../services/control-api/dist/permission.guard.js";
+import { tenantPermissions } from "../services/control-api/dist/rbac.js";
 import { ServiceAuthService } from "../services/control-api/dist/service-auth.service.js";
+import { SessionController } from "../services/control-api/dist/session.controller.js";
+import { WahaAuthorizationController } from "../services/control-api/dist/waha-authorization.controller.js";
 import { WebhookIngressController } from "../services/control-api/dist/webhook-ingress.controller.js";
 import { WebhookSecretResolutionError, WebhookSecretService } from "../services/control-api/dist/webhook-secret.service.js";
 import { verifyProviderHmac } from "../services/control-api/dist/webhook-security.js";
 import { ZammadInternalController } from "../services/control-api/dist/zammad-internal.controller.js";
+
+function permissionContext(controller, handler, principal) {
+  return {
+    getClass: () => controller,
+    getHandler: () => handler,
+    switchToHttp: () => ({ getRequest: () => ({ principal }) }),
+  };
+}
+
+test("the permission guard denies a route without authorization metadata", () => {
+  const guard = new PermissionGuard(new Reflector());
+  const context = permissionContext(class UnmarkedController {}, () => {}, { role: "tenant_owner" });
+  assert.throws(() => guard.canActivate(context), error =>
+    error instanceof ForbiddenException && error.getStatus() === 403);
+});
+
+test("the permission guard allows explicit public metadata on a handler or controller", () => {
+  const guard = new PermissionGuard(new Reflector());
+  assert.equal(guard.canActivate(permissionContext(HealthController, HealthController.prototype.live)), true);
+  assert.equal(guard.canActivate(permissionContext(SessionController, SessionController.prototype.session)), true);
+});
+
+test("the permission guard enforces a controller's required permission", () => {
+  const guard = new PermissionGuard(new Reflector());
+  const { qr } = WahaAuthorizationController.prototype;
+  assert.equal(guard.canActivate(permissionContext(WahaAuthorizationController, qr, { role: "tenant_owner" })), true);
+  assert.throws(() => guard.canActivate(permissionContext(WahaAuthorizationController, qr, { role: "agent" })), ForbiddenException);
+  assert.throws(() => guard.canActivate(permissionContext(WahaAuthorizationController, qr)), ForbiddenException);
+});
+
+test("every registered control API route declares a tenant permission or explicitly skips tenant auth", () => {
+  const reflector = new Reflector();
+  const scanner = new MetadataScanner();
+  const controllers = reflector.get(MODULE_METADATA.CONTROLLERS, AppModule);
+  const permissionKey = Requires("connection:read").KEY;
+  assert.ok(controllers?.length, "AppModule must register controllers");
+  const invalid = [];
+  let routeCount = 0;
+
+  for (const controller of controllers) {
+    for (const method of scanner.getAllMethodNames(controller.prototype)) {
+      const handler = controller.prototype[method];
+      if (reflector.get(METHOD_METADATA, handler) === undefined) continue;
+      routeCount++;
+      const targets = [handler, controller];
+      const permission = reflector.getAllAndOverride(permissionKey, targets);
+      const skipTenantAuth = reflector.getAllAndOverride(PUBLIC_ROUTE, targets) === true;
+      const valid = skipTenantAuth ? permission === undefined : tenantPermissions.includes(permission);
+      if (!valid) invalid.push(`${controller.name}.${method}`);
+    }
+  }
+
+  assert.ok(routeCount, "Expected to discover HTTP handlers");
+  assert.deepEqual(invalid, [], "Expected one valid authorization policy per route");
+});
 
 const secret="zammad-service-test-secret-at-least-32-bytes";
 const tenantId="10000000-0000-4000-8000-000000000001";
