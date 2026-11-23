@@ -10,6 +10,13 @@ for (const key of [
   "recipient", "primary_recipient", "primaryRecipient", "primary-recipient",
   "subject", "subject_line", "subjectLine", "subject-line",
   "EMAILAddress", "recipientEMAIL", "DisplayName", "SUBJECT-LINE",
+  "firstName", "last_name", "full-name", "contactName", "senderName", "recipientName",
+  "username", "userName", "pushname", "pushName", "contact", "sender",
+  "to", "from", "headers.to", "e_mail", "emailId", "recipient_id",
+  "apiKey", "credentials", "credential", "privateKey", "signature", "otp", "totp",
+  "http.request.body", "auth.token", "x-hub-signature-256",
+  "message", "title", "title_id", "filename", "filename_id", "group_name", "group_name_id",
+  "url", "reference", "mEsSaGe_Id",
 ]) {
   test(`structured logs redact ${key}`, () => {
     assert.deepEqual(redactLogValue({ [key]: "synthetic value" }), { [key]: "[REDACTED]" });
@@ -20,12 +27,72 @@ test("structured logs preserve record identifiers and unrelated fields", () => {
   const fields = {
     tenantId: "tenant-1",
     conversationId: "conversation-1",
-    externalMessageID: "message-1",
-    recipient_id: "recipient-1",
-    "subject-ids": ["subject-1"],
+    request_id: "request-1",
+    delivery_ids: ["delivery-1"],
     workspace_namespace: "test-workspace",
+    service_name: "control-api",
+    queueName: "outbox",
+    "template-name": "status-update",
+    from_state: "pending",
+    toState: "sent",
   };
   assert.deepEqual(redactLogValue(fields), fields);
+});
+
+test("structured logs redact provider message and chat identifiers", () => {
+  const wahaId = "false_12025550102@c.us_SAMPLE";
+  const metaId = "wamid.MTIwMjU1NTAxMDI=";
+  assert.deepEqual(redactLogValue({
+    message_id: wahaId,
+    message_ids: [wahaId],
+    messageId: metaId,
+    externalMessageID: metaId,
+    wamid: metaId,
+    "chat-id": "12025550102",
+    externalChatIDs: ["12025550102"],
+    id: metaId,
+    detail: `Received ${wahaId}`,
+  }), {
+    message_id: "[REDACTED]",
+    message_ids: "[REDACTED]",
+    messageId: "[REDACTED]",
+    externalMessageID: "[REDACTED]",
+    wamid: "[REDACTED]",
+    "chat-id": "[REDACTED]",
+    externalChatIDs: "[REDACTED]",
+    id: "[REDACTED]",
+    detail: "Received [REDACTED]",
+  });
+});
+
+test("structured logs redact nested personal arrays by their field key", () => {
+  assert.deepEqual(redactLogValue({
+    entries: [{
+      recipients: [{ label: "synthetic value" }],
+      emails: [["synthetic value"]],
+      names: ["synthetic value"],
+      subjects: ["synthetic value"],
+      context: { to: ["12025550102"], "auth.privateKey": "synthetic value" },
+    }],
+  }), {
+    entries: [{
+      recipients: "[REDACTED]",
+      emails: "[REDACTED]",
+      names: "[REDACTED]",
+      subjects: "[REDACTED]",
+      context: { to: "[REDACTED]", "auth.privateKey": "[REDACTED]" },
+    }],
+  });
+});
+
+test("structured logs scrub email addresses from free text and unlabeled array items", () => {
+  assert.deepEqual(redactLogValue({
+    detail: "Sent to <Fixture.Person+alerts@sub.example.test>.",
+    entries: ["other@example.test", "missing address", { detail: "synthetic@example.test" }],
+  }), {
+    detail: "Sent to <[EMAIL]>.",
+    entries: ["[EMAIL]", "missing address", { detail: "[EMAIL]" }],
+  });
 });
 
 test("structured log redaction still applies to credentials with identifier suffixes", () => {
