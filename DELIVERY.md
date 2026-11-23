@@ -1,6 +1,6 @@
 # WasalX delivery
 
-Follows engineering standard v1.3.
+Follows engineering standard v1.4.
 
 WasalX Delivery owns this document. Change it through a reviewed PR.
 
@@ -47,10 +47,10 @@ Before every push, run the private privacy check on the diff, commits, branch na
 
 ## Deploys
 
-- DEV host steps, the `stg` RC rehearsal, and the `prod` stable-release deploy each run through a gate. Review each gate once and record one Portfolio GO. For `prod`, the owner's yes is that GO.
-- After its GO, the gate automatically releases every change that passes and writes an audit row with the deployed commit, image digests, result, and the gate's GO reference. A new kind of change or a change to the gate requires a new GO.
+- DEV host steps and the `stg` RC rehearsal each run through a gate. Review each gate once and record one Portfolio GO. After its GO, the gate automatically releases every change that passes and writes an audit row with the deployed commit, image digests, result, and the gate's GO reference. A new kind of change or a change to the gate requires a new GO.
+- The owner is the `prod` environment's required reviewer and approves each production deployment there. Only that approval gives GO to release a deployment to production.
 - WasalX Delivery prepares the DEV host packets. Host work runs through the Servers lead, including the planned stager and relay outside this repo.
-- For the DEV GitHub environment record, dispatch [deploy.yml](.github/workflows/deploy.yml) from `main` with environment `dev` and a 40-hex SHA for a `main` commit.
+- The `dev` GitHub environment accepts deployments only from `main`. The DEV relay records a receipt only by dispatching the workflow with dispatch ref `main`, environment `dev`, and a 40-hex SHA for a `main` commit. The relay authenticates exclusively through the project's reviewed GitHub App helper. Dispatches accept only the fixed receipt-code vocabulary defined in [deploy.yml](.github/workflows/deploy.yml).
 - Before changing state, verify the backup is restorable and retain the previous installed state. Require a real-stack rehearsal for the exact candidate before any probe or pre-arm code reaches DEV. Run health checks after replacement and record health and recovery evidence for the target environment.
 - On DEV, install on an overlay over the frozen base. On failure, use the authorized discard path to restore the previous base and verify its health. Preserve the rollback receipt. See the [installer runbook](scripts/dev-install/README.md).
 - Any DEV configuration change must pass the installer's native preflight on the new configuration before acceptance.

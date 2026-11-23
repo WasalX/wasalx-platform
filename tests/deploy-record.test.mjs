@@ -17,13 +17,15 @@ test("deploy records only manifests admitted by the selected environment", async
   ]);
   const workflow = parse(source);
   assert.deepEqual(Object.keys(workflow.on), ["workflow_dispatch"]);
-  const { environment, ref } = workflow.on.workflow_dispatch.inputs;
-  assert.deepEqual(Object.keys(workflow.on.workflow_dispatch.inputs), ["environment", "ref"]);
+  const { environment, ref, receipt_code: receiptCode } = workflow.on.workflow_dispatch.inputs;
+  assert.deepEqual(Object.keys(workflow.on.workflow_dispatch.inputs), ["environment", "ref", "receipt_code"]);
   assert.equal(environment.type, "choice");
   assert.equal(environment.required, true);
   assert.deepEqual(environment.options, ["dev", "stg", "prod"]);
   assert.equal(ref.type, "string");
   assert.equal(ref.required, true);
+  assert.equal(receiptCode.type, "string");
+  assert.equal(receiptCode.required, false);
 
   assert.deepEqual(workflow.permissions, { contents: "read" });
   assert.deepEqual(Object.keys(workflow.jobs), ["record"]);
@@ -41,6 +43,7 @@ test("deploy records only manifests admitted by the selected environment", async
     GH_TOKEN: "${{ github.token }}",
     DEPLOY_ENVIRONMENT: "${{ inputs.environment }}",
     DEPLOY_REF: "${{ inputs.ref }}",
+    DEPLOY_RECEIPT_CODE: "${{ inputs.receipt_code }}",
   });
   assert.doesNotMatch(step.run, /\$\{\{/u);
   assert.match(step.run, /dev\)\s+\[\[ "\$DEPLOY_REF" =~ \^\[0-9a-fA-F\]\{40\}\$ \]\]/u);
@@ -118,6 +121,8 @@ esac
   const tag = ref => `refs/tags/${ref}`;
   const semicolon = "v1;touch semicolon-marker";
   const substitution = "v1$(touch substitution-marker)";
+  const invalidReceipt = "Invalid DEV receipt code";
+  const wrongEnvironment = "Receipt codes require the dev environment";
   const scenarios = [
     ["prod refuses an RC tag", "prod", rc, tag(rc), "Production refuses release candidate tags"],
     ["prod refuses an uppercase RC tag", "prod", "v1.2.3-RC.1", tag("v1.2.3-RC.1"), "Production refuses release candidate tags"],
@@ -131,11 +136,27 @@ esac
     ["deploy refuses an empty environment", "", commit, main, "Unknown deployment environment"],
     ["deploy refuses an unknown environment", "qa", commit, main, "Unknown deployment environment"],
     ["dev records a main commit", "dev", commit.toUpperCase(), main],
+    ["dev records digests with an empty receipt code", "dev", commit, main, null, ""],
     ["stg records a release candidate", "stg", rc, tag(rc)],
-    ["prod records a final release", "prod", release, tag(release)],
+    ["prod records a final release with an empty receipt code", "prod", release, tag(release), null, ""],
+    ...["STAGED", "VERIFIED", "INSTALL_PASS_HELD", "DISCARD_PASS"].map(code =>
+      [`dev succeeds after recording ${code}`, "dev", commit, main, null, code]),
+    ...["CLASS_HALTED", "HOLD_A", "HOLD_INSTALL_2", `HOLD_${"A".repeat(40)}`].map(code =>
+      [`dev fails after recording ${code}`, "dev", commit, main, null, code, 1]),
+    ["dev refuses an unknown receipt code", "dev", commit, main, invalidReceipt, "UNKNOWN"],
+    ["dev refuses a shell separator in the receipt code", "dev", commit, main, invalidReceipt, "STAGED;touch semicolon-marker"],
+    ["dev refuses command substitution in the receipt code", "dev", commit, main, invalidReceipt, "HOLD_$(touch substitution-marker)"],
+    ["dev refuses a multiline receipt code", "dev", commit, main, invalidReceipt, "STAGED\nVERIFIED"],
+    ["dev refuses a lowercase receipt code", "dev", commit, main, invalidReceipt, "staged"],
+    ["dev refuses a lowercase HOLD stage", "dev", commit, main, invalidReceipt, "HOLD_install"],
+    ["dev refuses an empty HOLD stage", "dev", commit, main, invalidReceipt, "HOLD_"],
+    ["dev refuses a HOLD stage starting with a digit", "dev", commit, main, invalidReceipt, "HOLD_1INSTALL"],
+    ["dev refuses a HOLD stage longer than 40 characters", "dev", commit, main, invalidReceipt, `HOLD_${"A".repeat(41)}`],
+    ["stg refuses a receipt code", "stg", rc, tag(rc), wrongEnvironment, "STAGED"],
+    ["prod refuses a receipt code", "prod", release, tag(release), wrongEnvironment, "STAGED"],
   ];
 
-  for (const [name, environment, ref, dispatchRef, refusal] of scenarios) {
+  for (const [name, environment, ref, dispatchRef, refusal, receiptCode, status = 0] of scenarios) {
     await t.test(name, async () => {
       await Promise.all([writeFile(summary, ""), writeFile(ghCalls, "")]);
       const result = spawnSync(bash, ["--noprofile", "--norc", "-euo", "pipefail", "validate.sh"], {
@@ -145,12 +166,13 @@ esac
           BASH_ENV: "./fixture-env",
           DEPLOY_ENVIRONMENT: environment,
           DEPLOY_REF: ref,
+          DEPLOY_RECEIPT_CODE: receiptCode,
           GITHUB_REF: dispatchRef,
           GITHUB_REPOSITORY: "fixture/deploy-record",
           GITHUB_STEP_SUMMARY: "summary",
           GIT_TRACE: "1",
           GH_TOKEN: "fixture",
-          RUNNER_TEMP: ".",
+          RUNNER_TEMP: refusal && receiptCode ? "./missing-runner-temp" : ".",
         },
       });
       assert.ifError(result.error);
@@ -165,8 +187,9 @@ esac
         assert.equal(existsSync(join(directory, "semicolon-marker")), false);
         assert.equal(existsSync(join(directory, "substitution-marker")), false);
       } else {
-        assert.equal(result.status, 0, diagnostic);
-        assert.equal(recorded, `### Image digests for \`${ref}\` (${environment})\n\nSource commit \`${commit}\`\n\n- \`portal\` \`${digest}\`\n`);
+        assert.equal(result.status, status, diagnostic);
+        const receipt = receiptCode ? `\nReceipt code \`${receiptCode}\`\n` : "";
+        assert.equal(recorded, `### Image digests for \`${ref}\` (${environment})\n\nSource commit \`${commit}\`\n\n- \`portal\` \`${digest}\`\n${receipt}`);
       }
     });
   }
