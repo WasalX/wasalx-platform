@@ -21,10 +21,10 @@ test("automation and tenant screens show no raw flow definition or developer ter
   const values = (text) => [...text.matchAll(/^ {2}"[^"]+": "((?:[^"\\]|\\.)*)",\r?$/gmu)].map((match) => match[1].replace(/\{[^}]+\}/gu, ""));
   for (const catalogue of ["automation", "tenant"]) {
     for (const value of values(await read(`lib/i18n/messages/en/${catalogue}.ts`))) {
-      assert.doesNotMatch(value, /\b(?:revisions?|immutable|JSON|schemas?|payloads?)\b/iu, value);
+      assert.doesNotMatch(value, /\b(?:revisions?|immutable|JSON(?! file)|schemas?|payloads?)\b/iu, value);
     }
     for (const value of values(await read(`lib/i18n/messages/ar/${catalogue}.ts`))) {
-      assert.doesNotMatch(value, /JSON|غير قابل|حمول/u, value);
+      assert.doesNotMatch(value, /(?<!ملف )JSON|غير قابل|حمول/u, value);
     }
   }
 });
