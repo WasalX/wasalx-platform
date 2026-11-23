@@ -13,10 +13,13 @@ import {
 const INSTRUMENTATION_NAME = "io.wasalx.platform";
 const INSTRUMENTATION_VERSION = "0.1.0";
 
-const sensitiveKey = /(?:^|_)(?:body|text|payload|secret|token|authorization|cookie|password|qr|passkey|phone|message|reference|group_name|title|filename|url)(?:_|$)/iu;
-// Generic strings are redacted only when a phone-like value is explicitly
-// international (+...) or uses whitespace/parentheses. This deliberately does
-// not match ISO timestamps, UUIDs, durations, or ordinary numeric counters.
+const sensitiveKey = /(?:^|_)(?:body|text|payload|secret|token|authorization|cookie|password|qr|pass_?key|phone|reference|url|group_name|messages?|title|filename|api_key|credentials?|private_key|signature|t?otp)(?:_|$)/iu;
+// Provider message, chat, and recipient identifiers can contain phone numbers.
+const personalFieldKey = /(?:^|_)(?:e_?mails?|recipients?|subjects?|contacts?|senders?|user_?names?|push_?names?|chat_ids?|wamids?|(?:first|last|full|display|recipient)_names?)(?:_|$)|^names?$/iu;
+const addressKey = /(?:^|\.)(?:to|from)$/iu;
+const providerMessageIdLike = /\b(?:wamid\.[A-Za-z0-9+/_=-]+|(?:true|false)_[\d-]+@(?:c\.us|g\.us|lid|s\.whatsapp\.net)_[A-Za-z0-9_-]+)/gu;
+const emailLike = /[\p{L}\p{N}.!#$%&'*+/=?^_`{|}~-]{1,64}@[\p{L}\p{N}-]{1,63}(?:\.[\p{L}\p{N}-]{1,63})+/gu;
+// Phone matching requires an international prefix or phone-style separators.
 const phoneLike = /(?:\+\d[\d\s()-]{7,}\d|\b\d{2,4}(?:[ ()]\d{2,4}){2,}\b)/gu;
 const bearerLike = /\b(?:bearer|basic)\s+[A-Za-z0-9._~+/=-]+/giu;
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
@@ -104,9 +107,24 @@ export type MetricName = keyof typeof metricDefinitions;
 const instruments = new Map<MetricName, ReturnType<typeof createInstrument>>();
 
 export function redactLogValue(value: unknown, key = ""): unknown {
-  if (sensitiveKey.test(key)) return "[REDACTED]";
+  const separatedKey = key.replace(/[.\s-]+/gu, "_");
+  const normalizedKey = separatedKey
+    .replace(/IDs(?=$|[^a-z])/gu, "Ids")
+    .replace(/([A-Z])([A-Z][a-z])/gu, "$1_$2")
+    .replace(/([a-z0-9])([A-Z])/gu, "$1_$2");
+  if (
+    sensitiveKey.test(separatedKey) || sensitiveKey.test(normalizedKey) ||
+    personalFieldKey.test(separatedKey) || personalFieldKey.test(normalizedKey) ||
+    addressKey.test(key)
+  ) {
+    return "[REDACTED]";
+  }
   if (typeof value === "string") {
-    const cleaned = value.replace(bearerLike, "[CREDENTIAL]").replace(phoneLike, "[PHONE]");
+    const cleaned = value
+      .replace(bearerLike, "[CREDENTIAL]")
+      .replace(providerMessageIdLike, "[REDACTED]")
+      .replace(emailLike, "[EMAIL]")
+      .replace(phoneLike, "[PHONE]");
     return cleaned.length > 2_000 ? `${cleaned.slice(0, 2_000)}…` : cleaned;
   }
   if (Array.isArray(value)) return value.slice(0, 50).map((item) => redactLogValue(item));
