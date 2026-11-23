@@ -57,7 +57,7 @@ Live-provider qualification is a separate release milestone.
 - Extend Zammad through package-owned code and verified extension points. Never patch Zammad core. Require compatibility coverage for upgrades.
 - Use the design tokens and Impeccable for UI work. Meet WCAG 2.2 AA, source English and Arabic text from translation files, and check RTL layout. Verify affected operator journeys in a real browser.
 - Trace affected journeys across the UI, API, database, workers, and integrations. Distinguish simulated, live-provider, and deployed evidence.
-- Include a test that fails without each behavior change. Use a controlled clock, avoid sleeps, and limit network calls to local test services.
+- Include a test that fails without each behavior change. Use a controlled clock and avoid sleeps.
 - Update affected documentation in the same PR as the change.
 - Follow the [branch and merge rules](DELIVERY.md#branching-and-merging) and the [security policy](SECURITY.md).
 
@@ -77,6 +77,7 @@ Require the [risk-path review](DELIVERY.md#branching-and-merging) for paths in [
 - **Customer contacts** — WhatsApp participant IDs and phone numbers, group participants, and coexistence contacts in the control database.
 - **Messages and media references** — Normalized messages, raw webhooks in the event inbox, delivery outbox payloads, media references, bot conversations, and group history in the control database.
 - **Privacy records and email routing** — Privacy requests, holds, export records, and email-routing applications in the control database.
+- **WhatsApp data-deletion callback receipts** — The control database stores receipts with a hashed subject identifier. Public status expires after the number of days set by `META_DELETION_RECEIPT_RETENTION_DAYS` (required, 1 to 365 days). After status expiry, cleanup removes the subject and review-evidence digests from refused receipts and purges those receipts after the replay window. Unresolved receipts stay available for review.
 - **Help desk and identity provider** — Help-desk tickets, articles, attachments, and customer and agent contact data in help-desk storage. Staff accounts and credentials in the identity provider's database.
 - **Object storage and backups** — Media and privacy exports in object storage. Backups can contain copies of database and help-desk data.
 - **Outside processors** — The email provider receives invitee email addresses. WhatsApp providers receive recipients and message content.

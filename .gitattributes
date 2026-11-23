@@ -14,3 +14,16 @@ patches/braces@3.0.3.patch text eol=lf
 patches/storybook@10.6.2.patch text eol=lf
 tests/fixtures/native-group/document.txt -text
 tests/fixtures/dev-live-compose/* -text
+
+/drizzle/meta/_journal.json linguist-generated
+/infra/terraform/.terraform.lock.hcl linguist-generated
+/next-env.d.ts linguist-generated
+/pnpm-lock.yaml linguist-generated
+/scripts/hosted-ci-baseline.mjs linguist-generated
+/scripts/typescript-comparison/package-lock.json linguist-generated
+/services/workspace-configurator/pnpm-lock.yaml linguist-generated
+/tests/fixtures/native-group/audio.ogg linguist-generated
+/tests/fixtures/native-group/image.png linguist-generated
+/tests/fixtures/native-group/provenance.json linguist-generated
+/tests/fixtures/native-group/video.mp4 linguist-generated
+/tests/fixtures/waha/synthetic-qr.png linguist-generated
