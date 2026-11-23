@@ -13,7 +13,9 @@ import {
 const INSTRUMENTATION_NAME = "io.wasalx.platform";
 const INSTRUMENTATION_VERSION = "0.1.0";
 
-const sensitiveKey = /(?:^|_)(?:body|text|payload|secret|token|authorization|cookie|password|qr|passkey|phone|message|reference|group_name|title|filename|url)(?:_|$)/iu;
+const sensitiveKey = /(?:^|_)(?:body|text|payload|secret|token|authorization|cookie|password|qr|pass_?key|phone|reference|url)(?:_|$)/u;
+const personalFieldKey = /(?:^|_)(?:email|name|recipient|subject|message|title|filename)(?:_|$)/u;
+const identifierKey = /(?:^|_)ids?$/u;
 // Generic strings are redacted only when a phone-like value is explicitly
 // international (+...) or uses whitespace/parentheses. This deliberately does
 // not match ISO timestamps, UUIDs, durations, or ordinary numeric counters.
@@ -104,7 +106,14 @@ export type MetricName = keyof typeof metricDefinitions;
 const instruments = new Map<MetricName, ReturnType<typeof createInstrument>>();
 
 export function redactLogValue(value: unknown, key = ""): unknown {
-  if (sensitiveKey.test(key)) return "[REDACTED]";
+  const normalizedKey = key
+    .replace(/([A-Z])([A-Z][a-z])/gu, "$1_$2")
+    .replace(/([a-z0-9])([A-Z])/gu, "$1_$2")
+    .replaceAll("-", "_")
+    .toLowerCase();
+  if (sensitiveKey.test(normalizedKey) || (personalFieldKey.test(normalizedKey) && !identifierKey.test(normalizedKey))) {
+    return "[REDACTED]";
+  }
   if (typeof value === "string") {
     const cleaned = value.replace(bearerLike, "[CREDENTIAL]").replace(phoneLike, "[PHONE]");
     return cleaned.length > 2_000 ? `${cleaned.slice(0, 2_000)}…` : cleaned;
