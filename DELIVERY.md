@@ -1,6 +1,6 @@
 # WasalX delivery
 
-Follows engineering standard v1.11.
+Follows engineering standard v1.12.
 
 WasalX Delivery owns this document. Change it through a reviewed PR.
 
@@ -120,5 +120,5 @@ Keep these performance targets independent of the merge result. Address misses t
 | §4 Run the full suite on main and merge groups | Main pushes skip PR checks and queue image builds because the merge queue already qualified the exact tree. | 2026-12-14 |
 | §6 Automatic production backups and quarterly restore tests | There is no production data yet. The [backup job](infra/helm/wasalx/templates/control-plane-backup.yaml) is disabled by default and the [restore rehearsal script](scripts/dr/rehearse-postgres-restore.mjs) is unwired. | 2026-12-14 |
 | §1 One formatter and one linter per language in CI | Ruby, Python, shell, SQL, and CSS lack CI linters. TypeScript and JavaScript use ESLint and still need a formatter. OpenTofu is the only language with a formatter check. | 2026-12-14 |
-| §1 URL and IP literal guard with a reasoned allowlist | The guard and allowlist have yet to be built. | 2026-12-14 |
+| §1 URL and IP literal guard with a reasoned allowlist for source outside configuration, generated files, and tests. Loopback, unspecified, and reserved example or documentation hosts and addresses, hostless URLs, and standard namespace IDs are exempt. | The guard and allowlist have yet to be built. | 2026-12-14 |
 | §6 Staging rollback rehearsal for every release candidate | Staging is not in service. Once it is, deploy each RC, roll back to the previous release, verify health, and record the rehearsal in the deployment audit. | 2026-12-14 |
