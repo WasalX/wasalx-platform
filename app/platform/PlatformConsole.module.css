@@ -49,7 +49,7 @@
 .panelHeader>span { color: var(--wx-color-text-muted); font-size: var(--wx-font-size-1); }
 .toolbar { display: flex; gap: var(--wx-space-2); border-bottom: 1px solid var(--wx-color-border); padding: var(--wx-space-3); }
 .toolbar label { flex: 1; }
-.toolbar input,.toolbar select,.formGrid input,.formGrid select,.formGrid textarea { width: 100%; min-height: var(--wx-control-height); border: 1px solid var(--wx-color-border); border-radius: var(--wx-radius-control); outline: 0; background: var(--wx-color-surface-raised); color: var(--wx-color-text); padding: var(--wx-space-2) var(--wx-space-3); }
+.toolbar input,.toolbar select,.formGrid input,.formGrid select,.formGrid textarea { width: 100%; min-height: var(--wx-control-height); border: 1px solid var(--wx-color-border); border-radius: var(--wx-radius-control); background: var(--wx-color-surface-raised); color: var(--wx-color-text); padding: var(--wx-space-2) var(--wx-space-3); }
 .toolbar select { width: auto; }
 .toolbar input:focus,.toolbar select:focus,.formGrid input:focus,.formGrid select:focus,.formGrid textarea:focus { border-color: var(--wx-color-accent); box-shadow: 0 0 0 var(--wx-space-1) var(--wx-color-accent-wash); }
 .tableScroll { position: relative; overflow: auto; overscroll-behavior-inline: contain; }
