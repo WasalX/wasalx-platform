@@ -315,6 +315,17 @@ async function readComposeEnvironments(file: string): Promise<Record<string, Com
   }));
 }
 
+test("Compose services only set TZ to UTC", async () => {
+  const files = ["compose.yaml", "compose.full.yaml", "compose.smoke.yaml"];
+  for (const file of files) {
+    const services = await readComposeEnvironments(file);
+    const nonUtc = Object.entries(services)
+      .filter(([, environment]) => Object.hasOwn(environment, "TZ") && environment.TZ !== "UTC")
+      .map(([service]) => service);
+    assert.deepEqual(nonUtc, [], file);
+  }
+});
+
 function composeConnectionHosts(key: string, value: string): string[] {
   const connectionKey = /_(?:URL|DSN|HOST)$|^(?:PGHOST|MEMCACHE_SERVERS|ZAMMAD_FQDN)$/u.test(key);
   // Keep credentials and ports opaque. Inspect literal defaults only at endpoint or host positions.

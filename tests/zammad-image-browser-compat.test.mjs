@@ -141,7 +141,7 @@ x-environment: &environment
   ZAMMAD_HTTP_TYPE: http
   ZAMMAD_FQDN: ${runnerContainer ? "zammad-nginx:8080" : `127.0.0.1:${port}`}
   NGINX_PORT: "8080"
-  TZ: Asia/Riyadh
+  TZ: UTC
   WASALX_CONTROL_URL: http://${fixtureHost}:${fixturePort}
   WASALX_PORTAL_URL: https://portal.compat.wasalx.invalid
   WASALX_TENANT_ID: ${tenantId}

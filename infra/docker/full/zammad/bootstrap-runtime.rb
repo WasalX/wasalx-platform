@@ -136,6 +136,8 @@ run_bootstrap = lambda do
 if fresh_database
   first_name, last_name = bootstrap_name.split(/\s+/, 2)
   last_name = 'Owner' if last_name.to_s.empty?
+  display_timezone = ENV.fetch('WASALX_ZAMMAD_DISPLAY_TIMEZONE', '')
+  display_timezone = 'Asia/Riyadh' if display_timezone.empty?
   wizard_relative_path = ENV.fetch('AUTOWIZARD_RELATIVE_PATH', 'tmp/auto_wizard.json')
   abort('WASALX_ZAMMAD_BOOTSTRAP_WIZARD_PATH_INVALID') if Pathname.new(wizard_relative_path).absolute? || wizard_relative_path.split('/').include?('..')
   wizard_path = Rails.root.join(wizard_relative_path)
@@ -143,8 +145,8 @@ if fresh_database
       Users: [{ login: bootstrap_email, firstname: first_name, lastname: last_name, email: bootstrap_email, password: bootstrap_password }],
       Groups: [{ name: 'Operations', users: [bootstrap_email] }],
       Settings: [
+        { name: 'timezone_default', value: display_timezone },
         { name: 'product_name', value: 'WasalX Support' },
-        { name: 'timezone_default', value: 'Asia/Riyadh' },
       ],
   )
   File.open(wizard_path, File::WRONLY | File::CREAT | File::TRUNC, 0o600) { |file| file.write(wizard) }
