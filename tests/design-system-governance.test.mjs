@@ -158,7 +158,7 @@ test("form controls keep a visible keyboard focus ring, also in forced colors", 
   for (const path of await readdir(new URL("app/", root), { recursive: true })) {
     if (!path.endsWith(".css")) continue;
     const css = await read(`app/${path.replaceAll("\\", "/")}`);
-    for (const [, selector] of css.matchAll(/([^{}]*)\{[^{}]*\boutline\s*:\s*(?:0|none)\b[^{}]*\}/gu)) {
+    for (const [, selector] of css.matchAll(/([^{}]*)\{[^{}]*\boutline\s*:\s*(?:0(?:px)?|none)\b[^{}]*\}/gu)) {
       if (/\b(?:input|select|textarea|button)\b/u.test(selector)) removals.push(`${path}: ${selector.trim()}`);
     }
   }

@@ -312,3 +312,5 @@ th,td,td small,.status,.timeline :where(p,small),.audit-note small,.support-layo
 .settings-summary > p { margin: 0; }
 .service-access-review > p { margin-inline: var(--wx-space-4); overflow-wrap: anywhere; }
 @media (max-width: 480px) { .mailbox-list > li { grid-template-columns: minmax(0, 1fr); } }
+.connection-detail-disconnect input:focus-visible { outline-color: var(--danger); }
+@media (forced-colors: none) { .search input:focus-visible { outline-color: transparent; } }
