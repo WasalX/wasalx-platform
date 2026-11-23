@@ -2103,7 +2103,7 @@ function RoutingSimulator({
         </label>
         <label>
           {t("routing.simulator.identifier")}
-          <input name="identifier" autoComplete="off" placeholder="ACME-42" />
+          <input name="identifier" autoComplete="off" placeholder={t("routing.simulator.identifierExample")} />
         </label>
         <label>
           {t("routing.simulator.namespace")}
