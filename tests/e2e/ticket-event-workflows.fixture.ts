@@ -185,12 +185,18 @@ export async function ticketEventWorkflowJourney(page: Page, testInfo: TestInfo,
   await panel.locator(".bot-version-list").getByRole("button", { name: closureName, exact: false }).click();
   const detail = panel.locator("section.panel.bot-flow-detail");
   await expect(detail.getByRole("heading", { name: closureName, exact: true })).toBeVisible();
-  await expect(detail.locator('select option[value="REFERENCE_MESSAGES"]:checked')).toHaveCount(1);
+  const reactionTarget = (editor: typeof detail) => editor.locator("fieldset.bot-node-card")
+    .filter({ has: page.getByRole("textbox", { name: reactionEmojiName, exact: true }) })
+    .getByRole("combobox", { name: t("quote"), exact: false });
+  await expect(reactionTarget(detail)).toHaveCount(1);
+  await expect(reactionTarget(detail)).toBeDisabled();
+  await expect(reactionTarget(detail)).toHaveValue("REFERENCE_MESSAGES");
   await detail.getByRole("button", { name: t("preview.run"), exact: true }).click();
   await expect(detail.getByRole("status")).toContainText(previewSummary);
   await expect(detail.getByText(t("preview.targetReferenceMessages"), { exact: true })).toBeVisible();
   await panel.getByRole("button", { name: t("workspace.edit"), exact: true }).click();
-  await expect(draft.locator('select option[value="REFERENCE_MESSAGES"]:checked')).toHaveCount(1);
+  await expect(reactionTarget(draft)).toBeEnabled();
+  await expect(reactionTarget(draft)).toHaveValue("REFERENCE_MESSAGES");
   await draft.getByRole("button", { name: messages["automation.common.cancel"], exact: true }).click();
   await expect(draft).toHaveCount(0);
   expect(writes.slice(beforeClosureWrites).map(write => write.path)).toEqual(["/api/bot-flows"]);

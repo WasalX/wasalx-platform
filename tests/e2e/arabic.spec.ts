@@ -17,7 +17,7 @@ import { consumeExpectedDirectSetupDenial, metaDirectConsentJourney } from "./me
 import { consumeExpectedSignupDenial, metaSignupJourney } from "./meta-signup.fixture";
 import { ticketEventWorkflowJourney } from "./ticket-event-workflows.fixture";
 import { expectAxeClean } from "../helpers/axe";
-import { captureTenantDesign } from "./design-evidence.fixture";
+import { captureTenantDesign, verifyRuleModalLabels } from "./design-evidence.fixture";
 import { expect, test, type Page } from "@playwright/test";
 import { arabicMessages } from "../../lib/i18n/messages/ar/index.ts";
 
@@ -159,6 +159,10 @@ async function open(page: Page, view: string) {
 if (role === "tenant_owner") {
   test("owner captures tenant surfaces in light and dark", async ({ page }, testInfo) => {
     await captureTenantDesign(page, testInfo, "ar", open);
+  });
+  test("Arabic rule modal labels every visible field in RTL", async ({ page }, testInfo) => {
+    await open(page, "rules");
+    await verifyRuleModalLabels(page, testInfo, "ar");
   });
 
   for (const [status, expected] of [

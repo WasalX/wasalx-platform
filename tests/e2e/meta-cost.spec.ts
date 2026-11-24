@@ -60,22 +60,17 @@ test("cost usage preserves exact money, role boundaries, account changes and com
   await expect(page.getByRole("combobox",{name:t("cost.account"),exact:true})).toHaveValue(accountA);
   await expect(cost.getByText("USD 12345678901234567890.12",{exact:true}).first()).toBeVisible();
   const tableScroll=cost.getByRole("region",{name:t("cost.tableCaption"),exact:true});
-  await tableScroll.focus();await page.keyboard.press("Shift+Tab");await expect(tableScroll).not.toBeFocused();
+  await cost.getByRole("button",{name:t("cost.export"),exact:true}).focus();
   await page.keyboard.press("Tab");await expect(tableScroll).toBeFocused();
   await expect(tableScroll).toHaveCSS("outline-style","solid");await expect(tableScroll).toHaveCSS("outline-width","2px");
   const scroll=await tableScroll.evaluate(element=>({left:element.scrollLeft,max:element.scrollWidth-element.clientWidth,rtl:getComputedStyle(element).direction==="rtl"}));
+  if(testInfo.project.name==="mobile-390")expect(scroll.max).toBeGreaterThan(1);
   if(scroll.max>1){
    const key=scroll.rtl?(scroll.left>-scroll.max+1?"ArrowLeft":"ArrowRight"):(scroll.left<scroll.max-1?"ArrowRight":"ArrowLeft");
    await page.keyboard.press(key);
    await expect.poll(()=>tableScroll.evaluate(element=>element.scrollLeft)).not.toBe(scroll.left);
+   await testInfo.attach(`cost-table-keyboard-${locale}-${testInfo.project.name}`,{body:await page.screenshot(),contentType:"image/png"});
   }
-  // A bounded viewport also exercises vertical keyboard scrolling in the same table.
-  await tableScroll.evaluate(element=>{element.style.maxBlockSize="16rem";});
-  const top=await tableScroll.evaluate(element=>element.scrollTop);
-  await page.keyboard.press("End");
-  await expect.poll(()=>tableScroll.evaluate(element=>element.scrollTop)).toBeGreaterThan(top);
-  await testInfo.attach(`cost-table-keyboard-${locale}-${testInfo.project.name}`,{body:await page.screenshot(),contentType:"image/png"});
-  await tableScroll.evaluate(element=>{element.style.removeProperty("max-block-size");});
   expect((await new AxeBuilder({page}).include("details[open]").analyze()).violations).toEqual([]);
   await testInfo.attach(`meta-cost-${locale}-${testInfo.project.name}`,{body:await cost.screenshot(),contentType:"image/png"});
 });

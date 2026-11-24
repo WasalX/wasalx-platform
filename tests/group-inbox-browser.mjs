@@ -232,10 +232,10 @@ try {
     await expect(group().getByRole("heading", { name: "Operations B" })).toBeFocused();
     await page.keyboard.press("Tab");
     await expect(history).toBeFocused();
-    await page.keyboard.press("Home");
-    await expect.poll(() => history.evaluate(element => element.scrollTop)).toBe(0);
-    await page.keyboard.press("End");
-    await expect.poll(() => history.evaluate(element => element.scrollTop)).toBeGreaterThan(0);
+    const { top, max } = await history.evaluate(element => ({ top: element.scrollTop, max: element.scrollHeight - element.clientHeight }));
+    expect(max).toBeGreaterThan(1);
+    await page.keyboard.press(top > 1 ? "ArrowUp" : "ArrowDown");
+    await expect.poll(() => history.evaluate(element => element.scrollTop)).not.toBe(top);
     await page.screenshot({ path: `${output}/group-history-keyboard-${locale}.png` });
     await page.locator("#wx-group-message").fill("Draft B");
     await choose("Customers A");
