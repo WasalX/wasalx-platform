@@ -125,7 +125,8 @@ function redactValue(value: unknown, key: string, ancestors?: WeakSet<object>, u
   if (internalIdKey.test(normalizedKey)) {
     if (typeof value === "string" && uuidPattern.test(value)) return value;
     if (Array.isArray(value)) {
-      const ids = Array.from({ length: Math.min(value.length, 50) }, (_, index) => value[index]);
+      const items: readonly unknown[] = value;
+      const ids = Array.from({ length: Math.min(items.length, 50) }, (_, index) => items[index]);
       if (ids.every((id) => typeof id === "string" && uuidPattern.test(id))) return ids;
     }
   }
