@@ -2012,18 +2012,18 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
     // Linux bounds each argument and environment entry, including encoded Ruby sources.
     await writeFile(join(nativeScripts, driverName),
       `require 'base64'; ENV['WASALX_NATIVE_DIAGNOSTIC'] = 'true'
-       Module.new.module_eval(Base64.decode64('${nativeInitializeSource.toString("base64")}'), 'portal-service-initialize-native.rb')
-       Module.new.module_eval(Base64.decode64('${nativeIdentitySource.toString("base64")}'), 'portal-service-identity-native.rb')
-       eval(Base64.decode64('${nativeSource.toString("base64")}'), TOPLEVEL_BINDING, 'portal-workspace-native.rb')
+       Module.new.module_eval(Base64.decode64('${nativeInitializeSource.toString("base64")}').force_encoding(Encoding::UTF_8), 'portal-service-initialize-native.rb')
+       Module.new.module_eval(Base64.decode64('${nativeIdentitySource.toString("base64")}').force_encoding(Encoding::UTF_8), 'portal-service-identity-native.rb')
+       eval(Base64.decode64('${nativeSource.toString("base64")}').force_encoding(Encoding::UTF_8), TOPLEVEL_BINDING, 'portal-workspace-native.rb')
        saved = JSON.parse(File.read('/var/tmp/portal-workspace-fixture.json'))
        ENV['WASALX_ADMIN_TEST_MODE'] = 'simulated'
        ENV['WASALX_ADMIN_TEST_OWNER'] = WasalxMembership.find(saved.fetch('owner')).portal_user_id
        ENV['WASALX_ADMIN_TEST_MEMBER'] = WasalxMembership.find(saved.fetch('agent')).portal_user_id
-       Module.new.module_eval(Base64.decode64('${nativeIdentityRaceSource.toString("base64")}'), 'portal-service-identity-race-native.rb')
-       Module.new.module_eval(Base64.decode64('${nativeTeamSource.toString("base64")}'), 'team-admin-native.rb')
-       Module.new.module_eval(Base64.decode64('${nativeRaceSource.toString("base64")}'), 'team-admin-race-native.rb')
+       Module.new.module_eval(Base64.decode64('${nativeIdentityRaceSource.toString("base64")}').force_encoding(Encoding::UTF_8), 'portal-service-identity-race-native.rb')
+       Module.new.module_eval(Base64.decode64('${nativeTeamSource.toString("base64")}').force_encoding(Encoding::UTF_8), 'team-admin-native.rb')
+       Module.new.module_eval(Base64.decode64('${nativeRaceSource.toString("base64")}').force_encoding(Encoding::UTF_8), 'team-admin-race-native.rb')
        ENV['WASALX_ADMIN_TLS_TRUST_MODE'] = 'trusted'
-       Module.new.module_eval(Base64.decode64('${nativeTlsSource.toString("base64")}'), 'mailbox-driver-tls-native.rb')`, { mode: 0o600 });
+       Module.new.module_eval(Base64.decode64('${nativeTlsSource.toString("base64")}').force_encoding(Encoding::UTF_8), 'mailbox-driver-tls-native.rb')`, { mode: 0o600 });
     // The host runner UID can differ from the Zammad image's UID.
     await privateNative("run", "--rm", "--no-deps", "--user", "0:0", "--entrypoint", "chown",
       "--volume", `${nativeScripts}:${nativeMount}:rw`, "zammad-package", "1000:1000", driverPath, mailboxPath);
@@ -2051,7 +2051,7 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
       "--env", "SSL_CERT_FILE=/run/wasalx-mailbox-fixture/untrusted-ca.crt", "zammad-package", "bundle", "exec", "rails", "runner",
       `require 'base64'
        ENV['WASALX_ADMIN_TEST_OWNER'] = Wasalx::ServiceIdentity.receipt.fetch('human_portal_user_id')
-       Module.new.module_eval(Base64.decode64('${nativeTlsSource.toString("base64")}'), 'mailbox-driver-tls-native.rb')`);
+       Module.new.module_eval(Base64.decode64('${nativeTlsSource.toString("base64")}').force_encoding(Encoding::UTF_8), 'mailbox-driver-tls-native.rb')`);
     const untrustedTls = JSON.parse(untrustedOutput.split("\n").find(line => line.startsWith('{"mode":"SIMULATED","boundary":"NATIVE_MAILBOX_TLS"')) ?? "");
     assert.equal(untrustedTls.trust_mode, "untrusted");
     assert.equal(untrustedTls.check_count, 4);

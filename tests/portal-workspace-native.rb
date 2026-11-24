@@ -8,7 +8,7 @@ installed_identity = Wasalx::InstalledPackage.verify!
 assert = ->(condition, message) { raise message unless condition }
 original_post = Wasalx::Client.method(:post)
 original_get = Wasalx::Client.method(:get)
-source = { 'issuer' => 'https://identity.example.test', 'audience' => 'wasalx-api' }
+portal_source = { 'issuer' => 'https://identity.example.test', 'audience' => 'wasalx-api' }
 members = {}
 denied = false
 privileged_window = 15
@@ -44,7 +44,7 @@ begin
       allowed = !denied && row && row.reload.member_state == 'ACTIVE' &&
         row.revision == input[:revision] && row.user_id.to_s == input[:native_user_id].to_s
       privileged_recheck_hook&.call(input)
-      { 'allowed' => !!allowed, 'portal_source' => source, 'privileged_reauth_minutes' => privileged_window, 'authentication_policy' => row && {
+      { 'allowed' => !!allowed, 'portal_source' => portal_source, 'privileged_reauth_minutes' => privileged_window, 'authentication_policy' => row && {
         'mfa_required' => true, 'session_timeout_minutes' => 480, 'policy_version' => 1,
         'subject' => row.subject, 'mfa_amr_values' => ['mfa'], 'mfa_acr_values' => [] } }
     when '/internal/v1/zammad/membership/retired'
@@ -181,7 +181,7 @@ begin
 
   call = lambda do |operation, input, member = members['agent'], changes = {}|
     envelope = { purpose: Wasalx::PortalDelegation::PURPOSE, tenant_id: ENV.fetch('WASALX_TENANT_ID'),
-      instance_id: ENV.fetch('WASALX_ZAMMAD_INSTANCE_ID'), source: source,
+      instance_id: ENV.fetch('WASALX_ZAMMAD_INSTANCE_ID'), source: portal_source,
       actor: { user_id: member.portal_user_id, subject: member.subject, revision: member.revision, native_user_id: member.user_id.to_s },
       assurance: { auth_time: Time.now.to_i, amr: ['mfa'], acr: nil }, operation: operation, input: input }.deep_stringify_keys
     envelope.merge!(changes)
@@ -724,9 +724,9 @@ begin
       end
       match = %r{\A/internal/v1/zammad/group-workspace/groups/#{group_uuid}/messages/([0-9a-f-]+)/source\z}.match(path)
       if match
-        source = sources.fetch(match[1])
-        raise Wasalx::Client::PermanentRequestFailed.new('Synthetic retained source absent', http_status: 404) unless source
-        source.merge('links' => links[match[1]].dup)
+        message_source = sources.fetch(match[1])
+        raise Wasalx::Client::PermanentRequestFailed.new('Synthetic retained source absent', http_status: 404) unless message_source
+        message_source.merge('links' => links[match[1]].dup)
       else
         boundary_get.call(path, **options)
       end
@@ -953,7 +953,7 @@ begin
     staged_cache = SecureRandom.uuid
     raw_upload = lambda do |input, member = members['agent'], content = 'Synthetic staged attachment', digest = nil|
       envelope = { purpose: Wasalx::PortalDelegation::UPLOAD_PURPOSE, tenant_id: ENV.fetch('WASALX_TENANT_ID'),
-        instance_id: ENV.fetch('WASALX_ZAMMAD_INSTANCE_ID'), source: source,
+        instance_id: ENV.fetch('WASALX_ZAMMAD_INSTANCE_ID'), source: portal_source,
         actor: { user_id: member.portal_user_id, subject: member.subject, revision: member.revision, native_user_id: member.user_id.to_s },
         assurance: { auth_time: Time.now.to_i, amr: ['mfa'], acr: nil }, operation: 'TICKET_UPLOAD', input: input,
         file: { filename: 'owned.txt', mime_type: 'text/plain', byte_size: content.bytesize, sha256: digest || Digest::SHA256.hexdigest(content) } }
@@ -1274,9 +1274,12 @@ begin
   end
 
   check.call('current-membership-and-assurance-denials') do
-  denied = true
-  assert.call(call.call('SHOW', { ticket_id: ticket.id.to_s }).first == 403, 'Revoked membership exposed conversation')
-  denied = false
+    begin
+      denied = true
+      assert.call(call.call('SHOW', { ticket_id: ticket.id.to_s }).first == 403, 'Revoked membership exposed conversation')
+    ensure
+      denied = false
+    end
   bad_assurance = { 'auth_time' => Time.now.to_i - 100_000, 'amr' => ['mfa'], 'acr' => nil }
   assert.call(call.call('SHOW', { ticket_id: ticket.id.to_s }, members['agent'], 'assurance' => bad_assurance).first == 403, 'Expired assurance admitted')
   assert.call(call.call('SHOW', { ticket_id: ticket.id.to_s }, members['agent'],
@@ -1343,10 +1346,10 @@ begin
       Rails.logger.level = Logger::WARN
       auth = JSON.parse(File.binread(ENV.fetch('WASALX_ADMIN_TLS_FIXTURE_AUTH_FILE')))
       ENV['WASALX_ADMIN_TEST_OWNER'] = members.fetch('owner').portal_user_id
-      ENV['WASALX_ADMIN_TEST_PORTAL_SOURCE'] = JSON.generate(source)
+      ENV['WASALX_ADMIN_TEST_PORTAL_SOURCE'] = JSON.generate(portal_source)
       ENV['WASALX_ADMIN_TEST_ASSURANCE_JSON'] = JSON.generate('auth_time' => Time.now.to_i, 'amr' => ['mfa'])
       ENV['WASALX_ADMIN_TLS_PASSWORD'] = auth.fetch('password')
-      Module.new.module_eval(File.binread(ENV.fetch('WASALX_NATIVE_MAILBOX_TEST_PATH')), 'mailbox-admin-native.rb')
+      load ENV.fetch('WASALX_NATIVE_MAILBOX_TEST_PATH'), true
     ensure
       %w[WASALX_ADMIN_TEST_OWNER WASALX_ADMIN_TEST_PORTAL_SOURCE WASALX_ADMIN_TEST_ASSURANCE_JSON WASALX_ADMIN_TLS_PASSWORD].each do |key|
         previous.key?(key) ? ENV[key] = previous[key] : ENV.delete(key)

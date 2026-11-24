@@ -69,7 +69,7 @@ jobs:
           needed=true
           if git diff --quiet --no-ext-diff --no-renames HEAD^1 HEAD -- \
             .github/workflows/ci.yml scripts/test-postgres-integration.mjs scripts/postgres-scenario-registry.mjs \
-            ':(glob)tests/*postgres*.mjs'; then
+            ':(glob)tests/*postgres*.mjs' tests/rendered-html.test.mjs tests/app-first-load-js-budget.json; then
             needed=false
           fi
           echo "needed=$needed" >> "$GITHUB_OUTPUT"
