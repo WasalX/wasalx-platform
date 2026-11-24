@@ -63,15 +63,7 @@ Live-provider qualification is a separate release milestone.
 
 ## Risk paths
 
-Only these need the independent [risk-path review](DELIVERY.md#branching-and-merging) because mistakes can be irreversible, silent, or public.
-
-- **Migrations, deletion, and retention** include `services/*/migrations/`, `services/control-api/src/migrate.ts`, and privacy, deletion, retention, and number-release code.
-- **Sign-in, authorization, tenant isolation, and secrets** include `app/auth/`, `app/platform/auth/`, `app/invitations/`, `app/webhooks/`, the auth, permission, session, tenant-access, and secret modules in `lib/`, `packages/core/src/`, and `services/*/src/`, and `infra/docker/full/keycloak/`.
-- **Money and outbound safety** include metering, cost, billing-policy, and outbound-safety code.
-- **Merge gates** include `.github/`, CI scripts (`scripts/hosted-ci*`, `scripts/test-*.mjs`, and `scripts/release/ci-*`), the `scripts` block of any `package.json`, and `tests/no-agent-instruction-files.test.mjs`, which keeps private agent files out of the public repo.
-- **Production configuration and deploys** include `Dockerfile.*`, `compose*.yaml`, `infra/helm/`, `infra/terraform/`, `release/`, the installer, image, and promotion scripts in `scripts/release/`, and `zammad-addon.json`.
-
-Docs (including `AGENTS.md`, `DELIVERY.md`, and `CLAUDE.md`), design, UI that does not change data exposure, tests, dependency bumps, lock files, and refactors outside these areas need no independent review.
+Only critical changes need an independent review: production configuration and deploys (`Dockerfile.*`, `compose*.yaml`, `infra/`, `release/`, `zammad-addon.json`); secrets; real people's or customer data, including migrations, deletion and retention, and sign-in or permission changes that alter who can see it; making anything public, including `tests/no-agent-instruction-files.test.mjs`; host, network or firewall changes; repo settings or rulesets; and release gates (`.github/`, CI scripts, `scripts/release/`). Everything else ships through its own PR once required CI is green, with no second review or sign-off.
 
 ## Data safety
 

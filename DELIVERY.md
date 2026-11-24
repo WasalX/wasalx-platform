@@ -7,10 +7,10 @@ WasalX Delivery owns this document, the merge queue, CI health and speed, releas
 ## Branching and merging
 
 - Open PRs from short-lived branches against trunk `main`. Merge, split, or close each PR within two days of its first push. Delete merged branches and branches with no PR after seven days without a push.
-- Workers push their own branches and open PRs under the project's agent identity. For low-risk PRs, the worker enables auto-merge when opening the PR. The queue squashes and requires every PR in a group to pass.
-- High-risk changes can fail irreversibly, silently, or in public. They include data loss (migrations, deletes, and restores on real data), data exposure (sign-in, permissions, privacy, secrets, making anything public, and network or access controls), safety-critical rules, weakening a merge gate (CI, rulesets, required checks, and deny lists), and production configuration and deploys. See the [risk-path list](AGENTS.md#risk-paths).
-- For a high-risk PR, the worker first enables auto-merge after the independent reviewer posts a passing Opus 5.5 high verdict on the full diff and names the current PR head SHA in the PR comment. Each change gets one review. Verify fixes for review findings with tests.
-- Disable auto-merge before any further push. Check queue membership directly and remove the PR from the queue before pushing if it is queued. A push touching a high-risk path requires a new verdict that names the new head before the worker enables auto-merge again.
+- Workers push their own branches and open PRs under the project's agent identity. The queue squashes and requires every PR in a group to pass.
+- Only [critical changes](AGENTS.md#risk-paths) need independent review. Critical changes cover production, secrets, real people's or customer data, making anything public, host, network or firewall changes, repo settings or rulesets, and release gates.
+- For all other changes, the thread that made the change opens its own PR and merges it once required CI is green. No second review, lead sign-off, or Portfolio GO is required. Never bypass required CI or branch protection.
+- For a critical PR, the author enables auto-merge only after the reviewer's passing verdict comment names the current head SHA. Before any later push, disable auto-merge, check queue membership, and remove the PR if queued. A push touching a critical path needs a new verdict on the new head.
 - Update `main` only through the protected queue, which qualifies the exact combined tree. Never force-push or rewrite history.
 - Run agent pushes, PR operations, merges, reruns, and issue and board writes only through the project's reviewed GitHub App helper. Never print its installation token. Use the owner login only for approved settings changes and authorized tag creation.
 
@@ -116,6 +116,7 @@ Keep these performance targets independent of the merge result. Address misses t
 | §4/§8 Measure job durations and cap timeouts from p95 | The [timing sample](.github/ci-timings.json) covers the jobs with timeouts in `ci.yml`. Those timeouts still exceed the measured limits. Sampling the other workflows and lowering timeouts are follow-ups. | 2026-12-14 |
 | §4 Local pre-commit and pre-push hooks | Agents run the checks in their push workflow. Repository hooks are pending. | 2026-12-14 |
 | §4 Runner pickup under 5 s | Measured hosted-runner pickup makes 60 s the working target. Tracked in [#181](https://github.com/WasalX/wasalx-platform/issues/181). | 2026-12-14 |
+| §4 PR feedback for `ci.yml` (p50 ≤ 1 min and p95 ≤ 2 min) | On 2026-11-24, the newest 62 successful PR runs measured p50 2.4 min and p95 5.2 min. The PR path still runs the full test and build matrix. | 2026-12-08 |
 | §2 Attest artifacts with `actions/attest-build-provenance` and verify with `gh attestation verify` | Images are signed with Cosign and carry BuildKit provenance. The installer verifies them. | 2026-12-14 |
 | §4 Run the full suite on main and merge groups | Main pushes skip PR checks and queue image builds because the merge queue already qualified the exact tree. | 2026-12-14 |
 | §6 Automatic production backups and quarterly restore tests | There is no production data yet. The [backup job](infra/helm/wasalx/templates/control-plane-backup.yaml) is disabled by default and the [restore rehearsal script](scripts/dr/rehearse-postgres-restore.mjs) is unwired. | 2026-12-14 |
