@@ -629,6 +629,28 @@ test("Application browser CI shards roles and locales and reuses the portal buil
   }
 });
 
+test("Hosted browser jobs retain Playwright diagnostics on failure or cancellation", async () => {
+  const { jobs } = parse(await read(".github/workflows/ci.yml"));
+  const diagnostics = {
+    "application-e2e": {
+      name: "application-e2e-${{ matrix.locale }}-${{ matrix.roles }}",
+      paths: ["output/playwright/application*/*/report/**", "output/playwright/application*/*/results/**"],
+    },
+    storybook: {
+      name: "storybook-audit",
+      paths: ["test-results/storybook", "output/playwright/design-system", "output/playwright/inbox/synthetic"],
+    },
+  };
+  for (const [job, { name, paths }] of Object.entries(diagnostics)) {
+    const upload = jobs[job].steps.find(step =>
+      step.uses?.startsWith("actions/upload-artifact@") && step.if === "failure() || cancelled()");
+    assert(upload, job);
+    assert.equal(upload.with.name, name, job);
+    assert.deepEqual(upload.with.path.trim().split("\n"), paths, job);
+    assert.equal(upload.with["retention-days"], 7, job);
+  }
+});
+
 test("CI gate requires each event's jobs and rejects unplanned skips, failures, and cancellations", async t => {
   const { jobs } = parse(await read(".github/workflows/ci.yml"));
   const [{ run }] = jobs["ci-gate"].steps;

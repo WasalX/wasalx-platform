@@ -191,19 +191,21 @@ jobs:
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '0'
         run: pnpm exec playwright install --no-shell chromium
       - name: Audit and capture every story
-        id: audit
         run: >-
           node scripts/storybook-visual-regression.mjs --require-browser tests/visual/storybook-ci.spec.ts
           tests/visual/inbox-synthetic.spec.ts --fully-parallel --workers=2
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: always() && steps.audit.outcome != 'skipped'
-        with:
+        if: failure() || cancelled()
+        with: &storybook-audit-artifact
           name: storybook-audit
           path: |
             test-results/storybook
             output/playwright/design-system
             output/playwright/inbox/synthetic
           retention-days: 7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: success()
+        with: *storybook-audit-artifact
 
   privacy:
     if: github.event_name != 'workflow_dispatch'
@@ -543,10 +545,12 @@ jobs:
           WASALX_E2E_ROLES: ${{ matrix.roles }}
         run: node scripts/run-application-e2e.mjs
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: failure()
+        if: failure() || cancelled()
         with:
           name: application-e2e-${{ matrix.locale }}-${{ matrix.roles }}
-          path: output/playwright/application*
+          path: |
+            output/playwright/application*/*/report/**
+            output/playwright/application*/*/results/**
           retention-days: 7
 
   integration-coverage:
