@@ -550,12 +550,12 @@ export async function getRuleSetVersions(input:{before?:string;limit?:number;sta
 
 export async function getTicketEventConfiguration(){return call<{bindings:Row[];groups:Row[];members:Row[]}>(await currentPortalSession(),"/v1/bot-flows/ticket-events")}
 export async function bindTicketEvent(input:Record<string,unknown>,idempotencyKey:string){return call<Row>(await currentPortalSession(),"/v1/bot-flows/ticket-events",{method:"POST",headers:{"idempotency-key":idempotencyKey},body:JSON.stringify(input)})}
-export async function getBotFlows(){return call<Row[]>(await currentPortalSession(),"/v1/bot-flows")}
+export async function getBotFlows(){return callList<Row>(await currentPortalSession(),"/v1/bot-flows")}
 export async function getBotFlowCatalog(query=""){return call<{items:Row[];next_cursor:string|null}>(await currentPortalSession(),`/v1/bot-flows/catalog${query}`)}
 export async function getBotFlow(id:string){return call<Row>(await currentPortalSession(),`/v1/bot-flows/${encodeURIComponent(id)}`)}
-export async function getBotMediaAssets(ids:string[]=[]){const query=new URLSearchParams();for(const id of ids)query.append("id",id);return call<Row[]>(await currentPortalSession(),`/v1/bot-flows/media-assets${query.size?`?${query}`:""}`)}
+export async function getBotMediaAssets(ids:string[]=[]){const query=new URLSearchParams();for(const id of ids)query.append("id",id);return callList<Row>(await currentPortalSession(),`/v1/bot-flows/media-assets${query.size?`?${query}`:""}`)}
 export async function createBotMediaAsset(input:{filename:string;mimeType:string;byteSize:number;contentSha256:string},idempotencyKey:string){return call<{id:string;state:string;tenantId:string;uploadToken?:string}>(await currentPortalSession(),"/v1/bot-flows/media-assets",{method:"POST",headers:{"idempotency-key":idempotencyKey},body:JSON.stringify(input)})}
-export async function getBotActions(){return call<Row[]>(await currentPortalSession(),"/v1/bot-flows/actions")}
+export async function getBotActions(){return callList<Row>(await currentPortalSession(),"/v1/bot-flows/actions")}
 export async function getBotActionCatalog(query=""){return call<{items:Row[];next_cursor:string|null}>(await currentPortalSession(),`/v1/bot-flows/actions/catalog${query}`)}
 export async function getBotAction(actionKey:string){return call<Row>(await currentPortalSession(),`/v1/bot-flows/actions/${encodeURIComponent(actionKey)}`)}
 export async function getBotAssignments(){return call<Row[]>(await currentPortalSession(),"/v1/bot-flows/assignments")}
@@ -572,7 +572,7 @@ export async function getBotConversationEvents(conversationId:string,input:BotCo
   return call<BotConversationEventPage>(await currentPortalSession(),`/v1/bot-flows/conversations/${encodeURIComponent(conversationId)}/events?${query}`);
 }
 export async function saveBotAction(input:Record<string,unknown>,idempotencyKey:string){return call<Row>(await currentPortalSession(),"/v1/bot-flows/actions",{method:"POST",headers:{"idempotency-key":idempotencyKey},body:JSON.stringify(input)})}
-export async function getBotActionRevisions(actionKey:string){return call<Row[]>(await currentPortalSession(),`/v1/bot-flows/actions/${encodeURIComponent(actionKey)}/revisions`)}
+export async function getBotActionRevisions(actionKey:string){return callList<Row>(await currentPortalSession(),`/v1/bot-flows/actions/${encodeURIComponent(actionKey)}/revisions`)}
 export async function restoreBotActionRevision(actionKey:string,revision:number,input:Record<string,unknown>,idempotencyKey:string){return call<Row>(await currentPortalSession(),`/v1/bot-flows/actions/${encodeURIComponent(actionKey)}/revisions/${revision}/restore`,{method:"POST",headers:{"idempotency-key":idempotencyKey},body:JSON.stringify(input)})}
 export async function storeBotActionCredential(input:Record<string,unknown>,idempotencyKey:string){return call<{secretReference:string}>(await currentPortalSession(),"/v1/bot-flows/actions/credential",{method:"POST",headers:{"idempotency-key":idempotencyKey},body:JSON.stringify(input)})}
 export async function qualifyBotAction(actionKey:string,input:Record<string,unknown>,idempotencyKey:string){return call<Row>(await currentPortalSession(),`/v1/bot-flows/actions/${encodeURIComponent(actionKey)}/qualifications`,{method:"POST",headers:{"idempotency-key":idempotencyKey},body:JSON.stringify(input)})}
@@ -584,7 +584,7 @@ export async function assignBotFlow(input:Record<string,unknown>,idempotencyKey:
 export async function setBotAssignmentState(id:string,input:Record<string,unknown>,idempotencyKey:string){return call<Row>(await currentPortalSession(),`/v1/bot-flows/assignments/${encodeURIComponent(id)}/state`,{method:"POST",headers:{"idempotency-key":idempotencyKey},body:JSON.stringify(input)})}
 export async function setBotAssignmentAttribution(id:string,input:Record<string,unknown>,idempotencyKey:string){return call<Row>(await currentPortalSession(),`/v1/bot-flows/assignments/${encodeURIComponent(id)}/attribution`,{method:"POST",headers:{"idempotency-key":idempotencyKey},body:JSON.stringify(input)})}
 export async function commandBotConversation(id:string,input:Record<string,unknown>,idempotencyKey:string){return call<Row>(await currentPortalSession(),`/v1/bot-flows/conversations/${encodeURIComponent(id)}/command`,{method:"POST",headers:{"idempotency-key":idempotencyKey},body:JSON.stringify(input)})}
-export async function getClientRouting(){return call<Row[]>(await currentPortalSession(),"/v1/bot-flows/routing")}
+export async function getClientRouting(){return callList<Row>(await currentPortalSession(),"/v1/bot-flows/routing")}
 export async function getClientRoutingCatalog(query=""){return call<{items:Row[];next_cursor:string|null}>(await currentPortalSession(),`/v1/bot-flows/routing/catalog${query}`)}
 export async function getClientRoutingVersion(id:string){return call<Row>(await currentPortalSession(),`/v1/bot-flows/routing/${encodeURIComponent(id)}`)}
 export async function getClientRoutingCapabilities(){return call<{externalConnectorsEnabled:boolean;notionOAuthEnabled:boolean}>(await currentPortalSession(),"/v1/bot-flows/routing/capabilities")}

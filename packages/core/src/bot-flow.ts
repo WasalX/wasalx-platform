@@ -46,6 +46,7 @@ export type DirectMessageCapabilities = {
   location: true;
   metaFlows: boolean;
   templates: boolean;
+  customerServiceWindowSeconds: number | null;
 };
 
 export type BotFlowInput =
@@ -92,8 +93,8 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-
 
 export function directMessageCapabilities(provider: "waha" | "meta"): DirectMessageCapabilities {
   return provider === "meta"
-    ? { choices: "BUTTONS", location: true, metaFlows: false, templates: true }
-    : { choices: "NUMBERED_TEXT", location: true, metaFlows: false, templates: false };
+    ? { choices: "BUTTONS", location: true, metaFlows: false, templates: true, customerServiceWindowSeconds: 24 * 60 * 60 }
+    : { choices: "NUMBERED_TEXT", location: true, metaFlows: false, templates: false, customerServiceWindowSeconds: null };
 }
 
 export function resolveBotHandoff(effect: Extract<BotFlowEffect, { type: "handoff" }>, primaryGroupId: string, primaryOwnerId?: string, route?: BotHandoffRoute) {
