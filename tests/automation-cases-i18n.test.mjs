@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { readTenantPortalSource } from "./helpers/tenant-portal-source.mjs";
 
 import { arabicAutomationMessages } from "../lib/i18n/messages/ar/automation.ts";
 import { arabicCaseMessages } from "../lib/i18n/messages/ar/cases.ts";
@@ -95,7 +96,7 @@ test("operator failures and unknown states never expose raw internal copy", asyn
     readFile(new URL("../app/BotAutomation.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/ClientRouting.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/CaseLifecycle.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../app/WasalXApp.tsx", import.meta.url), "utf8"),
+    readTenantPortalSource(),
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
     readFile(new URL("../lib/operator-ui.ts", import.meta.url), "utf8"),
   ]);

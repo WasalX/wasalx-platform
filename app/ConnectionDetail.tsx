@@ -9,7 +9,7 @@ import { operatorFailureMessage, operatorLocalFailure } from "../lib/operator-ui
 import { useVisibleRefresh } from "./use-visible-refresh";
 import { isAbortError } from "../lib/bot-conversations";
 import { connectionAuthorizationState, connectionInboundIsReady, connectionTransportIsReady } from "../lib/connection-readiness.ts";
-import { type ConnectionDetailRow, isDuplicateIdentityRejection, RelativeTime, duration, exactTime, type TenantTranslator, connectionMethod, apiError, requiresPrivilegedReauthentication, privilegedStepUpHref, Status, Empty, WorkspaceLoading, useDialogCloseGuard, DirtyCloseConfirmation } from "./tenant-ui";
+import { type ConnectionDetailRow, isDuplicateIdentityRejection, RelativeTime, exactTime, type TenantTranslator, connectionMethod, apiError, requiresPrivilegedReauthentication, privilegedStepUpHref, Status, Empty, WorkspaceLoading, useDialogCloseGuard, DirtyCloseConfirmation } from "./tenant-ui";
 
 const MetaSignup = lazy(async () => ({ default: (await import("./MetaSignup")).MetaSignup }));
 const MetaNumberRelease = lazy(async () => ({ default: (await import("./MetaNumberRelease")).MetaNumberRelease }));
