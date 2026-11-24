@@ -35,7 +35,8 @@ Use a new `wasalx-dev-*` project with no existing containers, volumes, or networ
 After native preflight and candidate image preparation, run installer `replace`
 with `--drained --dev-fresh-held`, then `smoke` with `--dev-fresh-held`.
 The installer creates the DEV hold set and one-shot prerequisites used only by
-held services without starting them. A failed replacement stays fenced for review.
+held services without starting them. Smoke requires every held container to remain
+in Docker's `created` state. A failed replacement stays fenced for review.
 
 For a synthetic guest, pass `--dev-simulator` through preflight, image preparation,
 replacement, and smoke. It uses the nightly Compose adjustments and puts the WAHA
