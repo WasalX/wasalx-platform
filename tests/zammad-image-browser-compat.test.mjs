@@ -912,10 +912,17 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
       service = Token.find_by!(action: 'api', token: '${serviceToken}')
       service_permissions = Array(service.preferences[:permission] || service.preferences['permission'])
       scheduler = Scheduler.find_by(method: 'WasalxGroupWorkspaceUploadCleanupJob.perform_now')
-      ${nativeCloseScenario}
+      seeded_ids = [ticket.id, article.id]
+      # Define the proof lambdas outside the seed's local scope.
+      def native_compatibility_proofs
+        ${nativeCloseScenario}
+        [native_close_proof, native_direct_keep_open_proof, native_denied_command_proof]
+      end
+      native_close_proof, native_direct_keep_open_proof, native_denied_command_proof = native_compatibility_proofs
       native_close = native_close_proof.call(owner: owner, customer: customer, group: group, service_token: '${serviceToken}', namespace: 'wasalx-native-close-compat')
       native_direct = native_direct_keep_open_proof.call(owner: owner, customer: customer, group: group, namespace: 'wasalx-native-direct-compat')
       native_denied = native_denied_command_proof.call(owner: owner, customer: customer, group: group, service_token: '${serviceToken}', namespace: 'wasalx-native-denied-compat')
+      raise 'Native proof changed the browser seed identity' unless [ticket.id, article.id] == seeded_ids
       # The dispatcher Agent article correctly moved this fixture to OPEN.
       # Prepare NEW through the fixture model, not the edit API (which rejects NEW).
       fixture_article_ids = Ticket::Article.where(ticket_id: ticket.id).order(:id).pluck(:id)
@@ -940,7 +947,7 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
     for (const key of ["stateOwnershipPreserved", "duplicateReceipt", "unknownReadOnly", "noCommunicationOrStateCallbacks", "historicalJobsPreserved"]) assert.equal(seeded.native_denied[key], true);
     assert.equal(seeded.native_denied.providerActions, 0);
     Object.assign(state, { customerId: seeded.customer_id, ticketId: seeded.ticket_id, ticketNumber: seeded.ticket_number, articleId: seeded.article_id, closedTicketId: seeded.closed_ticket_id, closedTicketNumber: seeded.closed_ticket_number, closedArticleId: seeded.closed_article_id });
-    assert.ok(state.requests.some((request) => request.path === "/internal/v1/zammad/outbound/preflight"
+    assert.ok(state.requests.some((request) => request.method === "GET" && request.path === "/internal/v1/zammad/outbound/preflight"
       && new URLSearchParams(request.query).get("ticket_id") === seeded.ticket_id), "Missing outbound preflight for the seeded ticket");
     assert.equal(seeded.staged_present, true);
     assert.equal(seeded.stale_present, false);
