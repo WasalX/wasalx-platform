@@ -4188,7 +4188,7 @@ function Groups({
           <table>
             <thead>
               <tr>
-                {canToggle ? <th className="select-column"><input type="checkbox" checked={allVisibleSelected} aria-label={t(allVisibleSelected ? "tenant.group.selection.clearVisible" : "tenant.group.selection.selectVisible")} onChange={toggleVisible} /></th> : null}
+                {canToggle ? <th className="select-column"><label><input type="checkbox" checked={allVisibleSelected} aria-label={t(allVisibleSelected ? "tenant.group.selection.clearVisible" : "tenant.group.selection.selectVisible")} onChange={toggleVisible} /></label></th> : null}
                 <th>{t("tenant.group.columns.group")}</th>
                 <th>{t("tenant.group.columns.destination")}</th>
                 <th>{t("tenant.group.columns.rule")}</th>
@@ -4201,7 +4201,7 @@ function Groups({
             <tbody>
               {displayedRows.map((row) => {const activationCodes=groupActivationCodes(row);return(
                 <tr key={String(row.id)}>
-                  {canToggle ? <td className="select-column"><input type="checkbox" checked={selected.has(String(row.id))} aria-label={t("tenant.group.selection.selectNamed", { name: String(row.name) })} onChange={() => toggleSelection(String(row.id))} /></td> : null}
+                  {canToggle ? <td className="select-column"><label><input type="checkbox" checked={selected.has(String(row.id))} aria-label={t("tenant.group.selection.selectNamed", { name: String(row.name) })} onChange={() => toggleSelection(String(row.id))} /></label></td> : null}
                   <td>
                     <div className="cell-main">
                       <span className="group-logo">#</span>

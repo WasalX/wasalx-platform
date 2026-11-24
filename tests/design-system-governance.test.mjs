@@ -287,3 +287,14 @@ test("platform case-service labels keep backend identifiers out of visible copy"
   assert.match(console, /zammadVersion: String\(data\.get\("zammadVersion"\)\)/u);
 });
 
+test("group selection checkboxes have 24 px targets and 44 px targets on coarse pointers", async () => {
+  const app = await read("app/WasalXApp.tsx");
+  const globals = await read("app/globals.css");
+  const cells = [...app.matchAll(/<t[hd] className="select-column">(.*?)<\/t[hd]>/gu)].map((match) => match[1]);
+  assert.equal(cells.length, 2);
+  for (const cell of cells) assert.match(cell, /^<label><input type="checkbox" .*aria-label=\{t\(.*"tenant\.group\.selection\.[\w.]+".*\/><\/label>$/u, "each checkbox sits in its label hit area and keeps its accessible name");
+  const size = (css) => css.match(/\.select-column label\{[^}]*min-inline-size:(\d+)px;min-block-size:(\d+)px/u).slice(1).map(Number);
+  assert.deepEqual(size(globals), [24, 24]);
+  assert.deepEqual(size(globals.match(/@media\(any-pointer:coarse\)\{\.select-column\{[^}]*\}[^}]*\}\}/u)[0]), [44, 44]);
+});
+
