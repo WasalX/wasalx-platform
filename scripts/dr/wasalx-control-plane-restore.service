@@ -1,0 +1,23 @@
+[Unit]
+Description=Rehearse a WasalX control-plane PostgreSQL restore
+Wants=network-online.target
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+User=wasalx-restore
+WorkingDirectory=/opt/wasalx/backup-restore
+EnvironmentFile=/etc/wasalx/control-plane-restore.env
+StateDirectory=wasalx-control-plane-restore
+StateDirectoryMode=0700
+CacheDirectory=wasalx-control-plane-restore
+CacheDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+PrivateTmp=true
+UnsetEnvironment=DOCKER_CONTEXT
+TimeoutStartSec=4h
+ExecStartPre=:/bin/sh -c 'status=0; rm -rf -- "${CACHE_DIRECTORY:?}"/rehearsal-* || status=$?; containers=$(docker --host unix:///run/docker.sock ps -aq --filter label=wasalx.io/purpose=dr-rehearsal) && echo "$containers" | xargs -r docker --host unix:///run/docker.sock rm --force --volumes || status=$?; exit "$status"'
+ExecStart=/usr/bin/node scripts/dr/rehearse-control-plane-backup.mjs
+ExecStopPost=:/bin/sh -c 'status=0; rm -rf -- "${CACHE_DIRECTORY:?}"/rehearsal-* || status=$?; containers=$(docker --host unix:///run/docker.sock ps -aq --filter label=wasalx.io/purpose=dr-rehearsal) && echo "$containers" | xargs -r docker --host unix:///run/docker.sock rm --force --volumes || status=$?; exit "$status"'

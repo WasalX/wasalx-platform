@@ -5,7 +5,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{1
 const SHA256 = /^[0-9a-f]{64}$/u;
 const DATABASE_NAME = /^[a-z][a-z0-9_]{0,62}$/u;
 const BUCKET_NAME = /^(?=.{3,63}$)[a-z0-9](?:[a-z0-9.-]*[a-z0-9])$/u;
-const CONTROL_PREFIX = "control-plane/backups/";
+export const CONTROL_BACKUP_PREFIX = "control-plane/backups/";
 
 export const DR_OBJECTIVES = Object.freeze({
   controlPlaneRpoMinutes: 15,
@@ -60,7 +60,7 @@ export function validateBackupManifest(value, now = new Date()) {
   const objectKey = safeText(storage.objectKey, "storage.objectKey", 1, 1_024);
   const expectedPrefix = kind === "tenant-zammad"
     ? `tenants/${tenantId}/backups/`
-    : CONTROL_PREFIX;
+    : CONTROL_BACKUP_PREFIX;
   if (!objectKey.startsWith(expectedPrefix) || objectKey.includes("..") || objectKey.startsWith("/")) {
     fail("BACKUP_OBJECT_ISOLATION", "Backup object key is outside its immutable workload prefix");
   }
