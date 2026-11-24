@@ -86,7 +86,8 @@ if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) 
     const exit = Number.isInteger(error.code) ? error.code : error.killed ? 124 : 1;
     // Only explicit identity mismatches are useful here. Assertion values can contain arbitrary input.
     const mismatch = /^(hosted source (?:commit|tree) mismatch|signed hosted [a-zA-Z ]+ mismatch)$/u;
-    if (error.code === "ERR_ASSERTION" && mismatch.test(error.message)) reason += ` (${error.message})`;
+    const message = error.code === "ERR_ASSERTION" ? error.message.split(/\r?\n/u, 1)[0] : "";
+    if (mismatch.test(message)) reason += ` (${message})`;
     console.error(`command=${command} exit=${exit} reason=${reason}`);
     process.exitCode = exit;
   }
