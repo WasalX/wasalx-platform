@@ -959,7 +959,7 @@ test("Zammad ticket context is service-authenticated, tenant-scoped, minimal, an
         query: async (sql, values) => {
           queries.push({ sql, values });
           assert.deepEqual(values, [tenantA, "42"]);
-          return { rows: [contextRow()], rowCount: 1 };
+          return { rows: [contextRow({ provider: "META" })], rowCount: 1 };
         },
       });
     },
@@ -970,7 +970,7 @@ test("Zammad ticket context is service-authenticated, tenant-scoped, minimal, an
   assert.deepEqual(result, {
     ticket_id: "42",
     connection_id: "12000000-0000-4000-8000-000000000001",
-    provider: "WAHA",
+    provider: "META",
     connection_state: "WORKING",
     binding_state: "ACTIVE",
     group_name: "Riyadh Operations",
@@ -978,6 +978,7 @@ test("Zammad ticket context is service-authenticated, tenant-scoped, minimal, an
     bot_state: null,
     last_heartbeat_at: "2026-08-09T20:00:00.000Z",
     last_provider_event_at: "2026-08-09T20:01:00.000Z",
+    service_window_expires_at: null,
     delivery_id: "30000000-0000-4000-8000-000000000003",
     zammad_article_id: "9",
     delivery_state: "DELIVERED",
@@ -994,6 +995,48 @@ test("Zammad ticket context is service-authenticated, tenant-scoped, minimal, an
   assert.match(query, /latest_delivery\.manual_retry_allowed/);
   assert.doesNotMatch(query, /message_body|payload|secret_reference|phone_e164/i);
   assert.doesNotMatch(JSON.stringify(result), /message_body|payload|secret|phone/i);
+});
+
+test("direct ticket context returns the tenant's provider window expiry", async () => {
+  const now = Date.parse("2026-08-10T20:00:00.000Z");
+  const tickets = new Map([
+    [tenantA, new Map([
+      ["42", contextRow({ provider: "META", last_customer_message_at: new Date("2026-08-10T19:00:00.000Z") })],
+      ["43", contextRow({ provider: "META", last_customer_message_at: null })],
+      ["44", contextRow({ provider: "WAHA", last_customer_message_at: new Date(now) })],
+    ])],
+    [tenantB, new Map([
+      ["42", contextRow({ provider: "META", last_customer_message_at: "2026-08-08T22:00:00+02:00" })],
+      ["43", contextRow({ provider: "META", last_customer_message_at: new Date(NaN) })],
+    ])],
+  ]);
+  const database = {
+    rows: async (tenantId, _sql, [boundTenant, instanceId]) => {
+      assert.equal(boundTenant, tenantId);
+      assert.equal(instanceId, tenantId === tenantA ? instanceA : instanceB);
+      return [{ id: instanceId }];
+    },
+    withTenant: async (tenantId, operation) => operation({ query: async (sql, [boundTenant, ticketId]) => {
+      assert.equal(boundTenant, tenantId);
+      if (!sql.includes("FROM bot_conversations conversation")) return { rows: [] };
+      assert.match(sql, /conversation\.tenant_id=\$1 AND conversation\.zammad_ticket_id=\$2/);
+      assert.match(sql, /message\.tenant_id=conversation\.tenant_id AND message\.connection_id=conversation\.connection_id/);
+      assert.match(sql, /ownership\.tenant_id=conversation\.tenant_id AND ownership\.connection_id=conversation\.connection_id/);
+      return { rows: [tickets.get(tenantId).get(ticketId)] };
+    } }),
+  };
+  const controller = new ZammadInternalController(database, serviceAuth(), { wake: async () => assert.fail("context cannot wake workers") });
+  const authorizationA = `Bearer ${await serviceToken()}`;
+  const authorizationB = `Bearer ${await serviceToken({ tenantId: tenantB, instanceId: instanceB, signingSecret: secretB })}`;
+  const open = await controller.ticketContext(authorizationA, "42");
+  const closed = await controller.ticketContext(authorizationB, "42");
+  assert.equal(open.service_window_expires_at, "2026-08-11T19:00:00.000Z");
+  assert.equal(closed.service_window_expires_at, "2026-08-09T20:00:00.000Z");
+  assert(Date.parse(open.service_window_expires_at) > now);
+  assert(Date.parse(closed.service_window_expires_at) < now);
+  assert.equal((await controller.ticketContext(authorizationA, "43")).service_window_expires_at, null);
+  assert.equal((await controller.ticketContext(authorizationA, "44")).service_window_expires_at, null);
+  assert.equal((await controller.ticketContext(authorizationB, "43")).service_window_expires_at, null);
 });
 
 test("ticket context derives tenant and instance only from the signed service identity", async () => {
@@ -1034,6 +1077,7 @@ test("ticket context resolves a group-workspace ticket without an automation cor
   const controller=new ZammadInternalController(database,serviceAuth(),{wake:async()=>{}});
   const result=await controller.ticketContext(`Bearer ${await serviceToken()}`,"42");
   assert.equal(result.group_name,"Workspace Operations");assert.equal(result.binding_state,"ACTIVE");
+  assert.equal(result.service_window_expires_at,null);
   const workspace=queries.find(sql=>sql.includes("FROM message_links link"));
   assert.match(workspace,/message\.history_captured_at IS NOT NULL/);assert.match(workspace,/tenant\.group_workspace_enabled AND workspace\.capture_enabled/);
 });
