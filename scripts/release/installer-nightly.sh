@@ -1,8 +1,18 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
 umask 077
 
-[[ "$GITHUB_ACTIONS" == true && "$RUNNER_ENVIRONMENT" == github-hosted ]]
+failure() {
+  printf 'command=%s exit=%s reason=%s\n' "$2" "$1" "$3" >&2
+}
+
+# BASH_COMMAND is the checked-in shell expression, with no expanded arguments.
+trap 'failure "$?" "$BASH_COMMAND" "rehearsal command failed at line $LINENO"' ERR
+
+if [[ "${GITHUB_ACTIONS:-}" != true || "${RUNNER_ENVIRONMENT:-}" != github-hosted ]]; then
+  failure 1 'bash scripts/release/installer-nightly.sh' 'requires a GitHub-hosted Actions runner'
+  exit 1
+fi
 work="$RUNNER_TEMP/wasalx-nightly"
 project=wasalx-nightly
 full_env="$work/full.env"
@@ -23,48 +33,97 @@ inventory() {
 
 if [[ "${1:-}" == cleanup ]]; then
   [[ -f "$full_env" ]] || exit 0
-  docker ps --all --filter "label=com.docker.compose.project=$project" \
-    --format '{{.Label "com.docker.compose.service"}} {{.Status}}' > "$diagnostics/containers.log" || true
   status=0
-  timeout 3m "${compose[@]}" down --volumes --remove-orphans > "$work/teardown.raw" 2>&1 || status=$?
+  docker ps --all --filter "label=com.docker.compose.project=$project" \
+    --format '{{.Label "com.docker.compose.service"}} {{.Status}}' > "$diagnostics/containers.log" || {
+    status=$?
+    failure "$status" 'docker ps' 'cannot record rehearsal containers before teardown'
+  }
+  timeout 3m "${compose[@]}" down --volumes --remove-orphans > "$work/teardown.raw" 2>&1 || {
+    status=$?
+    failure "$status" 'docker compose down --volumes --remove-orphans' 'disposable stack teardown failed'
+  }
   commit=$(git rev-parse HEAD)
   verifier="$project-migration-input-${commit:0:12}"
   if docker container inspect "$verifier" >/dev/null 2>&1; then
-    docker rm --force "$verifier" >/dev/null || status=$?
+    docker rm --force "$verifier" >/dev/null || {
+      status=$?
+      failure "$status" 'docker rm --force' 'migration verifier teardown failed'
+    }
   fi
   if docker container inspect "$registry_container" >/dev/null 2>&1; then
-    docker rm --force "$registry_container" >/dev/null || status=$?
+    docker rm --force "$registry_container" >/dev/null || {
+      status=$?
+      failure "$status" 'docker rm --force' 'guest registry teardown failed'
+    }
   fi
-  if ! remaining=$(inventory) || [[ -n "$remaining" ]]; then
-    status=1
+  if remaining=$(inventory); then
+    if [[ -n "$remaining" ]]; then
+      status=1
+      failure "$status" 'docker ps' 'rehearsal containers remain after teardown'
+    fi
+  else
+    status=$?
+    failure "$status" 'docker ps' 'cannot verify the rehearsal containers were removed'
   fi
   printf 'teardown exit=%s\n' "$status" | tee -a "$diagnostics/phases.log"
   exit "$status"
 fi
 
 phase() {
-  local name=$1 limit=$2 started=$SECONDS status=0
+  local name=$1 limit=$2 started=$SECONDS status=0 command reason arg
   shift 2
+  command=$1
+  case "$1" in
+    node) command="$1 $2" ;;
+    python3)
+      for arg in "${@:2}"; do
+        if [[ "$arg" == scripts/*.py ]]; then
+          command="$1 $arg"
+          break
+        fi
+      done
+      ;;
+    docker) command='docker compose' ;;
+  esac
   timeout "$limit" "$@" > "$work/$name.raw" 2>&1 || status=$?
   printf '%s exit=%s elapsed=%ss\n' "$name" "$status" "$((SECONDS - started))" | tee -a "$diagnostics/phases.log"
   # Copy only installer control messages, never an env file, Compose logs or inspect payloads.
-  grep -E '^remote full stage [a-z-]+ (passed \(operator authentication/live acceptance separate\)|failed; inspect before retry|reason: [[:print:]]+)$|^remote full qualification reason: [[:print:]]+$|^flock: cannot open lock file /tmp/wasalx-compose-stage\.lock: [[:print:]]+$|^unrecreatable fields: \[("[a-zA-Z0-9_.-]+"(,|\]))+$' \
-    "$work/$name.raw" >> "$diagnostics/installer.log" || true
-  if [[ "$name" == registry-stage ]]; then
-    grep -E '^registry-stage source=[a-zA-Z0-9._:/-]+@sha256:[0-9a-f]{64}$' "$work/$name.raw" >> "$diagnostics/installer.log" || true
+  sed -nE '/^remote full stage [a-z-]+ (passed \(operator authentication\/live acceptance separate\)|failed; inspect before retry|reason: [[:print:]]+)$/p;
+    /^remote full qualification reason: [[:print:]]+$/p;
+    /^flock: cannot open lock file \/tmp\/wasalx-compose-stage\.lock: [[:print:]]+$/p;
+    /^unrecreatable fields: \[("[a-zA-Z0-9_.-]+"(,|\]))+$/p;
+    /^hosted bundle staging reason: [[:print:]]+$/p' "$work/$name.raw" >> "$diagnostics/installer.log"
+  if [[ "$name" == bundles ]]; then
+    sed -nE '/^hosted bundle staging timing: route=(token|manifests|referrers|blobs) requests=[0-9]+ total_ms=[0-9]+ p95_ms=[0-9]+ max_ms=[0-9]+ http_404=[0-9]+ http_429=[0-9]+ transport_errors=[0-9]+$/p' \
+      "$work/$name.raw" | tee -a "$diagnostics/installer.log"
+  elif [[ "$name" == registry-stage ]]; then
+    sed -nE '/^registry-stage source=[a-zA-Z0-9._:\/-]+@sha256:[0-9a-f]{64}$/p' "$work/$name.raw" >> "$diagnostics/installer.log"
   elif [[ "$name" == native-preflight ]]; then
-    grep -E '^native docker diff service=[a-z0-9][a-z0-9_-]{0,62} elapsed=[0-9]+ms$' \
-      "$work/$name.raw" | tee -a "$diagnostics/installer.log" || true
+    sed -nE '/^native docker diff service=[a-z0-9][a-z0-9_-]{0,62} elapsed=[0-9]+ms$/p' \
+      "$work/$name.raw" | tee -a "$diagnostics/installer.log"
     if (( status != 0 )); then
-      grep -E '^native docker diff service=[a-z0-9][a-z0-9_-]{0,62} (started|elapsed=[0-9]+ms)$' "$work/$name.raw" \
-        | tail -n 1 | grep ' started$' | tee -a "$diagnostics/installer.log" || true
+      sed -nE '/^native docker diff service=[a-z0-9][a-z0-9_-]{0,62} (started|elapsed=[0-9]+ms)$/p' \
+        "$work/$name.raw" | tail -n 1 | sed -n '/ started$/p' | tee -a "$diagnostics/installer.log"
     fi
-  elif [[ "$name" == probe-scan && "$status" != 0 ]]; then
-    grep -E '^probe-scan error=(Error|AssertionError|SyntaxError|TypeError|RangeError) message=[[:print:]]{1,480}$' \
-      "$work/$name.raw" | tail -n 1 | tee -a "$diagnostics/installer.log" >&2 || true
   fi
-  return "$status"
+  if (( status != 0 )); then
+    reason=$(sed -nE '/^probe-scan error=(Error|AssertionError|SyntaxError|TypeError|RangeError) message=[[:print:]]{1,480}$/p;
+      /^remote full (stage [a-z-]+|qualification) reason: [[:print:]]+$/p;
+      /^flock: cannot open lock file \/tmp\/wasalx-compose-stage\.lock: [[:print:]]+$/p;
+      /^hosted bundle staging reason: [[:print:]]+$/p' "$work/$name.raw" | tail -n 1)
+    if (( status == 124 )); then
+      reason="stage exceeded its $limit deadline${reason:+ ($reason)}"
+    fi
+    failure "$status" "$command ($name)" "${reason:-stage failed without a redacted child diagnostic}"
+    exit "$status"
+  fi
 }
+
+if [[ "${1:-}" == stage-bundles ]]; then
+  phase bundles 5m python3 -I -B scripts/release/installer-hosted-bundles.py "$work/images-manifest.json"
+  exit 0
+fi
 
 start_registry() {
   local read_only=$1 pull=$2 mount="type=bind,src=$work/registry,dst=/var/lib/registry"
@@ -153,7 +212,9 @@ resources() {
   local name=$1
   {
     echo "$name"
-    df -Pm "$PWD" "$(docker info --format '{{.DockerRootDir}}')"
+    local docker_root
+    docker_root=$(docker info --format '{{.DockerRootDir}}')
+    df -Pm "$PWD" "$docker_root"
     free -m
     docker system df
   } | tee -a "$diagnostics/resources.log"
@@ -165,12 +226,17 @@ export DOCKER_CONFIG="$work/docker"
 mkdir -p "$DOCKER_CONFIG"
 commit=$(git rev-parse HEAD)
 tree=$(git rev-parse 'HEAD^{tree}')
-test -z "$(inventory)"
-test -z "$(docker volume ls --quiet --filter "label=com.docker.compose.project=$project")"
-test -z "$(docker network ls --quiet --filter "label=com.docker.compose.project=$project")"
+containers=$(inventory)
+volumes=$(docker volume ls --quiet --filter "label=com.docker.compose.project=$project")
+networks=$(docker network ls --quiet --filter "label=com.docker.compose.project=$project")
+if [[ -n "$containers$volumes$networks" ]]; then
+  failure 1 'docker ps / docker volume ls / docker network ls' 'rehearsal project already has resources'
+  exit 1
+fi
 printf 'installer=%s tree=%s images=%s\n' "$commit" "$tree" "$MAIN_SHA" | tee -a "$diagnostics/phases.log"
 resources baseline
-if (( $(sysctl -n vm.max_map_count) < 1048576 )); then
+map_count=$(sysctl -n vm.max_map_count)
+if (( map_count < 1048576 )); then
   sudo sysctl -w vm.max_map_count=1048576
 fi
 
@@ -189,9 +255,9 @@ if ! git diff --quiet "$MAIN_SHA" "$commit" -- Dockerfile.foundation-keycloak co
   phase candidate-keycloak-bootstrap 5m "${candidate_compose[@]}" up --no-build \
     --abort-on-container-exit --exit-code-from keycloak-bootstrap keycloak-bootstrap
   phase candidate-keycloak-teardown 3m "${candidate_compose[@]}" down --volumes
-  test -z "$(inventory)"
+  containers=$(inventory)
+  test -z "$containers"
 fi
-phase bundles 5m python3 -B scripts/release/images-by-digest.py stage-hosted-bundles --manifest "$work/images-manifest.json"
 stage=(--env-file "$full_env" --project-name "$project" --rehearsal-main "$MAIN_SHA" --local-registry "$registry")
 manifest_hash=$(sha256sum "$work/images-manifest.json" | cut -d ' ' -f 1)
 hosted=(--hosted-images "$work/images-manifest.json" --hosted-images-sha256 "$manifest_hash"
