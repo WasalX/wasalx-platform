@@ -288,7 +288,7 @@ test("platform case-service labels keep backend identifiers out of visible copy"
 });
 
 test("group selection checkboxes have 24 px targets and 44 px targets on coarse pointers", async () => {
-  const app = await read("app/WasalXApp.tsx");
+  const app = await read("app/Groups.tsx");
   const globals = await read("app/globals.css");
   const cells = [...app.matchAll(/<t[hd] className="select-column">(.*?)<\/t[hd]>/gu)].map((match) => match[1]);
   assert.equal(cells.length, 2);
