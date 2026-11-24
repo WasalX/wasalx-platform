@@ -193,7 +193,7 @@ export function CaseLifecycle({
       </div>
 
       {error ? <div className={styles.loadError} role="alert"><span>!</span><div><b>{t("cases.unavailable")}</b><p>{error}</p></div><button className="button small" onClick={() => void load()}>{t("cases.tryAgain")}</button></div> : null}
-      {loading ? <div className={styles.skeleton} role="status" aria-live="polite" aria-busy="true"><p className="sr-only">{t("cases.loading")}</p><span aria-hidden="true" /><span aria-hidden="true" /><span aria-hidden="true" /></div> : null}
+      {loading ? <div className={styles.skeleton} aria-busy="true"><p className="sr-only" role="status" aria-label={t("cases.loading")}>{t("cases.loading")}</p><span aria-hidden="true" /><span aria-hidden="true" /><span aria-hidden="true" /></div> : null}
       {!loading && !error && visible.length ? <div
         className="table-scroll"
         role="region"

@@ -985,11 +985,22 @@ test("lazy slots in panels, drawers and dialogs use a compact, accurately labell
   assert.match(source, /let metaSectionLoaded = false;\nconst MetaTemplatePreparation = lazy\(async \(\) => \{[^\n]*metaSectionLoaded = true;/u);
   assert.match(source, /detail\.provider === "META" \? \(\s*<Suspense fallback=\{<SectionLoading \/>\}>\s*\{!sessionExpired \? <MetaTemplatePreparation/u);
   // Skeleton loaders keep aria-busy on the skeleton and announce through one plain status inside it (#325).
-  const skeletons = [readTenantPortalSource(), await read("app/BotAutomation.tsx")].join("\n");
+  const skeletons = [readTenantPortalSource(), ...await Promise.all(["app/BotAutomation.tsx", "app/ClientRouting.tsx", "app/CaseLifecycle.tsx", "app/NativeRoutingSync.tsx"].map(read))].join("\n");
   assert.deepEqual([...skeletons.matchAll(/<\w+ [^>]*role="status"[^>]*>/gu)].map((match) => match[0]).filter((tag) => tag.includes("aria-busy")), [], "a live region is never busy");
   const statuses = [...skeletons.matchAll(/<\w+ className="[^"]*" aria-busy="true"><p className="sr-only" role="status" aria-label=\{t\("([\w.]+)"\)\}>\{t\("\1"\)\}<\/p>/gu)].map((match) => match[1]);
-  assert.deepEqual(statuses, ["tenant.settings.loading", "tenant.privacy.loading", "tenant.privacy.detail.loading", "tenant.team.loading", "bot.flows.loadingDetail", "bot.conversations.loadingExecution", "plugins.loading", "bot.canvas.loading"]);
+  assert.deepEqual(statuses, ["tenant.settings.loading", "tenant.privacy.loading", "tenant.privacy.detail.loading", "tenant.team.loading", "bot.flows.loadingDetail", "bot.conversations.loadingExecution", "plugins.loading", "bot.canvas.loading", "routing.detail.loading"]);
   assert.match(skeletons, /className="panel bot-loading"\s+aria-busy="true"\s*>\s*<p className="sr-only" role="status" aria-label=\{t\("bot\.loading"\)\}>/u);
+  assert.match(skeletons, /className="panel bot-loading" aria-busy="true">\s*<p className="sr-only" role="status" aria-label=\{t\("routing\.loading"\)\}>\{t\("routing\.loading"\)\}<\/p>/u);
+  assert.match(skeletons, /className=\{styles\.skeleton\} aria-busy="true"><p className="sr-only" role="status" aria-label=\{t\("cases\.loading"\)\}>\{t\("cases\.loading"\)\}<\/p>/u);
+  assert.match(skeletons, /className="data-connections-loading" role="status">\{t\("routing\.integrations\.loading"\)\}/u);
+  assert.match(skeletons, /aria-labelledby=\{titleId\} aria-busy=\{loading \|\| busy\}>/u);
+  assert.match(skeletons, /<div role="status">\s*<b>\{t\(displayState \? `nativeRouting\.state/u);
+  // Release simulations wait for the busy container, never a busy live region (#338).
+  for (const simulation of ["simulation-remaining-quality", "simulation-shared-readonly", "simulation-routing-quality"]) {
+    const script = await read(`scripts/release/${simulation}.mjs`);
+    assert.doesNotMatch(script, /\[role=status\]\[aria-busy=true\]/u, `${simulation} waits for a busy live region`);
+    assert.match(script, /\[aria-busy=true\]:has\(> \[role=status\]\)/u, `${simulation} waits for the busy loader`);
+  }
   assert.match(english, /"tenant\.loading\.section": "Loading this section…"/u);
   assert.match(arabic, /"tenant\.loading\.section": "جارٍ تحميل هذا القسم…"/u);
 });
