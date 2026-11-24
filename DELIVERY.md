@@ -113,7 +113,7 @@ Measure the latest 150 first-attempt PR runs from GitHub Actions timestamps. Spl
 
 In the daily Delivery check, report p50 and p95 changed lines across the last 100 merged PRs per repository. Exclude files marked `linguist-generated`.
 
-Keep these performance targets independent of the merge result. Address misses through the board while preserving the required checks.
+The `portal-integration` job enforces the `/app` JavaScript budget. Keep the other performance targets independent of the merge result and address misses through the board.
 
 ## Deviations
 
