@@ -10,10 +10,10 @@ export async function clonePolicyVersionThroughPortal({page,row,source,policy}){
  let requestCount=0;const countClone=request=>{if(matches(request))requestCount++};page.on('request',countClone);
  try{
   const [cloneRequest,cloneResponse]=await Promise.all([page.waitForRequest(matches),page.waitForResponse(response=>matches(response.request())),row.getByRole('button',{name:'New draft version',exact:true}).click()]);
-  assert.equal(cloneResponse.status(),200);await page.waitForTimeout(0);assert.equal(requestCount,1,'Portal clone dispatched more than once');
+  assert.equal(cloneResponse.status(),200);
   const key=cloneRequest.headers()['idempotency-key'];assert.match(key,/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/iu);
   const input=cloneRequest.postDataJSON();assert(input&&Array.isArray(input.rules));assert.equal(input.rules.length,source.rules.length);assert.equal(input.rules[0].matcherOptions?.teamSenderPolicy,policy);
-  const receipt=await cloneResponse.json();return{draftId:operationResultId(receipt),operationKeySha256:createHash('sha256').update(key).digest('hex'),requestCount};
+  const receipt=await cloneResponse.json();assert.equal(requestCount,1,'Portal clone dispatched more than once');return{draftId:operationResultId(receipt),operationKeySha256:createHash('sha256').update(key).digest('hex'),requestCount};
  }finally{page.off('request',countClone)}
 }
 export async function runFreshRuleVersions({ownerPage:page,portalOrigin:origin,runId,checkpoint,scoped,tenantId}){

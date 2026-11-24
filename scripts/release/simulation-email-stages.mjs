@@ -297,7 +297,6 @@ export async function observeNativeTicketNarrowLayout(page,origin,ticketId,artic
    const bounds=await toggle.boundingBox();assert(bounds&&bounds.width>0&&bounds.height>0);
    const before=await sidebarHitStack(toggle);
    await page.mouse.move(bounds.x+bounds.width/2,bounds.y+bounds.height/2);
-   await page.waitForTimeout(150);
    const hovered=await sidebarHitStack(toggle);
    try{await toggle.click({trial:true});}catch(error){
     const message=error?.message??'',category=/intercepts pointer events/iu.test(message)?'pointer-interception':/not visible/iu.test(message)?'not-visible':/outside of the viewport/iu.test(message)?'outside-viewport':'timeout-or-other';
