@@ -18,6 +18,7 @@ function Workspace({ locale = "en" }: { locale?: "en" | "ar" }) {
 export default {
   title: "Product/Inbox",
   component: Workspace,
+  args: { locale: "en" },
   parameters: { layout: "fullscreen", docs: { description: {
     component: "WasalX conversation workspace. Without a connected API it shows recovery. Browser interaction tests provide synthetic requests; these are not provider or backend acceptance.",
   } } },

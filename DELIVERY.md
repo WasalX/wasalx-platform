@@ -16,6 +16,8 @@ WasalX Delivery owns this document, the merge queue, CI health and speed, releas
 
 ## Checks
 
+- The [Storybook job](.github/workflows/ci.yml) runs on main and PRs that touch UI or Storybook inputs. It builds the static story index, audits every story with axe's WCAG 2.2 AA rules in Chromium, and fails on accessibility violations or render errors. It checks light and dark themes in English and Arabic (RTL). Product stories use both translations, and English design reference copy keeps its language in RTL layouts. The run's Storybook artifact contains screenshots and a browser report. Pixel comparisons need repeatable hosted-runner baselines.
+
 - PRs run lint, typecheck, test collection, both unit shards, and dependency review. On a PR, PostgreSQL and portal integration run when a file on the fixed path list in [ci.yml](.github/workflows/ci.yml) changes or CI cannot verify the diff. Otherwise, both first run in the merge queue. CI selects infrastructure jobs by path and narrows advisory image builds by their inputs, with `max-parallel: 8`. Unknown or shared image inputs select the full catalog.
 - The `merge_group` run covers the full CI suite, including PostgreSQL, portal/browser, and infrastructure checks, and accounts for every image in the catalog with `max-parallel: 21`. `ci-gate` is the only required status check. Code scanning for high and critical findings is a separate ruleset requirement.
 - `ci-gate` always runs. A failed or cancelled required job fails the gate. Only jobs explicitly excluded by the workflow's event or path selection may be skipped.
@@ -24,12 +26,13 @@ WasalX Delivery owns this document, the merge queue, CI health and speed, releas
 - The [pnpm cache action](.github/actions/ci-pnpm/action.yml) saves pnpm dependency and service build caches on main pushes only. PostgreSQL integration and portal integration always force clean service builds.
 - Run CI on free GitHub-hosted runners. Cancel older CI runs only for the same PR. Keep workflow permissions read-only at the top level, grant writes per job, and pin actions by full commit SHA. Prohibit `pull_request_target`. Fork PRs receive no secrets.
 - Set job time limits from the measured p95 plus 25 percent, rounded up to a whole minute. Review limits monthly. A higher limit needs new measurements in a separate PR. See the [CI timing sample](.github/ci-timings.json) and [current coverage](#deviations).
-- For every workflow-changing PR, verify the SHA-256 of the pinned actionlint 1.7.12 binary before running it. Require zero new findings compared with the base branch. Older 1.7.x versions misread YAML anchors.
+- The [workflow lint job](.github/workflows/ci.yml) verifies the pinned actionlint release archive by SHA-256. It compares all workflow findings against the base on workflow-changing PRs and records the base, candidate and new counts. Merge groups and main pushes always run the comparison. `ci-gate` requires zero new findings.
 
 ## Test policy
 
 - Fix a failing test or the defect it found. Keep required checks and lint rules in place. CI must pass on its first attempt without skipping tests or widening timeouts. File a flaky test as a High-priority bug and fix it or revert the change that introduced it.
 - Revert the offending change if `main` or the merge queue stays red for 30 minutes. Replacements must preserve the original regression coverage. A test file that only detects changes may be removed after two weeks of evidence. Keep authorization, privacy, migration, and concurrency tests.
+- Record known Node unit-test failures in [test-quarantine.json](scripts/test-quarantine.json) with the runner file path, exact test name, owner, and UTC expiry date (`expiresOn`, `YYYY-MM-DD`). The hosted unit reporter labels matching failures and keeps their failing result. A row expires at midnight UTC on its expiry date and fails the unit check.
 - Every test file belongs to a named runner. Keep runner ownership and the coverage inventory current. The [ownership guard](tests/hosted-ci.test.mjs) detects gaps and stale entries.
 - The [source endpoint guard](tests/source-endpoint-literals.test.mjs) runs in the required unit checks. Keep endpoints in configuration. When a source literal is required, record its exact value, path, and reason in the [allowlist](tests/source-endpoint-allowlist.json). The guard scans tracked source, with exemptions for configuration, generated files, tests, comments, reserved addresses and names, hostless URLs, and namespace identifiers.
 - [The integration scenario registry](scripts/postgres-scenario-registry.mjs) assigns each PostgreSQL scenario to one of four shards. Each shard uses a disposable database. CI requires one report per shard and fails on unknown, missing, or duplicate scenarios.
