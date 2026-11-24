@@ -44,6 +44,7 @@ test("bot lists continue through the old 200-row cap", async t => {
       const media = method === "listMediaAssets";
       const revising = method === "listActionRevisions";
       const redact = revising || method === "listActions";
+      let requestedIds = media ? [selected.id] : [];
       let queries = 0;
       const database = { rows: async (tenant, sql, values) => {
         queries += 1;
@@ -52,14 +53,14 @@ test("bot lists continue through the old 200-row cap", async t => {
         assert.ok(sql.includes(table));
         assert.match(sql, /LIMIT \$[34]/u);
         if (revising) assert.equal(values[1], "orders.lookup");
-        if (media) assert.deepEqual(values[1], [selected.id]);
+        if (media) assert.deepEqual(values[1], requestedIds);
         const cursor = values.at(-2);
-        const available = media ? records.slice(0, -1) : records;
+        const available = requestedIds.length ? records.slice(0, -1) : records;
         const position = cursor ? available.findIndex(row => row.id === cursor) + 1 : 0;
         const rows = available.slice(position, position + values.at(-1));
         if (!media) return rows;
         const normal = rows.map(row => ({ ...row, pagination_requested: false }));
-        return cursor ? normal : [...normal, { ...selected, pagination_requested: true }];
+        return cursor || !requestedIds.length ? normal : [...normal, { ...selected, pagination_requested: true }];
       } };
       const controller = new BotFlowsController(new BotFlowsService(database));
       assert.equal(Reflect.getMetadata("wasalx:permission", controller[method]), "bot:read");
@@ -86,6 +87,9 @@ test("bot lists continue through the old 200-row cap", async t => {
       await assert.rejects(() => list({ cursor: "invalid" }), /cursor is invalid/);
       await assert.rejects(() => list({ limit: ["2"] }), /Page limit/);
       assert.equal(queries, 2);
+      requestedIds = [];
+      const direct = revising ? await controller[method](request, "orders.lookup") : await controller[method](request);
+      assert.deepEqual(ids(direct), ids(records.slice(0, 200)));
     });
   }
 });
@@ -1263,6 +1267,7 @@ test("legacy conversation requests retain the no-query array and can continue pa
   const headers = new Map();
   const reply = { header: (name, value) => headers.set(name, value) };
   const request = { principal };
+  assert.deepEqual((await controller.listConversations(request)).map(row => row.id), rows.slice(0, 200).map(row => row.id));
   const first = await controller.listConversations(request, undefined, undefined, reply);
   assert.ok(Array.isArray(first));
   assert.deepEqual(first.map(row => row.id), rows.slice(0, 200).map(row => row.id));

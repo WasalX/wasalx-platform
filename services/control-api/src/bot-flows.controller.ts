@@ -11,7 +11,7 @@ export class BotFlowsController {
 
   @Get()
   @Requires("bot:read")
-  async list(@Req() request: AuthenticatedRequest, @Query() query: ListPageQuery, @Res({ passthrough: true }) reply: FastifyReply) {
+  async list(@Req() request: AuthenticatedRequest, @Query() query: ListPageQuery = {}, @Res({ passthrough: true }) reply?: FastifyReply) {
     return withListCursor(reply, await this.flows.list(request.principal, query));
   }
 
@@ -31,7 +31,7 @@ export class BotFlowsController {
 
   @Get("actions")
   @Requires("bot:read")
-  async listActions(@Req() request: AuthenticatedRequest, @Query() query: ListPageQuery, @Res({ passthrough: true }) reply: FastifyReply) {
+  async listActions(@Req() request: AuthenticatedRequest, @Query() query: ListPageQuery = {}, @Res({ passthrough: true }) reply?: FastifyReply) {
     return withListCursor(reply, await this.flows.listActions(request.principal, query));
   }
 
@@ -47,8 +47,8 @@ export class BotFlowsController {
   @Requires("bot:read")
   async listMediaAssets(
     @Req() request: AuthenticatedRequest,
-    @Query() query: ListPageQuery & { id?: string | string[] },
-    @Res({ passthrough: true }) reply: FastifyReply,
+    @Query() query: ListPageQuery & { id?: string | string[] } = {},
+    @Res({ passthrough: true }) reply?: FastifyReply,
   ) {
     const ids = query.id === undefined ? [] : Array.isArray(query.id) ? query.id : [query.id];
     return withListCursor(reply, await this.flows.listMediaAssets(request.principal, ids, query));
@@ -62,9 +62,9 @@ export class BotFlowsController {
   @Requires("bot:read")
   async listConversations(
     @Req() request: AuthenticatedRequest,
-    @Query("cursor") cursor: unknown,
-    @Query("limit") limit: string | undefined,
-    @Res({ passthrough: true }) reply: FastifyReply,
+    @Query("cursor") cursor?: unknown,
+    @Query("limit") limit?: string,
+    @Res({ passthrough: true }) reply?: FastifyReply,
   ) {
     const page = await this.flows.listConversations(request.principal, { cursor, limit });
     return limit === undefined ? withListCursor(reply, page) : page;
@@ -83,7 +83,7 @@ export class BotFlowsController {
 
   @Get("routing")
   @Requires("bot:read")
-  async listRouting(@Req() request: AuthenticatedRequest, @Query() query: ListPageQuery, @Res({ passthrough: true }) reply: FastifyReply) {
+  async listRouting(@Req() request: AuthenticatedRequest, @Query() query: ListPageQuery = {}, @Res({ passthrough: true }) reply?: FastifyReply) {
     return withListCursor(reply, await this.flows.listRouting(request.principal, query));
   }
 
@@ -180,8 +180,8 @@ export class BotFlowsController {
   async listActionRevisions(
     @Req() request: AuthenticatedRequest,
     @Param("actionKey") actionKey: string,
-    @Query() query: ListPageQuery,
-    @Res({ passthrough: true }) reply: FastifyReply,
+    @Query() query: ListPageQuery = {},
+    @Res({ passthrough: true }) reply?: FastifyReply,
   ) {
     return withListCursor(reply, await this.flows.listActionRevisions(request.principal, actionKey, query));
   }
