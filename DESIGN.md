@@ -50,6 +50,12 @@ typography:
     fontFamily: "Geist Mono, ui-monospace, Consolas, monospace"
     fontSize: "0.75rem"
     fontWeight: 400
+  display:
+    fontFamily: "Geist Sans, ui-sans-serif, system-ui, sans-serif"
+    fontSize: "3.75rem"
+    fontWeight: 750
+    lineHeight: 1.1
+    letterSpacing: "-0.04em"
   arabic:
     fontFamily: "Noto Sans Arabic, sans-serif"
 rounded:
@@ -126,11 +132,11 @@ One neutral zinc ramp, one violet accent, three status colors and two provider m
 
 ### Status and provider
 - **Success / Warning / Danger**: light `#167d53 / #a45e09 / #c64343`; dark `#45c58a / #f3ad4e / #f06b6b`. Status color is always paired with a word or an icon, never color alone. **Danger solid** (`--wx-color-danger-solid`, light `#7b2a2a`, dark `#954242`) is the fill behind white text on a destructive button.
-- **Provider marks**: WhatsApp groups green (`--wx-color-provider-waha`: `#16855a` light, `#22a06b` dark) and Meta blue (`--wx-color-provider-meta`, `#1769e0`). Use them only to identify a channel.
+- **Provider marks**: WhatsApp groups green (`--wx-color-provider-waha`: `#16855a` light, `#22a06b` dark) and Meta blue (`--wx-color-provider-meta`, `#1769e0`). Use them only to identify a channel; the public pages' WhatsApp icon uses the WhatsApp groups green.
 
 ### Named Rules
 **The One Accent Rule.** Violet is the only hue used for interaction. Any other color means status or provider.
-**The Token-Only Rule.** New code uses `var(--wx-color-*)` (or the legacy `--bg/--surface/--text/...` aliases). No hex, `rgb()` or named color outside `tokens.css`; tints are `color-mix()` of a token. `tests/design-system-governance.test.mjs` enforces this for `primitives.css` and `globals.css`.
+**The Token-Only Rule.** New code uses `var(--wx-color-*)` (or the legacy `--bg/--surface/--text/...` aliases). No hex, `rgb()` or named color outside `tokens.css`; tints are `color-mix()` of a token. `tests/design-system-governance.test.mjs` enforces this for `primitives.css`, `globals.css` and `marketing.css`.
 **The AA Rule.** Text and solid-action pairs meet 4.5:1 in both themes; the governance test checks it.
 
 ## Typography
@@ -144,9 +150,10 @@ One neutral zinc ramp, one violet accent, three status colors and two provider m
 - **Title** (650, 14-16 px, -0.015em): panel and section heads.
 - **Body** (400, 13-14 px, line height 1.43; 1.6 for prose, max 45-65ch).
 - **Label / table** (550, 12 px): table headers, badges, field labels, buttons.
+- **Display** (750, `--wx-font-size-display` 60 px, -0.04em): the public-page hero only, fluid from 32 px.
 - **Mono** (12 px): only for values an operator may copy (codes, references). Never for raw ids or internal names.
 
-**The Scale Rule.** Use only the 7 size tokens; the governance test rejects a raw `px`/`rem` font size in `globals.css`.
+**The Scale Rule.** Use only the size tokens (the 7 steps, plus display for the public hero). A public heading may be fluid: `clamp(<token>, <token> + <n>vw, <token>)`. The governance test rejects any raw `px`/`rem` in a font size in `globals.css` and `marketing.css`, also inside `clamp()`.
 
 ## Layout
 
@@ -158,14 +165,14 @@ One neutral zinc ramp, one violet accent, three status colors and two provider m
 
 ## Elevation & Depth
 
-Flat with tonal layering: page → surface → raised → selected, separated by 1 px borders. Only these two shadows give elevation; the governance test enforces this for `globals.css`. Rings without blur (`0 0 0 <width> <token color>`) are allowed for focus, status halos and 1 px edges:
+Flat with tonal layering: page → surface → raised → selected, separated by 1 px borders. Only these two shadows give elevation; the governance test enforces this for `globals.css` and `marketing.css`. Rings without blur (`0 0 0 <width> <token color>`) are allowed for focus, status halos and 1 px edges:
 - **Control** (`0 1px 1px var(--wx-color-control-shadow)`): the resting button.
-- **Dialog** (`0 1.5rem 5rem var(--wx-color-shadow)`): dialogs and drawers only, over `--wx-color-overlay`.
+- **Dialog** (`0 1.5rem 5rem var(--wx-color-shadow)`): dialogs and drawers over `--wx-color-overlay`, and the public pages' inbox showcase window.
 In forced-colors mode, dialogs drop the shadow and use `CanvasText` borders.
 
 ## Shapes
 
-Three radii: control 6 px, panel 8 px, dialog 12 px (also the pill radius of status badges). Borders are 1 px; `border-strong` is for controls. Radii in `globals.css` use only these tokens (plus `0` and `50%` for circles). No thick one-side accent borders or inset side bars (detector `side-tab`); a selected row uses a full 1 px accent ring. The governance test checks both.
+Three radii: control 6 px, panel 8 px, dialog 12 px (also the pill radius of status badges). Borders are 1 px; `border-strong` is for controls. Radii in `globals.css` and `marketing.css` use only these tokens (plus `0` and `50%` for circles). No thick one-side accent borders or inset side bars (detector `side-tab`); a selected row uses a full 1 px accent ring. The governance test checks both.
 
 ## Components
 
