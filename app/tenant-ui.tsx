@@ -190,22 +190,22 @@ export function SectionLoading({ quiet = false }: { quiet?: boolean }) {
   );
 }
 
+type ScrollRegionName = { "aria-label": string; "aria-labelledby"?: never } | { "aria-labelledby": string; "aria-label"?: never };
+
+/** A named overflow area that keyboard users can focus and scroll (WCAG 2.1.1). */
+export function ScrollRegion(props: Omit<React.ComponentPropsWithRef<"div">, "role" | "tabIndex" | "aria-label" | "aria-labelledby"> & ScrollRegionName) {
+  return <div {...props} role="region" tabIndex={0} />;
+}
+
 export function WideTable({ children }: { children: React.ReactNode }) {
   const { t } = useI18n();
   return (
-    <div
-      className="table-scroll"
-      role="region"
-      // Keyboard users need to focus an otherwise non-interactive overflow area.
-      // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex
-      tabIndex={0}
-      aria-label={t("tenant.accessibility.scrollTable")}
-    >
+    <ScrollRegion className="table-scroll" aria-label={t("tenant.accessibility.scrollTable")}>
       <span className="table-scroll-cue" aria-hidden="true">
         {t("tenant.accessibility.scrollTableCue")}
       </span>
       {children}
-    </div>
+    </ScrollRegion>
   );
 }
 
