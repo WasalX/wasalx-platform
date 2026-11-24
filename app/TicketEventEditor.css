@@ -8,6 +8,8 @@
 .ticket-event-editor .ticket-event-check input { flex: 0 0 auto; inline-size: 1.25rem; block-size: 1.25rem; min-block-size: 1.25rem; accent-color: var(--accent); }
 .ticket-event-help, .ticket-event-editor small { color: var(--muted); line-height: var(--wx-line-height-default); }
 .ticket-event-editor summary { display: flex; align-items: center; cursor: pointer; font-weight: var(--wx-weight-semibold); }
+/* The preview panel continues the editor above it, so its top padding is the editor's bottom padding. */
+.ticket-event-editor.ticket-event-preview-panel { padding-block-start: 0; }
 .ticket-event-preview-results { margin: 0; padding-inline-start: var(--wx-space-5); }
 .ticket-event-preview-results li { padding-block: var(--wx-space-2); }
 .ticket-event-preview-results p { margin-block: var(--wx-space-2); white-space: pre-wrap; overflow-wrap: anywhere; }
