@@ -205,8 +205,9 @@ failures even when the installed checksum still matches the old pin.
 
 1. On the trusted networked machine, verify the Linux amd64 Cosign binary
    against the pin used by the [pull verifier](pull-verify.mjs).
-   Set `COSIGN` to that verified binary's absolute path. Initialize a clean TUF
-   cache and record the SHA-256 of the authenticated target.
+   Set `COSIGN` to that verified binary's absolute path. The cache path below
+   applies to the pinned Cosign v3.1.4. Initialize a clean TUF cache and record
+   the SHA-256 of the authenticated target.
 
    ```sh
    export TUF_ROOT="$(mktemp -d)"

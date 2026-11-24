@@ -281,10 +281,13 @@ class PullTest(unittest.TestCase):
         self.assertEqual(stderr.getvalue(), "<3>REPORT_TRUST_ROOT_MISMATCH: Re-pin Sigstore trust via TUF\n")
         self.assertEqual([path.read_bytes() for path in self.records()], [previous])
 
-    def test_product_verification_failure_creates_no_handover(self):
-        with (patch.object(agent, "verify", side_effect=subprocess.CalledProcessError(1, "cosign")),
-              self.assertRaises(subprocess.CalledProcessError)):
-            self.tick()
+    def test_product_verification_failure_alerts_without_creating_handover(self):
+        stderr = io.StringIO()
+        with (patch.object(agent, "verify", side_effect=subprocess.CalledProcessError(1, "cosign")) as verify,
+              redirect_stderr(stderr)):
+            self.assertEqual(self.run_main(self.config), 1)
+        verify.assert_called_once()
+        self.assertEqual(stderr.getvalue(), "<3>REPORT_FAILED\n")
         self.assertEqual(self.records(), [])
 
     def test_repointed_tag_during_verification_creates_no_handover(self):
