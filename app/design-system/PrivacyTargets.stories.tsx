@@ -2,7 +2,7 @@ import { useState } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { getMessages } from "../../lib/i18n/messages";
 import { I18nProvider, useI18n } from "../I18nProvider";
-import { PrivacyHoldDialog, PrivacyRequestDialog } from "../WasalXApp";
+import { PrivacyHoldDialog, PrivacyRequestDialog } from "../TenantSettings";
 import "../globals.css";
 
 const headers = { "content-type": "application/json" };
@@ -27,7 +27,7 @@ function Workspace({ locale = "en", kind = "export" }: { locale?: "en" | "ar"; k
   </I18nProvider>;
 }
 export default {
-  title: "Product/Privacy targets", component: Workspace, parameters: { layout: "fullscreen", docs: { description: {
+  title: "Product/Privacy targets", component: Workspace, args: { locale: "en" }, parameters: { layout: "fullscreen", docs: { description: {
     component: "Real privacy dialogs with synthetic browser-controlled responses. This fixture does not qualify native policy or privacy execution.",
   } } },
 } satisfies Meta<typeof Workspace>;

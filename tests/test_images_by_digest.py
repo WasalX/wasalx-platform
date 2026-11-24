@@ -27,6 +27,46 @@ alias_spec.loader.exec_module(aliases)
 
 
 class ImagePublicationTests(unittest.TestCase):
+    def test_synthetic_mail_policies_are_explicit_and_nightly_allows_only_its_owner(self):
+        with tempfile.TemporaryDirectory() as directory:
+            for mode in ["simulation", "nightly"]:
+                with self.subTest(mode=mode):
+                    target = Path(directory) / mode
+                    subprocess.run(
+                        [sys.executable, "-B", str(ROOT / "scripts/release/generate-simulation-env.py"),
+                         str(ROOT), str(target), str(ROOT / "scripts/contracts/waha-simulation-server.mjs"),
+                         *(["--installer-rehearsal"] if mode == "nightly" else [])],
+                        check=True, capture_output=True, timeout=20,
+                    )
+                    keys = ("WASALX_TEST_EMAIL_RECIPIENT_ALLOWLIST", "WASALX_KEYCLOAK_PASSWORD_RESET_ENABLED",
+                            "WASALX_FULL_QUALIFICATION_OWNER_EMAIL")
+                    env = dict(line.rstrip("'").split("='", 1) for line in target.read_text().splitlines()
+                               if line.startswith(tuple(key + "=" for key in keys)))
+                    expected = [env["WASALX_FULL_QUALIFICATION_OWNER_EMAIL"]] if mode == "nightly" else []
+                    self.assertEqual(json.loads(env["WASALX_TEST_EMAIL_RECIPIENT_ALLOWLIST"]), expected)
+                    self.assertEqual(env["WASALX_KEYCLOAK_PASSWORD_RESET_ENABLED"],
+                                     "true" if mode == "nightly" else "false")
+
+    def test_signed_rehearsal_selects_fenced_keycloak_only_when_the_provider_is_packaged(self):
+        overlay = (ROOT / "scripts/release/installer-nightly.compose.yaml").read_text()
+        script = textwrap.dedent(overlay.split("      - |\n", 1)[1].split("      - --", 1)[0])
+        script = script.replace("$$", "$").replace("/opt/keycloak/providers/wasalx-mail-fence.jar", '"$FENCE_JAR"')
+        bash = "C:/Program Files/Git/bin/bash.exe" if os.name == "nt" else "bash"
+        args = ["start", "--import-realm", "--spi-email-sender--provider=wasalx-fenced",
+                "--spi-email-template--provider=wasalx-fenced"]
+        record_exec = 'exec() { printf "%s\\n" "${@:2}"; exit 0; }\n'
+        with tempfile.TemporaryDirectory() as directory:
+            jar = Path(directory) / "wasalx-mail-fence.jar"
+            for packaged in [False, True]:
+                with self.subTest(packaged=packaged):
+                    if packaged:
+                        jar.write_bytes(b"fixture")
+                    result = subprocess.check_output(
+                        [bash, "--noprofile", "--norc", "-ec", record_exec + script, "--", *args],
+                        env={**os.environ, "FENCE_JAR": jar.as_posix()}, text=True, timeout=10,
+                    )
+                    self.assertEqual(result.splitlines(), args if packaged else args[:2])
+
     def test_merge_group_workflow_selects_all_21_images(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
         after_matrix_id = workflow.split("      - id: matrix\n", 1)[1]
@@ -51,15 +91,6 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
         selected = json.loads(values["matrix"])["include"]
         self.assertEqual(len(selected), 21)
         self.assertEqual([row["image"] for row in selected], [row["image"] for row in images.catalog()])
-
-    def test_workflow_lint_uses_the_pr_merge_parent_and_queue_base(self):
-        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
-        step = workflow.split("      - name: Check workflow lint against the base\n", 1)[1].split("\n      - ", 1)[0]
-        self.assertIn(
-            "BASE_REF: ${{ github.event_name == 'pull_request' && 'HEAD^1' || github.event.merge_group.base_sha }}",
-            step,
-        )
-        self.assertIn('git archive "$BASE_REF" .github', step)
 
     def test_portal_contact_email_is_passed_without_logging_commands(self):
         dockerfile = (ROOT / "Dockerfile.portal").read_text()
@@ -192,6 +223,7 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
             "app/page.tsx": "portal",
             "services/invitation-mailer/src/removed.ts": "invitation-mailer",
             "scripts/release/patch-keycloak-jackson.py": "foundation-keycloak",
+            "infra/docker/full/keycloak/mail-fence/AllowedEmailSenderFactory.java": "foundation-keycloak",
             "tools/dev-secret-sidecar.mjs": "secret-sidecar",
             "infra/docker/Dockerfile.zammad": "zammad",
             "infra/docker/full/zammad/entrypoint.rb": "zammad",

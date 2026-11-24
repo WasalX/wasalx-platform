@@ -128,6 +128,10 @@
       "types": "./dist/direct-customer-close.d.ts",
       "default": "./dist/direct-customer-close.js"
     },
+    "./delivery": {
+      "types": "./dist/delivery.d.ts",
+      "default": "./dist/delivery.js"
+    },
     "./direct-delivery-guards": {
       "types": "./dist/direct-delivery-guards.d.ts",
       "default": "./dist/direct-delivery-guards.js"

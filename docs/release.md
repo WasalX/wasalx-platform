@@ -41,7 +41,9 @@ green `main` publication in the PR base's first five first-parent commits
 (including the base). Scheduled and manual runs start at their checked-out
 `main` SHA and use its publication when complete. The run logs the image
 source separately from the installer tree and fails if the bounded search
-finds no eligible publication.
+finds no eligible publication. When the search selects an older publication,
+the workflow warning and job summary show the requested base, the selected
+commit, and the publishing run.
 
 Live-provider qualification with real WhatsApp or Meta services and real
 customers is a separate milestone that requires the owner's approval for the

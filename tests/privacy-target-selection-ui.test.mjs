@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import test from "node:test";
+import { readTenantPortalSource } from "./helpers/tenant-portal-source.mjs";
 import ts from "typescript";
 import { operatorFailureMessage, operatorLocalFailure } from "../lib/operator-ui.ts";
 import { localizedUiError } from "../lib/ui-error.ts";
 
 // Source-executed trust-boundary and asynchronous state tests; real browser and native policy checks remain separate.
-const source = ts.createSourceFile("WasalXApp.tsx", readFileSync(new URL("../app/WasalXApp.tsx", import.meta.url), "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+const source = ts.createSourceFile("WasalXApp.tsx", readTenantPortalSource(), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 function top(name, bindings = {}) {
   const node = source.statements.find(value => ts.isFunctionDeclaration(value) && value.name?.text === name);
   assert.ok(node, name);

@@ -940,9 +940,8 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
     for (const key of ["stateOwnershipPreserved", "duplicateReceipt", "unknownReadOnly", "noCommunicationOrStateCallbacks", "historicalJobsPreserved"]) assert.equal(seeded.native_denied[key], true);
     assert.equal(seeded.native_denied.providerActions, 0);
     Object.assign(state, { customerId: seeded.customer_id, ticketId: seeded.ticket_id, ticketNumber: seeded.ticket_number, articleId: seeded.article_id, closedTicketId: seeded.closed_ticket_id, closedTicketNumber: seeded.closed_ticket_number, closedArticleId: seeded.closed_article_id });
-    const outboundPreflight = state.requests.find((request) => request.path === "/internal/v1/zammad/outbound/preflight");
-    assert.ok(outboundPreflight);
-    assert.equal(new URLSearchParams(outboundPreflight.query).get("ticket_id"), seeded.ticket_id);
+    assert.ok(state.requests.some((request) => request.path === "/internal/v1/zammad/outbound/preflight"
+      && new URLSearchParams(request.query).get("ticket_id") === seeded.ticket_id), "Missing outbound preflight for the seeded ticket");
     assert.equal(seeded.staged_present, true);
     assert.equal(seeded.stale_present, false);
     assert.equal(seeded.cleanup_scheduler_active, true);
