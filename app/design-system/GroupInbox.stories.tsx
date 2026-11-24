@@ -26,6 +26,7 @@ function Workspace({ locale = "en", canWrite = true, lifecycle = false }: { loca
 export default {
   title: "Product/Group inbox",
   component: Workspace,
+  args: { locale: "en" },
   parameters: { layout: "fullscreen", docs: { description: {
     component: "Actual WasalX Groups/Tickets components. Browser tests intercept requests with synthetic data; these stories do not qualify backend permissions, provider delivery or real microphone hardware.",
   } } },

@@ -202,6 +202,9 @@ class PullTest(unittest.TestCase):
             f"    image: quay.io/vendor/image:Release_1@sha256:{'AB' * 32}\n"
             f"    image: docker.io/library/postgres:17@{COMPOSE_DIGEST}\n"
             f"    image: docker.io/postgres@{COMPOSE_DIGEST}\n"
+            f"    image: index.docker.io/library/postgres:17@{COMPOSE_DIGEST}\n"
+            f"    image: registry-1.docker.io/postgres@{COMPOSE_DIGEST}\n"
+            f"    image: library/{COMPOSE_REF}\n"
             f"    image: postgres:18@{second_digest}\n"
         )
         offer = self.make_offer()
@@ -323,16 +326,21 @@ class PullTest(unittest.TestCase):
                 target.pop(next(iter(target)))
                 with self.assertRaises(ValueError):
                     agent.validate_handover(altered)
-        for altered in (record | {"counts": {"product": 21, "compose": 2}},
-                        record | {"refs": [record["refs"][0], *record["refs"]]}):
-            with self.assertRaises(ValueError):
-                agent.validate_handover(altered)
+        counts = {"product": 21, "compose": 2}
+        with self.assertRaisesRegex(ValueError, "invalid hand-over counts"):
+            agent.validate_handover(record | {"counts": counts})
+        duplicate = next(row for row in record["refs"] if row["origin"] == "compose")
+        refs = sorted([*record["refs"], duplicate], key=lambda row: row["ref"])
+        with self.assertRaisesRegex(ValueError, "invalid hand-over ref"):
+            agent.validate_handover(record | {"counts": counts, "refs": refs})
 
     def test_schema_refuses_noncanonical_or_unsorted_refs(self):
         self.outbox.add(self.make_offer())
         record = json.loads(self.records()[0].read_bytes())
         for ref in (f"postgres:17@{COMPOSE_DIGEST}", f"docker.io/library/{COMPOSE_REF}",
-                    f"docker.io/{COMPOSE_REF}", f"postgres@sha256:{'AB' * 32}"):
+                    f"docker.io/{COMPOSE_REF}", f"index.docker.io/{COMPOSE_REF}",
+                    f"registry-1.docker.io/library/{COMPOSE_REF}", f"library/{COMPOSE_REF}",
+                    f"postgres@sha256:{'AB' * 32}"):
             with self.subTest(ref=ref), self.assertRaisesRegex(ValueError, "invalid hand-over ref"):
                 refs = [row | {"ref": ref} if row["origin"] == "compose" else row for row in record["refs"]]
                 agent.validate_handover(record | {"refs": sorted(refs, key=lambda row: row["ref"])})
@@ -342,7 +350,7 @@ class PullTest(unittest.TestCase):
     def test_schema_requires_b2_release_asset_digest(self):
         self.outbox.add(self.make_offer())
         record = json.loads(self.records()[0].read_bytes())
-        for value in (None, "sha256:" + "A" * 64):
+        for value in (None, "", "sha512:" + "a" * 64, "sha256:" + "A" * 64):
             with self.subTest(value=value), self.assertRaisesRegex(ValueError, "invalid hand-over identity"):
                 agent.validate_handover(record | {"release_asset_digest": value})
         del record["release_asset_digest"]

@@ -106,7 +106,7 @@ def absolute_path(value):
 
 def render_host(identity, run_id, commit, receipts, bundle):
     fields = set(HOST_PATHS) | HOST_PATTERNS.keys() | set(HOST_NUMBERS) | {"TOP_CHAIN"}
-    if not isinstance(identity, dict) or set(identity) - {"LEASE_RECEIPT_SHA256S"} != fields:
+    if not isinstance(identity, dict) or set(identity) - {"LEASE_RECEIPT_SHA256S", "LEASE_RECEIPT_POLICY"} != fields:
         raise ValueError("invalid host identity fields")
     for key in HOST_PATHS:
         if not absolute_path(identity[key]):
@@ -137,8 +137,10 @@ def render_host(identity, run_id, commit, receipts, bundle):
     raw_receipts = [path.read_bytes() for path in receipts]
     if [hashlib.sha256(raw).hexdigest() for raw in raw_receipts] != expected:
         raise ValueError("lease receipt SHA-256 mismatch")
-    lease_budgets = run_path(str(TEMPLATES / "host-maintenance.py"))["lease_budgets"]
-    leases = lease_budgets(raw.decode("utf-8") for raw in raw_receipts)
+    maintenance = run_path(str(TEMPLATES / "host-maintenance.py"))
+    policy = identity.get("LEASE_RECEIPT_POLICY")
+    texts = [raw.decode("utf-8") for raw in raw_receipts]
+    leases = maintenance["lease_budgets"](texts if maintenance["lease_receipts_match"](texts, policy) else [])
     for key in ("INSTALL_SECONDS", "DISCARD_SECONDS"):
         if not 0 < leases[key] < 2**31:
             raise ValueError(f"invalid lease duration: {key}")
@@ -147,6 +149,8 @@ def render_host(identity, run_id, commit, receipts, bundle):
         **identity, **leases, "TOP_CHAIN": json.dumps(chain), "REV": commit,
         "LEASE_RECEIPT_SHA256S": json.dumps(expected),
     }
+    if "LEASE_RECEIPT_POLICY" in identity:
+        env["LEASE_RECEIPT_POLICY"] = json.dumps(policy, sort_keys=True)
     files = {name: (TEMPLATES / name).read_text(encoding="utf-8").encode() for name in HOST_SCRIPTS}
     files["run-id"] = (run_id + "\n").encode()
     files["host.env"] = "".join(f"export {key}={shlex.quote(str(value))}\n"

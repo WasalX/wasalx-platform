@@ -973,8 +973,9 @@ test("mobile and tablet navigation keep content bounded and role-appropriate", a
     await route.continue();
   });
   await page.goto("/app?view=automation");
-  const loading = page.getByRole("status", { name: "Loading workflows" });
-  await expect(loading).toHaveAttribute("aria-busy", "true");
+  const loading = page.locator('.bot-loading[aria-busy="true"]');
+  await expect(loading.getByRole("status", { name: "Loading workflows" })).toHaveText("Loading workflows");
+  await expect(loading.getByRole("status")).not.toHaveAttribute("aria-busy");
   await expect(loading.locator('[aria-hidden="true"]')).toHaveCount(3);
   releaseCatalog();
   await expect(page.getByRole("heading", { level: 1, name: "Workflows" })).toBeVisible();
