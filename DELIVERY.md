@@ -24,7 +24,7 @@ WasalX Delivery owns this document, the merge queue, CI health and speed, releas
 - The [pnpm cache action](.github/actions/ci-pnpm/action.yml) saves pnpm dependency and service build caches on main pushes only. PostgreSQL integration and portal integration always force clean service builds.
 - Run CI on free GitHub-hosted runners. Cancel older CI runs only for the same PR. Keep workflow permissions read-only at the top level, grant writes per job, and pin actions by full commit SHA. Prohibit `pull_request_target`. Fork PRs receive no secrets.
 - Set job time limits from the measured p95 plus 25 percent, rounded up to a whole minute. Review limits monthly. A higher limit needs new measurements in a separate PR. See the [CI timing sample](.github/ci-timings.json) and [current coverage](#deviations).
-- For every workflow-changing PR, CI verifies the pinned actionlint archive and requires zero new findings compared with the PR base. The CI run summary records the counts.
+- For every workflow-changing PR, verify the SHA-256 of the pinned actionlint 1.7.12 binary before running it. Require zero new findings compared with the base branch. Older 1.7.x versions misread YAML anchors.
 
 ## Test policy
 
@@ -38,7 +38,7 @@ WasalX Delivery owns this document, the merge queue, CI health and speed, releas
 
 Before every push, run the private privacy check on the diff, commits, branch name, PR title and body, and any public issue text. Require zero blocking findings and a finished scan. Report counts only.
 
-The [public privacy workflow](.github/workflows/privacy.yml) scans newly introduced commit text, paths, added lines, and PR and issue titles and bodies with generic patterns. The scan runs on branch pushes, PRs, and the merge queue. `ci-gate` fails if the scan fails on a PR, in the queue, or on a push to main. Issue findings appear in Actions after publication. Findings show a location, line, and rule, and redact paths that match a rule.
+The [public privacy workflow](.github/workflows/privacy.yml) scans newly introduced commit text, paths, added lines, and PR and issue titles and bodies with generic patterns. The scan runs on branch pushes, PRs, and the merge queue. `ci-gate` fails if the scan fails on a PR, in the queue, or on a push to main. PR title or body edits trigger the privacy workflow by itself. Issue findings appear in Actions after publication. Findings show a location, line, and rule, and redact paths that match a rule.
 
 ## Environments
 

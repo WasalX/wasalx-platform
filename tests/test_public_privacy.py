@@ -70,7 +70,7 @@ class PublicPrivacyTest(unittest.TestCase):
         for event, field in (("pull_request", "pull_request"), ("issues", "issue")):
             with self.subTest(event=event):
                 title = '$(echo untrusted) ' + KEY
-                body = f"Details\r\n{HOST}\r\n{PATH}"
+                body = f"Details\r\nhttps://{HOST}\r\n{PATH}"
                 payload = self.pr(title, body) if event == "pull_request" else {field: {"title": title, "body": body}}
                 self.assertCountEqual(self.scan(event, payload, 1), [
                     f'privacy "{field}.title":1 private-key',
@@ -78,13 +78,15 @@ class PublicPrivacyTest(unittest.TestCase):
                     f'privacy "{field}.body":3 private-path',
                 ])
 
-    def test_queue_and_new_branch_push_scan_the_introduced_commits(self):
-        (self.repo / HOST).write_text(TOKEN, encoding="utf-8")
+    def test_queue_and_branch_pushes_scan_the_introduced_commits(self):
+        (self.repo / f"operator@{HOST}").write_text(TOKEN, encoding="utf-8")
         head = self.commit("seed " + IP)
         self.git("update-ref", "refs/remotes/origin/main", self.base)
         for event, payload in (
             ("merge_group", {"merge_group": {"base_sha": self.base, "head_sha": head}}),
             ("push", {"before": "0" * 40, "after": head, "ref": "refs/heads/fixture",
+                      "repository": {"default_branch": "main"}}),
+            ("push", {"before": "f" * 40, "after": head, "ref": "refs/heads/fixture", "forced": True,
                       "repository": {"default_branch": "main"}}),
         ):
             with self.subTest(event=event):
@@ -102,6 +104,24 @@ class PublicPrivacyTest(unittest.TestCase):
         head = self.commit("public documentation")
         self.assertEqual(self.scan("pull_request", self.pr(), 0, head), [])
         self.assertEqual(self.scan("issues", {"issue": {"title": "Clean issue", "body": None}}, 0), [])
+
+    def test_member_access_and_public_placeholders_pass(self):
+        env_example = SCANNER.parents[1] / ".env.example"
+        provider = next(line for line in env_example.read_text(encoding="utf-8").splitlines()
+                        if line.startswith("WAHA_BASE_URL="))
+        (self.repo / ".env.example").write_text(provider + "\n", encoding="utf-8")
+        (self.repo / "fixture.js").write_text("return article.internal ?? body.internal;\n", encoding="utf-8")
+        head = self.commit("public local configuration and member access")
+        body = "\n".join(("https://example.internal/", "http://identity.local",
+                          "http://host.docker.internal:3000", "https://release.home.arpa"))
+        self.assertEqual(self.scan("pull_request", self.pr(body=body), 0, head), [])
+
+    def test_edited_pr_checks_host_in_payload_without_commit_history(self):
+        payload = self.pr(body=f"https://operator@{HOST}:8443/path")
+        payload["action"] = "edited"
+        self.assertEqual(self.scan("pull_request", payload, 1, "f" * 40), [
+            'privacy "pull_request.body":1 private-host',
+        ])
 
     def test_type_change_scans_the_new_file(self):
         file = self.repo / "mode-fixture"

@@ -433,7 +433,9 @@ test("CI gates integration and infrastructure and runs portal integration files 
   for (const job of ["integration", "portal-integration", "integration-coverage"]) assert(gate.needs.includes(job));
   assert(gate.needs.includes("dev-install-dryrun"));
   assert(gate.needs.includes("privacy"));
-  assert(on.pull_request.types.includes("edited"));
+  assert(!on.pull_request.types.includes("edited"));
+  const metadataWorkflow = parse(await read(".github/workflows/privacy.yml"));
+  assert.deepEqual(metadataWorkflow.on.pull_request.types, ["edited"]);
   assert.equal(jobs.privacy.uses, "./.github/workflows/privacy.yml");
   const [gateStep] = gate.steps;
   assert.equal(gateStep.env.PRIVACY, "${{ needs.privacy.result }}");

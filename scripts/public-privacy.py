@@ -15,10 +15,16 @@ RULES = {
     "jwt": r"\beyJ[a-zA-Z0-9_-]{5,}\.eyJ[a-zA-Z0-9_-]{5,}\.[a-zA-Z0-9_-]{16,}\b",
     "private-key": r"-----BEGIN (?:(?:RSA|DSA|EC|OPENSSH|ENCRYPTED) )?PRIVATE KEY-----",
     "private-ipv4": rf"(?<![0-9.])(?:10\.{OCTET}|172\.(?:1[6-9]|2[0-9]|3[01])|192\.168)\.{OCTET}\.{OCTET}(?![0-9]|\.[0-9])",
-    "private-host": r"(?i)(?<![\w.-])(?:[a-z0-9-]+\.)+(?:internal|lan|local|home\.arpa)(?![\w-]|\.[a-z0-9])",
     "private-path": r"""(?i)(?<![\w])(?:[a-z]:[\\/]+[^\s"'<>|/\\]+|/(?:home|users)/[\w.-]+/)""",
 }
 RULES = {name: re.compile(pattern) for name, pattern in RULES.items()}
+PRIVATE_HOST = re.compile(
+    r"(?i)(?:\b[a-z][a-z0-9+.-]*://|@)"
+    r"((?:[a-z0-9-]+\.)+(?:internal|lan|local|home\.arpa))"
+    r"""\.?(?::[0-9]+)?(?=$|[/?#\s"'\x60),;}\]<>])"""
+)
+# Public local-development and cluster placeholders already used in the repository.
+PLACEHOLDER_HOSTS = {"example.internal", "identity.local", "host.docker.internal", "release.home.arpa"}
 SHA = re.compile(r"[0-9a-f]{40}")
 HUNK = re.compile(rb"@@ -[0-9]+(?:,[0-9]+)? \+([0-9]+)(?:,[0-9]+)? @@")
 
@@ -28,7 +34,11 @@ def git(*args):
 
 
 def matches(text):
-    return [name for name, pattern in RULES.items() if pattern.search(text)]
+    rules = [name for name, pattern in RULES.items() if pattern.search(text)]
+    hosts = (match[1].lower() for match in PRIVATE_HOST.finditer(text))
+    if any(host not in PLACEHOLDER_HOSTS and not host.endswith(".svc.cluster.local") for host in hosts):
+        rules.append("private-host")
+    return rules
 
 
 def findings(text, location):
@@ -95,7 +105,7 @@ def scan(event, payload):
         body = item["body"]
         if body is not None:
             yield from findings(body, f"{field}.body")
-        if event == "issues":
+        if event == "issues" or payload.get("action") == "edited":
             return
         yield from findings(item["head"]["ref"], "pull_request.head.ref")
         base, head = item["base"]["sha"], os.environ["GITHUB_SHA"]
@@ -104,11 +114,12 @@ def scan(event, payload):
     elif event == "push":
         yield from findings(payload["ref"], "push.ref")
         base, head = payload["before"], payload["after"]
-        if base == "0" * 40:
-            # A new branch has no previous tip. Exclude the default branch history.
+        if base == "0" * 40 or payload.get("forced") is True:
             default = payload["repository"]["default_branch"]
-            base = git("rev-parse", "--verify", "--end-of-options",
-                       f"refs/remotes/origin/{default}^{{commit}}").decode("ascii").strip()
+            # The previous branch tip may be absent after a force-push.
+            if base == "0" * 40 or payload["ref"] != f"refs/heads/{default}":
+                base = git("rev-parse", "--verify", "--end-of-options",
+                           f"refs/remotes/origin/{default}^{{commit}}").decode("ascii").strip()
     else:
         raise ValueError
     yield from commit_findings(base, head)
