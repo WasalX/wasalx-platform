@@ -991,7 +991,9 @@ test("optional PR lanes run on diff errors and gate their applicable checks", as
       "zammad-addon.json", "zammad-package/", "build/zammad/", "release/installer-images.json",
       ":(glob)scripts/*zammad*", ":(glob)scripts/contracts/*mailbox*", "scripts/release/operator-input.mjs",
       "tests/zammad-image-browser-compat.test.mjs", "tests/fixtures/native-compat-cleanup.mjs", ":(glob)tests/**/*.rb",
-      "services/control-api/src/zammad-internal.controller.ts", "tests/outbound-media.test.mjs", "tests/helpers/operator-input-fixtures.mjs",
+      "services/control-api/", "services/connector-worker/", "packages/",
+      "scripts/build-services.mjs", "tsconfig.json", ":(glob)services/*/tsconfig*.json", ".gitattributes",
+      "tests/outbound-media.test.mjs", "tests/helpers/operator-input-fixtures.mjs",
       ":(glob)**/package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", ".npmrc", "patches/",
       ".github/actions/ci-pnpm/", ".github/workflows/ci.yml", ".github/workflows/zammad-compatibility.yml",
     ].join(" ")],
@@ -1067,6 +1069,37 @@ ${detector.run}`, { GITHUB_OUTPUT: outputFile.replaceAll("\\", "/"), DIFF_PATHS:
       ZAMMAD_COMPATIBILITY: "success",
     });
     assert.equal(result.status, status, [event, needed, postgres, portal, coverage].join("/"));
+  }
+});
+
+test("Zammad compatibility selects changes to outbound dependencies and service build inputs", async t => {
+  const { jobs } = parse(await read(".github/workflows/ci.yml"));
+  const { run } = jobs.changes.steps.find(step => step.id === "zammad");
+  const directory = await mkdtemp(join(tmpdir(), "zammad-compatibility-selection-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const git = (...args) => execFileSync("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", ...args], {
+    cwd: directory, encoding: "utf8", windowsHide: true,
+  });
+  git("init", "--quiet");
+  git("commit", "--quiet", "--allow-empty", "-m", "Base");
+  const output = join(directory, "selection");
+  for (const [path, expected] of [
+    ["services/control-api/src/ticket-reply-target.ts", true],
+    ["services/connector-worker/src/media-runtime.ts", true],
+    ["packages/core/src/outbound-text.ts", true],
+    ["scripts/build-services.mjs", true],
+    ["tsconfig.json", true],
+    ["services/invitation-mailer/tsconfig.json", true],
+    ["docs/release.md", false],
+  ]) {
+    await mkdir(join(directory, posix.dirname(path)), { recursive: true });
+    await writeFile(join(directory, path), "fixture\n");
+    git("add", "--", path);
+    git("commit", "--quiet", "-m", "Change one input");
+    await writeFile(output, "");
+    const result = runWorkflowScript(run, { GITHUB_OUTPUT: output.replaceAll("\\", "/") }, directory);
+    assert.equal(result.status, 0, result.error?.message ?? result.stderr);
+    assert.equal((await readFile(output, "utf8")).trim(), `needed=${expected}`, path);
   }
 });
 
