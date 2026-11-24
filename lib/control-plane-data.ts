@@ -216,7 +216,7 @@ export async function getDashboardData() {
     session.role === "auditor";
   const settingsAllowed = session.role !== "agent";
   const [connections, groups, ruleSets, deliveries, audit, health, workspace] = await Promise.all([
-    call<Row[]>(session, "/v1/connections"),
+    callList<Row>(session, "/v1/connections"),
     call<Row[]>(session, "/v1/groups?limit=200"),
     call<Row[]>(session, "/v1/rule-sets?state=ACTIVE&limit=200"),
     call<Row[]>(session, "/v1/deliveries"),
@@ -1012,10 +1012,28 @@ function normalizeConnection(row: Row) {
   };
 }
 
+async function callList<T>(session: PortalSession, path: string) {
+  const items: T[] = [];
+  const seen = new Set<string>();
+  const separator = path.includes("?") ? "&" : "?";
+  let cursor: string | null = null;
+  do {
+    const target: string = cursor ? path + separator + "cursor=" + encodeURIComponent(cursor) : path;
+    const page = await call<T[]>(session, target, {}, headers => { cursor = headers.get("x-next-cursor"); });
+    for (const item of page) items.push(item);
+    if (cursor) {
+      if (seen.has(cursor)) throw new ControlPlaneError("The control plane repeated a page cursor", 502);
+      seen.add(cursor);
+    }
+  } while (cursor);
+  return items;
+}
+
 async function call<T>(
   session: PortalSession,
   path: string,
   init: RequestInit = {},
+  onHeaders?: (headers: Headers) => void,
 ) {
   const base = process.env.CONTROL_API_URL?.replace(/\/$/, "");
   if (!base) throw new Error("CONTROL_API_URL is required");
@@ -1070,6 +1088,7 @@ async function call<T>(
       workspaceProof,
     );
   }
+  onHeaders?.(response.headers);
   return body as T;
 }
 

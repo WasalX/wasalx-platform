@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { readTenantPortalSource } from "./helpers/tenant-portal-source.mjs";
 import { englishTenantMessages } from "../lib/i18n/messages/en/tenant.ts";
 import { MetaGroupsAdapter } from "../services/connector-worker/dist/packages/connectors/src/meta.js";
 import { WahaAdapter } from "../services/connector-worker/dist/packages/connectors/src/waha.js";
@@ -17,7 +18,7 @@ const lifecycle=await readFile(new URL("../services/connector-worker/src/connect
 const repository=await readFile(new URL("../services/connector-worker/src/inbound-repository.ts",import.meta.url),"utf8");
 const ingress=await readFile(new URL("../services/control-api/src/webhook-ingress.controller.ts",import.meta.url),"utf8");
 const controller=await readFile(new URL("../services/control-api/src/quarantine.controller.ts",import.meta.url),"utf8");
-const portal=await readFile(new URL("../app/WasalXApp.tsx",import.meta.url),"utf8");
+const portal=await readTenantPortalSource();
 
 test("WAHA subscribes only to the dedicated group receipt contract",async()=>{
   assert.match(lifecycle,/"message\.ack\.group"/);

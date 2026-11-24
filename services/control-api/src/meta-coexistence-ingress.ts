@@ -4,7 +4,7 @@ import type { CoexistenceUnit } from "@wasalx/core/meta-coexistence";
 import type { WebhookRoute } from "./database.service.js";
 
 export type CoexistenceIngressInput = { unit: CoexistenceUnit; sourceSha256: string; appId: string };
-export async function acceptCoexistence(client: PoolClient, route: WebhookRoute, input: CoexistenceIngressInput) {
+export async function acceptCoexistence(client: PoolClient, route: WebhookRoute, input: CoexistenceIngressInput, verifiedAppId?: string) {
   const { unit } = input;
   const eventId = `coexistence:${unit.kind}:${unit.key}`;
   if ((await client.query<{ active: boolean }>("SELECT app.lock_current_active_tenant_for_event_admission() AS active")).rows[0]?.active !== true) unavailable();
@@ -40,10 +40,10 @@ export async function acceptCoexistence(client: PoolClient, route: WebhookRoute,
   for (const item of unit.contacts) if (!await blocked(client, context.id, item.subject, unit.kind, item.timestamp)) contacts.push(item);
   const payload = { ...unit, messages, contacts };
   const inserted = (await client.query<{ id: string }>(`INSERT INTO event_inbox
-    (tenant_id,connection_id,provider,provider_event_id,event_type,payload,payload_sha256,status,meta_coexistence_admission)
-    VALUES($1,$2,'META',$3,$4,$5,$6,'ACCEPTED',$7) RETURNING id`,
+    (tenant_id,connection_id,provider,provider_event_id,event_type,payload,payload_sha256,status,meta_coexistence_admission,meta_webhook_app_id)
+    VALUES($1,$2,'META',$3,$4,$5,$6,'ACCEPTED',$7,$8) RETURNING id`,
   [route.tenant_id, route.connection_id, eventId, `meta.coexistence.${unit.kind.toLowerCase()}`, payload, input.sourceSha256,
-    { contextId: context.id, providerSessionId: context.provider_session_id, appId: input.appId, sourceSha256: input.sourceSha256 }])).rows[0]!;
+    { contextId: context.id, providerSessionId: context.provider_session_id, appId: input.appId, sourceSha256: input.sourceSha256 }, verifiedAppId ?? null])).rows[0]!;
   return { id: inserted.id, duplicate: false };
 }
 async function blocked(client: PoolClient, contextId: string, subject: string, kind: string, timestamp: number) {

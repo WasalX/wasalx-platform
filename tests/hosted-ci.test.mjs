@@ -10,6 +10,7 @@ import { parse } from "yaml";
 import { collectFile, collectionFiles, inventory, isTestFile, shardFiles } from "../scripts/hosted-ci.mjs";
 import { selectUnitFiles } from "../scripts/affected-unit-tests.mjs";
 import { unitAllowlist, unitFiles } from "../scripts/test-unit.mjs";
+import reportTimings, { validateQuarantine } from "../scripts/hosted-ci-timing-reporter.mjs";
 import { addonSkips, skipPattern } from "../scripts/hosted-ci-policy.mjs";
 import { generateBaseline } from "../scripts/generate-hosted-ci-baseline.mjs";
 import baseline from "../scripts/hosted-ci-baseline.mjs";
@@ -34,6 +35,24 @@ function runsFile(text, file, option) {
     return exe === "node" && args.includes("--test") ? paths.includes(file) : paths.find(arg => !arg.startsWith("-")) === file;
   });
 }
+
+test("test quarantine expires at midnight UTC and annotates failures only", async () => {
+  for (const { file } of validateQuarantine()) assert(unitFiles.includes(file), file + " is not a unit test file");
+
+  const file = "tests/hosted-ci.test.mjs";
+  const known = { file, name: "example failure", owner: "test maintainer", expiresOn: "2030-01-02" };
+  const entries = validateQuarantine([known], "2030-01-01");
+  assert.throws(() => validateQuarantine(entries, "2030-01-02"), /expired on 2030-01-02/u);
+  assert.throws(() => validateQuarantine([{ ...known, expiresOn: "2030-02-30" }], "2030-01-01"), /valid UTC expiry/u);
+  assert.throws(() => validateQuarantine([{ ...known, owner: "" }], "2030-01-01"), /requires a file, test name and owner/u);
+  const data = { file: join(process.cwd(), file), name: known.name };
+  const reports = await Array.fromAsync(reportTimings([
+    { type: "test:pass", data },
+    { type: "test:fail", data: { ...data, name: "other failure" } },
+    { type: "test:fail", data },
+  ], entries));
+  assert.deepEqual(reports, ["KNOWN TEST FAILURE " + JSON.stringify(known) + "\n"]);
+});
 
 test("runner ownership recognizes a bare sudo interpreter", () => {
   const file = "scripts/example.sh";
@@ -147,6 +166,11 @@ test("tracked tests belong to a named CI runner or the test allowlist", async ()
       case "playwright.identity.config.ts":
         return referencesFile(identity, "./tests/e2e")
           && posix.dirname(file) === "tests/e2e" && referencesFile(identity, posix.basename(file));
+      case "storybook":
+        return referencesFile(storybookRunner, "playwright.storybook.config.ts")
+          && referencesFile(storybook, "./tests/visual")
+          && commands(command).some(line =>
+            runsFile(line, "scripts/storybook-visual-regression.mjs", "--require-browser") && words(line).includes(file));
       case "test:visual":
         return runsFile(command, "scripts/storybook-visual-regression.mjs")
           && referencesFile(storybookRunner, "playwright.storybook.config.ts")
@@ -167,6 +191,30 @@ test("tracked tests belong to a named CI runner or the test allowlist", async ()
     return !/^not run in CI: \S/u.test(reason) || !(runnerRuns(runner, file) || runsFile(runner, file));
   }).map(([file]) => file);
   assert.deepEqual({ missing, stale, invalid }, { missing: [], stale: [], invalid: [] });
+});
+
+test("Storybook selects UI changes and unknown diffs", async (t) => {
+  const { jobs } = parse(await read(".github/workflows/ci.yml"));
+  const selection = jobs.changes.steps.find(step => step.id === "storybook");
+  assert.equal(selection.if, "github.event_name == 'pull_request'");
+  assert.equal(jobs.storybook.needs, "changes");
+  assert.match(jobs.storybook.if, /github\.event_name == 'push'/u);
+  assert.match(jobs.storybook.if, /github\.event_name == 'pull_request' && needs\.changes\.outputs\.storybook != 'false'/u);
+  assert(!jobs["ci-gate"].needs.includes("storybook"));
+
+  const directory = await mkdtemp(join(tmpdir(), "storybook-selection-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const output = join(directory, "output");
+
+  for (const [status, expected] of [[0, "false"], [1, "true"], [128, "true"]]) {
+    await writeFile(output, "");
+    const result = runWorkflowScript(
+      `git() { case " $* " in *" app/ "*) return "$DIFF_STATUS";; *) return 0;; esac; }\n${selection.run}`,
+      { DIFF_STATUS: String(status), GITHUB_OUTPUT: output },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal((await readFile(output, "utf8")).trim(), `needed=${expected}`);
+  }
 });
 
 test("nightly install is report-only, read-only and fails open on PR diff errors", async () => {
@@ -280,7 +328,7 @@ gh() {
   const cases = [
     { ready: base, selected: base, lookups: commits.slice(0, 1), reason: "requested base has a complete publication" },
     { ready: commits[4], incomplete: commits[1], expired: commits[2], noJob: commits[3],
-      selected: commits[4], lookups: commits.slice(0, 5), reason: "newest complete first-parent publication" },
+      selected: commits[4], lookups: commits.slice(0, 5) },
     { ready: commits[5], lookups: commits.slice(0, 5), reason: "No complete green main publication" },
     { ready: side, lookups: commits.slice(0, 5), reason: "No complete green main publication" },
     { ready: commits[1], lookupError: base, lookups: commits.slice(0, 1), status: 17 },
@@ -293,19 +341,26 @@ gh() {
     exact = false, lookups, status = selected ? 0 : 1, reason } of cases) {
     await writeFile(join(directory, "lookups"), "");
     await writeFile(join(directory, "publication-output"), "");
+    await writeFile(join(directory, "publication-summary"), "");
     const result = spawnSync(bash, ["--noprofile", "--norc", "-euo", "pipefail", "-c", ghFixture + publication.run], {
       ...options, timeout: 10_000, env: {
         ...process.env, GITHUB_REPOSITORY: "fixture/nightly", BASE: base, READY: ready, INCOMPLETE: incomplete,
         EXPIRED: expired, NO_JOB: noJob, LOOKUP_ERROR: lookupError, INVALID: String(invalid),
         GITHUB_EVENT_NAME: exact ? "push" : "schedule", GITHUB_REF_TYPE: exact ? "tag" : "branch",
         GITHUB_REF: exact ? `refs/tags/${tag}` : "refs/heads/main",
-        GITHUB_SHA: base, GITHUB_OUTPUT: "publication-output", RUNNER_TEMP: ".",
+        GITHUB_SHA: base, GITHUB_OUTPUT: "publication-output", GITHUB_STEP_SUMMARY: "publication-summary", RUNNER_TEMP: ".",
       },
     });
     assert.ifError(result.error);
     assert.equal(result.status, status, result.stdout + result.stderr);
     assert.equal((await readFile(join(directory, "publication-output"), "utf8")).trim(), selected ? `commit=${selected}` : "");
     if (reason) assert.ok((result.stdout + result.stderr).includes(reason), result.stderr);
+    const warning = selected && selected !== base
+      ? `Nightly images come from ${selected} (run 101) because requested base ${base} has no complete green publication.`
+      : "";
+    const annotations = result.stderr.split(/\r?\n/u).filter(line => line.startsWith("::warning::"));
+    assert.deepEqual(annotations, warning ? [`::warning::${warning}`] : []);
+    assert.equal((await readFile(join(directory, "publication-summary"), "utf8")).trim(), warning);
     if (selected) {
       const manifest = join(directory, "wasalx-nightly", "images-manifest.json");
       assert.equal(JSON.parse(await readFile(manifest, "utf8")).commit, selected);
@@ -423,6 +478,8 @@ test("CI gates integration and infrastructure and runs portal integration files 
   for (const job of ["integration", "portal-integration", "integration-coverage"]) assert(gate.needs.includes(job));
   assert(gate.needs.includes("dev-install-dryrun"));
   const [gateStep] = gate.steps;
+  assert(gate.needs.includes("workflow-lint"));
+  assert.equal(gateStep.env.WORKFLOW_LINT, "${{ needs.workflow-lint.result }}");
   assert.equal(gateStep.env.INTEGRATION_NEEDED, "${{ needs.changes.outputs.integration }}");
   assert.equal(gateStep.env.INTEGRATION, "${{ needs.integration.result }}");
   assert.equal(gateStep.env.PORTAL_INTEGRATION, "${{ needs.portal-integration.result }}");
@@ -441,7 +498,7 @@ test("CI gate requires each event's jobs and rejects unplanned skips, failures, 
   t.after(() => rm(directory, { recursive: true, force: true }));
   const summary = join(directory, "summary.md");
   const pr = {
-    EVENT: "pull_request", CHANGES: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: "success", IMAGES: "skipped",
+    EVENT: "pull_request", CHANGES: "success", WORKFLOW_LINT: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: "success", IMAGES: "skipped",
     INTEGRATION_NEEDED: "true", INTEGRATION: "success", PORTAL_INTEGRATION: "success",
     INTEGRATION_COVERAGE: "success", INFRA_NEEDED: "true", INFRA: "success",
     DEV_INSTALL_NEEDED: "true", DEV_INSTALL: "success",
@@ -463,6 +520,8 @@ test("CI gate requires each event's jobs and rejects unplanned skips, failures, 
     ["PR with unselected jobs", unselected, {}, 0],
     ["PR without a recorded skip reason", unselected, { INTEGRATION_NEEDED: "" }, 1],
     ["PR with cancelled queue images", pr, { IMAGES: "cancelled" }, 1],
+    ["PR with new workflow lint findings", pr, { WORKFLOW_LINT: "failure" }, 1],
+    ["PR with workflow lint skipped", pr, { WORKFLOW_LINT: "skipped" }, 1],
     ["merge queue", queue, {}, 0],
     ["merge queue with failed images", queue, { IMAGES: "failure" }, 1],
     ["main push", push, {}, 0],
@@ -577,7 +636,7 @@ test("PR image results are advisory while the merge queue requires the full imag
     if (imageResult === "failure") assert.match(advisory.stdout, /::warning::Advisory PR image builds: failure/u);
 
     const result = runWorkflowScript(gate.steps[0].run, {
-      EVENT: "merge_group", CHANGES: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: "skipped",
+      EVENT: "merge_group", CHANGES: "success", WORKFLOW_LINT: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: "skipped",
       IMAGES: imageResult, INTEGRATION: "success", PORTAL_INTEGRATION: "success",
       INTEGRATION_COVERAGE: "success", DEV_INSTALL: "skipped", INFRA: "success",
     });
@@ -585,7 +644,7 @@ test("PR image results are advisory while the merge queue requires the full imag
   }
   const summary = join(directory, "gate").replaceAll("\\", "/");
   const result = runWorkflowScript(gate.steps[0].run, {
-    EVENT: "pull_request", CHANGES: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: "success",
+    EVENT: "pull_request", CHANGES: "success", WORKFLOW_LINT: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: "success",
     IMAGES: "skipped", INTEGRATION_NEEDED: "false", INTEGRATION: "skipped",
     PORTAL_INTEGRATION: "skipped", INTEGRATION_COVERAGE: "skipped", DEV_INSTALL_NEEDED: "false", DEV_INSTALL: "skipped",
     INFRA_NEEDED: "false", INFRA: "skipped", GITHUB_STEP_SUMMARY: summary,
@@ -654,7 +713,7 @@ ${detector.run}`, { GITHUB_OUTPUT: outputFile.replaceAll("\\", "/"), DIFF_PATHS:
   ]) {
     const pr = event === "pull_request";
     const result = runWorkflowScript(gateStep.run, {
-      EVENT: event, CHANGES: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: pr ? "success" : "skipped",
+      EVENT: event, CHANGES: "success", WORKFLOW_LINT: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: pr ? "success" : "skipped",
       IMAGES: pr ? "skipped" : "success", INTEGRATION_NEEDED: "false",
       INTEGRATION: pr ? "skipped" : "success", PORTAL_INTEGRATION: pr ? "skipped" : "success",
       INTEGRATION_COVERAGE: pr ? "skipped" : "success",
@@ -668,7 +727,7 @@ ${detector.run}`, { GITHUB_OUTPUT: outputFile.replaceAll("\\", "/"), DIFF_PATHS:
     ["true", "failure", 1], ["true", "cancelled", 1],
   ]) {
     const result = runWorkflowScript(gateStep.run, {
-      EVENT: "pull_request", CHANGES: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: "success",
+      EVENT: "pull_request", CHANGES: "success", WORKFLOW_LINT: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: "success",
       IMAGES: "skipped", INTEGRATION_NEEDED: "false",
       INTEGRATION: "skipped", PORTAL_INTEGRATION: "skipped", INTEGRATION_COVERAGE: "skipped",
       DEV_INSTALL_NEEDED: needed, DEV_INSTALL: jobResult, INFRA_NEEDED: "false", INFRA: "skipped",
@@ -687,7 +746,7 @@ ${detector.run}`, { GITHUB_OUTPUT: outputFile.replaceAll("\\", "/"), DIFF_PATHS:
   ]) {
     const pr = event === "pull_request";
     const result = runWorkflowScript(gateStep.run, {
-      EVENT: event, CHANGES: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: pr ? "success" : "skipped",
+      EVENT: event, CHANGES: "success", WORKFLOW_LINT: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: pr ? "success" : "skipped",
       IMAGES: pr ? "skipped" : "success", DEV_INSTALL_NEEDED: "false", DEV_INSTALL: "skipped",
       INFRA_NEEDED: "true", INFRA: "success", INTEGRATION_NEEDED: needed, GITHUB_STEP_SUMMARY: summary,
       INTEGRATION: postgres, PORTAL_INTEGRATION: portal, INTEGRATION_COVERAGE: coverage,

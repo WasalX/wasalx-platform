@@ -26,6 +26,7 @@ function Administration({ locale = "en", surface = "teams" }: { locale?: "en" | 
 }
 
 export default { title: "Product/Administration", component: Administration,
+  args: { locale: "en" },
   parameters: { layout: "fullscreen", docs: { description: {
     component: "Actual WasalX administration components. Browser tests supply a synthetic bridge. Captures and interaction results are exploratory UI evidence; they do not prove native, email, network verification or provider behavior.",
   } } },

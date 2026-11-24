@@ -144,16 +144,48 @@ test("installer smoke forwards the DEV option and verifies the selected Compose 
   });
   syncBuiltinESMExports();
   t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
-  for (const [project, skip] of [["wasalx-live", false], ["wasalx-live", true], ["wasalx-dev-bc3ef42", true]]) {
+  for (const [project, skip, simulator] of [
+    ["wasalx-live", false, false], ["wasalx-live", true, false], ["wasalx-dev-bc3ef42", true, false],
+    ["wasalx-dev-fresh", true, true],
+  ]) {
     await executeStage("smoke", { project, envFile, plan: [], model: { services: {} }, devSkipPublicWebhookPreflight: skip,
-      command: (command, args) => { process.argv = [command, ...args]; return 0; },
+      devFreshHeld: simulator, devSimulator: simulator, command: (command, args) => { process.argv = [command, ...args]; return 0; },
     });
     await assert.rejects(verifyStack(), error => error === rendered);
     assert.deepEqual(spawn.mock.calls.at(-1).arguments.slice(0, 2), ["docker", [
       "compose", "--env-file", envFile, "--file", "compose.yaml", "--file", "compose.full.yaml",
+      ...(simulator ? ["--file", "scripts/release/installer-nightly.compose.yaml", "--file", "scripts/release/installer-dev-simulator.compose.yaml"] : []),
       ...(skip ? ["--file", "scripts/release/installer-dev-skip-webhook.compose.yaml"] : []),
       "--profile", "full", "--profile", "runtime-workers", "--project-name", project, "config", "--quiet",
     ]]);
+  }
+});
+
+test("fresh guest options are explicit and fail closed in both installer CLIs", () => {
+  const envFile = fileURLToPath(new URL("./missing-installer-env", import.meta.url));
+  for (const [project, markers, flags, expected] of [
+    ["wasalx-dev-fresh", {}, ["--dev-fresh-held"], /check WASALX_INSTALL_EXPECTED_HOSTNAME/],
+    ["wasalx-dev-fresh", {}, ["--dev-fresh-held", "--dev-simulator"], /check WASALX_INSTALL_EXPECTED_HOSTNAME/],
+    ["wasalx-live", {}, ["--dev-fresh-held"], /fresh held and simulator options require a side-by-side DEV project/],
+    ["wasalx-nightly", { GITHUB_ACTIONS: "true" }, ["--dev-fresh-held", "--dev-simulator"], /fresh held and simulator options require a side-by-side DEV project/],
+    ["wasalx-prod", {}, ["--dev-fresh-held", "--dev-simulator"], /fresh held and simulator options require a side-by-side DEV project/],
+    ["wasalx-dev-fresh", { DEPLOY_ENVIRONMENT: "stg" }, ["--dev-fresh-held", "--dev-simulator"], /fresh held and simulator options require a side-by-side DEV project/],
+    ["wasalx-dev-fresh", {}, ["--dev-simulator"], /simulator (replacement|smoke) requires --dev-fresh-held/],
+  ]) {
+    const env = { ...process.env, WASALX_CANDIDATE_SHA: sha, WASALX_CANDIDATE_TREE: tree,
+      WASALX_INSTALL_EXPECTED_HOSTNAME: "", DEPLOY_ENVIRONMENT: "", WASALX_ENVIRONMENT: "", ...markers };
+    for (const args of [
+      ["scripts/release/installer-stages.mjs", "replace", "--env-file", envFile, "--project-name", project],
+      ["scripts/release/installer-stack.mjs", project, "--full", "--env-file", envFile],
+    ]) {
+      const result = spawnSync(process.execPath, ["--", ...args, ...flags], {
+        cwd: repositoryRoot, env, encoding: "utf8", timeout: 10000, windowsHide: true,
+      });
+      assert.equal(result.error, undefined);
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, expected, `${args[0]} ${project}`);
+      assert.equal(result.stdout, "");
+    }
   }
 });
 
@@ -315,4 +347,31 @@ test("held-stack smoke requires zero restarts for new held containers and non-he
   held.RestartCount = 0;
   fixture.containers.find(row => row.service === "app").RestartCount = 1;
   assert.throws(() => projectStack(fixture), /restart history changed/);
+});
+
+test("fresh held smoke requires stopped holds and checks every other service normally", () => {
+  const fixture = devHeldStackFixture();
+  delete fixture.devPreimages;
+  fixture.imageInspections.pop();
+  for (const row of fixture.containers) {
+    row.Image = fixture.imageInspections.find(({ reference }) => reference === fixture.compose.services[row.service].image).details.Id;
+    row.Config.Image = fixture.compose.services[row.service].image;
+  }
+  for (const service of Object.values(fixture.compose.services)) delete service.depends_on?.["public-webhook-preflight"];
+  fixture.compose.services["waha-gows"].depends_on["public-webhook-preflight"] = { condition: "service_completed_successfully" };
+  const webhook = fixture.containers.find(row => row.service === "public-webhook-preflight");
+  webhook.State.Status = "created";
+  assert.throws(() => projectStack(fixture), /is not running|must resume|one-shot did not exit/);
+  const held = { ...fixture, devFreshHeld: true };
+  const projection = projectStack(held);
+  assert.deepEqual(projection.heldServices, [...devHeldServices, webhook.service].sort());
+  assert.equal(projection.fullLiveAcceptance, false);
+  const sender = fixture.containers.find(row => row.service === "connector-worker");
+  sender.State.Running = true;
+  assert.throws(() => projectStack(held));
+  sender.State.Running = false;
+  fixture.containers.find(row => row.service === "app").State.Health.Status = "unhealthy";
+  assert.throws(() => projectStack(held), /app is unhealthy/);
+  fixture.compose.services.app.depends_on["waha-gows"] = { condition: "service_healthy" };
+  assert.throws(() => projectStack(held), /app depends on held service waha-gows/);
 });
