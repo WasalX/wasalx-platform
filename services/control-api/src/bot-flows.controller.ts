@@ -60,12 +60,14 @@ export class BotFlowsController {
 
   @Get("conversations")
   @Requires("bot:read")
-  listConversations(
+  async listConversations(
     @Req() request: AuthenticatedRequest,
-    @Query("cursor") cursor?: unknown,
-    @Query("limit") limit?: string,
+    @Query("cursor") cursor: unknown,
+    @Query("limit") limit: string | undefined,
+    @Res({ passthrough: true }) reply: FastifyReply,
   ) {
-    return this.flows.listConversations(request.principal, { cursor, limit });
+    const page = await this.flows.listConversations(request.principal, { cursor, limit });
+    return limit === undefined ? withListCursor(reply, page) : page;
   }
 
   @Get("conversations/:id/events")

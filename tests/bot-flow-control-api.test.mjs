@@ -1239,16 +1239,31 @@ test("execution history is tenant-bound, safely projected, paginated, and preser
   assert.equal(transactionCount,2);
 });
 
-test("legacy conversation requests retain the no-query array response",async()=>{
-  let values;
-  const database={rows:async(_tenant,_sql,input=[])=>{
-    values=input;
-    return[{id:"85000000-0000-4000-8000-000000000001",last_activity_at:new Date("2026-08-23T12:34:56.123Z"),pagination_activity_at:"2026-08-23T12:34:56.123456Z"}];
-  }};
-  const result=await new BotFlowsService(database).listConversations(principal);
-  assert.equal(Array.isArray(result),true);
-  assert.equal("pagination_activity_at" in result[0],false);
-  assert.deepEqual(values,[tenantId,null,null,200]);
+test("legacy conversation requests retain the no-query array and can continue past 200", async () => {
+  const at = "2026-08-23T12:34:56.123456Z";
+  const rows = Array.from({ length: 202 }, (_, index) => ({
+    id: "85000000-0000-4000-8000-" + String(202 - index).padStart(12, "0"),
+    last_activity_at: new Date(at), pagination_activity_at: at,
+  }));
+  const database = { rows: async (tenant, _sql, [, timestamp, boundary, fetchSize]) => {
+    assert.equal(tenant, tenantId);
+    assert.equal(timestamp, boundary ? at : null);
+    return rows.filter(row => !boundary || row.id < boundary).slice(0, fetchSize);
+  } };
+  const controller = new BotFlowsController(new BotFlowsService(database));
+  const headers = new Map();
+  const reply = { header: (name, value) => headers.set(name, value) };
+  const request = { principal };
+  const first = await controller.listConversations(request, undefined, undefined, reply);
+  assert.ok(Array.isArray(first));
+  assert.deepEqual(first.map(row => row.id), rows.slice(0, 200).map(row => row.id));
+  const cursor = headers.get("x-next-cursor");
+  assert.ok(cursor);
+  const next = await controller.listConversations(request, cursor, "100", reply);
+  assert.deepEqual(next.items.map(row => row.id), rows.slice(200).map(row => row.id));
+  assert.equal(next.next_cursor, null);
+  assert.ok(!("pagination_activity_at" in first[0]));
+  await assert.rejects(() => controller.listConversations(request, cursor, ["100"], reply), /Conversation page limit is invalid/);
 });
 
 test("conversation head refresh updates retained rows, keeps the deep cursor, and sorts deterministically",()=>{

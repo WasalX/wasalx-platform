@@ -385,7 +385,7 @@ export class BotFlowsService {
     WHERE conversation.tenant_id=$1
       AND ($2::timestamptz IS NULL OR (conversation.last_activity_at,conversation.id)<($2::timestamptz,$3::uuid))
     ORDER BY conversation.last_activity_at DESC,conversation.id DESC LIMIT $4`,[
-      principal.tenantId,cursor?.at??null,cursor?.id??null,limit+(paginated?1:0),
+      principal.tenantId,cursor?.at??null,cursor?.id??null,limit+1,
     ]);
     const pageRows=rows.slice(0,limit);
     const items=pageRows.map(row=>{
@@ -393,7 +393,6 @@ export class BotFlowsService {
       delete item.pagination_activity_at;
       return item;
     });
-    if(!paginated)return items;
     return{items,next_cursor:rows.length>limit?encodeConversationCursor(principal.tenantId,pageRows.at(-1)!):null};
   }
 
@@ -1316,8 +1315,8 @@ function assignmentState(value:unknown){const body=object(value,"Assignment stat
 function assignmentAttribution(value:unknown){const body=object(value,"Assignment attribution request");return{agentPrefix:boundedText(body.agentPrefix,"Agent prefix",80),agentIdentityPlacement:agentIdentityPlacement(body.agentIdentityPlacement),expectedRevision:boundedNumber(body.expectedRevision,1,Number.MAX_SAFE_INTEGER,"Expected revision")}}
 function agentIdentityPlacement(value:unknown):"HEADER"|"FOOTER"|"OFF"{if(value===undefined)return"HEADER";if(value!=="HEADER"&&value!=="FOOTER"&&value!=="OFF")throw new BadRequestException("Agent identity placement is invalid");return value}
 
-function conversationPageLimit(value:string){
-  if(!/^[1-9][0-9]{0,2}$/u.test(value))throw new BadRequestException("Conversation page limit is invalid");
+function conversationPageLimit(value:unknown){
+  if(typeof value!=="string"||!/^[1-9][0-9]{0,2}$/u.test(value))throw new BadRequestException("Conversation page limit is invalid");
   const limit=Number(value);
   if(limit>CONVERSATION_PAGE_MAX)throw new BadRequestException("Conversation page limit is invalid");
   return limit;
