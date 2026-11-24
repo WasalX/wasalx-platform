@@ -809,7 +809,7 @@ export async function getTeamAccess(): Promise<TeamAccessData> {
     if (page.members_next_cursor) query.set("member_cursor", page.members_next_cursor);
     if (page.invitations_next_cursor) query.set("invitation_cursor", page.invitations_next_cursor);
     const continuation = query.toString();
-    if (seen.has(continuation)) throw new ControlPlaneError("The control plane repeated a team page cursor", 502);
+    if (seen.has(continuation)) throw new ControlPlaneError("The service repeated a team page cursor", 502);
     seen.add(continuation);
     page = await call<TeamPage>(session, "/v1/team?" + continuation);
     first.members.push(...page.members);
