@@ -190,7 +190,10 @@ file. Keep the receipt files in sequence.
 
 The nightly PR leg binds the exact PR head and its tree through the anonymous GitHub
 API and independently verifies real GHCR/Sigstore bytes for the recorded main
-publication. The release path requires the RC asset and a successful census on the
+publication. The verifier uses the pinned trust root and validates the staged
+manifest, signature and provenance offline. The report agent stages those public
+GHCR bytes once per candidate. Nightly stages them once for both the live pull
+check and the rehearsal. The release path requires the RC asset and a successful census on the
 latest nightly push run for that tag and commit. The census step checks the installer
 commit, tree and published image commit against the rehearsal log.
 

@@ -280,6 +280,12 @@ test("nightly install is report-only, read-only and fails open on PR diff errors
   assert.match(rehearsal, /phase native-preflight [^]*phase probe-scan 5m sudo -H env "PATH=\$PATH" node scripts\/dev-install\/probe\.mjs [^]*--held-services ''[^]*\.census == "PASS" and \.services == 37 and \.rerendered_hashes == \.services[^]*phase configured-reinstall/u);
 });
 
+test("nightly installer refuses an invalid runner with a command, status and reason", () => {
+  const result = runWorkflowScript("bash scripts/release/installer-nightly.sh", { GITHUB_ACTIONS: "false" }, repository);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /command=bash scripts\/release\/installer-nightly\.sh exit=1 reason=requires a GitHub-hosted Actions runner/u);
+});
+
 test("PR installer skips only when the publication migration tree differs", async t => {
   const { jobs } = parse(await read(".github/workflows/nightly-install.yml"));
   const steps = jobs["nightly-install"].steps;

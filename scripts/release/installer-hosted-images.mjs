@@ -101,13 +101,16 @@ export async function verifyHostedImages(context, { verifyOnly = false } = {}) {
   const version = JSON.parse(await execute("cosign", ["version", "--json"], context.environment));
   assert.equal(version.gitVersion, cosignPin.version, "hosted admission requires the pinned Cosign version");
   const rootBytes = await readFile(context.hostedTrustedRoot), trustedRootSha256 = sha256(rootBytes);
+  if (context.hostedTrustedRootSha256) {
+    assert.equal(trustedRootSha256, context.hostedTrustedRootSha256, "Sigstore trust root checksum mismatch");
+  }
   const temporary = await mkdtemp(join(tmpdir(), "wasalx-hosted-verification-"));
   try {
     const root = join(temporary, "trusted-root.json");
     await writeFile(root, rootBytes, { mode: 0o600, flag: "wx" });
     const common = ["--offline", "--trusted-root", root,
       "--certificate-identity", inventory.publisher, "--certificate-oidc-issuer", hostedIssuer];
-    const images = [];
+    const images = [], references = [];
     let verified = 0;
     for (const image of context.plan) {
       const row = inventory.images[image.id];
@@ -136,6 +139,7 @@ export async function verifyHostedImages(context, { verifyOnly = false } = {}) {
           "--bundle", path, "--type", type, "--digest", row.digest.slice(7), "--digestAlg", "sha256"], context.environment);
         seals[name] = sha256(bytes);
       }
+      references.push(row.pullReference);
       verified += 1;
       if (verifyOnly) continue;
       const inspect = async () => JSON.parse(await execute("docker", ["image", "inspect", image.reference], context.environment))[0];
@@ -163,6 +167,6 @@ export async function verifyHostedImages(context, { verifyOnly = false } = {}) {
     assert.equal(verified, context.catalog.images.length, "complete hosted candidate plan required");
     assert.equal(new Set(context.plan.map(({ id }) => id)).size, verified, "duplicate hosted candidate plan");
     assert.equal(sha256(await readFile(context.hostedTrustedRoot)), trustedRootSha256, "hosted trust root changed");
-    return { images, trustedRootSha256, publisher: inventory.publisher };
+    return { images, references, trustedRootSha256, publisher: inventory.publisher };
   } finally { await rm(temporary, { recursive: true, force: true }); }
 }
