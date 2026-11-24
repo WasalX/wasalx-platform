@@ -18,6 +18,10 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  zammad-compatibility:
+    if: github.event_name == 'schedule' && github.repository == 'WasalX/wasalx-platform'
+    uses: ./.github/workflows/zammad-compatibility.yml
+
   frozen-disk-qemu:
     if: github.repository == 'WasalX/wasalx-platform' && (github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main')
     runs-on: ubuntu-24.04
