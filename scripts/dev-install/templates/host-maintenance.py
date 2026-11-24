@@ -2,6 +2,7 @@
 """Generate measured lease inputs or archive a closed support directory."""
 
 import argparse
+import hmac
 import json
 import os
 from pathlib import Path
@@ -9,6 +10,7 @@ import re
 import stat
 import subprocess
 import sys
+import time
 
 
 PHASES = {
@@ -19,12 +21,68 @@ PHASES = {
 TIMING = re.compile(r"PHASE_TIMING phase=(install|rollback|audit|commit)"
                     r" step=([a-z-]+) event=(start|pass) epoch_ns=([0-9]{19}) at=\S+"
                     r"(?: bytes=([1-9][0-9]{0,18}))?")
+ORIGIN = re.compile(r"LEASE_RECEIPT_ORIGIN host_sha256=([0-9a-f]{64})"
+                    r" disk_device=([0-9]{1,20}) disk_inode=([0-9]{1,20}) captured_ns=([0-9]{19})")
 REVIEWED_RESERVATIONS = {"install": 13_400, "rollback": 11_400}
 # DEV cycle timings (2026-11-22): 2,880 s per ~115 GB hash at ~40 MB/s.
 # Reserve two hashes, one assumed full-disk pass for qemu-img commit, and 11,400 s for restore, plus 25%.
 COMMIT_FALLBACK_S = 25_050
 GB = 10**9
 RUN_ID = re.compile(r"[0-9]{8}T[0-9]{6}Z")
+
+
+def sizing_top(path):
+    top = path.lstat()
+    if not stat.S_ISREG(top.st_mode) or top.st_nlink != 1 or top.st_size <= 0:
+        raise ValueError("invalid TOP for lease sizing")
+    return top
+
+
+def timing_origin(path):
+    machine_id = Path("/etc/machine-id").read_text(encoding="ascii").strip()
+    if not re.fullmatch(r"[0-9a-f]{32}", machine_id) or int(machine_id, 16) == 0:
+        raise ValueError("invalid machine ID for lease timing")
+    host = hmac.digest(b"WasalX DEV timing receipt v1", bytes.fromhex(machine_id), "sha256").hex()
+    top = sizing_top(path)
+    return (f"LEASE_RECEIPT_ORIGIN host_sha256={host} disk_device={top.st_dev}"
+            f" disk_inode={top.st_ino} captured_ns={time.time_ns()}")
+
+
+def lease_receipts_match(receipts, policy):
+    if policy is None:
+        return False
+    if (not isinstance(policy, dict)
+            or set(policy) != {"host_sha256", "disk_device", "disk_inode", "max_age_seconds"}
+            or not isinstance(policy["host_sha256"], str)
+            or not re.fullmatch(r"[0-9a-f]{64}", policy["host_sha256"])
+            or type(policy["disk_device"]) is not int or not 0 <= policy["disk_device"] < 2**64
+            or type(policy["disk_inode"]) is not int or not 0 < policy["disk_inode"] < 2**64
+            or type(policy["max_age_seconds"]) is not int or not 0 < policy["max_age_seconds"] < 2**31):
+        raise ValueError("invalid LEASE_RECEIPT_POLICY")
+
+    now = time.time_ns()
+    max_age = policy["max_age_seconds"] * 10**9
+    for receipt in receipts:
+        captured_ns = None
+        for line in receipt.splitlines():
+            if line.startswith("LEASE_RECEIPT_ORIGIN"):
+                origin = ORIGIN.fullmatch(line)
+                if not origin:
+                    return False
+                host, device, inode, captured = origin.groups()
+                captured_ns = int(captured)
+                if (host != policy["host_sha256"] or int(device) != policy["disk_device"]
+                        or int(inode) != policy["disk_inode"] or not 0 <= now - captured_ns <= max_age):
+                    return False
+            elif timing := TIMING.fullmatch(line):
+                tick = int(timing[4])
+                # The lease clock includes the preflight that verifies the packet before origin capture.
+                earliest = now - max_age if (timing[2], timing[3]) == ("lease", "start") else captured_ns
+                if captured_ns is None or not earliest <= tick <= now:
+                    return False
+        if captured_ns is None:
+            return False
+    return True
 
 
 def lease_budgets(receipts):
@@ -107,9 +165,7 @@ def lease_runtime(mode, env):
     measured = env["INSTALL_DISCARD_BUDGET_SOURCE"] == "measured-receipts"
     hash_ns = 0
     if measured or mode == "commit":
-        top = Path(env["TOP"]).lstat()
-        if not stat.S_ISREG(top.st_mode) or top.st_nlink != 1 or top.st_size <= 0:
-            raise ValueError("invalid TOP for lease sizing")
+        top = sizing_top(Path(env["TOP"]))
         hash_rate = int(env["HASH_NS_PER_GB"])
         hash_ns = (hash_rate * top.st_size + GB - 1) // GB
     if mode == "commit":
@@ -175,6 +231,8 @@ def main():
     action = parser.add_subparsers(dest="action", required=True)
     budget = action.add_parser("lease-budgets")
     budget.add_argument("receipts", type=Path, nargs="+")
+    origin = action.add_parser("timing-origin")
+    origin.add_argument("top", type=Path)
     runtime = action.add_parser("lease-runtime")
     runtime.add_argument("mode", choices=("install", "rollback", "commit"))
     archive = action.add_parser("archive-support")
@@ -186,6 +244,8 @@ def main():
     if args.action == "lease-budgets":
         budgets = lease_budgets(path.read_text(encoding="utf-8") for path in args.receipts)
         print(json.dumps(budgets, sort_keys=True))
+    elif args.action == "timing-origin":
+        print(timing_origin(args.top))
     elif args.action == "lease-runtime":
         seconds = lease_runtime(args.mode, os.environ)
         if not 0 < seconds < 2**31:

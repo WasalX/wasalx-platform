@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import ts from "typescript";
+import { tenantPortalFiles } from "./helpers/tenant-portal-source.mjs";
 
 import { arabicMessages } from "../lib/i18n/messages/ar/index.ts";
 import { englishMessages } from "../lib/i18n/messages/en/index.ts";
@@ -9,7 +10,7 @@ import { englishMessages } from "../lib/i18n/messages/en/index.ts";
 const clientSurfaces = [
   "../app/MarketingInbox.tsx",
   "../app/page.tsx",
-  "../app/WasalXApp.tsx",
+  ...tenantPortalFiles.map((path) => `../${path}`),
   "../app/BotAutomation.tsx",
   "../app/ClientRouting.tsx",
   "../app/CaseLifecycle.tsx",

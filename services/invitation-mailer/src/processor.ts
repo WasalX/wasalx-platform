@@ -18,14 +18,14 @@ import { MailerSecretError, type MailerSecretResolver } from "./secrets.js";
 export class InvitationMailerProcessor {
   private readonly config: Pick<InvitationMailerConfig,
     "workerId" | "batchSize" | "maxAttempts" | "privateKeyReferences" |
-    "portalOrigin" | "sender" | "templateId">;
+    "portalOrigin" | "sender" | "templateId" | "testRecipients">;
   private readonly store: InvitationMailerStore;
   private readonly secrets: MailerSecretResolver;
   private readonly provider: TransactionalEmailProvider;
   constructor(
     config: Pick<InvitationMailerConfig,
       "workerId" | "batchSize" | "maxAttempts" | "privateKeyReferences" |
-      "portalOrigin" | "sender" | "templateId">,
+      "portalOrigin" | "sender" | "templateId" | "testRecipients">,
     store: InvitationMailerStore,
     secrets: MailerSecretResolver,
     provider: TransactionalEmailProvider,
@@ -54,6 +54,10 @@ export class InvitationMailerProcessor {
     }, async () => {
       let providerReceipt: string | undefined;
       try {
+        if (this.config.testRecipients && !this.config.testRecipients.has(job.recipient_email)) {
+          throw new InvitationDeliveryError("EMAIL_TEST_RECIPIENT_NOT_ALLOWED", false,
+            "This invitation recipient is outside the configured test allowlist.");
+        }
         const token = await decryptInvitationToken({
           ciphertext: job.token_ciphertext,
           keyVersion: job.token_key_version,

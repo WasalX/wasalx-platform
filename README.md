@@ -1,5 +1,7 @@
 # WasalX platform
 
+See [Meta upstream message cost estimates](docs/runbooks/meta-cost-reference-tariff.md) for the provider rate catalog and tariff upload.
+
 ## Bot delivery retry limits
 
 Set these optional variables in the service environment. For the Compose stack,
