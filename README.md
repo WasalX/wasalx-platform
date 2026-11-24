@@ -1,5 +1,7 @@
 # WasalX platform
 
+See [Meta upstream message cost estimates](docs/runbooks/meta-cost-reference-tariff.md) for the provider rate catalog and tariff upload.
+
 ## Zammad ticket context
 
 `GET /internal/v1/zammad/tickets/:ticketId/context` returns
