@@ -129,6 +129,44 @@ jobs:
         with:
           node-version: '24.13.1'
           package-manager-cache: false
+      - name: Check GitHub Actions workflows
+        if: matrix.mode == 'lint'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          ACTIONLINT_URL: https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz
+          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+        run: |
+          scratch=$(mktemp -d)
+          trap 'rm -rf -- "$scratch"' EXIT
+          archive="$scratch/actionlint.tar.gz"
+          curl -fsSL -o "$archive" "$ACTIONLINT_URL"
+          printf '%s  %s\n' "$ACTIONLINT_SHA256" "$archive" | sha256sum --check --strict
+          tar -xzf "$archive" -C "$scratch" actionlint
+
+          [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null || git fetch --quiet --no-tags --depth=1 origin "$BASE_SHA"
+          mkdir "$scratch/base"
+          git archive "$BASE_SHA" .github | tar -x -C "$scratch/base"
+          git init --quiet "$scratch/base"
+
+          findings() {
+            local status=0
+            # Ignore line movement and keep duplicate findings for the comparison.
+            "$scratch/actionlint" -shellcheck= -pyflakes= -format '{{range .}}{{printf "%q\t%q\t%q\n" .Filepath .Kind .Message}}{{end}}' > "$1" || status=$?
+            case "$status" in
+              0) test ! -s "$1" ;;
+              1) test -s "$1" ;;
+              *) return "$status" ;;
+            esac
+            LC_ALL=C sort -o "$1" "$1"
+          }
+          (cd "$scratch/base" && findings "$scratch/base.txt")
+          findings "$scratch/head.txt"
+          LC_ALL=C comm -13 "$scratch/base.txt" "$scratch/head.txt" > "$scratch/new.txt"
+          counts="actionlint findings: base=$(wc -l < "$scratch/base.txt"), head=$(wc -l < "$scratch/head.txt"), new=$(wc -l < "$scratch/new.txt")"
+          printf '%s\n' "$counts" | tee -a "$GITHUB_STEP_SUMMARY"
+          cat "$scratch/new.txt"
+          test ! -s "$scratch/new.txt"
       - name: Check image publication contracts
         if: matrix.mode == 'lint'
         run: |
