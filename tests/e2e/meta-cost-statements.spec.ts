@@ -37,7 +37,11 @@ test('published statement history preserves exact amounts, unknown quantity and 
  await page.goto('/app?view=connections');await expect(page.locator('[data-application-ready="true"]')).toBeVisible();
  const summary=page.locator('summary').filter({hasText:t('cost.title')});
  if(!['tenant_owner','tenant_admin','auditor'].includes(role)){await expect(summary).toHaveCount(0);expect(statementReads).toBe(0);expect(errors).toEqual([]);return;}
- await summary.focus();await page.keyboard.press('Enter');await page.getByRole('combobox',{name:t('cost.account'),exact:true}).selectOption(accountA);
+ const disclosure=page.locator('details').filter({has:summary});
+ await expect(summary).toBeVisible();await summary.focus();await expect(summary).toBeFocused();
+ await page.keyboard.press('Enter');await expect(disclosure).toHaveJSProperty('open',true);
+ const accounts=disclosure.getByRole('combobox',{name:t('cost.account'),exact:true});
+ await expect(accounts).toBeVisible();await accounts.selectOption(accountA);
  const panel=page.getByRole('region',{name:t('cost.statement.title'),exact:true});
  await expect.poll(()=>Boolean(initial)).toBe(true);await expect(panel.getByRole('status')).toContainText(t('cost.loading'));expect(errors).toEqual([]);
  await initial!.fulfill({json:[]});await expect(panel.getByText(t('cost.statement.empty'),{exact:true})).toBeVisible();
