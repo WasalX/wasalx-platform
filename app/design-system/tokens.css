@@ -86,6 +86,7 @@
   --wx-color-success: #45c58a;
   --wx-color-warning: #f3ad4e;
   --wx-color-danger: #f06b6b;
+  --wx-color-danger-solid: #954242;
   --wx-color-on-solid: #ffffff;
   --wx-color-qr-surface: #ffffff;
   --wx-color-provider-waha: #22a06b;
@@ -121,6 +122,7 @@
   --wx-color-success: #167d53;
   --wx-color-warning: #a45e09;
   --wx-color-danger: #c64343;
+  --wx-color-danger-solid: #7b2a2a;
   --wx-color-on-solid: #ffffff;
   --wx-color-qr-surface: #ffffff;
   --wx-color-provider-waha: #16855a;

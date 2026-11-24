@@ -11,4 +11,4 @@
 .card form button:hover:not(:disabled) { background:var(--surface-2); }
 .card form button:active:not(:disabled) { border-color:var(--accent); }
 .card :is(input,button,a):focus-visible { outline:2px solid var(--accent); outline-offset:3px; }
-.card section { border-inline-start:3px solid var(--accent); padding-inline-start:1rem; }
+.card section { border-block-start:1px solid var(--border); padding-block-start:var(--wx-space-4); }

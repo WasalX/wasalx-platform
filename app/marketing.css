@@ -211,14 +211,14 @@ html:has(.marketing-shell) { scroll-padding-block-start: 5.5rem; }
 .marketing-group-ticket .inbox-ticket-state { margin-inline-start: auto; }
 .marketing-section-copy > .marketing-trigger-description { display: flex; align-items: start; gap: var(--wx-space-3); margin-block-start: var(--wx-space-4); color: var(--text); font-size: var(--wx-font-size-3); }
 .marketing-trigger-description svg { color: var(--accent); margin-block-start: .2em; inline-size: 1.25rem; }
-.marketing-group-rule { display: flex; align-items: center; gap: var(--wx-space-3); padding: var(--wx-space-3) var(--wx-space-4); background: var(--accent-wash); border-block-end: 1px solid var(--border); border-inline-start: 3px solid var(--accent); font-size: var(--wx-font-size-2); }
+.marketing-group-rule { display: flex; align-items: center; gap: var(--wx-space-3); padding: var(--wx-space-3) var(--wx-space-4); background: var(--accent-wash); border-block-end: 1px solid var(--border); font-size: var(--wx-font-size-2); }
 .marketing-group-rule > svg { color: var(--accent); inline-size: 1.1rem; }
 .marketing-group-rule > span:first-of-type { display: grid; gap: var(--wx-space-1); }
 .marketing-group-rule strong { font-size: var(--wx-font-size-1); font-weight: var(--wx-weight-semibold); color: var(--accent); }
 .marketing-rule-active { display: inline-flex; align-items: center; gap: var(--wx-space-1); margin-inline-start: auto; color: var(--text); font-size: var(--wx-font-size-1); white-space: nowrap; }
 .marketing-rule-active svg { inline-size: 1rem; color: var(--success); }
 .marketing-shell .inbox-bubble mark { background: var(--wx-color-accent-solid); color: var(--wx-color-on-solid); font-weight: var(--wx-weight-semibold); border-radius: var(--wx-radius-control); padding: .1em .3em; box-decoration-break: clone; }
-.marketing-shell .inbox-message-trigger .inbox-bubble { background: color-mix(in srgb, var(--accent) 12%, var(--surface)); border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--border)); border-inline-start: 3px solid var(--accent); box-shadow: none; }
+.marketing-shell .inbox-message-trigger .inbox-bubble { background: color-mix(in srgb, var(--accent) 12%, var(--surface)); border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--border)); box-shadow: none; }
 .inbox-trigger-label { display: inline-flex; align-items: center; gap: var(--wx-space-1); padding: .1rem var(--wx-space-2); border-radius: var(--wx-radius-control); background: var(--wx-color-accent-solid); color: var(--wx-color-on-solid); font-size: var(--wx-font-size-1); font-weight: var(--wx-weight-medium); }
 .inbox-trigger-label svg { inline-size: .85rem; block-size: .85rem; }
 .inbox-rule-toggle { border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--border)); background: var(--accent-wash); }
@@ -430,7 +430,7 @@ html:has(.marketing-shell) { scroll-padding-block-start: 5.5rem; }
 .inbox-trigger-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--wx-space-2); }
 .inbox-trigger-fields > label:only-child { grid-column: 1 / -1; }
 .inbox-history-entry { display: flex; flex-direction: column; }
-.inbox-active-rule { display: flex; align-items: center; flex-wrap: wrap; gap: var(--wx-space-2); padding: var(--wx-space-2) var(--wx-space-4); border-block-end: 1px solid var(--border); border-inline-start: 3px solid var(--accent); background: var(--accent-wash); color: var(--text); font-size: var(--wx-font-size-1); }
+.inbox-active-rule { display: flex; align-items: center; flex-wrap: wrap; gap: var(--wx-space-2); padding: var(--wx-space-2) var(--wx-space-4); border-block-end: 1px solid var(--border); background: var(--accent-wash); color: var(--text); font-size: var(--wx-font-size-1); }
 .inbox-active-rule > svg, .inbox-active-rule > strong { color: var(--accent); }
 .inbox-active-rule > span { display: inline-flex; align-items: center; gap: var(--wx-space-1); margin-inline-start: auto; color: var(--text); }
 .inbox-active-rule > span svg { color: var(--success); }
