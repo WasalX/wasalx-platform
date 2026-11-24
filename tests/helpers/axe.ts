@@ -10,10 +10,11 @@ export async function expectAxeClean(page: Page) {
       id,
       impact,
       help,
-      nodes: nodes.map(({ target, html, any }) => {
-        const size = id === "target-size" ? any.find((check) => check.id === "target-size")?.data : undefined;
-        return { target, html, ...(size && { box: { width: size.width, height: size.height } }) };
-      }),
+      nodes: nodes.map(({ target, html, any }) => ({
+        target,
+        html,
+        any: any.map(({ id, data }) => ({ id, data })),
+      })),
     })),
     "axe must find no WCAG A/AA violations",
   ).toEqual([]);
