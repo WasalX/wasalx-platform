@@ -72,16 +72,22 @@ Runtime install/release and provider acceptance require separate evidence.
 
 ## Provision a full-stack invitee
 
-For DEV mail, set `WASALX_TEST_EMAIL_RECIPIENT_ALLOWLIST` in the private
-Compose environment to a JSON array of exact, approved test email addresses.
-The invitation worker and Keycloak both refuse delivery when the list is
-empty or missing. Wildcards and malformed lists are refused. Invitation
-deliveries outside the list fail without retrying. Set the separate
+Set `WASALX_TEST_EMAIL_RECIPIENT_ALLOWLIST` in the private Compose environment.
+On DEV, use a JSON array of exact, approved test email addresses or `[]` to
+deny all mail. For staging and production, set the explicit value `*` for
+unrestricted mail. Use the same key in the invitation mailer Secret for Helm
+deployments. A missing or invalid policy fails startup. Invitation deliveries
+outside the list fail without retrying. Set the separate
 `WASALX_KEYCLOAK_PASSWORD_RESET_ENABLED` switch to `true` only when testing
 password reset mail for an approved recipient. Leave it off for other mail
 tests. Apply changes through the guarded installer procedure. On an existing
 realm, run the approved Keycloak bootstrap reconciliation before testing the
 self-service password reset link.
+
+Upgrade the full Compose files and Keycloak image together. The Compose
+command requires the fenced providers, so an older image fails startup.
+The disposable hosted rehearsal checks the candidate Keycloak image and
+bootstrap separately when it installs a signed image set from an older commit.
 
 Before accepting an invitation, the invitee needs an email-verified account in the `wasalx` realm. Confirm control of the invitation address before provisioning.
 On the full-stack host, set `private_dir` to a directory outside the checkout owned by UID 1000 with mode `0700`. Set `email_file` to a private file containing the address on one line.

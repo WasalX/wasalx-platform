@@ -7,6 +7,7 @@ import {
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { fullEnvironmentCredentialNames, validateFullEnvironment } from "../scripts/release/preflight-full-env.mjs";
 
 import { canonicalEmail, loadInvitationMailerConfig } from "../services/invitation-mailer/dist/config.js";
 import {
@@ -40,6 +41,7 @@ test("mailer production configuration requires a live HTTPS or TLS-required SMTP
     INVITATION_EMAIL_FROM: ["test-user-0456","example.home.arpa"].join("@"),
     INVITATION_EMAIL_TEMPLATE_ID: "wasalx-tenant-invitation-v1",
     PORTAL_PUBLIC_ORIGIN: "https://portal.example.com",
+    WASALX_TEST_EMAIL_RECIPIENT_ALLOWLIST: "*",
   };
   assert.throws(() => loadInvitationMailerConfig(base), /HTTPS endpoint or credential-free SMTP submission URL/);
   assert.throws(() => loadInvitationMailerConfig({
@@ -62,15 +64,16 @@ test("mailer production configuration requires a live HTTPS or TLS-required SMTP
   assert.equal(config.port, 8085);
   assert.equal(config.testRecipients, undefined);
   const mailFence = "WASALX_TEST_EMAIL_RECIPIENT_ALLOWLIST";
-  const email = ["fixture-2718", "example.home.arpa"].join("@");
+  const email = ["fixture_2718", "example.test"].join("@");
   const withFence = value => loadInvitationMailerConfig({
     ...base,
     INVITATION_EMAIL_PROVIDER_URL: "https://email.internal/v1/send",
     [mailFence]: value,
   });
-  assert.deepEqual(withFence("").testRecipients, new Set());
+  assert.deepEqual(withFence("[]").testRecipients, new Set());
+  assert.equal(withFence("*").testRecipients, undefined);
   assert.deepEqual(withFence(JSON.stringify([email.toUpperCase()])).testRecipients, new Set([email]));
-  for (const invalid of ["*", "null", "{}", '[1]', JSON.stringify([email, "*"])]) {
+  for (const invalid of [undefined, "", " * ", "null", "{}", '[1]', JSON.stringify([email, "*"])]) {
     assert.throws(() => withFence(invalid), /WASALX_TEST_EMAIL_RECIPIENT_ALLOWLIST/u);
   }
   const shared = loadInvitationMailerConfig({
@@ -92,6 +95,32 @@ test("mailer production configuration requires a live HTTPS or TLS-required SMTP
     () => loadInvitationMailerConfig({ ...base, INVITATION_EMAIL_PROVIDER_URL: providerUrl }),
     /HTTPS endpoint or credential-free SMTP submission URL/,
   );
+});
+
+test("full installer preflight requires valid mail and password-reset policies", () => {
+  const recipients = "WASALX_TEST_EMAIL_RECIPIENT_ALLOWLIST";
+  const reset = "WASALX_KEYCLOAK_PASSWORD_RESET_ENABLED";
+  const base = {
+    ...Object.fromEntries(fullEnvironmentCredentialNames.map((key, index) => [key, `fixture-${index}`])),
+    PUBLIC_WEBHOOK_BASE_URL: "https://webhook.fixture.internal",
+    WASALX_FULL_INVITATION_EMAIL_PROVIDER_URL: "https://mail.fixture.internal/send",
+    WASALX_FULL_INVITATION_EMAIL_FROM: ["sender", "fixture.internal"].join("@"),
+    WASALX_FULL_KEYCLOAK_SMTP_FROM: ["identity", "fixture.internal"].join("@"),
+    WASALX_FULL_QUALIFICATION_OWNER_EMAIL: ["owner", "fixture.internal"].join("@"),
+    WASALX_FULL_KEYCLOAK_SMTP_PORT: "587",
+    DEV_SECRET_STORE_ENCRYPTION_KEY: Buffer.alloc(32, 1).toString("base64"),
+    [recipients]: "[]",
+    [reset]: "false",
+  };
+  for (const policy of ["[]", "*", JSON.stringify([["fixture_2718", "example.test"].join("@")])]) {
+    assert.equal(validateFullEnvironment({ ...base, [recipients]: policy, [reset]: "true" }), true);
+  }
+  for (const policy of [undefined, "", " * ", "[1]", '["*"]', '["alias@example.test,other@example.test"]']) {
+    assert.throws(() => validateFullEnvironment({ ...base, [recipients]: policy }), { variables: [recipients] });
+  }
+  for (const enabled of [undefined, "", "True", "yes"]) {
+    assert.throws(() => validateFullEnvironment({ ...base, [reset]: enabled }), { variables: [reset] });
+  }
 });
 
 test("encrypted invitation tokens decrypt only with the referenced key version and stay in URL fragments", async () => {

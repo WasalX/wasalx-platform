@@ -19,7 +19,7 @@ import java.util.regex.Pattern;
 public final class AllowedEmailSenderFactory extends DefaultEmailSenderProviderFactory {
     private static final String ALLOWLIST = "WASALX_TEST_EMAIL_RECIPIENT_ALLOWLIST";
     private static final Pattern ADDRESS = Pattern.compile(
-        "[a-z0-9!#$%&'*+/=?^`{|}~-]+(?:\\.[a-z0-9!#$%&'*+/=?^`{|}~-]+)*"
+        "[a-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\\.[a-z0-9!#$%&'*+/=?^_`{|}~-]+)*"
         + "@[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+");
     private Set<String> recipients = Set.of();
 
@@ -40,7 +40,8 @@ public final class AllowedEmailSenderFactory extends DefaultEmailSenderProviderF
     }
 
     static Set<String> parseRecipients(String raw) {
-        if (raw == null || raw.isBlank()) return Set.of();
+        if (raw == null || raw.isBlank()) throw new IllegalArgumentException(ALLOWLIST + " is required");
+        if (raw.equals("*")) return null;
         JsonNode values;
         try {
             values = JsonSerialization.mapper.readerFor(JsonNode.class)
@@ -68,8 +69,10 @@ public final class AllowedEmailSenderFactory extends DefaultEmailSenderProviderF
         public void send(Map<String, String> config, String address, String subject, String text, String html)
                 throws EmailException {
             String recipient = address == null ? "" : address.strip().toLowerCase(Locale.ROOT);
-            if (!recipients.contains(recipient)) throw new EmailException("Recipient is outside the test email allowlist");
-            delegate.send(config, recipient, subject, text, html);
+            if (recipients != null && !recipients.contains(recipient)) {
+                throw new EmailException("Recipient is outside the test email allowlist");
+            }
+            delegate.send(config, address, subject, text, html);
         }
 
         @Override

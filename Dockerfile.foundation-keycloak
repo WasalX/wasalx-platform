@@ -85,4 +85,20 @@ LABEL org.opencontainers.image.revision="${WASALX_CANDIDATE_SHA}" \
 USER 1000:1000
 # Check the Compose readiness shell as the runtime user during the image build.
 RUN /bin/bash -ec '/opt/keycloak/bin/kc.sh --version && /opt/keycloak/bin/kcadm.sh --help >/dev/null'
+# Start the final image's server with both SPIs without persisting the H2 or augmented build files.
+RUN /bin/bash -ec '\
+    work=$(mktemp -d); pid=; \
+    cleanup() { if [[ -n "$pid" ]]; then kill "$pid" 2>/dev/null || true; wait "$pid" || true; fi; rm -rf "$work"; }; \
+    trap cleanup EXIT; \
+    cp -a /opt/keycloak/. "$work"; \
+    WASALX_TEST_EMAIL_RECIPIENT_ALLOWLIST="[]" "$work/bin/kc.sh" start-dev --db=dev-mem --http-host=127.0.0.1 --health-enabled=true \
+      --spi-email-sender--provider=wasalx-fenced --spi-email-template--provider=wasalx-fenced >"$work/start.log" 2>&1 & pid=$!; \
+    ready() { printf "GET /health/ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n" >&3; \
+      IFS= read -r -t 2 status <&3 && [[ "$status" == *" 200 "* ]]; }; \
+    for attempt in {1..90}; do \
+      kill -0 "$pid" 2>/dev/null || break; \
+      if { ready 3<>/dev/tcp/127.0.0.1/9000; } 2>/dev/null; then exit 0; fi; \
+      sleep 1; \
+    done; \
+    cat "$work/start.log"; exit 1'
 ENTRYPOINT ["/opt/keycloak/bin/kc.sh"]

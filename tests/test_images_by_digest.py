@@ -27,6 +27,46 @@ alias_spec.loader.exec_module(aliases)
 
 
 class ImagePublicationTests(unittest.TestCase):
+    def test_synthetic_mail_policies_are_explicit_and_nightly_allows_only_its_owner(self):
+        with tempfile.TemporaryDirectory() as directory:
+            for mode in ["simulation", "nightly"]:
+                with self.subTest(mode=mode):
+                    target = Path(directory) / mode
+                    subprocess.run(
+                        [sys.executable, "-B", str(ROOT / "scripts/release/generate-simulation-env.py"),
+                         str(ROOT), str(target), str(ROOT / "scripts/contracts/waha-simulation-server.mjs"),
+                         *(["--installer-rehearsal"] if mode == "nightly" else [])],
+                        check=True, capture_output=True, timeout=20,
+                    )
+                    keys = ("WASALX_TEST_EMAIL_RECIPIENT_ALLOWLIST", "WASALX_KEYCLOAK_PASSWORD_RESET_ENABLED",
+                            "WASALX_FULL_QUALIFICATION_OWNER_EMAIL")
+                    env = dict(line.rstrip("'").split("='", 1) for line in target.read_text().splitlines()
+                               if line.startswith(tuple(key + "=" for key in keys)))
+                    expected = [env["WASALX_FULL_QUALIFICATION_OWNER_EMAIL"]] if mode == "nightly" else []
+                    self.assertEqual(json.loads(env["WASALX_TEST_EMAIL_RECIPIENT_ALLOWLIST"]), expected)
+                    self.assertEqual(env["WASALX_KEYCLOAK_PASSWORD_RESET_ENABLED"],
+                                     "true" if mode == "nightly" else "false")
+
+    def test_signed_rehearsal_selects_fenced_keycloak_only_when_the_provider_is_packaged(self):
+        overlay = (ROOT / "scripts/release/installer-nightly.compose.yaml").read_text()
+        script = textwrap.dedent(overlay.split("      - |\n", 1)[1].split("      - --", 1)[0])
+        script = script.replace("$$", "$").replace("/opt/keycloak/providers/wasalx-mail-fence.jar", '"$FENCE_JAR"')
+        bash = "C:/Program Files/Git/bin/bash.exe" if os.name == "nt" else "bash"
+        args = ["start", "--import-realm", "--spi-email-sender--provider=wasalx-fenced",
+                "--spi-email-template--provider=wasalx-fenced"]
+        record_exec = 'exec() { printf "%s\\n" "${@:2}"; exit 0; }\n'
+        with tempfile.TemporaryDirectory() as directory:
+            jar = Path(directory) / "wasalx-mail-fence.jar"
+            for packaged in [False, True]:
+                with self.subTest(packaged=packaged):
+                    if packaged:
+                        jar.write_bytes(b"fixture")
+                    result = subprocess.check_output(
+                        [bash, "--noprofile", "--norc", "-ec", record_exec + script, "--", *args],
+                        env={**os.environ, "FENCE_JAR": jar.as_posix()}, text=True, timeout=10,
+                    )
+                    self.assertEqual(result.splitlines(), args if packaged else args[:2])
+
     def test_merge_group_workflow_selects_all_21_images(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
         step = workflow.split("      - id: matrix\n", 1)[1].split("\n\n", 1)[0]

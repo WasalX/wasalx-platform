@@ -301,6 +301,8 @@ invitationMailer:
   # This worker Secret must provide the discovery-capable, mailer-only
   # INVITATION_MAILER_DATABASE_URL, the sidecar read token, private-key secret
   # references, provider endpoint/reference, sender/template, and portal origin.
+  # WASALX_TEST_EMAIL_RECIPIENT_ALLOWLIST is required in the Secret.
+  # Use '*' for staging and production, and an explicit JSON array for development.
   # Set INVITATION_MAILER_TENANT_ID only for an intentionally dedicated tenant
   # worker; the shared deployment omits it and discovers only tenant UUIDs with
   # eligible jobs through its SECURITY DEFINER function.

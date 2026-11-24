@@ -14,7 +14,7 @@ import java.util.Map;
 import java.util.Set;
 
 final class MailFenceTest {
-    private static final String ALLOWED = "fixture-2718" + "@" + "example.test";
+    private static final String ALLOWED = "fixture_2718" + "@" + "example.test";
 
     public static void main(String[] args) throws Exception {
         testRecipients();
@@ -30,12 +30,12 @@ final class MailFenceTest {
             public void validate(Map<String, String> config) {}
             public void close() {}
         };
-        for (String empty : new String[] {null, "", "[]"}) {
-            var sender = new AllowedEmailSenderFactory.Sender(transport, AllowedEmailSenderFactory.parseRecipients(empty));
-            expect(EmailException.class, () -> sender.send(Map.of(), ALLOWED, "", "", ""));
-        }
+        expect(IllegalArgumentException.class, () -> AllowedEmailSenderFactory.parseRecipients(null));
+        expect(IllegalArgumentException.class, () -> AllowedEmailSenderFactory.parseRecipients(""));
+        var deny = new AllowedEmailSenderFactory.Sender(transport, AllowedEmailSenderFactory.parseRecipients("[]"));
+        expect(EmailException.class, () -> deny.send(Map.of(), ALLOWED, "", "", ""));
         String allowedJson = "[\"" + ALLOWED.toUpperCase(Locale.ROOT) + "\"]";
-        for (String invalid : List.of("*", "null", "{}", "[1]", "[\"*\"]", allowedJson + " true")) {
+        for (String invalid : List.of(" * ", "null", "{}", "[1]", "[\"*\"]", allowedJson + " true")) {
             expect(IllegalArgumentException.class, () -> AllowedEmailSenderFactory.parseRecipients(invalid));
         }
         Set<String> allowed = AllowedEmailSenderFactory.parseRecipients(allowedJson);
@@ -47,7 +47,10 @@ final class MailFenceTest {
         check(sent.isEmpty(), "a denied recipient reached the transport");
         sender.send(Map.of(), ALLOWED.toUpperCase(Locale.ROOT), "", "", "");
         sender.send(Map.of(), proxy(UserModel.class, "getEmail", ALLOWED), "", "", "");
-        check(sent.equals(List.of(ALLOWED, ALLOWED)), "approved recipients did not reach the transport");
+        var unrestricted = new AllowedEmailSenderFactory.Sender(transport, AllowedEmailSenderFactory.parseRecipients("*"));
+        unrestricted.send(Map.of(), "Other" + ALLOWED, "", "", "");
+        check(sent.equals(List.of(ALLOWED.toUpperCase(Locale.ROOT), ALLOWED, "Other" + ALLOWED)),
+            "transport should receive the original approved or unrestricted addresses");
     }
 
     private static void testPasswordReset() throws Exception {

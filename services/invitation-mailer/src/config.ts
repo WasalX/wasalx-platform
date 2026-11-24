@@ -72,18 +72,19 @@ export function loadInvitationMailerConfig(
 }
 
 function parseTestRecipients(raw: string | undefined) {
-  if (raw === undefined) return undefined;
   const name = "WASALX_TEST_EMAIL_RECIPIENT_ALLOWLIST";
+  const value = required(raw, name);
+  if (value === "*") return undefined;
   let entries: unknown;
   try {
-    entries = JSON.parse(raw.trim() || "[]");
+    entries = JSON.parse(value);
   } catch {
     throw new Error(`${name} must be a JSON array of email addresses`);
   }
   if (!Array.isArray(entries) || entries.some(entry => typeof entry !== "string")) {
     throw new Error(`${name} must be a JSON array of email addresses`);
   }
-  return new Set(entries.map((entry, index) => canonicalEmail(entry, `${name}[${index}]`)));
+  return new Set(entries.map((entry, index) => canonicalEmail(entry, `${name}[${index}]`, true)));
 }
 
 function parsePrivateKeyReferences(raw: string) {
@@ -144,14 +145,14 @@ function secretReference(value: string, name: string) {
   return value;
 }
 
-export function canonicalEmail(value: string, name: string) {
+export function canonicalEmail(value: string, name: string, allowReservedDomain = false) {
   const normalized = value.trim().toLowerCase();
   const domain = normalized.slice(normalized.lastIndexOf("@") + 1);
   if (
     normalized.length > 320 ||
     !/^[a-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[a-z0-9!#$%&'*+/=?^_`{|}~-]+)*@[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/u.test(normalized) ||
-    /(?:^|\.)(?:invalid|local|localhost|example|test)$/u.test(domain) ||
-    /(?:^|\.)example\.(?:com|net|org)$/u.test(domain)
+    (!allowReservedDomain && (/(?:^|\.)(?:invalid|local|localhost|example|test)$/u.test(domain)
+      || /(?:^|\.)example\.(?:com|net|org)$/u.test(domain)))
   ) {
     throw new Error(`${name} is invalid`);
   }
