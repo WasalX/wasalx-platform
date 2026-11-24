@@ -89,7 +89,7 @@ jobs:
             scripts/dev-install/templates/pull-agent.py scripts/dev-install/templates/wasalx-dev-pull.service \
             scripts/dev-install/templates/wasalx-dev-pull.timer scripts/dev-install/render.py \
             scripts/dev-install/test_pull_agent.py scripts/dev-install/pull-verify.mjs \
-            tests/pull-verify.test.mjs scripts/release/installer-hosted-images.mjs \
+            tests/pull-verify.test.mjs scripts/release/installer-hosted-images.mjs scripts/release/installer-hosted-bundles.py \
             scripts/release/cosign-pin.json .github/actions/cosign/action.yml \
             .github/workflows/nightly-install.yml; then
             echo 'pull=true' >> "$GITHUB_OUTPUT"
@@ -148,6 +148,9 @@ jobs:
           root="$TUF_ROOT/tuf-repo-cdn.sigstore.dev/targets/trusted_root.json"
           test -f "$root"
           echo "root=$root" >> "$GITHUB_OUTPUT"
+      - name: Stage published manifests and Sigstore bundles
+        if: steps.changes.outputs.needed != 'false' && (steps.migration-check.outputs.skip != 'true' || steps.changes.outputs.pull == 'true')
+        run: bash scripts/release/installer-nightly.sh stage-bundles
       - name: Verify the PR pull tooling against public GitHub, GHCR and Sigstore
         if: github.event_name == 'pull_request' && steps.changes.outputs.pull == 'true'
         timeout-minutes: 10

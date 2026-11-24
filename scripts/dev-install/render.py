@@ -178,7 +178,7 @@ def render_pull(identity, bundle):
     }
     for name in (
         "scripts/dev-install/pull-verify.mjs", "scripts/release/installer-hosted-images.mjs",
-        "scripts/release/cosign-pin.json", "release/installer-images.json",
+        "scripts/release/installer-hosted-bundles.py", "scripts/release/cosign-pin.json", "release/installer-images.json",
     ):
         files[name] = (ROOT / name).read_bytes()
     write_packet(bundle, files)

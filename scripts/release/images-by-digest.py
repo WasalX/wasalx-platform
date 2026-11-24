@@ -15,7 +15,6 @@ import tarfile
 import tempfile
 import time
 import urllib.request
-from urllib.error import HTTPError
 
 from image_registry_retry import retry
 
@@ -661,64 +660,9 @@ def verify_publication(manifest_path):
         verify_signatures(reference, commit=commit)
 
 
-def stage_hosted_bundles(manifest_path):
-    """Download exact public OCI bytes for the installer to verify offline."""
-    path = Path(manifest_path)
-    manifest = json.loads(path.read_bytes())
-    require(manifest == assemble(list(manifest["images"].values())), "Complete published manifest required")
-    types = {"https://sigstore.dev/cosign/sign/v1": "signature", "https://slsa.dev/provenance/v0.2": "provenance"}
-    for image, row in manifest["images"].items():
-        repository = "wasalx/" + image
-        with urllib.request.urlopen("https://ghcr.io/token?scope=repository:" + repository + ":pull", timeout=30) as response:
-            token = json.load(response)["token"]
-
-        def registry(kind, reference):
-            request = urllib.request.Request(f"https://ghcr.io/v2/{repository}/{kind}/{reference}", headers={
-                "Authorization": "Bearer " + token,
-                "Accept": ("application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json, "
-                           "application/vnd.docker.distribution.manifest.v2+json"),
-            })
-            with urllib.request.urlopen(request, timeout=30) as response:
-                raw = response.read(2**20 + 1)
-            require(len(raw) <= 2**20, "OCI metadata exceeds staging limit")
-            if kind != "referrers" and DIGEST.fullmatch(reference):
-                require(sha256(raw) == reference, "OCI object digest mismatch")
-            return raw
-
-        digest = row["digest"]
-        raw = registry("manifests", digest)
-        verify_manifest(json.loads(raw), row["configDigest"])
-        try:
-            index = json.loads(registry("referrers", digest))
-        except HTTPError as error:
-            if error.code != 404:
-                raise
-            index = json.loads(registry("manifests", digest.replace(":", "-")))
-        bundles = {}
-        for descriptor in index["manifests"]:
-            reference = descriptor["digest"]
-            require(DIGEST.fullmatch(reference), "Invalid OCI referrer digest")
-            referrer = json.loads(registry("manifests", reference))
-            if referrer.get("artifactType") != "application/vnd.dev.sigstore.bundle.v0.3+json":
-                continue
-            require(referrer["subject"]["digest"] == digest and len(referrer["layers"]) == 1, "Invalid Sigstore referrer")
-            blob_digest = referrer["layers"][0]["digest"]
-            require(DIGEST.fullmatch(blob_digest), "Invalid Sigstore blob digest")
-            blob = registry("blobs", blob_digest)
-            payload = json.loads(base64.b64decode(json.loads(blob)["dsseEnvelope"]["payload"], validate=True))
-            if (name := types.get(payload["predicateType"])) is not None:
-                bundles[name] = blob
-        require(set(bundles) == set(types.values()), "Signature and provenance bundles required")
-        destination = path.parent / image
-        destination.mkdir(mode=0o700)
-        (destination / "manifest.json").write_bytes(raw)
-        for name, blob in bundles.items():
-            (destination / f"{name}.sigstore.json").write_bytes(blob)
-
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=["matrix", "build", "pending", "publish", "assemble", "verify-publication", "stage-hosted-bundles", "loaded-config"])
+    parser.add_argument("command", choices=["matrix", "build", "pending", "publish", "assemble", "verify-publication", "loaded-config"])
     parser.add_argument("--image")
     diff = parser.add_mutually_exclusive_group()
     diff.add_argument("--pull-request", action="store_true")
@@ -744,15 +688,6 @@ if __name__ == "__main__":
         publish(args.output)
     elif args.command == "verify-publication":
         verify_publication(args.manifest)
-    elif args.command == "stage-hosted-bundles":
-        try:
-            stage_hosted_bundles(args.manifest)
-        except HTTPError as error:
-            sys.exit(f"hosted bundle staging reason: registry returned HTTP {error.code}")
-        except (urllib.error.URLError, TimeoutError):
-            sys.exit("hosted bundle staging reason: registry connection failed or timed out")
-        except (OSError, ValueError, KeyError, TypeError) as error:
-            sys.exit(f"hosted bundle staging reason: invalid or unreadable OCI metadata ({type(error).__name__})")
     elif args.command == "pending":
         pending(args.image, args.output)
     else:

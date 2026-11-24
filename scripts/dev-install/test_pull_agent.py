@@ -419,9 +419,9 @@ class PullTest(unittest.TestCase):
         bundle = self.work / "package"
         render.render_pull(identity, bundle)
         seals = (bundle / "SHA256SUMS").read_text().splitlines()
-        pin = Path("scripts/release/cosign-pin.json")
-        self.assertEqual((bundle / pin).read_bytes(), (HERE.parents[1] / pin).read_bytes())
-        self.assertTrue(any(entry.endswith(f"  {pin.as_posix()}") for entry in seals))
+        for file in ("scripts/release/cosign-pin.json", "scripts/release/installer-hosted-bundles.py"):
+            self.assertEqual((bundle / file).read_bytes(), (HERE.parents[1] / file).read_bytes())
+            self.assertTrue(any(entry.endswith(f"  {file}") for entry in seals))
         for entry in seals:
             digest, name = entry.split("  ")
             self.assertEqual(digest, sha256((bundle / name).read_bytes()).hexdigest())
@@ -470,15 +470,12 @@ def live():
         commit = agent.object_sha(json.loads(manifest_bytes)["commit"])
         reason = "anonymous API did not bind the publication to main"
         tree = agent.main_tree(api, commit)
-        reason = "cannot prepare the pinned Sigstore root or private manifest"
+        reason = "cannot prepare the pinned Sigstore root"
         config = {"cosign": args.cosign, "trusted_root": args.trust,
                   "trusted_root_sha256": sha256(args.trust.read_bytes()).hexdigest()}
-        with tempfile.TemporaryDirectory() as directory:
-            work = Path(directory) / agent.ASSET
-            work.write_bytes(manifest_bytes)
-            command, reason = "node scripts/dev-install/pull-verify.mjs", "cannot verify the main publication signatures"
-            # The verifier writes only redacted diagnostics to stderr and JSON refs to stdout.
-            refs = agent.verify(work, commit, tree, config, stderr=None, trace=True)
+        command, reason = "node scripts/dev-install/pull-verify.mjs", "cannot verify the main publication signatures"
+        # The verifier writes only redacted diagnostics to stderr and JSON refs to stdout.
+        refs = agent.verify(args.manifest, commit, tree, config, stderr=None, staged=True)
         command, reason = LIVE_COMMAND, "cannot validate the publication's Compose image references"
         compose = agent.compose_refs(api, commit, refs)
         print(f"PR_TOOLING={args.candidate} SIGNED_MAIN_PUBLICATION={commit} PRODUCT={len(refs)} COMPOSE={len(compose)} ANONYMOUS_API_GHCR_SIGSTORE=PASS")

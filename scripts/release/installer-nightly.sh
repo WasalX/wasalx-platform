@@ -61,11 +61,19 @@ if [[ "${1:-}" == cleanup ]]; then
 fi
 
 phase() {
-  local name=$1 limit=$2 started=$SECONDS status=0 command reason
+  local name=$1 limit=$2 started=$SECONDS status=0 command reason arg
   shift 2
   command=$1
   case "$1" in
-    node|python3) command="$1 $2" ;;
+    node) command="$1 $2" ;;
+    python3)
+      for arg in "${@:2}"; do
+        if [[ "$arg" == scripts/*.py ]]; then
+          command="$1 $arg"
+          break
+        fi
+      done
+      ;;
     docker) command='docker compose' ;;
   esac
   timeout "$limit" "$@" > "$work/$name.raw" 2>&1 || status=$?
@@ -96,6 +104,11 @@ phase() {
     exit "$status"
   fi
 }
+
+if [[ "${1:-}" == stage-bundles ]]; then
+  phase bundles 5m python3 -I -B scripts/release/installer-hosted-bundles.py "$work/images-manifest.json"
+  exit 0
+fi
 
 resources() {
   local name=$1
@@ -147,7 +160,6 @@ if ! git diff --quiet "$MAIN_SHA" "$commit" -- Dockerfile.foundation-keycloak co
   containers=$(inventory)
   test -z "$containers"
 fi
-phase bundles 5m python3 -B scripts/release/images-by-digest.py stage-hosted-bundles --manifest "$work/images-manifest.json"
 stage=(--env-file "$full_env" --project-name "$project" --rehearsal-main "$MAIN_SHA")
 manifest_hash=$(sha256sum "$work/images-manifest.json" | cut -d ' ' -f 1)
 hosted=(--hosted-images "$work/images-manifest.json" --hosted-images-sha256 "$manifest_hash"
