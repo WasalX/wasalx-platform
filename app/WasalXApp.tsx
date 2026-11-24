@@ -1896,7 +1896,7 @@ function Overview({
       <div className="metrics">
         <button onClick={() => navigate("connections")} className="metric">
           <span>
-            {t("tenant.overview.workingConnections")} <i className="info" aria-hidden="true">i</i>
+            {t("tenant.overview.workingConnections")}
           </span>
           <strong>
             {formatNumber(working, locale)}
@@ -1909,7 +1909,7 @@ function Overview({
         </button>
         <button onClick={() => navigate("groups")} className="metric">
           <span>
-            {t("tenant.overview.activeGroups")} <i className="info" aria-hidden="true">i</i>
+            {t("tenant.overview.activeGroups")}
           </span>
           <strong>{formatNumber(activeGroups, locale)}</strong>
           <footer>
@@ -1919,7 +1919,7 @@ function Overview({
         </button>
         <button onClick={() => navigate("deliveries")} className="metric">
           <span>
-            {t("tenant.overview.deliverySuccess")} <i className="info" aria-hidden="true">i</i>
+            {t("tenant.overview.deliverySuccess")}
           </span>
           <strong>{success===null?"—":formatNumber(success / 100, locale, { style:"percent", maximumFractionDigits:1 })}</strong>
           <footer>
@@ -1932,7 +1932,7 @@ function Overview({
           className={`metric ${attention ? "attention" : ""}`}
         >
           <span>
-            {t("tenant.overview.needsAttention")} <i className="info" aria-hidden="true">i</i>
+            {t("tenant.overview.needsAttention")}
           </span>
           <strong>{formatNumber(attention, locale)}</strong>
           <footer>
