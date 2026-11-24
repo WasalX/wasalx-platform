@@ -275,7 +275,7 @@ export async function verifyMetaPrimaryDelivery({admin,db,pool,controller,reques
   {id,tenantId,connectionId,provider:'meta'},
   {provider:'meta',connectionId,externalMessageId,scope:'MESSAGE',status:'FAILED',providerStatus:'FAILED',
    receiptKey:createHash('sha256').update(id).digest('hex'),timestamp:'2026-11-24T10:00:05.000Z',errorCodes:['131050'],metadata:{errorCount:1}});
- const receiptAuditCount=id=>worker(async c=>(await c.query(
+ const receiptAuditCount=id=>db.withTenant(tenantId,async c=>(await c.query(
   "SELECT count(*)::int n FROM audit_events WHERE tenant_id=$1 AND request_id=$2 AND action='whatsapp.marketing_preference_changed' AND new_value->>'reason'='PROVIDER_131050'",
   [tenantId,id])).rows[0].n);
  const preferenceRows=()=>worker(async c=>(await c.query(
