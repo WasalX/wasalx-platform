@@ -27,7 +27,12 @@ check = lambda do |name, &block|
     block.call
     proof << name
   rescue StandardError => error
-    failures << { name: name, error: error.message[0, 300] }
+    # Exception text can contain fixture credentials or request data.
+    frames = Array(error.backtrace_locations).filter_map do |frame|
+      file = File.basename(frame.path)
+      "#{file}:#{frame.lineno}" if %w[portal-workspace-native.rb mailbox-admin-native.rb].include?(file)
+    end
+    failures << { name: name, error: error.class.name, fixture_frames: frames.first(2) }
   end
 end
 
@@ -1372,9 +1377,10 @@ begin
     assert.call(before == [Ticket.count, Ticket::Article.count, User.count, WasalxTicketOperation.count], 'Privacy target confirmation wrote native effects')
   end
 
+  raise "Native diagnostic checks failed: #{JSON.generate(failures)}", cause: nil unless failures.empty?
+
   puts JSON.generate({ mode: 'isolated-native-diagnostic', native: Version.get, source: installed_identity,
     proof: proof, failures: failures, provider_admissions: admissions.length })
-  raise 'Native diagnostic failure union is nonempty' unless failures.empty?
 ensure
   Wasalx::Client.define_singleton_method(:post, original_post)
   Wasalx::Client.define_singleton_method(:get, original_get)

@@ -201,6 +201,10 @@ jobs:
             output/playwright/design-system
           retention-days: 7
 
+  privacy:
+    if: github.event_name != 'workflow_dispatch'
+    uses: ./.github/workflows/privacy.yml
+
   dependency-review:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
@@ -609,7 +613,7 @@ jobs:
 
   ci-gate:
     if: always()
-    needs: [changes, workflow-lint, dependency-review, checks, full-unit, images, integration, portal-integration, integration-coverage, infra-validate, dev-install-dryrun, zammad-compatibility]
+    needs: [changes, workflow-lint, privacy, dependency-review, checks, full-unit, images, integration, portal-integration, integration-coverage, infra-validate, dev-install-dryrun, zammad-compatibility]
     runs-on: ubuntu-slim
     timeout-minutes: 2
     permissions: {}
@@ -619,6 +623,7 @@ jobs:
           EVENT: ${{ github.event_name }}
           CHANGES: ${{ needs.changes.result }}
           WORKFLOW_LINT: ${{ needs.workflow-lint.result }}
+          PRIVACY: ${{ needs.privacy.result }}
           CHECKS: ${{ needs.checks.result }}
           FULL_UNIT: ${{ needs.full-unit.result }}
           REVIEW: ${{ needs.dependency-review.result }}
@@ -635,6 +640,10 @@ jobs:
           ZAMMAD_COMPATIBILITY: ${{ needs.zammad-compatibility.result }}
         run: |
           test "$WORKFLOW_LINT" = success || exit 1
+          case "$EVENT:$PRIVACY" in
+            pull_request:success|merge_group:success|push:success|workflow_dispatch:skipped) ;;
+            *) echo 'Privacy scan did not pass.'; exit 1 ;;
+          esac
           case "$EVENT:$ZAMMAD_NEEDED:$ZAMMAD_COMPATIBILITY" in
             *:*:success) ;;
             pull_request:false:skipped)

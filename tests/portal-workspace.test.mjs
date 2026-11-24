@@ -301,7 +301,8 @@ test("source navigation keeps exact UUID targets on WasalX and removes malformed
   const declaration = name => {
     const node = file.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === name);
     assert.ok(node, name);
-    return ts.transpileModule(node.getText(file), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+    // Shared helpers are exported from tenant-ui; the compiled declaration is evaluated as a plain function.
+    return ts.transpileModule(node.getText(file).replace(/^export /u, ""), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
   };
   const variable = file.statements.find(node => ts.isVariableStatement(node) && node.declarationList.declarations.some(item => item.name.getText(file) === "NAVIGATION_TARGET_KEYS"));
   assert.ok(variable);

@@ -40,7 +40,7 @@ let cleanupError = null;
 
 try {
   docker([
-    "run", "--detach", "--name", containerName,
+    "run", "--detach", "--pull=never", "--name", containerName,
     "--network", "none",
     "--label", "wasalx.io/purpose=dr-rehearsal",
     "--label", `wasalx.io/rehearsal-id=${rehearsalId}`,
@@ -141,7 +141,8 @@ async function waitForPostgres(containerName) {
   while (Date.now() < deadline) {
     const result = spawnSync(
       "docker",
-      ["exec", containerName, "pg_isready", "--username", "postgres", "--dbname", RESTORE_DATABASE],
+      // The image's temporary init server is socket-only.
+      ["exec", containerName, "pg_isready", "--host", "127.0.0.1", "--username", "postgres", "--dbname", RESTORE_DATABASE],
       { encoding: "utf8", timeout: 5_000 },
     );
     if (result.status === 0) return;
