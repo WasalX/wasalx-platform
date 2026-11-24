@@ -13,7 +13,7 @@ export async function POST(request: Request) {
       savedExamples?: Array<{ name:string; message:string; expectedMatches:string[]; sender?: "team" | "customer" | "unknown" }>;
     };
     if (!body.name?.trim() || !body.pattern?.trim()) return NextResponse.json({ error: "Name and expression are required." }, { status: 400 });
-    if (!isControlPlaneBackend() && body.matcherType === "advanced") return NextResponse.json({ error: "Advanced expression creation requires the Node control plane and its safe RE2 tester." }, { status: 422 });
+    if (!isControlPlaneBackend() && body.matcherType === "advanced") return NextResponse.json({ error: "Advanced expression creation requires the managed service." }, { status: 422 });
     const id = await createRule(body, principal.displayName, idempotencyKey);
     return NextResponse.json({ id }, { status: 201 });
   } catch (error) { try{return authErrorResponse(error)}catch{return NextResponse.json({ error: error instanceof Error ? error.message : "Invalid rule." }, { status: 400 })} }

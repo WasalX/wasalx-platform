@@ -168,7 +168,8 @@ jobs:
   storybook:
     needs: changes
     if: >-
-      ${{ !cancelled() && (github.event_name == 'push' ||
+      ${{ !cancelled() && (github.event_name == 'merge_group' || github.event_name == 'push' ||
+      github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'pull_request' && needs.changes.outputs.storybook != 'false')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -613,7 +614,7 @@ jobs:
 
   ci-gate:
     if: always()
-    needs: [changes, workflow-lint, privacy, dependency-review, checks, full-unit, images, integration, portal-integration, integration-coverage, infra-validate, dev-install-dryrun, zammad-compatibility]
+    needs: [changes, workflow-lint, storybook, privacy, dependency-review, checks, full-unit, images, integration, portal-integration, integration-coverage, infra-validate, dev-install-dryrun, zammad-compatibility]
     runs-on: ubuntu-slim
     timeout-minutes: 2
     permissions: {}
@@ -623,6 +624,8 @@ jobs:
           EVENT: ${{ github.event_name }}
           CHANGES: ${{ needs.changes.result }}
           WORKFLOW_LINT: ${{ needs.workflow-lint.result }}
+          STORYBOOK_NEEDED: ${{ needs.changes.outputs.storybook }}
+          STORYBOOK: ${{ needs.storybook.result }}
           PRIVACY: ${{ needs.privacy.result }}
           CHECKS: ${{ needs.checks.result }}
           FULL_UNIT: ${{ needs.full-unit.result }}
@@ -640,6 +643,10 @@ jobs:
           ZAMMAD_COMPATIBILITY: ${{ needs.zammad-compatibility.result }}
         run: |
           test "$WORKFLOW_LINT" = success || exit 1
+          case "$EVENT:$STORYBOOK_NEEDED:$STORYBOOK" in
+            *:*:success|pull_request:false:skipped) ;;
+            *) echo 'Storybook did not pass.'; exit 1 ;;
+          esac
           case "$EVENT:$PRIVACY" in
             pull_request:success|merge_group:success|push:success|workflow_dispatch:skipped) ;;
             *) echo 'Privacy scan did not pass.'; exit 1 ;;

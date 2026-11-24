@@ -57,7 +57,6 @@ test("Meta number release preserves reservation review and exact uncertain recov
 });
 
 test("Meta existing-number access stays paused and recovers without registration or replay", async ({ page }, testInfo) => {
-  test.setTimeout(150_000);
   test.skip(testInfo.project.name === "tablet-820");
   await metaAddAccessJourney(page, "ar", role, testInfo);
 });
@@ -69,7 +68,6 @@ test("Arabic Meta external routing preserves exact lost-response recovery and se
 });
 
 test("Meta Business app consent and inert imports preserve unknown and stopped states", async ({ page }, testInfo) => {
-  test.setTimeout(120_000);
   test.skip(testInfo.project.name === "tablet-820");
   await metaCoexistenceJourney(page, "ar", role, testInfo);
 });

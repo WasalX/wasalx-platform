@@ -45,7 +45,7 @@ test("connection wizard permits direct Meta with credentials and optional Groups
   assert.doesNotMatch(source, /Meta Groups connector is not enabled/);
 
   const createRoute = await read("app/api/connections/route.ts");
-  assert.match(createRoute, /Official Meta connections require the persistent control plane/);
+  assert.match(createRoute, /Official Meta connections require the managed service/);
   assert.doesNotMatch(createRoute, /!body\.eligibilityAccepted/);
   assert.match(source, /provider === "waha" && !accepted/);
   assert.match(source, /eligibilityVersion: provider === "meta" && accepted/);

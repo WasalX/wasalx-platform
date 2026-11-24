@@ -16,7 +16,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       return NextResponse.json(await fixture.retryPrivacyRequest(id, body.confirmation, idempotencyKey, principal.displayName), { status: 202 });
     }
     if (!isControlPlaneBackend()) {
-      return NextResponse.json({ error: "Privacy lifecycle requires the production control plane" }, { status: 503 });
+      return NextResponse.json({ error: "Privacy lifecycle requires the managed service" }, { status: 503 });
     }
     return NextResponse.json(await retryPrivacyRequest(id, body.confirmation, idempotencyKey), { status: 202 });
   } catch (error) {

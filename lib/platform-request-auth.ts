@@ -19,7 +19,7 @@ export async function authenticatePlatformCostSourceRequest(request: Request) {
 async function authenticate(request: Request, allowedMimeTypes: readonly string[]) {
   if (!isControlPlaneBackend()) {
     throw new PlatformPortalSessionError(
-      "The platform console is available only on the managed control plane",
+      "The platform console is available only in the managed service",
       404,
     );
   }
