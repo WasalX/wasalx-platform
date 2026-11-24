@@ -146,6 +146,11 @@ test("tracked tests belong to a named CI runner or the test allowlist", async ()
       case "playwright.identity.config.ts":
         return referencesFile(identity, "./tests/e2e")
           && posix.dirname(file) === "tests/e2e" && referencesFile(identity, posix.basename(file));
+      case "storybook":
+        return referencesFile(storybookRunner, "playwright.storybook.config.ts")
+          && referencesFile(storybook, "./tests/visual")
+          && commands(command).some(line =>
+            runsFile(line, "scripts/storybook-visual-regression.mjs", "--require-browser") && words(line).includes(file));
       case "test:visual":
         return runsFile(command, "scripts/storybook-visual-regression.mjs")
           && referencesFile(storybookRunner, "playwright.storybook.config.ts")
@@ -166,6 +171,30 @@ test("tracked tests belong to a named CI runner or the test allowlist", async ()
     return !/^not run in CI: \S/u.test(reason) || !(runnerRuns(runner, file) || runsFile(runner, file));
   }).map(([file]) => file);
   assert.deepEqual({ missing, stale, invalid }, { missing: [], stale: [], invalid: [] });
+});
+
+test("Storybook selects UI changes and unknown diffs", async (t) => {
+  const { jobs } = parse(await read(".github/workflows/ci.yml"));
+  const selection = jobs.changes.steps.find(step => step.id === "storybook");
+  assert.equal(selection.if, "github.event_name == 'pull_request'");
+  assert.equal(jobs.storybook.needs, "changes");
+  assert.match(jobs.storybook.if, /github\.event_name == 'push'/u);
+  assert.match(jobs.storybook.if, /github\.event_name == 'pull_request' && needs\.changes\.outputs\.storybook != 'false'/u);
+  assert(!jobs["ci-gate"].needs.includes("storybook"));
+
+  const directory = await mkdtemp(join(tmpdir(), "storybook-selection-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const output = join(directory, "output");
+
+  for (const [status, expected] of [[0, "false"], [1, "true"], [128, "true"]]) {
+    await writeFile(output, "");
+    const result = runWorkflowScript(
+      `git() { case " $* " in *" app/ "*) return "$DIFF_STATUS";; *) return 0;; esac; }\n${selection.run}`,
+      { DIFF_STATUS: String(status), GITHUB_OUTPUT: output },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal((await readFile(output, "utf8")).trim(), `needed=${expected}`);
+  }
 });
 
 test("nightly install is report-only, read-only and fails open on PR diff errors", async () => {
