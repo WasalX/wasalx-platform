@@ -151,16 +151,19 @@ test("new primitives consume tokens instead of feature-local color and spacing l
   }
 });
 
-test("portal styles use color, type, radius and elevation tokens", async () => {
-  const globals = await read("app/globals.css");
-  const drift = (pattern) => [...globals.matchAll(pattern)].map((match) => match[0]);
-  assert.deepEqual(drift(/#[\da-f]{3,8}\b|(?:rgb|hsl)a?\(|[:,(]\s*(?:white|black)\b(?!-)/giu), [], "colors must come from tokens.css");
-  assert.deepEqual(drift(/font-size\s*:\s*[\d.]+(?:px|r?em)|font\s*:\s*(?:\d{3}\s+)?[\d.]+(?:px|r?em)/giu), [], "font sizes must use --wx-font-size-*");
-  assert.deepEqual(drift(/radius\s*:(?!\s*(?:0\b|50%|revert\b|var\(--wx-radius-))[^;}]+/giu), [], "radii must use --wx-radius-*");
-  // Elevation is the control or dialog shadow; everything else is a flat, blur-free ring.
-  const shadows = drift(/box-shadow\s*:\s*[^;}]+/giu).map((declaration) => declaration.replace(/^box-shadow\s*:\s*/u, ""));
-  assert.deepEqual(shadows.filter((value) => !/^(?:none|var\(--shadow\)|0 1px 1px var\(--wx-color-control-shadow\)|(?:inset )?0 0 0 [^\s,]+ (?:var\([^()]*\)|color-mix\([^()]*(?:\([^()]*\)[^()]*)*\)))$/u.test(value)), [], "off-token shadow");
-  assert.doesNotMatch(globals, /@media([^{]+)\{(?:[^{}]*\{[^{}]*\})*[^{}]*\}\s*@media\1\{/u, "adjacent blocks for one breakpoint must be merged");
+test("portal and public styles use color, type, radius and elevation tokens", async () => {
+  for (const path of ["app/globals.css", "app/marketing.css"]) {
+    const css = await read(path);
+    const drift = (pattern) => [...css.matchAll(pattern)].map((match) => match[0]);
+    assert.deepEqual(drift(/#[\da-f]{3,8}\b|(?:rgb|hsl)a?\(|[:,(]\s*(?:white|black)\b(?!-)/giu), [], `${path}: colors must come from tokens.css`);
+    // Any raw length in a font size, also inside clamp(); fluid sizes run between tokens.
+    assert.deepEqual(drift(/font-size\s*:[^;}]*?[\d.](?:px|r?em)\b[^;}]*|font\s*:\s*(?:\d{3}\s+)?[\d.]+(?:px|r?em)/giu), [], `${path}: font sizes must use --wx-font-size-*`);
+    assert.deepEqual(drift(/radius\s*:(?!\s*(?:0\b|50%|revert\b|var\(--wx-radius-))[^;}]+/giu), [], `${path}: radii must use --wx-radius-*`);
+    // Elevation is the control or dialog shadow; everything else is a flat, blur-free ring.
+    const shadows = drift(/box-shadow\s*:\s*[^;}]+/giu).map((declaration) => declaration.replace(/^box-shadow\s*:\s*/u, "").trim());
+    assert.deepEqual(shadows.filter((value) => !/^(?:none|var\(--shadow\)|0 1px 1px var\(--wx-color-control-shadow\)|(?:inset )?0 0 0 [^\s,]+ (?:var\([^()]*\)|color-mix\([^()]*(?:\([^()]*\)[^()]*)*\)))$/u.test(value)), [], `${path}: off-token shadow`);
+    assert.doesNotMatch(css, /@media([^{]+)\{(?:[^{}]*\{[^{}]*\})*[^{}]*\}\s*@media\1\{/u, `${path}: adjacent blocks for one breakpoint must be merged`);
+  }
   const sideTabs = [];
   for (const path of await readdir(new URL("app/", root), { recursive: true })) {
     if (!path.endsWith(".css")) continue;
