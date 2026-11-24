@@ -660,7 +660,7 @@ test("portal UX has no dead operational controls and keeps sensitive content fai
   assert.match(app, /!isDuplicateIdentityRejection\(c\.action_reason\)/u);
   assert.match(app, /!isDuplicateIdentityRejection\(row\.action_reason\)/u);
   assert.match(css, /@media\(max-width:760px\).*\.top-actions>\.connect-number-action\{display:inline-grid;width:44px;min-width:44px;height:44px;min-height:44px;padding:0\}/su);
-  assert.match(css, /@media\(any-pointer:coarse\)\{:is\(button,input:where\(:not\(\[type="hidden"\]\):not\(\[type="checkbox"\]\):not\(\[type="radio"\]\)\),select,textarea[^}]*min-block-size:44px/u);
+  assert.match(css, /@media\(any-pointer:coarse\)\{:is\(button:not\(\.switch\),input:where\(:not\(\[type="hidden"\]\):not\(\[type="checkbox"\]\):not\(\[type="radio"\]\)\),select,textarea[^}]*min-block-size:44px/u);
   assert.match(css, /@media\(any-pointer:coarse\).*\.modal-head>button.*min-inline-size:44px/su);
   assert.match(css, /th,td,td small,\.status,[^\n]+font-size:var\(--wx-font-size-1\)/u);
   assert.doesNotMatch(css, /font-size:(?:9|10|11)px|font:(?:500|550|600|650) (?:9|10|11)px|font:9px/u);
