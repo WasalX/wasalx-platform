@@ -17,6 +17,10 @@ for (const key of [
   "http.request.body", "auth.token", "x-hub-signature-256",
   "message", "title", "title_id", "filename", "filename_id", "group_name", "group_name_id",
   "url", "reference", "mEsSaGe_Id",
+  "wa_id", "waId", "WA_ID", "waIds", "participant", "participants", "author", "authors",
+  "customer_name", "customerName", "agentName", "profile_name", "profile.name", "nickname",
+  "cc", "headers.bcc", "reply_to", "replyTo", "mail_from", "address",
+  "access_key", "accessKeyId", "passphrase", "hmac",
 ]) {
   test(`structured logs redact ${key}`, () => {
     assert.deepEqual(redactLogValue({ [key]: "synthetic value" }), { [key]: "[REDACTED]" });
@@ -39,6 +43,25 @@ test("structured logs preserve record identifiers and unrelated fields", () => {
   assert.deepEqual(redactLogValue(fields), fields);
 });
 
+test("structured logs preserve internal UUIDs and message counters", () => {
+  const internalId = "10000000-0000-4000-8000-000000000001";
+  const fields = {
+    contact_id: internalId, senderId: internalId, subject_id: internalId, emailID: internalId,
+    message_count: 3, messagesSent: 2,
+  };
+  assert.deepEqual(redactLogValue(fields), fields);
+  assert.deepEqual(redactLogValue({ contact_id: "12025550102", message_count: "fixture message" }), {
+    contact_id: "[REDACTED]", message_count: "[REDACTED]",
+  });
+});
+
+test("structured logs redact phone-shaped numbers and digit strings", () => {
+  assert.deepEqual(redactLogValue({
+    wa_id: 12025550102,
+    detail: [12025550102, "12025550102", 42, "12345"],
+  }), { wa_id: "[REDACTED]", detail: ["[PHONE]", "[PHONE]", 42, "12345"] });
+});
+
 test("structured logs redact provider message and chat identifiers", () => {
   const wahaId = "false_12025550102@c.us_SAMPLE";
   const metaId = "wamid.MTIwMjU1NTAxMDI=";
@@ -52,6 +75,9 @@ test("structured logs redact provider message and chat identifiers", () => {
     externalChatIDs: ["12025550102"],
     id: metaId,
     detail: `Received ${wahaId}`,
+    group: "Received false_123456789-123456789@g.us_SAMPLE_12025550102@c.us.",
+    linked: "Received false_123456789@g.us_SAMPLE_12025550102@lid.",
+    bareLink: "Received 12025550102@lid.",
   }), {
     message_id: "[REDACTED]",
     message_ids: "[REDACTED]",
@@ -62,6 +88,9 @@ test("structured logs redact provider message and chat identifiers", () => {
     externalChatIDs: "[REDACTED]",
     id: "[REDACTED]",
     detail: "Received [REDACTED]",
+    group: "Received [REDACTED].",
+    linked: "Received [REDACTED].",
+    bareLink: "Received [REDACTED].",
   });
 });
 
@@ -93,6 +122,33 @@ test("structured logs scrub email addresses from free text and unlabeled array i
     detail: "Sent to <[EMAIL]>.",
     entries: ["[EMAIL]", "missing address", { detail: "[EMAIL]" }],
   });
+});
+
+test("structured logs bound long value scans and skip the email regex when there is no at-sign", (t) => {
+  const prefix = "fixture-log ";
+  const value = prefix.padEnd(1_000_000, "x");
+  const exec = RegExp.prototype.exec;
+  let longestInput = 0;
+  let scannedForEmail = false;
+  const scan = t.mock.method(RegExp.prototype, "exec", function (this: RegExp, input: string) {
+    if (input.startsWith(prefix)) {
+      longestInput = Math.max(longestInput, input.length);
+      scannedForEmail ||= this.source.startsWith("[\\p{L}\\p{N}.");
+    }
+    return exec.call(this, input);
+  });
+  const actual = redactLogValue(value);
+  scan.mock.restore();
+  assert.equal(actual, `${value.slice(0, 2_000)}…`);
+  assert.deepEqual({ boundedInput: longestInput <= 2_400, scannedForEmail }, {
+    boundedInput: true, scannedForEmail: false,
+  });
+});
+
+test("structured logs scrub addresses that straddle the output limit", () => {
+  const prefix = "x ".repeat(994);
+  const value = `${prefix}<fixture@example.test> ${"x".repeat(2_400)}`;
+  assert.equal(redactLogValue(value), `${prefix}<[EMAIL]> xx…`);
 });
 
 test("structured log redaction still applies to credentials with identifier suffixes", () => {

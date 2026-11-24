@@ -13,14 +13,19 @@ import {
 const INSTRUMENTATION_NAME = "io.wasalx.platform";
 const INSTRUMENTATION_VERSION = "0.1.0";
 
-const sensitiveKey = /(?:^|_)(?:body|text|payload|secret|token|authorization|cookie|password|qr|pass_?key|phone|reference|url|group_name|messages?|title|filename|api_key|credentials?|private_key|signature|t?otp)(?:_|$)/iu;
+const sensitiveKey = /(?:^|_)(?:body|text|payload|secret|token|authorization|cookie|password|qr|pass_?key|phone|reference|url|group_name|messages?|title|filename|api_key|access_key|credentials?|private_key|signature|t?otp|passphrase|hmac)(?:_|$)/iu;
 // Provider message, chat, and recipient identifiers can contain phone numbers.
-const personalFieldKey = /(?:^|_)(?:e_?mails?|recipients?|subjects?|contacts?|senders?|user_?names?|push_?names?|chat_ids?|wamids?|(?:first|last|full|display|recipient)_names?)(?:_|$)|^names?$/iu;
-const addressKey = /(?:^|\.)(?:to|from)$/iu;
-const providerMessageIdLike = /\b(?:wamid\.[A-Za-z0-9+/_=-]+|(?:true|false)_[\d-]+@(?:c\.us|g\.us|lid|s\.whatsapp\.net)_[A-Za-z0-9_-]+)/gu;
-const emailLike = /[\p{L}\p{N}.!#$%&'*+/=?^_`{|}~-]{1,64}@[\p{L}\p{N}-]{1,63}(?:\.[\p{L}\p{N}-]{1,63})+/gu;
-// Phone matching requires an international prefix or phone-style separators.
+const personalFieldKey = /(?:^|_)(?:e_?mails?|recipients?|subjects?|contacts?|senders?|user_?names?|push_?names?|chat_ids?|wamids?|wa_?ids?|participants?|authors?|nicknames?|(?:first|last|full|display|recipient|customer|agent|profile|nick)_names?)(?:_|$)|^names?$/iu;
+const addressKey = /(?:^|\.)(?:to|from|cc|bcc|reply[ _-]?to|mail[ _-]?from|address)$/iu;
+const internalIdKey = /^(?:contact|sender|subject|e_?mail)_id$/iu;
+const messageCounterKey = /^messages?_(?:count|sent)$/iu;
+const providerMessageIdLike = /\b(?:wamid\.[A-Za-z0-9+/_=-]+|(?:true|false)_[\d-]+@(?:c\.us|g\.us|lid|s\.whatsapp\.net)_[A-Za-z0-9_-]+(?:@(?:c\.us|lid|s\.whatsapp\.net))?|[\d-]+@lid\b(?!-|\.[\p{L}\p{N}-]))/gu;
+const emailLike = /[\p{L}\p{N}.!#$%&'*+/=?^`{|}~-]{1,64}@[\p{L}\p{N}-]{1,63}(?:\.[\p{L}\p{N}-]{1,63})+/gu;
+const barePhoneLike = /^[1-9]\d{9,14}$/u;
 const phoneLike = /(?:\+\d[\d\s()-]{7,}\d|\b\d{2,4}(?:[ ()]\d{2,4}){2,}\b)/gu;
+const logTextLimit = 2_000;
+// Scan past the output limit to catch addresses that cross it.
+const logScanLimit = logTextLimit + 400;
 const bearerLike = /\b(?:bearer|basic)\s+[A-Za-z0-9._~+/=-]+/giu;
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const requestIdPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
@@ -112,20 +117,28 @@ export function redactLogValue(value: unknown, key = ""): unknown {
     .replace(/IDs(?=$|[^a-z])/gu, "Ids")
     .replace(/([A-Z])([A-Z][a-z])/gu, "$1_$2")
     .replace(/([a-z0-9])([A-Z])/gu, "$1_$2");
-  if (
+  if (typeof value === "string" && internalIdKey.test(normalizedKey) && uuidPattern.test(value)) {
+    return value;
+  }
+  const messageCounter = typeof value === "number" && Number.isSafeInteger(value) && value >= 0 &&
+    messageCounterKey.test(normalizedKey);
+  if (!messageCounter && (
     sensitiveKey.test(separatedKey) || sensitiveKey.test(normalizedKey) ||
     personalFieldKey.test(separatedKey) || personalFieldKey.test(normalizedKey) ||
     addressKey.test(key)
-  ) {
+  )) {
     return "[REDACTED]";
   }
+  if (typeof value === "number" && barePhoneLike.test(String(value))) return "[PHONE]";
   if (typeof value === "string") {
-    const cleaned = value
-      .replace(bearerLike, "[CREDENTIAL]")
-      .replace(providerMessageIdLike, "[REDACTED]")
-      .replace(emailLike, "[EMAIL]")
+    const prefix = value.slice(0, logScanLimit);
+    if (barePhoneLike.test(prefix)) return "[PHONE]";
+    const scrubbed = prefix.replace(bearerLike, "[CREDENTIAL]").replace(providerMessageIdLike, "[REDACTED]");
+    const cleaned = (scrubbed.includes("@") ? scrubbed.replace(emailLike, "[EMAIL]") : scrubbed)
       .replace(phoneLike, "[PHONE]");
-    return cleaned.length > 2_000 ? `${cleaned.slice(0, 2_000)}…` : cleaned;
+    return value.length > prefix.length || cleaned.length > logTextLimit
+      ? `${cleaned.slice(0, logTextLimit)}…`
+      : cleaned;
   }
   if (Array.isArray(value)) return value.slice(0, 50).map((item) => redactLogValue(item));
   if (value && typeof value === "object") {
