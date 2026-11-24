@@ -49,20 +49,21 @@ export class InboundProcessor {
   }
 
   private async process(event: InboundEvent, leaseId: string) {
+    const appId = event.metaWebhookAppId ?? this.appId ?? "";
     let reviewContext: (InboundContext|DirectBotContext) | undefined;
     let reviewMessage: ProviderMessage | undefined;
     let reprocessReplyToMessageId: string | undefined;
     try {
       if (event.eventType.startsWith("meta.coexistence.")) {
-        await this.repository.projectCoexistence(event, leaseId, this.appId ?? "");
+        await this.repository.projectCoexistence(event, leaseId, appId);
         return false;
       }
       if(event.eventType==="meta.routing.passive"||event.eventType==="meta.routing.unresolved"){
-        await this.repository.applyMetaRouting(event,leaseId,this.appId??"");
+        await this.repository.applyMetaRouting(event,leaseId,appId);
         return false;
       }
       if(event.eventType.startsWith("meta.account.lifecycle.")){
-        await this.repository.applyMetaLifecycle(event,leaseId,this.appId??"");
+        await this.repository.applyMetaLifecycle(event,leaseId,appId);
         return false;
       }
       let receiptRejection: WahaReceiptRejection | undefined;
@@ -202,7 +203,7 @@ export class InboundProcessor {
         const change=await new MetaGroupsAdapter({accessToken:"unused-token-value",graphVersion:"v1.0",phoneNumberIdFor:()=>"unused"})
           .normalizeIdentityChangeWebhook(event.connectionId,event.payload);
         if(change){
-          await this.repository.applyMetaIdentityTransition(event,leaseId,change.change,this.appId??"");
+          await this.repository.applyMetaIdentityTransition(event,leaseId,change.change,appId);
           return false;
         }
       }
@@ -216,9 +217,9 @@ export class InboundProcessor {
           await this.repository.complete(event,leaseId,"IGNORED",true,"PROVIDER_MESSAGE_BEFORE_ADMISSION_WINDOW");
           return false;
         }
-        if(event.provider==="meta")direct=await this.repository.resolveMetaDirectMessage(event,leaseId,direct,this.appId??"");
+        if(event.provider==="meta")direct=await this.repository.resolveMetaDirectMessage(event,leaseId,direct,appId);
         const canonical=direct.chatId;
-        const assertIdentity=async()=>{if(event.provider==="meta")await this.repository.assertMetaDirectIdentityCurrent(event,leaseId,canonical,this.appId??"");};
+        const assertIdentity=async()=>{if(event.provider==="meta")await this.repository.assertMetaDirectIdentityCurrent(event,leaseId,canonical,appId);};
         const context=await this.repository.directContext(event,direct.chatId,direct.senderId,direct.senderPhone);
         if(!context){
           await this.repository.complete(event,leaseId,"IGNORED",true,"DIRECT_BOT_NOT_ASSIGNED");
@@ -740,7 +741,7 @@ export class InboundProcessor {
       if(!providerContext.metaCredentialContext)throw new InboundValidationError("Meta credential context is unavailable");
       assertMetaLifecycleAccess(providerContext.metaCredentialContext.lifecycle);
       const proof=await this.repository.currentMetaCredentialProof(event,providerContext.connectionSecretReference,providerContext.metaCredentialContext);
-      assertMetaCredentialProof(proof,{appId:this.appId??"",accessToken});
+      assertMetaCredentialProof(proof,{appId:event.metaWebhookAppId??this.appId??"",accessToken});
     }:undefined;
     return this.media.prepare({
       tenantId: event.tenantId,

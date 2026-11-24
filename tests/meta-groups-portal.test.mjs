@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { access, readFile } from "node:fs/promises";
 import test from "node:test";
+import { readTenantPortalSource } from "./helpers/tenant-portal-source.mjs";
 import { englishTenantMessages } from "../lib/i18n/messages/en/tenant.ts";
 import { createReplaceableRequestController } from "../lib/meta-capability-request.ts";
 
@@ -27,7 +28,7 @@ test("portal publishes a tenant-authorized, no-store official Meta Groups BFF", 
 });
 
 test("connection wizard permits direct Meta with credentials and optional Groups consent", async () => {
-  const source = await read("app/WasalXApp.tsx");
+  const source = await readTenantPortalSource();
   for (const key of [
     "tenant.setup.providers.metaMeta",
     "tenant.setup.review.metaTitle",
@@ -56,7 +57,7 @@ test("connection wizard permits direct Meta with credentials and optional Groups
 });
 
 test("later Groups opt-in uses existing sync and pins the consent in the retry intent", async () => {
-  const source = await read("app/WasalXApp.tsx");
+  const source = await readTenantPortalSource();
   assert.match(source, /action === "sync" && detail\?\.provider === "META" && !detail\.disclosure_version && metaGroupsAccepted/);
   assert.match(source, /body: JSON\.stringify\(intent\.body\)/);
   assert.match(source, /capability\?\.state === "CONSENT_REQUIRED"/);
@@ -67,7 +68,7 @@ test("later Groups opt-in uses existing sync and pins the consent in the retry i
 });
 
 test("existing Meta connections can replace an expired token without recreating the connection", async () => {
-  const source = await read("app/WasalXApp.tsx");
+  const source = await readTenantPortalSource();
   const rotation = source.slice(
     source.indexOf("function MetaCredentialRotation("),
     source.indexOf("type MetaCapabilityView"),
@@ -102,7 +103,7 @@ test("existing Meta connections can replace an expired token without recreating 
 });
 
 test("official group creation UI stays fail closed until a live provider probe succeeds", async () => {
-  const source = await read("app/WasalXApp.tsx");
+  const source = await readTenantPortalSource();
   for (const key of [
     "tenant.connection.officialGroups.body",
     "tenant.connection.officialGroups.unverifiedBody",

@@ -38,8 +38,8 @@ test("rejects unsafe action identifiers and invalid locations", () => {
 });
 
 test("uses truthful provider capability fallbacks", () => {
-  assert.deepEqual(directMessageCapabilities("waha"), { choices: "NUMBERED_TEXT", location: true, metaFlows: false, templates: false });
-  assert.deepEqual(directMessageCapabilities("meta"), { choices: "BUTTONS", location: true, metaFlows: false, templates: true });
+  assert.deepEqual(directMessageCapabilities("waha"), { choices: "NUMBERED_TEXT", location: true, metaFlows: false, templates: false, customerServiceWindowSeconds: null });
+  assert.deepEqual(directMessageCapabilities("meta"), { choices: "BUTTONS", location: true, metaFlows: false, templates: true, customerServiceWindowSeconds: 86_400 });
 });
 
 test("sends approved templates and advances only a matching WhatsApp form response", () => {

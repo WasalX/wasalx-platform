@@ -151,16 +151,19 @@ test("new primitives consume tokens instead of feature-local color and spacing l
   }
 });
 
-test("portal styles use color, type, radius and elevation tokens", async () => {
-  const globals = await read("app/globals.css");
-  const drift = (pattern) => [...globals.matchAll(pattern)].map((match) => match[0]);
-  assert.deepEqual(drift(/#[\da-f]{3,8}\b|(?:rgb|hsl)a?\(|[:,(]\s*(?:white|black)\b(?!-)/giu), [], "colors must come from tokens.css");
-  assert.deepEqual(drift(/font-size\s*:\s*[\d.]+(?:px|r?em)|font\s*:\s*(?:\d{3}\s+)?[\d.]+(?:px|r?em)/giu), [], "font sizes must use --wx-font-size-*");
-  assert.deepEqual(drift(/radius\s*:(?!\s*(?:0\b|50%|revert\b|var\(--wx-radius-))[^;}]+/giu), [], "radii must use --wx-radius-*");
-  // Elevation is the control or dialog shadow; everything else is a flat, blur-free ring.
-  const shadows = drift(/box-shadow\s*:\s*[^;}]+/giu).map((declaration) => declaration.replace(/^box-shadow\s*:\s*/u, ""));
-  assert.deepEqual(shadows.filter((value) => !/^(?:none|var\(--shadow\)|0 1px 1px var\(--wx-color-control-shadow\)|(?:inset )?0 0 0 [^\s,]+ (?:var\([^()]*\)|color-mix\([^()]*(?:\([^()]*\)[^()]*)*\)))$/u.test(value)), [], "off-token shadow");
-  assert.doesNotMatch(globals, /@media([^{]+)\{(?:[^{}]*\{[^{}]*\})*[^{}]*\}\s*@media\1\{/u, "adjacent blocks for one breakpoint must be merged");
+test("portal and public styles use color, type, radius and elevation tokens", async () => {
+  for (const path of ["app/globals.css", "app/marketing.css"]) {
+    const css = await read(path);
+    const drift = (pattern) => [...css.matchAll(pattern)].map((match) => match[0]);
+    assert.deepEqual(drift(/#[\da-f]{3,8}\b|(?:rgb|hsl)a?\(|[:,(]\s*(?:white|black)\b(?!-)/giu), [], `${path}: colors must come from tokens.css`);
+    // Any raw length in a font size, also inside clamp(); fluid sizes run between tokens.
+    assert.deepEqual(drift(/font-size\s*:[^;}]*?[\d.](?:px|r?em)\b[^;}]*|font\s*:\s*(?:\d{3}\s+)?[\d.]+(?:px|r?em)/giu), [], `${path}: font sizes must use --wx-font-size-*`);
+    assert.deepEqual(drift(/radius\s*:(?!\s*(?:0\b|50%|revert\b|var\(--wx-radius-))[^;}]+/giu), [], `${path}: radii must use --wx-radius-*`);
+    // Elevation is the control or dialog shadow; everything else is a flat, blur-free ring.
+    const shadows = drift(/box-shadow\s*:\s*[^;}]+/giu).map((declaration) => declaration.replace(/^box-shadow\s*:\s*/u, "").trim());
+    assert.deepEqual(shadows.filter((value) => !/^(?:none|var\(--shadow\)|0 1px 1px var\(--wx-color-control-shadow\)|(?:inset )?0 0 0 [^\s,]+ (?:var\([^()]*\)|color-mix\([^()]*(?:\([^()]*\)[^()]*)*\)))$/u.test(value)), [], `${path}: off-token shadow`);
+    assert.doesNotMatch(css, /@media([^{]+)\{(?:[^{}]*\{[^{}]*\})*[^{}]*\}\s*@media\1\{/u, `${path}: adjacent blocks for one breakpoint must be merged`);
+  }
   const sideTabs = [];
   for (const path of await readdir(new URL("app/", root), { recursive: true })) {
     if (!path.endsWith(".css")) continue;
@@ -168,6 +171,19 @@ test("portal styles use color, type, radius and elevation tokens", async () => {
     for (const [match] of css.matchAll(/border-(?:inline-start|inline-end|left|right)(?:-width)?\s*:\s*(?:[2-9]|\d{2,})|box-shadow\s*:\s*inset\s+(?!0\s)[^;}]+/gu)) sideTabs.push(`${path}: ${match}`);
   }
   assert.deepEqual(sideTabs, [], "no thick one-side accent borders");
+});
+
+test("working surfaces are flat: gradients stay on the brand mark, chart grid and skeletons", async () => {
+  const allowed = new Set([".brand-mark", ".operatorMark", ".chart-grid", ".group-skeleton", ".review-loading span", ".skeleton span", ".wx-skeleton-stack span"]);
+  const gradients = [];
+  for (const path of await readdir(new URL("app/", root), { recursive: true })) {
+    if (!path.endsWith(".css")) continue;
+    const css = (await read(`app/${path.replaceAll("\\", "/")}`)).replace(/\/\*[\s\S]*?\*\//gu, "");
+    for (const [, selector, body] of css.matchAll(/([^{}]*)\{([^{}]*)\}/gu)) {
+      if (/(?:linear|radial|conic)-gradient\(/u.test(body) && !allowed.has(selector.trim())) gradients.push(`${path}: ${selector.trim()}`);
+    }
+  }
+  assert.deepEqual(gradients, [], "use flat token surfaces on working surfaces");
 });
 
 test("form controls keep a visible keyboard focus ring, also in forced colors", async () => {
@@ -183,6 +199,15 @@ test("form controls keep a visible keyboard focus ring, also in forced colors", 
     }
   }
   assert.deepEqual(removals, [], "form-control rules must not remove the shared focus outline");
+});
+
+test("toggle switches keep a 31 x 18 track with a 44 x 44 hit area on coarse pointers", async () => {
+  const globals = await read("app/globals.css");
+  const [, width, height] = globals.match(/\.switch\{[^}]*width:(\d+)px;height:(\d+)px/u);
+  const coarse = globals.match(/@media\(any-pointer:coarse\)\{:is\(button[^{]*\{min-block-size:44px\}.*?\}\}/u)[0];
+  assert.match(coarse, /^@media\(any-pointer:coarse\)\{:is\(button:not\(\.switch\),/u, "the 44 px button minimum must not stretch the switch track");
+  const [, block, inline] = coarse.match(/\.switch::after\{content:"";position:absolute;inset:-([\d.]+)px -([\d.]+)px\}/u);
+  assert.deepEqual([Number(width) + 2 * Number(inline), Number(height) + 2 * Number(block)], [44, 44]);
 });
 
 test("the production portal consumes governed tokens without duplicate theme values", async () => {
@@ -282,5 +307,16 @@ test("platform case-service labels keep backend identifiers out of visible copy"
     assert.match(messages, /"platform\.states\.zammad":/u);
   }
   assert.match(console, /zammadVersion: String\(data\.get\("zammadVersion"\)\)/u);
+});
+
+test("group selection checkboxes have 24 px targets and 44 px targets on coarse pointers", async () => {
+  const app = await read("app/Groups.tsx");
+  const globals = await read("app/globals.css");
+  const cells = [...app.matchAll(/<t[hd] className="select-column">(.*?)<\/t[hd]>/gu)].map((match) => match[1]);
+  assert.equal(cells.length, 2);
+  for (const cell of cells) assert.match(cell, /^<label><input type="checkbox" .*aria-label=\{t\(.*"tenant\.group\.selection\.[\w.]+".*\/><\/label>$/u, "each checkbox sits in its label hit area and keeps its accessible name");
+  const size = (css) => css.match(/\.select-column label\{[^}]*min-inline-size:(\d+)px;min-block-size:(\d+)px/u).slice(1).map(Number);
+  assert.deepEqual(size(globals), [24, 24]);
+  assert.deepEqual(size(globals.match(/@media\(any-pointer:coarse\)\{\.select-column\{[^}]*\}[^}]*\}\}/u)[0]), [44, 44]);
 });
 

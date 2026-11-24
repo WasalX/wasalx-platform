@@ -176,6 +176,7 @@ services:
       PUBLIC_PORTAL_BASE_URL: ${PUBLIC_PORTAL_BASE_URL:-http://localhost:3000}
       NOTION_OAUTH_CLIENT_ID: ${NOTION_OAUTH_CLIENT_ID:-}
       NOTION_OAUTH_CLIENT_SECRET_REFERENCE: ${NOTION_OAUTH_CLIENT_SECRET_REFERENCE:-}
+      BOT_HANDOFF_MAX_ATTEMPTS:
     depends_on:
       migrate: { condition: service_completed_successfully }
       runtime-role-bootstrap: { condition: service_completed_successfully }
@@ -220,6 +221,8 @@ services:
       WAHA_DELIVERY_MAX_ATTEMPTS: ${WAHA_DELIVERY_MAX_ATTEMPTS:-8}
       META_DELIVERY_MAX_ATTEMPTS: ${META_DELIVERY_MAX_ATTEMPTS:-8}
       ZAMMAD_STATUS_MAX_ATTEMPTS: ${ZAMMAD_STATUS_MAX_ATTEMPTS:-8}
+      BOT_ACTION_MAX_ATTEMPTS:
+      BOT_HANDOFF_MAX_ATTEMPTS:
       WORKER_CONCURRENCY: "4"
       INBOUND_WORKER_CONCURRENCY: "4"
     depends_on:
@@ -260,6 +263,7 @@ services:
       INVITATION_EMAIL_PROVIDER_SECRET_REFERENCE: ${INVITATION_EMAIL_PROVIDER_SECRET_REFERENCE:-secret://platform/invitation-email-provider}
       INVITATION_EMAIL_FROM: ${INVITATION_EMAIL_FROM:-support@wasalx.invalid}
       INVITATION_EMAIL_TEMPLATE_ID: ${INVITATION_EMAIL_TEMPLATE_ID:-wasalx-invitation-v1}
+      WASALX_TEST_EMAIL_RECIPIENT_ALLOWLIST: ${WASALX_TEST_EMAIL_RECIPIENT_ALLOWLIST:-[]}
       PORTAL_PUBLIC_ORIGIN: ${PORTAL_PUBLIC_ORIGIN:-http://localhost:3000}
     depends_on:
       migrate: { condition: service_completed_successfully }
