@@ -9,7 +9,7 @@ export async function captureTenantDesign(
     inbox: page.getByRole("heading", { name: messages["inbox.empty"], exact: true }),
     cases: page.getByRole("row", { name: /1234567890.*10382/u }),
     settings: page.getByRole("tabpanel", { name: messages["tenant.settings.sections.general"], exact: true }),
-    groups: page.getByRole("row", { name: /Riyadh ? Last mile/u }),
+    groups: page.getByRole("row").filter({ has: page.getByText("Riyadh \u00b7 Last mile", { exact: true }) }),
   };
   await open(page, "overview");
   for (const theme of ["dark", "light"]) {
