@@ -4,6 +4,7 @@ import { readFile, stat, mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { decryptBackup } from "../scripts/dr/decrypt-backup.mjs";
+import { rehearseControlPlaneBackup } from "../scripts/dr/rehearse-control-plane-backup.mjs";
 import test from "node:test";
 import {
   DrContractError,
@@ -282,6 +283,108 @@ test("restore runner cannot target a database endpoint and keeps the disposable 
   assert.match(script, /docker", \["rm", "--force", "--volumes"/);
   assert.match(script, /flag: "wx"/);
   assert.match(script, /@sha256:[0-9a-f]{64}/);
+  assert.match(script, /"pg_isready", "--host", "127\.0\.0\.1"/u);
+});
+
+test("quarterly restore uses the exact archive version and cleans scratch on failure", async t => {
+  const directory = await mkdtemp(join(tmpdir(), "wasalx-dr-quarterly-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const value = manifest();
+  const environment = {
+    BACKUP_S3_BUCKET: value.storage.bucket, BACKUP_S3_REGION: value.workload.region,
+    BACKUP_S3_ENDPOINT: "https://s3.example.test", CACHE_DIRECTORY: directory, STATE_DIRECTORY: directory,
+  };
+  const calls = [];
+  let failedStage;
+  let source = value;
+  let scratch;
+  const run = async (program, args) => {
+    const manifestKey = `${source.storage.objectKey}.manifest.json`;
+    if (program === process.execPath) {
+      if (args[0].endsWith("decrypt-backup.mjs")) {
+        calls.push("decrypt");
+        assert.deepEqual(args.slice(1), [
+          join(scratch, "manifest.json"), join(scratch, "artifact"), environment.BACKUP_AGE_IDENTITY,
+          join(scratch, "restore.dump"),
+        ]);
+        await writeFile(args.at(-1), "synthetic plaintext");
+        return { stdout: "" };
+      }
+      calls.push("restore");
+      assert.match(args[0], /rehearse-postgres-restore\.mjs$/u);
+      assert.equal(args[4], join(scratch, failedStage === "client" ? "restore.dump" : "artifact"));
+      if (failedStage === "restore") throw new Error("sensitive diagnostics");
+      await writeFile(args.at(-1), "synthetic evidence");
+      return { stdout: "" };
+    }
+    assert.equal(program, "aws");
+    if (args.includes("list-objects-v2")) {
+      assert.equal(args[args.indexOf("--prefix") + 1], "control-plane/backups/");
+      calls.push("list");
+      return { stdout: JSON.stringify(manifestKey) };
+    }
+    const key = args[args.indexOf("--key") + 1];
+    const destination = args.at(-1);
+    if (key === manifestKey) {
+      calls.push("manifest");
+      scratch = join(destination, "..");
+      const manifestSha256 = validateBackupManifest(source, now).manifestSha256;
+      await writeFile(destination, JSON.stringify({ ...source, manifestSha256 }));
+      return { stdout: JSON.stringify("manifest-version") };
+    }
+    calls.push("artifact");
+    assert.equal(key, source.storage.objectKey);
+    assert.equal(args[args.indexOf("--version-id") + 1], value.storage.objectVersionId);
+    await writeFile(destination, "synthetic dump");
+    const version = failedStage === "artifact" ? "wrong-version" : value.storage.objectVersionId;
+    return { stdout: JSON.stringify(version) };
+  };
+  for (const [failure, expected, steps] of [
+    [undefined, null, ["list", "manifest", "artifact", "restore"]],
+    ["client", null, ["list", "manifest", "artifact", "decrypt", "restore"]],
+    ["identity", /requires a recovery identity/u, ["list", "manifest"]],
+    ["artifact", /version could not be verified/u, ["list", "manifest", "artifact"]],
+    ["restore", /Disposable PostgreSQL restore failed/u, ["list", "manifest", "artifact", "restore"]],
+    ["stale", /backup is stale/u, ["list", "manifest"]],
+    ["bucket", /does not match the selected backup/u, ["list", "manifest"]],
+  ]) {
+    failedStage = failure;
+    calls.length = 0;
+    source = structuredClone(value);
+    if (failure === "client" || failure === "identity") {
+      source.storage.objectKey += ".age";
+      source.storage.encryption = { mode: "CLIENT_ENVELOPE", algorithm: "age-x25519", keyReference: `key:age1${"q".repeat(58)}` };
+      source.artifact.ciphertextSha256 = "d".repeat(64);
+      source.artifact.ciphertextSizeBytes = 4_300;
+    }
+    if (failure === "client") environment.BACKUP_AGE_IDENTITY = join(directory, "fixture-identity");
+    else delete environment.BACKUP_AGE_IDENTITY;
+    if (failure === "stale") {
+      source.createdAt = "2026-08-08T08:20:00.000Z";
+      source.completedAt = "2026-08-08T08:30:00.000Z";
+    }
+    if (failure === "bucket") source.storage.bucket = "different-backup-bucket";
+    const operation = rehearseControlPlaneBackup(environment, { run, now: () => now });
+    if (expected) await assert.rejects(operation, expected);
+    else {
+      const result = await operation;
+      assert.equal(result.backupId, value.backupId);
+      assert.equal(result.manifestVersion, "manifest-version");
+      assert.equal(result.artifactVersion, value.storage.objectVersionId);
+      assert.equal(await readFile(result.evidence, "utf8"), "synthetic evidence");
+    }
+    assert.deepEqual(calls, steps);
+    await assert.rejects(stat(scratch), { code: "ENOENT" });
+  }
+});
+
+test("the quarterly systemd timer activates the one-shot restore service", async () => {
+  const timer = await readFile(new URL("../scripts/dr/wasalx-control-plane-restore.timer", import.meta.url), "utf8");
+  const service = await readFile(new URL("../scripts/dr/wasalx-control-plane-restore.service", import.meta.url), "utf8");
+  assert.match(timer, /^OnCalendar=\*-01,04,07,10-01 04:00:00 UTC$/mu);
+  assert.match(timer, /^Persistent=true$/mu);
+  assert.match(service, /^Type=oneshot$/mu);
+  assert.match(service, /^ExecStart=\/usr\/bin\/node scripts\/dr\/rehearse-control-plane-backup\.mjs$/mu);
 });
 
 test("PITR inspector is read-only and cannot promote database settings into release proof", async () => {
