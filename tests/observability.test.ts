@@ -68,14 +68,36 @@ test("structured logs redact phone-shaped numbers and digit strings", () => {
   }), { wa_id: "[REDACTED]", detail: ["[PHONE]", "[PHONE]", 42, "12345"] });
 });
 
+for (const [format, number] of [
+  ["local leading zero", "07700900000"],
+  ["international 00 prefix", "0012025550102"],
+  ["Arabic-Indic digits", "٠٧٧٠٠٩٠٠٠٠٠"],
+  ["extended Arabic-Indic digits", "۰۰۱۲۰۲۵۵۵۰۱۰۲"],
+  ["formatted Arabic-Indic digits", "+١ ٢٠٢ ٥٥٥ ٠١٠٢"],
+]) {
+  test(`structured logs redact ${format} in free text and arrays`, () => {
+    assert.deepEqual(redactLogValue({ detail: `Called ${number}.`, entries: [number] }), {
+      detail: "Called [PHONE].", entries: ["[PHONE]"],
+    });
+  });
+}
+
+for (const key of ["mobile", "msisdn", "tel", "jid", "customer"]) {
+  test(`structured logs redact bare phone strings under ${key}`, () => {
+    assert.deepEqual(redactLogValue({ [key]: "12025550102" }), { [key]: "[REDACTED]" });
+  });
+}
+
 test("structured logs preserve long numeric IDs and timestamps in fields", () => {
   const fields = {
     at: 1764000000000,
     timestamp: "2026-11-24T12:05:00.000Z",
     waba_id: "123456789012345",
     business_id: 123456789012345,
+    customer_id: "12025550102",
     ticket_number: "20261124000123",
     request_id: "120255501020",
+    external_id: "٠٧٧٠٠٩٠٠٠٠٠",
     job_id: 120255501021,
   };
   assert.deepEqual(redactLogValue(fields), fields);
@@ -90,6 +112,25 @@ test("structured logs redact phone numbers embedded in text with common separato
       detail: "Customer [PHONE] called.",
     });
   }
+});
+
+test("structured logs redact phones after a hyphen and preserve UUIDs and dates in text", () => {
+  const preserved = "10000000-dead-4000-8abc-000000000001 on 2026-11-24";
+  assert.equal(redactLogValue(`ID-(202) 555-0102; ${preserved}`), `ID-[PHONE]; ${preserved}`);
+  const labelledDates = "date-24-11-2026; date-2026-11-24";
+  assert.equal(redactLogValue(labelledDates), labelledDates);
+});
+
+test("structured logs keep label-hyphen-digit IDs", () => {
+  const fields = { request_id: "req-1764000000000", job_id: "wa-1764000000000", trace: "req-0123456789" };
+  assert.deepEqual(redactLogValue(fields), fields);
+  const text = "TKT-20261124000123 and import-1764000000000 done";
+  assert.deepEqual(redactLogValue({ detail: text }), { detail: text });
+});
+
+test("structured logs drop split localized phone fragments after a hyphen", () => {
+  const prefix = `${"x ".repeat(994)}ID-`;
+  assert.equal(redactLogValue(`${prefix}+١ ٢٠٢ ٥٥٥ ٠١٠٢`), `${prefix}…`);
 });
 
 test("structured logs redact JWTs in text", () => {
