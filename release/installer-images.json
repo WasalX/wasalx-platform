@@ -19,8 +19,8 @@
   },
   "tenantProvisioning": {
     "package": {
-      "version": "0.5.84",
-      "sha256": "9673aefce89b6aa4d767eed01ae574d48397de28de5ff6f4c65d86ceee6ee761"
+      "version": "0.5.85",
+      "sha256": "22cf79b1f498e858e4ee017e29ae79ba32f4a2231eb6126a67717aeea8ce4c6b"
 
     },
     "configuratorImageId": "workspace-configurator",

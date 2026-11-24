@@ -1,8 +1,8 @@
 {
   "repository": "WasalX/wasalx-zammad-addon",
-  "commit": "3236bd0a7b77695f6743814577860b7a979c1928",
-  "reference": "WasalX/wasalx-zammad-addon@3236bd0a7b77695f6743814577860b7a979c1928",
-  "packageVersion": "0.5.84",
-  "packageSha256": "9673aefce89b6aa4d767eed01ae574d48397de28de5ff6f4c65d86ceee6ee761",
+  "commit": "e60cfbd034eb7658200de3da5d69be3efb7036e3",
+  "reference": "WasalX/wasalx-zammad-addon@e60cfbd034eb7658200de3da5d69be3efb7036e3",
+  "packageVersion": "0.5.85",
+  "packageSha256": "22cf79b1f498e858e4ee017e29ae79ba32f4a2231eb6126a67717aeea8ce4c6b",
   "upstreamRevision": "8facd9250f4e1634124965eb0ba79a78a3fcdc19"
 }
