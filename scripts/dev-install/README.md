@@ -27,7 +27,9 @@ The read-only running-stack scan is `node scripts/dev-install/probe.mjs --projec
 Run it as root from the candidate checkout, with the deployed Compose inputs in a separate tree.
 Use `--repository` to select the candidate checkout and repeat `--compose-file` to add overlays.
 `--held-services` overrides the DEV hold set with a comma-separated list. Nightly passes an empty list.
-Keep the JSON report private. The nightly logs only the counts and census result or a sanitized failure.
+The scan derives its expected service count from the active services in the rendered Compose model
+and checks the exact service inventory before and after scanning. Keep the JSON report private.
+The nightly logs only the counts and census result or a sanitized failure.
 
 ## Fresh held guest projects
 
