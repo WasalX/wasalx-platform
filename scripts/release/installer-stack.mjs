@@ -139,6 +139,17 @@ export function assertInstallHostname() {
 }
 
 export const rehearsalComposeFile = "scripts/release/installer-nightly.compose.yaml";
+export const devSkipPublicWebhookPreflightFlag = "--dev-skip-public-webhook-preflight";
+const devWebhookPreflightOnly = "public webhook preflight skip is DEV-only";
+
+export function devWebhookPreflightOverlay({ project, devSkipPublicWebhookPreflight, rehearsalMain, full = true }) {
+  if (!devSkipPublicWebhookPreflight) return [];
+  const devProject = project === "wasalx-live" || /^wasalx-dev-[a-z0-9][a-z0-9-]*$/u.test(project);
+  const stgOrProd = [process.env.DEPLOY_ENVIRONMENT, process.env.WASALX_ENVIRONMENT]
+    .some(value => /^(stg|staging|prod|production)$/iu.test(value?.trim() ?? ""));
+  assert.ok(full && devProject && !rehearsalMain && !stgOrProd, devWebhookPreflightOnly);
+  return ["scripts/release/installer-dev-skip-webhook.compose.yaml"];
+}
 
 export function rehearsalImageSource(project, commit, runGit) {
   assert.equal(process.env.GITHUB_ACTIONS, "true", "installer rehearsal requires GitHub Actions");
@@ -472,11 +483,18 @@ function argumentsFrom(values) {
   let full = false;
   let devPreimagesFile; let devPreimagesSha256;
   let rehearsalMain;
+  let devSkipPublicWebhookPreflight = false;
   for (let index = 0; index < rest.length;) {
     const option = rest[index];
     if (option === "--full") {
       assert.equal(full, false, "--full can be provided only once");
       full = true;
+      index += 1;
+      continue;
+    }
+    if (option === devSkipPublicWebhookPreflightFlag) {
+      assert.equal(devSkipPublicWebhookPreflight, false, `${option} can be provided only once`);
+      devSkipPublicWebhookPreflight = true;
       index += 1;
       continue;
     }
@@ -509,7 +527,8 @@ function argumentsFrom(values) {
     }
     index += 2;
   }
-  return { project, candidateImages, composeFiles, profiles, output, envFile, full, devPreimagesFile, devPreimagesSha256, rehearsalMain };
+  return { project, candidateImages, composeFiles, profiles, output, envFile, full, devPreimagesFile,
+    devPreimagesSha256, rehearsalMain, devSkipPublicWebhookPreflight };
 }
 
 export async function verifyStack({ repositoryRoot: verificationRoot = root } = {}) {
@@ -521,7 +540,8 @@ export async function verifyStack({ repositoryRoot: verificationRoot = root } = 
   assert.match(candidateSha ?? "", shaPattern, "WASALX_CANDIDATE_SHA is required");
   assert.match(candidateTree ?? "", shaPattern, "WASALX_CANDIDATE_TREE is required");
   assert.match(project ?? "", /^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$/u, "Compose project is invalid");
-  const composeFiles = parsed.composeFiles.length ? parsed.composeFiles : ["compose.yaml", "compose.smoke.yaml"];
+  const overlay = devWebhookPreflightOverlay(parsed);
+  const requestedFiles = parsed.composeFiles.length ? parsed.composeFiles : ["compose.yaml", "compose.smoke.yaml"];
   const profiles = parsed.profiles;
   const fullMode = parsed.full;
   if (fullMode) assertInstallHostname();
@@ -530,10 +550,11 @@ export async function verifyStack({ repositoryRoot: verificationRoot = root } = 
   assert.equal(Boolean(parsed.devPreimagesFile), Boolean(parsed.devPreimagesSha256), "DEV preimage digest binding is required");
   const evidenceName = parsed.rehearsalMain ? "nightly-stack" : parsed.devPreimagesFile ? "dev-held-stack" : fullMode ? "remote-full-stack" : "exact-stack";
   const fullComposeFiles = ["compose.yaml", "compose.full.yaml", ...(parsed.rehearsalMain ? [rehearsalComposeFile] : [])];
-  assert.ok((fullMode && JSON.stringify(composeFiles) === JSON.stringify(fullComposeFiles) &&
+  assert.ok((fullMode && JSON.stringify(requestedFiles) === JSON.stringify(fullComposeFiles) &&
     (JSON.stringify(profiles) === JSON.stringify(["full"]) || JSON.stringify(profiles) === JSON.stringify(["full", "runtime-workers"])) && isAbsolute(parsed.envFile ?? "")) ||
-    (!fullMode && JSON.stringify(composeFiles) === JSON.stringify(["compose.yaml", "compose.smoke.yaml"]) && profiles.length === 0 && parsed.envFile === undefined),
+    (!fullMode && JSON.stringify(requestedFiles) === JSON.stringify(["compose.yaml", "compose.smoke.yaml"]) && profiles.length === 0 && parsed.envFile === undefined),
     "stack verification supports only the smoke overlay or the exact full profile");
+  const composeFiles = [...requestedFiles, ...overlay];
   const outputPath = parsed.output ?? `output/release-evidence/${candidateSha}/${evidenceName}.json`;
   assert.equal(outputPath, `output/release-evidence/${candidateSha}/${evidenceName}.json`,
     "stack verification output must be the candidate-scoped canonical path");
@@ -633,6 +654,7 @@ export async function verifyStack({ repositoryRoot: verificationRoot = root } = 
     project,
     stackProfile: imageSource ? "nightly" : devPreimages ? "dev-held" : fullMode ? "remote-full" : "docker-smoke",
     ...(imageSource ? { imageSource } : {}),
+    ...(parsed.devSkipPublicWebhookPreflight ? { devSkipPublicWebhookPreflight: true } : {}),
     profiles,
     composeFiles: composeEvidence,
     renderedCompose: { bytes: Buffer.byteLength(renderedCompose), sha256: createHash("sha256").update(renderedCompose).digest("hex") },
@@ -658,7 +680,8 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   verifyStack().catch((error) => {
     // Parser and subprocess errors can contain private captured input.
     const variable = ["WASALX_INSTALL_EXPECTED_HOSTNAME", "WASALX_DEV_REVIEW_ORIGIN_SUFFIX"].find((name) => error.message?.includes(name));
-    process.stderr.write(`exact stack verification failed${variable ? `: check ${variable}` : ""}\n`);
+    const reason = error.message === devWebhookPreflightOnly ? `: ${devWebhookPreflightOnly}` : variable ? `: check ${variable}` : "";
+    process.stderr.write(`exact stack verification failed${reason}\n`);
     process.exitCode = 1;
   });
 }

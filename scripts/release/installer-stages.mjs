@@ -8,7 +8,7 @@ import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { stripVTControlCharacters } from "node:util";
 import { activeServiceNames, assertDevInstallPreimages, devContainerPreimage, devColdResidents, devHeldServices, devHeldPrerequisites, devPreservedServices, devValueDigest, captureDevReviewAuth, assertDevReviewAuthRows, devReviewAuthEnvironment, devReviewAuthConfiguration, assertInstallHostname } from "./installer-stack.mjs";
-import { oneShotServiceNames, rehearsalComposeFile, rehearsalImageSource } from "./installer-stack.mjs";
+import { devSkipPublicWebhookPreflightFlag, devWebhookPreflightOverlay, oneShotServiceNames, rehearsalComposeFile, rehearsalImageSource } from "./installer-stack.mjs";
 import { parseRailsJson } from "./simulation-rails-json.mjs";
 import { sha256, preserveReplacement, readBoundArtifacts, writeArtifactState,
   assertRetainedPreimage, composeProfiles, dockerfileOf, imageServices, inspectOwned, preparePrivateDirectory, preimagePath, fenceReplacementEffects, rollbackReplacement } from "./installer-artifacts.mjs";
@@ -590,6 +590,7 @@ export async function executeStage(action, context) {
   return execute(process.execPath, [verifier, project, "--full", "--env-file", context.envFile,
     "--compose-file", "compose.yaml", "--compose-file", "compose.full.yaml",
     ...(context.imageSource ? ["--compose-file", rehearsalComposeFile, "--rehearsal-main", context.imageSource.commit] : []),
+    ...(context.devSkipPublicWebhookPreflight ? [devSkipPublicWebhookPreflightFlag] : []),
     ...composeProfiles.flatMap((profile) => ["--profile", profile]),
     ...(context.devPreimagesFile ? ["--dev-preimages", context.devPreimagesFile, "--dev-preimages-sha256", context.devPreimagesSha256] : []),
     ...plan.flatMap(({ id, reference }) => ["--candidate-image", `${id}=${reference}`]),
@@ -701,6 +702,7 @@ async function main() {
   let rollbackSafetyFile; let rollbackSafetySha256;
   let hostedImages; let hostedImagesSha256; let hostedTrustedRoot;
   let rehearsalMain;
+  let devSkipPublicWebhookPreflight = false;
   for (let i = 0; i < extra.length; i += 1) {
     if (["--hosted-images", "--hosted-images-sha256", "--hosted-trusted-root"].includes(extra[i])) {
       const flag = extra[i], value = extra[++i];
@@ -715,6 +717,9 @@ async function main() {
       assert.equal(rehearsalMain, undefined);
       rehearsalMain = extra[++i];
       assert.match(rehearsalMain ?? "", shaPattern);
+    } else if (extra[i] === devSkipPublicWebhookPreflightFlag) {
+      assert.equal(devSkipPublicWebhookPreflight, false, `${extra[i]} can be provided only once`);
+      devSkipPublicWebhookPreflight = true;
     } else if (extra[i] === "--service") {
       assert.equal(action, "release-held"); assert.equal(service, undefined);
       service = extra[++i]; assert.match(service ?? "", /^[a-z0-9][a-z0-9_.-]*$/u);
@@ -743,6 +748,7 @@ async function main() {
       else { assert.equal(captureDevPreimagesFile, undefined); captureDevPreimagesFile = value; }
     } else rest.push(extra[i]);
   }
+  const overlay = devWebhookPreflightOverlay({ project, rehearsalMain, devSkipPublicWebhookPreflight });
   assert.equal(Boolean(hostedImages), Boolean(hostedImagesSha256), "hosted inventory hash required");
   assert.equal(Boolean(hostedImages), Boolean(hostedTrustedRoot), "separate trusted Sigstore root required");
   assert.ok(!["verify-hosted", "admit-hosted"].includes(action) || hostedImages, "hosted admission inventory required");
@@ -831,12 +837,14 @@ async function main() {
   const composeArguments = [
     "compose", "--env-file", envFile, "--file", "compose.yaml", "--file", "compose.full.yaml",
     ...(imageSource ? ["--file", rehearsalComposeFile] : []),
+    ...overlay.flatMap(file => ["--file", file]),
     ...composeProfiles.flatMap((profile) => ["--profile", profile]), "--project-name", project,
   ];
   run("docker", [...composeArguments, "config", "--quiet"], environment);
   const safeCompose = JSON.parse(run("docker", [
     ...composeArguments, "config", "--no-interpolate", "--no-env-resolution", "--format", "json",
   ], environment));
+  if (devSkipPublicWebhookPreflight) process.stderr.write("public webhook preflight skipped by DEV option\n");
   const catalogBytes = await readFile(resolve(repository, "release/installer-images.json"));
   const catalog = JSON.parse(catalogBytes.toString("utf8"));
   const plan = createCandidatePlan(catalog, safeCompose);
@@ -847,7 +855,7 @@ async function main() {
     try {
       const exit = await executeStage(stage, { plan, candidateSha, candidateTree, environment, composeArguments,
         buildContext, buildContextSha256, catalog, catalogSha256: sha256(catalogBytes), rollbackSafetyFile, rollbackSafetySha256,
-        hostedImages, hostedImagesSha256, hostedTrustedRoot, imageSource,
+        hostedImages, hostedImagesSha256, hostedTrustedRoot, imageSource, devSkipPublicWebhookPreflight,
         project, envFile, repository, capturePreimage: rest.includes("--capture-preimage"),
         privateDirectory: resolve(homedir(), `.local/state/wasalx-compose/${candidateSha}/${project}`),
         nativePackage: catalog.tenantProvisioning.package, model: safeCompose, directory: resolve(repository, `output/release-evidence/${candidateSha}`),

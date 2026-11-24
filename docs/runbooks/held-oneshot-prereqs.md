@@ -31,6 +31,12 @@ the approved guest hostname before every installer stage or full stack
 verification. The hostname must match exactly; missing, empty or mismatched
 values refuse before installer actions. There is no default.
 
+For a guarded DEV install, pass `--dev-skip-public-webhook-preflight` on every
+installer stage that uses the Compose model. This default-off option replaces
+the public webhook check with a local notice and records the skip in the run
+log and stack verification receipt. It is refused for staging, production and
+rehearsals. The webhook origin must still be configured.
+
 When admitting DEV review origins with `--dev-review-origin` and
 `--dev-review-identity-origin`, also set `WASALX_DEV_REVIEW_ORIGIN_SUFFIX` to the
 approved hostname suffix. Keep it set for subsequent stages and full stack
