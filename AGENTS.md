@@ -63,7 +63,15 @@ Live-provider qualification is a separate release milestone.
 
 ## Risk paths
 
-Require the [risk-path review](DELIVERY.md#branching-and-merging) for the high-risk paths listed in [CODEOWNERS](CODEOWNERS). Also review changes to package scripts that control required checks or production builds, and UI or API changes that alter what personal data is exposed or who can see it.
+Only these need the independent [risk-path review](DELIVERY.md#branching-and-merging) because mistakes can be irreversible, silent, or public.
+
+- **Migrations, deletion, and retention** include `services/*/migrations/`, `services/control-api/src/migrate.ts`, and privacy, deletion, retention, and number-release code.
+- **Sign-in, authorization, tenant isolation, and secrets** include `app/auth/`, `app/platform/auth/`, `app/invitations/`, `app/webhooks/`, the auth, permission, session, tenant-access, and secret modules in `lib/`, `packages/core/src/`, and `services/*/src/`, and `infra/docker/full/keycloak/`.
+- **Money and outbound safety** include metering, cost, billing-policy, and outbound-safety code.
+- **Merge gates** include `.github/`, CI scripts (`scripts/hosted-ci*`, `scripts/test-*.mjs`, and `scripts/release/ci-*`), the `scripts` block of any `package.json`, and `tests/no-agent-instruction-files.test.mjs`, which keeps private agent files out of the public repo.
+- **Production configuration and deploys** include `Dockerfile.*`, `compose*.yaml`, `infra/helm/`, `infra/terraform/`, `release/`, the installer, image, and promotion scripts in `scripts/release/`, and `zammad-addon.json`.
+
+Docs (including `AGENTS.md`, `DELIVERY.md`, and `CLAUDE.md`), design, UI that does not change data exposure, tests, dependency bumps, lock files, and refactors outside these areas need no independent review.
 
 ## Data safety
 
