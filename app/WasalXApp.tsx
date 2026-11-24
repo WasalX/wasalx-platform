@@ -14,6 +14,7 @@ import { LocaleSwitcher } from "./LocaleSwitcher";
 import { InlineConfirmation, ModalDialog } from "./ModalDialog";
 import type { TriggerRule } from "../lib/domain";
 import { useI18n } from "./I18nProvider";
+import { MarketingIcon } from "./MarketingIcon";
 import { formatDuration, formatNumber } from "../lib/i18n/format.ts";
 import { fetchAccessCheck, installShellFetch, shouldCoverOnReturn, trackAccessCheck } from "../lib/shell-validation";
 import { operatorFailureMessage, operatorLocalFailure, confirmUnsavedNavigation, createLatestRequestFence, shouldPauseAutomaticRefresh, unmatchedReviewItems } from "../lib/operator-ui.ts";
@@ -272,7 +273,7 @@ function NotificationCenter({
       {open ? (
         <section id="operational-notifications" className="notification-panel" aria-labelledby="operational-notifications-title">
           <header><span><h2 id="operational-notifications-title">{t("tenant.notifications.title")}</h2><small>{items.length ? t(items.length === 1 ? "tenant.notifications.needReview.one" : "tenant.notifications.needReview", { count: formatNumber(items.length, locale) }) : t("tenant.notifications.none")}</small></span><button className="text-button" onClick={() => close(true)}>{t("common.actions.close")}</button></header>
-          {items.length ? <div className="notification-list">{items.map((item) => <button key={item.id} onClick={() => { close(true); navigate(item.view, item.target); }}><span className={`notification-mark ${item.tone}`} /><span><b><bdi>{item.title}</bdi></b><small>{item.body}</small></span><span className="reading-arrow" aria-hidden="true">→</span></button>)}</div> : <Empty title={t("tenant.notifications.allClear")} body={t("tenant.notifications.allClearBody")} />}
+          {items.length ? <div className="notification-list">{items.map((item) => <button key={item.id} onClick={() => { close(true); navigate(item.view, item.target); }}><span className={`notification-mark ${item.tone}`} /><span><b><bdi>{item.title}</bdi></b><small>{item.body}</small></span><span className="reading-arrow" aria-hidden="true"><MarketingIcon name="arrow" /></span></button>)}</div> : <Empty title={t("tenant.notifications.allClear")} body={t("tenant.notifications.allClearBody")} />}
         </section>
       ) : null}
     </div>
@@ -1285,7 +1286,7 @@ function Overview({
           </strong>
           <footer>
             <b className={connectionIssues||noneWorking?"warning-text":"positive"}>{connectionIssues?t("tenant.overview.requireAction", { count: formatNumber(connectionIssues, locale) }):noneWorking?t("tenant.health.noWorkingConnections"):t("tenant.overview.healthy")}</b>
-            <span>{t("tenant.actions.viewAll")} <span className="reading-arrow" aria-hidden="true">→</span></span>
+            <span>{t("tenant.actions.viewAll")} <span className="reading-arrow" aria-hidden="true"><MarketingIcon name="arrow" /></span></span>
           </footer>
         </button>
         <button onClick={() => navigate("groups")} className="metric">
@@ -1295,7 +1296,7 @@ function Overview({
           <strong>{formatNumber(activeGroups, locale)}</strong>
           <footer>
             <b>{t("tenant.overview.bindingsConfigured", { count: formatNumber(data.groups.filter(group=>group.zammad_group&&group.zammad_group!=="Not configured").length, locale) })}</b>
-            <span>{t("tenant.actions.manage")} <span className="reading-arrow" aria-hidden="true">→</span></span>
+            <span>{t("tenant.actions.manage")} <span className="reading-arrow" aria-hidden="true"><MarketingIcon name="arrow" /></span></span>
           </footer>
         </button>
         <button onClick={() => navigate("deliveries")} className="metric">
@@ -1318,7 +1319,7 @@ function Overview({
           <strong>{formatNumber(attention, locale)}</strong>
           <footer>
             <b className={attention?"warning-text":"positive"}>{t(attention?"tenant.status.actionRequired":"tenant.overview.healthy")}</b>
-            <span>{t("tenant.actions.resolve")} <span className="reading-arrow" aria-hidden="true">→</span></span>
+            <span>{t("tenant.actions.resolve")} <span className="reading-arrow" aria-hidden="true"><MarketingIcon name="arrow" /></span></span>
           </footer>
         </button>
       </div>
@@ -1357,7 +1358,7 @@ function Overview({
             className="text-button"
             onClick={() => navigate("deliveries")}
           >
-            {t("tenant.overview.viewAllDeliveries")} <span className="reading-arrow" aria-hidden="true">→</span>
+            {t("tenant.overview.viewAllDeliveries")} <span className="reading-arrow" aria-hidden="true"><MarketingIcon name="arrow" /></span>
           </button>
         </div>
         <DeliveryTable rows={data.deliveries.slice(0, 4)} compact openCase={canReadCases ? (ticket) => navigate("inbox", { ticket }) : undefined} />

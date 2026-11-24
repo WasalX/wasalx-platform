@@ -1226,7 +1226,7 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
     const uploadResponse = await uploadResponsePromise;
     const uploadPayload = await uploadResponse.json();
     assert.equal(uploadResponse.status(), 200, JSON.stringify(uploadPayload));
-    await page.waitForTimeout(250);
+    await page.getByText("proof.png").first().waitFor();
     const uploadUi = await page.evaluate(() => ({
       error: document.querySelector("#wasalx-group-message-error")?.textContent?.trim() || null,
       visible: document.body.innerText.includes("proof.png"),
@@ -1237,12 +1237,13 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
     await page.getByRole("button", { name: "Send", exact: true }).click();
     const attachmentSendResponse = await attachmentSendResponsePromise;
     const attachmentSendPayload = await attachmentSendResponse.json();
-    await page.waitForTimeout(250);
+    assert.equal(attachmentSendResponse.status(), 202, JSON.stringify(attachmentSendPayload));
+    await page.locator(`[data-message-id="${state.sentMessages[0].id}"]`)
+      .filter({ hasText: "proof.png" }).waitFor();
     const attachmentSendUi = await page.evaluate(() => ({
       error: document.querySelector("#wasalx-group-message-error")?.textContent?.trim() || null,
       visible: document.body.innerText.includes("proof.png"),
     }));
-    assert.equal(attachmentSendResponse.status(), 202, JSON.stringify({ attachmentSendPayload, attachmentSendUi }));
     assert.equal(attachmentSendUi.error, null, JSON.stringify({ attachmentSendPayload, attachmentSendUi }));
     assert.equal(attachmentSendUi.visible, true, JSON.stringify({ attachmentSendPayload, attachmentSendUi }));
     const attachment = state.requests.filter((request) => request.path.endsWith("/send")).at(-1)?.body?.attachments?.[0];

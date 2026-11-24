@@ -11,6 +11,7 @@ import { ServiceAuthService, type ZammadClaims, type ZammadServiceRequest } from
 import { TenantDrainService } from "./tenant-drain.service.js";
 import { groupBindingReplyAccessSql, groupWorkspaceAccessSql } from "./group-workspace-access.js";
 import { prepareTicketReply } from "./ticket-reply-target.js";
+import { directMessageCapabilities } from "@wasalx/core/bot-flow";
 import { renderOutboundText } from "@wasalx/core/outbound-text";
 import { completeTicketEventExecution, type TicketEventReceipt } from "@wasalx/core/ticket-event-runtime";
 import { recordStructuredLog } from "@wasalx/observability";
@@ -35,7 +36,7 @@ type EmailRoutingBody={tenant_id?:string;instance_id?:string;ticket_id?:string|n
 type EmailRoutingAcknowledgementBody={tenant_id?:string;instance_id?:string;route_id?:string;ticket_id?:string|number;article_id?:string|number;idempotency_key?:string;application_status?:string;observed_group_id?:string|number;observed_owner_id?:string|number|null};
 type EmailRouteRow={id:string;zammad_instance_id:string|null;source_article_id:string|null;request_sha256:string|null;client_routing_version_id:string|null;client_route_status:"MATCHED"|"FALLBACK"|"UNCONFIGURED";client_id:string|null;client_route_matched_by:"EMAIL"|"DOMAIN"|"CLIENT_IDENTIFIER"|"FALLBACK"|null;definition:unknown|null};
 type EmailRouteApplicationRow={route_id:string;idempotency_key:string;request_sha256:string;application_status:"APPLIED"|"MANUAL_OVERRIDE";observed_group_id:string;observed_owner_id:string|null};
-type TicketContextRow={ticket_id:string;connection_id:string;provider:"WAHA"|"META";connection_state:string;binding_state:string;group_name:string;correlation_state:string;bot_state?:string|null;last_heartbeat_at:string|Date|null;last_provider_event_at:string|Date|null;delivery_id:string|null;zammad_article_id:string|null;delivery_state:string|null;delivery_updated_at:string|Date|null;manual_retry_allowed:boolean|null};
+type TicketContextRow={ticket_id:string;connection_id:string;provider:"WAHA"|"META";connection_state:string;binding_state:string;group_name:string;correlation_state:string;bot_state?:string|null;last_customer_message_at?:string|Date|null;last_heartbeat_at:string|Date|null;last_provider_event_at:string|Date|null;delivery_id:string|null;zammad_article_id:string|null;delivery_state:string|null;delivery_updated_at:string|Date|null;manual_retry_allowed:boolean|null};
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const PROVIDER_CONTEXT_STATES=new Set(["WAHA","META"]);
 const CONNECTION_CONTEXT_STATES=new Set(["PROVISIONING","AWAITING_AUTH","CONNECTING","WORKING","DEGRADED","ACTION_REQUIRED","FAILED","PAUSED","REVOKED"]);
@@ -241,6 +242,23 @@ export class ZammadInternalController{
              'ACTIVE'::text AS binding_state,'Private WhatsApp conversation'::text AS group_name,
              CASE WHEN conversation.state='RESOLVED' THEN 'RESOLVED' ELSE 'OPEN' END AS correlation_state,
              conversation.state AS bot_state,
+             GREATEST(
+               (SELECT message.provider_timestamp
+                  FROM normalized_messages message
+                 WHERE message.tenant_id=conversation.tenant_id AND message.connection_id=conversation.connection_id
+                   AND message.external_group_id=conversation.external_chat_id
+                   AND NOT message.from_me AND message.provider_metadata @> '{"direct":true}'
+                 ORDER BY message.provider_timestamp DESC LIMIT 1),
+               (SELECT ownership.last_customer_message_at
+                  FROM meta_thread_ownership ownership
+                  JOIN participant_identities participant ON participant.tenant_id=ownership.tenant_id
+                    AND participant.connection_id=ownership.connection_id AND participant.id=ownership.participant_identity_id
+                  JOIN provider_sessions session ON session.tenant_id=ownership.tenant_id
+                    AND session.connection_id=ownership.connection_id AND session.id=ownership.provider_session_id
+                    AND session.ownership_state='ACTIVE'
+                 WHERE ownership.tenant_id=conversation.tenant_id AND ownership.connection_id=conversation.connection_id
+                   AND participant.external_participant_id=conversation.external_chat_id)
+             ) AS last_customer_message_at,
              connection.last_heartbeat_at,connection.last_provider_event_at,
              latest_delivery.id AS delivery_id,latest_delivery.zammad_article_id,
              latest_delivery.state AS delivery_state,latest_delivery.updated_at AS delivery_updated_at,
@@ -260,10 +278,13 @@ export class ZammadInternalController{
         [claims.tenantId,ticketId])).rows[0];
     });
     if(!context)throw new NotFoundException("WasalX ticket context was not found");
+    const provider=contextEnum(context.provider,PROVIDER_CONTEXT_STATES,"provider");
+    const {customerServiceWindowSeconds}=directMessageCapabilities(context.provider.toLowerCase() as Lowercase<TicketContextRow["provider"]>);
+    const lastCustomerMessageAt=context.last_customer_message_at??null;
     return{
       ticket_id:context.ticket_id,
       connection_id:context.connection_id,
-      provider:contextEnum(context.provider,PROVIDER_CONTEXT_STATES,"provider"),
+      provider,
       connection_state:contextEnum(context.connection_state,CONNECTION_CONTEXT_STATES,"connection state"),
       binding_state:contextEnum(context.binding_state,BINDING_CONTEXT_STATES,"binding state"),
       group_name:contextText(context.group_name,"group name"),
@@ -271,6 +292,8 @@ export class ZammadInternalController{
       bot_state:context.bot_state==null?null:contextEnum(context.bot_state,new Set(["BOT","ACTION_PENDING","HANDOFF_PENDING","HUMAN","RESOLVED"]),"conversation state"),
       last_heartbeat_at:isoOrNull(context.last_heartbeat_at),
       last_provider_event_at:isoOrNull(context.last_provider_event_at),
+      service_window_expires_at:lastCustomerMessageAt!==null&&customerServiceWindowSeconds!==null
+        ?isoOrNull(new Date(new Date(lastCustomerMessageAt).getTime()+customerServiceWindowSeconds*1000)):null,
       delivery_id:context.delivery_id,
       zammad_article_id:context.zammad_article_id,
       delivery_state:context.delivery_state===null?null:contextEnum(context.delivery_state,DELIVERY_CONTEXT_STATES,"delivery state"),
