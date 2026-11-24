@@ -3,6 +3,7 @@
 
 import argparse
 import base64
+from contextlib import redirect_stderr
 from copy import deepcopy
 from hashlib import sha256
 import importlib.util
@@ -133,8 +134,12 @@ class PullTest(unittest.TestCase):
         self.directory = self.work / "handover-outbox"
         self.outbox = agent.Outbox(self.directory, self.key)
         self.fake = PublicAPI()
+        self.trusted_root = self.work / "trusted_root.json"
+        original_root = b'{"root":"original"}'
+        self.trusted_root.write_bytes(original_root)
         self.config = {"mode": "report", "cosign": "/example/cosign",
-                       "trusted_root": "/example/trust.json", "trusted_root_sha256": "a" * 64}
+                       "trusted_root": str(self.trusted_root),
+                       "trusted_root_sha256": sha256(original_root).hexdigest()}
 
     def tick(self):
         agent.tick(agent.GitHub(self.fake.open), self.outbox, self.work, self.config)
@@ -266,10 +271,23 @@ class PullTest(unittest.TestCase):
         self.assertIn(b"hosted source commit mismatch", result.exception.stderr)
         self.assertEqual(self.records(), [])
 
-    def test_product_verification_failure_creates_no_handover(self):
-        with (patch.object(agent, "verify", side_effect=subprocess.CalledProcessError(1, "cosign")),
-              self.assertRaises(subprocess.CalledProcessError)):
-            self.tick()
+    def test_rotated_trusted_root_alerts_without_advancing_receipt_chain(self):
+        self.outbox.add(self.make_offer("v1.2.3-rc.0"))
+        previous = self.records()[0].read_bytes()
+        self.trusted_root.write_bytes(b'{"root":"rotated"}')
+        stderr = io.StringIO()
+        with redirect_stderr(stderr):
+            self.assertEqual(self.run_main(self.config), 1)
+        self.assertEqual(stderr.getvalue(), "<3>REPORT_TRUST_ROOT_MISMATCH: Re-pin Sigstore trust via TUF\n")
+        self.assertEqual([path.read_bytes() for path in self.records()], [previous])
+
+    def test_product_verification_failure_alerts_without_creating_handover(self):
+        stderr = io.StringIO()
+        with (patch.object(agent, "verify", side_effect=subprocess.CalledProcessError(1, "cosign")) as verify,
+              redirect_stderr(stderr)):
+            self.assertEqual(self.run_main(self.config), 1)
+        verify.assert_called_once()
+        self.assertEqual(stderr.getvalue(), "<3>REPORT_FAILED\n")
         self.assertEqual(self.records(), [])
 
     def test_repointed_tag_during_verification_creates_no_handover(self):
@@ -396,7 +414,7 @@ class PullTest(unittest.TestCase):
         unit = (bundle / render.PULL_SERVICE).read_text().splitlines()
         for setting in ("ProtectSystem=strict", "NoNewPrivileges=yes", "CPUQuota=100%", "MemoryMax=2G",
                         "TasksMax=64", "IOWeight=10", "Nice=10", "TimeoutStartSec=15min",
-                        "LoadCredential=receipt-key:/example/receipt_key"):
+                        "LoadCredential=receipt-key:/example/receipt_key", "StandardError=journal"):
             self.assertIn(setting, unit)
         self.assertFalse(any("@" in line or line.startswith("ReadWritePaths=") for line in unit))
         self.assertEqual(json.loads((bundle / "pull-config.json").read_bytes()).keys(), agent.CONFIG_FIELDS)

@@ -49,6 +49,74 @@ test("inbound Meta workers use the admitted app ID and retain the fallback for o
   await processor.drainTenant("synthetic");
   assert.deepEqual(apps, ["10002", "10003", "10001"]);
 });
+
+test("second-app Meta direct messages and media use the admitted app ID", async t => {
+  t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-11-01T00:00:00Z") });
+  const defaultAppId = "10001";
+  const appId = "10002";
+  const previousAppId = process.env.META_APP_ID;
+  process.env.META_APP_ID = defaultAppId;
+  t.after(() => {
+    if (previousAppId === undefined) delete process.env.META_APP_ID;
+    else process.env.META_APP_ID = previousAppId;
+  });
+  const token = "synthetic-meta-token-for-proof";
+  const proof = metadataProof(token, { appId });
+  const context = {
+    metaCredentialContext: metaContext(proof), connectionSecretReference: proof.secretReference,
+    mediaEnabled: true, retentionDays: 30,
+    zammadBaseUrl: "https://zammad.example", zammadSecretReference: "secret://zammad",
+  };
+  const events = [
+    { id: "wamid.text", type: "text", text: { body: "Hello" } },
+    { id: "wamid.image", type: "image", image: { id: "20001", mime_type: "image/png" } },
+  ].map(message => ({
+    id: message.id, providerEventId: message.id, eventType: "messages", attempts: 1,
+    tenantId: proof.tenantId, connectionId: proof.connectionId, provider: "meta", metaWebhookAppId: appId,
+    payload: { entry: [{ id: proof.wabaId, changes: [{ field: "messages", value: {
+      metadata: { phone_number_id: proof.phoneNumberId },
+      messages: [{ ...message, from: "12025550102", timestamp: String(Date.now() / 1000) }],
+    } }] }] },
+  }));
+  const completed = [], linked = [];
+  let mediaProofChecks = 0;
+  const repository = Object.assign(Object.create(InboundRepository.prototype), {
+    claim: async () => events,
+    messageIsWithinAdmissionWindow: async () => true,
+    resolveMetaDirectMessage: async (_event, _lease, message, resolvedAppId) => {
+      assert.equal(resolvedAppId, appId);
+      return message;
+    },
+    assertMetaDirectIdentityCurrent: async (_event, _lease, _chat, checkedAppId) => assert.equal(checkedAppId, appId),
+    directContext: async () => context,
+    tenant: async (_tenant, work) => work({ query: async (sql, params) => {
+      assert.match(sql, /app\.meta_lifecycle_guard/u);
+      assert.equal(params[7], appId);
+      mediaProofChecks++;
+      return { rows: [{ meta_account_proof: proof }] };
+    } }),
+    processDirectMessage: async () => ({ duplicate: false, queued: false }),
+    linkMediaObject: async event => linked.push(event.id),
+    complete: async (event, _lease, outcome) => completed.push([event.id, outcome]),
+    fail: async (_event, _lease, _retryable, error) => assert.fail(error),
+  });
+  t.mock.method(globalThis, "fetch", async (url, init) => {
+    if (url.pathname === "/api/v1/users/search") return Response.json([]);
+    assert.equal(url.pathname, "/api/v1/users");
+    return Response.json({ id: 7, login: JSON.parse(init.body).login });
+  });
+  const media = { prepare: async ({ beforeMetaRequest, media }) => {
+    assert.equal(media.url, "meta-media://20001");
+    await beforeMetaRequest(token);
+    return { mediaObjectId: "synthetic-media", attachment: { filename: "image.png", "mime-type": "image/png" } };
+  } };
+  await new ProductionInboundProcessor(repository, { resolve: async () => ({ token: "synthetic-zammad-token" }) },
+    media, undefined, undefined, defaultAppId).drainTenant(proof.tenantId);
+  assert.deepEqual(completed.sort(), [["wamid.image", "PROCESSED"], ["wamid.text", "PROCESSED"]]);
+  assert.deepEqual(linked, ["wamid.image"]);
+  assert.equal(mediaProofChecks, 1);
+});
+
 const wahaAssignment={providerBaseUrl:"http://waha-gows.internal:3000/",wahaWorkerId:"30000000-0000-4000-8000-000000000001",wahaAssignmentFencingToken:7,wahaAssignmentLeaseExpiresAt:"2026-08-09T23:59:59.000Z"};
 
 const agentReplyChat = "12025550120@c.us";

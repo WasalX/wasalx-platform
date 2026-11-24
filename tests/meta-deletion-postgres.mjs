@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID,randomBytes,createHash } from "node:crypto";
 import { Client,Pool } from "pg";
+import { withPostgresClock } from "./support/postgres-clock.mjs";
 import {metaDeletionPreservationSql,validateDeletionPreservation} from '../scripts/release/meta-deletion-dev-guest.mjs';
 
 // Existing canonical PostgreSQL runner only; all IDs below are synthetic.
@@ -110,35 +111,32 @@ export async function verifyMetaDeletionPostgres(adminUrl,appUrl,workerConfig,pl
     assert.equal((await operator.query("SELECT app.operator_meta_deletion_receipts($1,$2,NULL,$3) result",["synthetic-reviewer",randomUUID(),"d".repeat(64)])).rows[0].result.items[0].state,"HELD");
     assert.equal((await app.query("SELECT app.meta_deletion_receipt_status($1) result",["d".repeat(64)])).rows[0].result.state,"UNAVAILABLE");
     await assert.rejects(app.query("SELECT app.expire_meta_signup_attempts()"),error=>error.code==="42501");
-    // Bounded wall-clock admission race: no pre-lock clock may grant a new receipt.
-    const waitingHash=randomBytes(32).toString("hex"),waitingApp=appId+"2";
-    const peerPid=(await peer.query("SELECT pg_catalog.pg_backend_pid() pid")).rows[0].pid;
-    let waiting,released=false,expired;
-    await admin.query("BEGIN");
-    try{
-      await admin.query("SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended('meta-deletion:'||$1||':'||$2,0))",[waitingApp,waitingHash]);
-      // Five seconds of positive margin survives the SQL bigint rounding rule.
-      const issued=(await admin.query("SELECT floor(extract(epoch FROM clock_timestamp()))::bigint-295 issued")).rows[0].issued;
-      waiting=peer.query(accept,[waitingApp,subject,waitingHash,keyA,randomBytes(32).toString("hex"),issued,0,300,1]).then(()=>null,error=>error);
-      let observed;
-      for(let attempt=0;attempt<20;attempt++){
-        await admin.query("SELECT pg_catalog.pg_stat_clear_snapshot()");
-        const row=(await admin.query("SELECT wait_event_type,wait_event,extract(epoch FROM clock_timestamp())::bigint db_seconds FROM pg_catalog.pg_stat_activity WHERE pid=$1",[peerPid])).rows[0];
-        if(row?.wait_event_type==="Lock"&&String(row.wait_event).toLowerCase()==="advisory"){observed=row;break;}
-        await admin.query("SELECT pg_catalog.pg_sleep(0.05)");
+    // An admitted timestamp must become invalid while the request is blocked.
+    await withPostgresClock(admin, "app.accept_meta_deletion_receipt(text,text,text,text,text,bigint,bigint,integer,integer)", async advance => {
+      const waitingHash=randomBytes(32).toString("hex"),waitingApp=appId+"2";
+      const peerPid=(await peer.query("SELECT pg_catalog.pg_backend_pid() pid")).rows[0].pid;
+      const issued=Date.UTC(2030,0,1)/1000;
+      await advance(new Date((issued+295)*1000));
+      let waiting,committed=false;
+      await admin.query("BEGIN");
+      try{
+        await admin.query("SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended('meta-deletion:'||$1||':'||$2,0))",[waitingApp,waitingHash]);
+        waiting=peer.query(accept,[waitingApp,subject,waitingHash,keyA,randomBytes(32).toString("hex"),issued,0,300,1]).then(()=>null,error=>error);
+        const deadline=performance.now()+1000;
+        let blocked=false;
+        do{
+          blocked=(await admin.query("SELECT pg_backend_pid()=ANY(pg_blocking_pids($1)) blocked",[peerPid])).rows[0].blocked;
+        }while(!blocked&&performance.now()<deadline);
+        assert.ok(blocked,"fixture prerequisite: peer must wait on the owned payload lock");
+        await advance(new Date((issued+301)*1000));
+        await admin.query("COMMIT");committed=true;
+        assert.equal((await waiting)?.code,"22023");
+      }finally{
+        if(!committed)await admin.query("ROLLBACK");
+        if(waiting)await waiting;
       }
-      assert.ok(observed,"fixture prerequisite: peer must demonstrably wait on the owned payload lock");
-      assert.ok(Number(observed.db_seconds)<Number(issued)+300,"fixture prerequisite: confirmed pre-wait age predicate must still have positive margin");
-      // Deliberately cross the deadline only after proving valid blocked admission.
-      // This bounded wait is at most six seconds; it is not a clock override.
-      await admin.query("SELECT pg_catalog.pg_sleep(greatest(0,$1::double precision-extract(epoch FROM clock_timestamp())))",[Number(issued)+301]);
-      await admin.query("COMMIT");released=true;expired=await waiting;
-      assert.equal(expired?.code,"22023");
-    }finally{
-      if(!released)await admin.query("ROLLBACK");
-      if(waiting)await waiting;
-    }
-    assert.equal((await admin.query("SELECT count(*)::integer n FROM public.meta_deletion_receipts WHERE app_id=$1",[waitingApp])).rows[0].n,0);
+      assert.equal((await admin.query("SELECT count(*)::integer n FROM public.meta_deletion_receipts WHERE app_id=$1",[waitingApp])).rows[0].n,0);
+    });
     // Fixed SQL budget covers all public paths and fresh process/backend sessions.
     // Synthetic future minute avoids a wall-clock minute-boundary race and
     // also proves that backward clock movement cannot reset consumed quota.

@@ -752,6 +752,7 @@ test("landing uses bundled language fonts and centers its Riyadh footer", async 
 
 test("landing motion can pause, respects reduced motion and yields to inbox interaction", async ({ page }, testInfo) => {
   test.setTimeout(testInfo.project.name === "desktop" ? 75_000 : 45_000);
+  await page.clock.install();
   await page.goto("/");
   await page.locator("#product").scrollIntoViewIfNeeded();
   await page.emulateMedia({ reducedMotion: "no-preference" });
@@ -778,7 +779,7 @@ test("landing motion can pause, respects reduced motion and yields to inbox inte
   await expect(page.locator(".marketing-shell")).toHaveAttribute("data-motion", "off");
   const frozen = await page.locator("#inbox-conversation").textContent();
   const frozenTitle = await title.textContent();
-  await page.waitForTimeout(3000);
+  await page.clock.runFor(3000);
   expect(await page.locator("#inbox-conversation").textContent()).toBe(frozen);
   expect(await title.textContent()).toBe(frozenTitle);
   await page.getByRole("button", { name: arabic ? "تشغيل الحركة" : "Play animation", exact: true }).click();
@@ -787,7 +788,7 @@ test("landing motion can pause, respects reduced motion and yields to inbox inte
   await openChooser(page);
   await page.locator('.inbox-row[value="2"]').click();
   await page.locator("#demo-reply").fill("Draft stays while animation stops");
-  await page.waitForTimeout(6000);
+  await page.clock.runFor(6000);
   await expect(page.locator("#demo-reply")).toHaveValue("Draft stays while animation stops");
   await expect(page.locator('.inbox-row[value="2"]')).toHaveAttribute("aria-pressed", "true");
   await page.locator(".inbox-composer button[type=submit]").click();

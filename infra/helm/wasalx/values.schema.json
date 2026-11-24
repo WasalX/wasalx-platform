@@ -91,12 +91,14 @@
     "connectorRetries": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["wahaWorkerProbeTimeoutMs", "wahaDeliveryMaxAttempts", "metaDeliveryMaxAttempts", "zammadStatusMaxAttempts"],
+      "required": ["wahaWorkerProbeTimeoutMs", "wahaDeliveryMaxAttempts", "metaDeliveryMaxAttempts", "zammadStatusMaxAttempts", "botActionMaxAttempts", "botHandoffMaxAttempts"],
       "properties": {
         "wahaWorkerProbeTimeoutMs": { "type": "integer", "minimum": 1000, "maximum": 30000 },
         "wahaDeliveryMaxAttempts": { "type": "integer", "minimum": 1, "maximum": 25 },
         "metaDeliveryMaxAttempts": { "type": "integer", "minimum": 1, "maximum": 25 },
-        "zammadStatusMaxAttempts": { "type": "integer", "minimum": 1, "maximum": 25 }
+        "zammadStatusMaxAttempts": { "type": "integer", "minimum": 1, "maximum": 25 },
+        "botActionMaxAttempts": { "type": "integer", "minimum": 1, "maximum": 25 },
+        "botHandoffMaxAttempts": { "type": "integer", "minimum": 1, "maximum": 8 }
       }
     },
     "managedWaha": {
