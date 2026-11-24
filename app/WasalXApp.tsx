@@ -704,6 +704,17 @@ function WorkspaceLoading() {
   );
 }
 
+// Lazy slots inside panels, drawers and dialogs: compact and labelled for the section, not the workspace.
+function SectionLoading() {
+  const { t } = useI18n();
+  return (
+    <div className="review-loading compact" role="status" aria-live="polite" aria-busy="true">
+      <span aria-hidden="true" />
+      <b>{t("tenant.loading.section")}</b>
+    </div>
+  );
+}
+
 function WideTable({ children }: { children: React.ReactNode }) {
   const { t } = useI18n();
   return (
@@ -1653,7 +1664,7 @@ function TenantWasalXApp({
                 canConfigure={canConfigure}
                 mutationHeaders={mutationHeaders}
               />
-              {!isPrivateDemo&&can(role,"billing:read")?<Suspense fallback={<WorkspaceLoading />}><MetaCostUsage key={String(initialData.tenant.id)} canExport={can(role,"billing:export")}/></Suspense>:null}</>
+              {!isPrivateDemo&&can(role,"billing:read")?<Suspense fallback={<SectionLoading />}><MetaCostUsage key={String(initialData.tenant.id)} canExport={can(role,"billing:export")}/></Suspense>:null}</>
             )}
             {view === "groups" && (
               <Groups
@@ -1781,7 +1792,7 @@ function TenantWasalXApp({
                 canManage={canManageTeam}
                 mutationHeaders={mutationHeaders}
               />
-              {canManageTeam ? <Suspense fallback={<WorkspaceLoading />}>
+              {canManageTeam ? <Suspense fallback={<SectionLoading />}>
                 <SupportTeams key={inboxScope} execute={executeWorkspace} scope={inboxRecoveryScope} owner={role === "tenant_owner"} />
               </Suspense> : null}
               </>
@@ -1802,7 +1813,7 @@ function TenantWasalXApp({
                 isFixturePreview={runtime === "FIXTURE"}
                 mutationHeaders={mutationHeaders}
               />
-              {canWriteSettings ? <Suspense fallback={<WorkspaceLoading />}>
+              {canWriteSettings ? <Suspense fallback={<SectionLoading />}>
                 <MailboxAdministration key={inboxScope} execute={executeWorkspace} scope={inboxRecoveryScope} />
               </Suspense> : null}
               </>
@@ -2153,7 +2164,7 @@ function Connections({
           />
         )}
       </section>
-      <Suspense fallback={<WorkspaceLoading />}>
+      <Suspense fallback={<SectionLoading />}>
         <ConnectedDataServices canWrite={canConfigure} mutationHeaders={mutationHeaders} />
       </Suspense>
     </div>
@@ -2882,7 +2893,7 @@ function ConnectionDetail({
               </div>
             </section>
 
-            {detail.provider === "META" && state === "REVOKED" && canConfigure && !sessionExpired ? <Suspense fallback={<WorkspaceLoading />}><MetaNumberRelease
+            {detail.provider === "META" && state === "REVOKED" && canConfigure && !sessionExpired ? <Suspense fallback={<SectionLoading />}><MetaNumberRelease
               tenantId={tenantId} actorId={actorId} connectionId={id} connectionName={String(detail.name ?? "")} mutationHeaders={mutationHeaders} busyChanged={setMetaNumberReleasePending}
             /></Suspense> : null}
 
@@ -3286,7 +3297,7 @@ function ConnectionDetail({
             ) : null}
 
             {detail.provider === "META" ? (
-              <Suspense fallback={<WorkspaceLoading />}>
+              <Suspense fallback={<SectionLoading />}>
                 {!sessionExpired ? <MetaTemplatePreparation connectionId={id} tenantId={tenantId} actorId={actorId} canWrite={canConfigure} mutationHeaders={mutationHeaders} /> : null}
                 {!sessionExpired ? <MetaLegacyMigration connectionId={id} tenantId={tenantId} actorId={actorId} canWrite={canConfigure} mutationHeaders={mutationHeaders} /> : null}
                 {canConfigure && state !== "REVOKED" ? <div className="connection-detail-section">
@@ -3294,7 +3305,7 @@ function ConnectionDetail({
                     <h3 id="meta-reconnect-title">{t("tenant.metaSignup.reconnect.title")}</h3>
                     <p>{t("tenant.metaSignup.reconnect.body")}</p>
                   </div></div>}
-                  {metaReconnectOpen && !sessionExpired ? <Suspense fallback={<WorkspaceLoading />}><MetaSignup
+                  {metaReconnectOpen && !sessionExpired ? <Suspense fallback={<SectionLoading />}><MetaSignup
                     key={id} name={t("tenant.metaSignup.reconnect.title")} target={{ connectionId: id, name: String(detail.name ?? ""), canPrepare: state === "PAUSED" && !operationPending, canContinue: state === "PAUSED" }}
                     isTargetConnectionRevoked={() => metaReconnectTargetRevoked.current}
                     mutationHeaders={mutationHeaders} busyChanged={setMetaReconnectPending}
@@ -4813,7 +4824,7 @@ function GroupConfigurationDrawer({
           <button ref={closeButton} type="button" onClick={requestClose} aria-label={t("tenant.group.configuration.closeLabel")}>×</button>
         </div>
 
-        <Suspense fallback={<WorkspaceLoading />}><NativeRoutingSync canWrite={canConfigure} mutationHeaders={mutationHeaders} refreshKey={JSON.stringify(savedForm)} /></Suspense>
+        <Suspense fallback={<SectionLoading />}><NativeRoutingSync canWrite={canConfigure} mutationHeaders={mutationHeaders} refreshKey={JSON.stringify(savedForm)} /></Suspense>
 
         {loading ? (
           <div className="group-drawer-loading" role="status" aria-live="polite">
@@ -6962,7 +6973,7 @@ function TeamAccess({ role, currentUserId, canManage, mutationHeaders }: { role:
   const active = data.members.filter((member) => member.state === "ACTIVE").length;
   const pending = data.invitations.filter((invitation) => invitation.state === "PENDING").length;
   return <div className="team-layout">
-    <Suspense fallback={<WorkspaceLoading />}><WorkspaceAccess members={data.members} owner={role==="tenant_owner"} mutationHeaders={mutationHeaders} nativeObservations={nativeAccountRead.observations} nativeObservationUnavailable={nativeAccountRead.unavailable} beginNativeObservationRead={beginNativeObservationRead} completeNativeObservationRead={completeNativeObservationRead}/></Suspense>
+    <Suspense fallback={<SectionLoading />}><WorkspaceAccess members={data.members} owner={role==="tenant_owner"} mutationHeaders={mutationHeaders} nativeObservations={nativeAccountRead.observations} nativeObservationUnavailable={nativeAccountRead.unavailable} beginNativeObservationRead={beginNativeObservationRead} completeNativeObservationRead={completeNativeObservationRead}/></Suspense>
     <section className="team-summary" aria-label={t("tenant.team.summary.label")}><div><small>{t("tenant.team.summary.active")}</small><strong>{formatNumber(active, locale)}</strong><span>{t("tenant.team.summary.identities", { count: formatNumber(data.members.length, locale) })}</span></div><div><small>{t("tenant.team.summary.pending")}</small><strong className={data.capabilities.can_invite ? undefined : "team-role-value"}>{data.capabilities.can_invite ? formatNumber(pending, locale) : t("tenant.team.readOnly")}</strong><span>{t(data.capabilities.can_invite ? pending ? "tenant.team.summary.awaiting" : "tenant.team.summary.none" : "tenant.team.invitations.restrictedTitle")}</span></div><div><small>{t("tenant.team.summary.yourRole")}</small><strong className="team-role-value">{t(`tenant.role.${role}`)}</strong><span>{t(canManage ? "tenant.team.summary.management" : "tenant.team.summary.readOnly")}</span></div></section>
     {error ? <div className="settings-feedback error team-feedback" role="alert"><span>!</span><p>{error}</p><button className="button small" onClick={() => void load()}>{t("tenant.team.actions.reload")}</button></div> : null}
     {notice ? <div className="settings-feedback success team-feedback" role="status"><span>✓</span><p>{notice}</p></div> : null}
@@ -7202,7 +7213,7 @@ function ConnectionModal({
               <span>{t(`tenant.metaSignup.addAccess.purpose.${value}`)}</span>
             </label>)}
           </fieldset>
-          <Suspense fallback={<WorkspaceLoading />}><MetaSignup name={name} purpose={metaPurpose} mutationHeaders={mutationHeaders} busyChanged={setCreating}
+          <Suspense fallback={<SectionLoading />}><MetaSignup name={name} purpose={metaPurpose} mutationHeaders={mutationHeaders} busyChanged={setCreating}
             created={(id) => { closeGuard.resetDirty(); void dashboardChanged(); created(id); }}
             back={() => setStep(1)} manual={() => setMetaManual(true)} /></Suspense>
           </>
