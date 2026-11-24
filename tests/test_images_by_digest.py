@@ -29,7 +29,8 @@ alias_spec.loader.exec_module(aliases)
 class ImagePublicationTests(unittest.TestCase):
     def test_merge_group_workflow_selects_all_21_images(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
-        step = workflow.split("      - id: matrix\n", 1)[1].split("\n\n", 1)[0]
+        after_matrix_id = workflow.split("      - id: matrix\n", 1)[1]
+        step = re.split(r"\n(?= {6}- | {2}\S)", after_matrix_id, maxsplit=1)[0]
         script = textwrap.dedent(step.split("        run: |\n", 1)[1])
         bash = "C:/Program Files/Git/bin/bash.exe" if os.name == "nt" else "bash"
         helpers = '''\
@@ -50,6 +51,15 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
         selected = json.loads(values["matrix"])["include"]
         self.assertEqual(len(selected), 21)
         self.assertEqual([row["image"] for row in selected], [row["image"] for row in images.catalog()])
+
+    def test_workflow_lint_uses_the_pr_merge_parent_and_queue_base(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        step = workflow.split("      - name: Check workflow lint against the base\n", 1)[1].split("\n      - ", 1)[0]
+        self.assertIn(
+            "BASE_REF: ${{ github.event_name == 'pull_request' && 'HEAD^1' || github.event.merge_group.base_sha }}",
+            step,
+        )
+        self.assertIn('git archive "$BASE_REF" .github', step)
 
     def test_portal_contact_email_is_passed_without_logging_commands(self):
         dockerfile = (ROOT / "Dockerfile.portal").read_text()
