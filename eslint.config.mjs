@@ -38,6 +38,12 @@ const eslintConfig = defineConfig([
     },
   },
   {
+    files: ["{app,components,lib,packages,services}/**/*.{js,mjs,cjs,ts,tsx,jsx,mts,cts}"],
+    // The shared logger uses the console as a structured sink outside Node.
+    ignores: ["packages/observability/src/index.ts"],
+    rules: { "no-console": "error" },
+  },
+  {
     files: ["zammad-package/app/frontend/**/*.ts"],
     rules: {
       // Zammad's Vue composables support calls inside event callbacks.
