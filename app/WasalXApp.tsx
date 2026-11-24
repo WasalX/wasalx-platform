@@ -11,6 +11,7 @@ import {
 } from "react";
 import type { ChatGPTUser } from "./chatgpt-auth";
 import { LocaleSwitcher } from "./LocaleSwitcher";
+import { MetaCostDisclosure } from "./MetaCostDisclosure";
 import { InlineConfirmation, ModalDialog } from "./ModalDialog";
 import type { TriggerRule } from "../lib/domain";
 import { useI18n } from "./I18nProvider";
@@ -29,7 +30,6 @@ import { type RecordRow, type ConnectionDetailRow, isDuplicateIdentityRejection,
 const InboxWorkspace = lazy(async () => ({ default: (await import("./InboxWorkspace")).InboxWorkspace }));
 const SupportTeams = lazy(async () => ({ default: (await import("./SupportTeams")).SupportTeams }));
 const MailboxAdministration = lazy(async () => ({ default: (await import("./MailboxAdministration")).MailboxAdministration }));
-const MetaCostUsage = lazy(async () => ({ default: (await import("./MetaCostUsage")).MetaCostUsage }));
 const BotAutomation = lazy(async () => ({
   default: (await import("./BotAutomation")).BotAutomation,
 }));
@@ -1031,7 +1031,9 @@ function TenantWasalXApp({
                 canConfigure={canConfigure}
                 mutationHeaders={mutationHeaders}
               />
-              {!isPrivateDemo&&can(role,"billing:read")?<Suspense fallback={<SectionLoading />}><MetaCostUsage key={String(initialData.tenant.id)} canExport={can(role,"billing:export")}/></Suspense>:null}</>
+              {!isPrivateDemo && can(role, "billing:read") && (
+                <MetaCostDisclosure key={String(initialData.tenant.id)} canExport={can(role, "billing:export")} />
+              )}</>
             )}
             {view === "groups" && (
               <Suspense fallback={<WorkspaceLoading />}>
