@@ -23,9 +23,11 @@ import {
   Post,
   Query,
   Req,
+  Res,
   ServiceUnavailableException,
 } from "@nestjs/common";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
+import type { FastifyReply } from "fastify";
 import type { PoolClient } from "pg";
 import { sameMetaConnectionBinding, type MetaAccountRelation, type MetaAccountProof, type MetaConnectionBinding } from "@wasalx/core/meta-account-relation";
 import { appendAudit } from "./audit.js";
@@ -53,6 +55,7 @@ import type { MetaSignupExchangeRequest, MetaSignupSelectRequest, MetaSignupStar
 import {assertMetaTransitionWriter,requestMetaTransitionPreview,refreshMetaTransitionPreview,cancelMetaTransitionPreview,readMetaTransitionPreview,readMetaTransitionPage,requestMetaTransitionExecution} from './meta-account-transition.js';
 import {requestMetaCustomerPolicy,metaPolicyBody} from "./meta-account-policy.js";
 import type { AuthenticatedRequest } from "./types.js";
+import { listCursor, listLimit, takeListPage, withListCursor, type ListPageQuery } from "./list-pagination.js";
 
 type Provider = "WAHA" | "META";
 type WahaEngine = "GOWS" | "NOWEB";
@@ -698,10 +701,24 @@ export class ConnectionsController {
 
   @Get()
   @Requires("connection:read")
-  list(@Req() request: AuthenticatedRequest) {
-    return this.database.rows(
-      request.principal.tenantId,
-      `SELECT c.id,c.name,c.provider,c.engine,c.phone_e164,c.state,c.last_heartbeat_at,c.last_provider_event_at,
+  async list(
+    @Req() request: AuthenticatedRequest,
+    @Query() query: ListPageQuery,
+    @Res({ passthrough: true }) reply: FastifyReply,
+  ) {
+    const limit = listLimit(query.limit);
+    const cursor = listCursor(query.cursor);
+    const tenantId = request.principal.tenantId;
+    const rows = await this.database.rows<Record<string, unknown> & { id: string }>(
+      tenantId,
+      `WITH cursor_position AS (
+        SELECT created_at,id FROM connections WHERE tenant_id=$1 AND id=$3::uuid
+      ), page_ids AS (
+        SELECT id FROM connections
+         WHERE tenant_id=$1 AND ($3::uuid IS NULL OR (created_at,id)<(SELECT created_at,id FROM cursor_position))
+         ORDER BY created_at DESC,id DESC LIMIT $4
+      )
+      SELECT c.id,c.name,c.provider,c.engine,c.phone_e164,c.state,c.last_heartbeat_at,c.last_provider_event_at,
               c.action_reason,c.created_at,ps.state AS provider_session_state,ps.provider_state,
               ${WAHA_RUNTIME_READY_SQL} AS worker_ready,
               ps.onboarding_working_at,wr.state AS webhook_state,wr.admission_opened_at AS webhook_admission_opened_at,
@@ -713,10 +730,12 @@ export class ConnectionsController {
          LEFT JOIN provider_sessions ps ON ps.tenant_id=c.tenant_id AND ps.connection_id=c.id AND ps.ownership_state='ACTIVE'
          LEFT JOIN webhook_routes wr ON wr.tenant_id=c.tenant_id AND wr.connection_id=c.id
          ${META_READINESS_JOIN_SQL.replaceAll("__BINDING__","$2")}
-        WHERE c.tenant_id=$1
-        GROUP BY c.id,ps.id,wr.id,meta_readiness.allowed,meta_readiness.reason ORDER BY c.created_at DESC`,
-      [request.principal.tenantId,metaReadinessBinding()],
+        WHERE c.tenant_id=$1 AND c.id IN (SELECT id FROM page_ids)
+        GROUP BY c.id,ps.id,wr.id,meta_readiness.allowed,meta_readiness.reason
+        ORDER BY c.created_at DESC,c.id DESC`,
+      [tenantId,metaReadinessBinding(),cursor,limit+1],
     );
+    return withListCursor(reply, takeListPage(rows, limit, row => row.id));
   }
 
   @Get(":id")
