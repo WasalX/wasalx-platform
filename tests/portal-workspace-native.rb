@@ -1134,7 +1134,9 @@ begin
     duplicate_email = "ambiguous-#{SecureRandom.hex(5)}@example.test"
     UserInfo.with_user_id(members['agent'].user_id) do
       User.create!(login: "one-#{SecureRandom.hex(4)}", email: duplicate_email, firstname: 'Duplicate One', active: true, role_ids: Role.signup_role_ids)
-      duplicate = User.new(login: "two-#{SecureRandom.hex(4)}", email: duplicate_email, firstname: 'Duplicate Two', active: true, role_ids: Role.signup_role_ids)
+      # Skipping validation also skips the native audit-column callback.
+      duplicate = User.new(login: "two-#{SecureRandom.hex(4)}", email: duplicate_email, firstname: 'Duplicate Two', active: true,
+        role_ids: Role.signup_role_ids, created_by_id: members['agent'].user_id, updated_by_id: members['agent'].user_id)
       duplicate.save!(validate: false)
     end
     assert.call(call.call('CREATE_TICKET', input.merge(operation_id: SecureRandom.uuid, customer: { email: duplicate_email })).first == 409, 'Ambiguous email used first matching customer')
@@ -1208,7 +1210,7 @@ begin
         CoreWorkflow.create!(name: "Inline customer restriction #{SecureRandom.hex(5)}", object: 'User', active: true,
           changeable: true, priority: 1, stop_after_match: true, condition_saved: {},
           condition_selected: { 'user.email' => { 'operator' => 'is', 'value' => [email] } },
-          perform: { 'user.email' => { 'operator' => 'set_fixed_to', 'set_fixed_to' => ['different-required@example.test'] } },
+          perform: { 'user.login' => { 'operator' => 'set_fixed_to', 'set_fixed_to' => ['different-required@example.test'] } },
           preferences: { 'screen' => ['create'] }, created_by_id: members['owner'].user_id, updated_by_id: members['owner'].user_id)
       end
       title = "Customer workflow denial #{SecureRandom.hex(4)}"
@@ -1366,7 +1368,7 @@ begin
       auth = JSON.parse(File.binread(ENV.fetch('WASALX_ADMIN_TLS_FIXTURE_AUTH_FILE')))
       ENV['WASALX_ADMIN_TEST_OWNER'] = members.fetch('owner').portal_user_id
       ENV['WASALX_ADMIN_TEST_PORTAL_SOURCE'] = JSON.generate(portal_source)
-      ENV['WASALX_ADMIN_TEST_ASSURANCE_JSON'] = JSON.generate('auth_time' => Time.now.to_i, 'amr' => ['mfa'])
+      ENV['WASALX_ADMIN_TEST_ASSURANCE_JSON'] = JSON.generate('auth_time' => Time.now.to_i, 'amr' => ['mfa'], 'acr' => nil)
       ENV['WASALX_ADMIN_TLS_PASSWORD'] = auth.fetch('password')
       load ENV.fetch('WASALX_NATIVE_MAILBOX_TEST_PATH'), true
     ensure
