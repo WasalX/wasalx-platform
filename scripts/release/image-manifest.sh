@@ -85,7 +85,11 @@ download_nightly_image_manifest() {
     if [[ "$commit" == "$base" ]]; then
       echo "Nightly uses $commit: requested base has a complete publication (run $run)" >&2
     else
-      echo "Nightly uses $commit: newest complete first-parent publication for $base (run $run)" >&2
+      local warning="Nightly images come from $commit (run $run) because requested base $base has no complete green publication."
+      printf '::warning::%s\n' "$warning" >&2
+      if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
+        printf '%s\n' "$warning" >> "$GITHUB_STEP_SUMMARY" || return
+      fi
     fi
     printf '%s\n' "$commit"
     return
