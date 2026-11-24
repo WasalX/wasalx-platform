@@ -5,6 +5,7 @@ import type { InboxArticle, InboxDetail, InboxOperation, InboxPage, InboxTicket 
 import { formatDateTime } from "../lib/i18n/format";
 import { operatorFailureMessage, operatorLocalFailure, createLatestRequestFence } from "../lib/operator-ui";
 import { useI18n } from "./I18nProvider";
+import { ScrollRegion } from "./tenant-ui";
 import { useVisibleRefresh } from "./use-visible-refresh";
 import styles from "./Inbox.module.css";
 import { FullTicketArticle, NewTicketDialog, TicketAttachmentPicker, TicketTeamPicker } from "./TicketInbox";
@@ -483,8 +484,7 @@ export function Inbox({ mutationHeaders, targetTicketNumber, selectTicket, canWr
             </select></label>
             {owner !== null || state !== null || transfer ? <button className="wx-button wx-button-secondary" disabled={busy || Boolean(unknown) || !recoveryReady || denied || transfer && transferPreview?.owner_team_id !== targetTeam}>{t("inbox.save")}</button> : null}
           </form>
-          {/* eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- The separately scrolling transcript needs keyboard access. */}
-          <div className={styles.history} role="region" aria-label={t("inbox.history")} tabIndex={0}>
+          <ScrollRegion className={styles.history} aria-label={t("inbox.history")}>
             {articleCursor ? <button className="wx-button wx-button-secondary" disabled={busy} onClick={() => void olderArticles()}>{t("inbox.older")}</button> : null}
             <ol className={styles.articles}>{[...articles].reverse().map(article => <li key={article.id} className={styles.article} data-article-id={article.id} data-internal={article.internal}>
               <div className={styles.articleHead}><b dir="auto">{article.sender === "System" ? t("common.brand.name") : article.author || t("inbox.customer")}</b>
@@ -502,7 +502,7 @@ export function Inbox({ mutationHeaders, targetTicketNumber, selectTicket, canWr
                   aria-label={t("inbox.download", { filename: file.filename })}><bdi dir="auto">{file.filename}</bdi></button>
               </li>)}</ul> : null}
             </li>)}</ol>
-          </div>
+          </ScrollRegion>
           {canWrite && detail.can_update ? <form className={styles.composer} onSubmit={submit}>
             <label htmlFor="inbox-kind">{t("inbox.messageKind")}<select id="inbox-kind" disabled={busy || Boolean(unknown)} value={internal ? "note" : "reply"} onChange={event => { setInternal(event.target.value === "note"); setReplyPreview(null); setPreviewRevision(value => value + 1); }}>
               <option value="reply" disabled={!detail.can_reply}>{t("inbox.reply")}</option><option value="note">{t("inbox.note")}</option>

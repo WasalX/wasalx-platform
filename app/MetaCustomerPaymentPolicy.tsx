@@ -1,6 +1,7 @@
 "use client";
 import {useCallback,useEffect,useRef,useState} from 'react';
 import {useI18n} from './I18nProvider';
+import { ScrollRegion } from "./tenant-ui";
 import {MetaAccountTransitionPreview} from './MetaAccountTransitionPreview';
 import {createLatestRequestFence} from '../lib/operator-ui';
 import {localizedUiError,type UiErrorCode} from '../lib/ui-error';
@@ -87,11 +88,10 @@ function CustomerPaymentPolicySession({tenantId,actorId,connectionId,canConfigur
     <p>{tariff.currency} · {t('tenant.connection.paymentPolicy.precision')}: {tariff.minorUnits} · {t(tariff.rounding==='PERIOD'?'tenant.connection.paymentPolicy.periodRounding':'tenant.connection.paymentPolicy.lineRounding')}</p>
     <p>{t('tenant.connection.paymentPolicy.deliveredUnit')}</p>
     {tariff.evidenceMode==='SIMULATED'?<p>{t('tenant.connection.paymentPolicy.developmentRates')}</p>:null}
-    {/* eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- The named rates scroll region needs keyboard focus to read all columns. */}
-    <div style={{maxWidth:'100%',overflowX:'auto'}} tabIndex={0} role="region" aria-label={t('tenant.connection.paymentPolicy.rateTable')}>
+    <ScrollRegion style={{maxWidth:'100%',overflowX:'auto'}} aria-label={t('tenant.connection.paymentPolicy.rateTable')}>
      <table><caption>{t('tenant.connection.paymentPolicy.rateTable')}</caption><thead><tr>{['category','pricingType','billable','schedule','market','tier','unitPrice'].map(key=><th scope="col" key={key}>{t(`tenant.connection.paymentPolicy.rate.${key}`)}</th>)}</tr></thead>
       <tbody>{tariff.rates.map((rate,index)=><tr key={index}><td>{t(`tenant.connection.paymentPolicy.value.${rate.category}`)}</td><td>{t(`tenant.connection.paymentPolicy.value.${rate.pricingType}`)}</td><td>{t(rate.billable?'tenant.connection.paymentPolicy.yes':'tenant.connection.paymentPolicy.no')}</td><td>{t(`tenant.connection.paymentPolicy.value.${rate.schedule}`)}</td><td>{rate.market}</td><td>{rate.tier}</td><td><bdi>{rate.unitPrice} {tariff.currency}</bdi></td></tr>)}</tbody>
-     </table></div>
+     </table></ScrollRegion>
    </div>:null}
    {choice||tariff?<><details><summary>{t('tenant.connection.paymentPolicy.reviewTerms')}</summary><p className="connection-detail-note" style={{whiteSpace:'pre-wrap',overflowWrap:'anywhere'}}>{tariff?.documentText??choice?.documentText}</p></details>
     <label className="connection-detail-note"><input type="checkbox" checked={acceptedTerms} disabled={reading||locked} onChange={event=>setAcceptedTerms(event.target.checked)}/>{' '}{t(tariff?'tenant.connection.paymentPolicy.acceptRates':'tenant.connection.paymentPolicy.acceptTerms')}</label>
