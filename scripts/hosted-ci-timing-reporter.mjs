@@ -21,7 +21,11 @@ export function validateQuarantine(entries = quarantine, today = new Date().toIS
   return entries;
 }
 
-export default async function* reportTimings(events, entries = quarantine) {
+export default async function* reportTimings(events) {
+  yield* reportTimingsWithQuarantine(events, validateQuarantine());
+}
+
+export async function* reportTimingsWithQuarantine(events, entries) {
   for await (const { type, data } of events) {
     if (!data.file || (type !== "test:summary" && type !== "test:fail")) continue;
     const file = relative(process.cwd(), data.file).split(sep).join("/");
