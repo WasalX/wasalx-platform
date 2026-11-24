@@ -28,6 +28,37 @@ const request = {
 };
 
 
+test("connections continue past 200 with a tenant-scoped cursor and stable ties", async () => {
+  const records = Array.from({ length: 202 }, (_, index) => ({
+    id: `40000000-0000-4000-8000-${String(202 - index).padStart(12, "0")}`,
+  }));
+  let queries = 0;
+  const controller = new ConnectionsController({ rows: async (tenant, sql, [, , cursor, fetchSize]) => {
+    queries += 1;
+    assert.equal(tenant, tenantId);
+    assert.match(sql, /WHERE .*tenant_id=\$1/u);
+    assert.match(sql, /ORDER BY c\.created_at DESC,c\.id DESC/u);
+    assert.match(sql, /LIMIT \$4/u);
+    const offset = cursor ? records.findIndex(row => row.id === cursor) + 1 : 0;
+    return records.slice(offset, offset + fetchSize);
+  } });
+  assert.equal(Reflect.getMetadata("wasalx:permission", controller.list), "connection:read");
+  const headers = new Map();
+  const reply = { header: (name, value) => headers.set(name, value) };
+  const first = await controller.list(request, {}, reply);
+  assert.deepEqual(first, records.slice(0, 200));
+  const cursor = headers.get("x-next-cursor");
+  assert.equal(cursor, records[199].id);
+  headers.clear();
+  assert.deepEqual(await controller.list(request, { cursor }, reply), records.slice(200));
+  assert.equal(headers.has("x-next-cursor"), false);
+  for (const query of [{ cursor: "bad" }, { cursor: [cursor] }, { limit: "201" }, { limit: ["2"] }, { limit: "0" }]) {
+    await assert.rejects(() => controller.list(request, query, reply), BadRequestException);
+  }
+  assert.equal(queries, 2);
+  assert.deepEqual(await controller.list(request), records.slice(0, 200));
+});
+
 const metaAppId = "12025550130";
 const metaAppSecret = "synthetic-configured-meta-app-secret";
 const metaAppReference = "secret://platform/meta-webhook";
