@@ -16,6 +16,7 @@ import { parsePostgresShardArgs, postgresScenarioGroups, verifyPostgresReports }
 
 const repository = fileURLToPath(new URL("../", import.meta.url));
 const read = file => readFile(join(repository, file), "utf8");
+const cosignAction = "./.github/actions/cosign";
 const commands = text => text.split(/\n|&&|;/u).map(line => line.trim()).filter(line => line && !line.startsWith("#"));
 const words = text => Array.from(text.matchAll(/"([^"]*)"|'([^']*)'|([^\s"'()]+)/gu),
   ([, doubleQuoted, singleQuoted, bare]) => doubleQuoted ?? singleQuoted ?? bare);
@@ -187,7 +188,10 @@ test("nightly install is report-only, read-only and fails open on PR diff errors
   assert.deepEqual(job.permissions, { contents: "read", actions: "read" });
   assert.equal(job["runs-on"], "ubuntu-24.04");
   const actions = job.steps.filter(step => step.uses);
-  assert(actions.every(step => /@[0-9a-f]{40}$/u.test(step.uses)));
+  const { runs } = parse(await read(cosignAction + "/action.yml"));
+  const remoteActions = actions.flatMap(step => step.uses === cosignAction
+    ? runs.steps.filter(nested => nested.uses) : [step]);
+  assert(remoteActions.every(step => /@[0-9a-f]{40}$/u.test(step.uses)));
   assert.equal(actions.find(step => step.uses.startsWith("actions/checkout@")).with["persist-credentials"], false);
   assert(!JSON.stringify(job).includes("secrets."));
   const changeSelection = job.steps.find(step => step.id === "changes");
@@ -532,7 +536,6 @@ test("CI seeds pnpm caches on main and builds cleanly in the merge queue", async
 });
 
 test("signing, promotion and nightly workflows use the same Cosign pin", async () => {
-  const actionPath = "./.github/actions/cosign";
   const pinPath = "scripts/release/cosign-pin.json";
   const pin = JSON.parse(await read(pinPath));
   assert.match(pin.version, /^v\d+\.\d+\.\d+$/u);
@@ -542,12 +545,12 @@ test("signing, promotion and nightly workflows use the same Cosign pin", async (
   for (const [workflow, expectedJobs] of Object.entries(installJobs)) {
     const { jobs } = parse(await read(`.github/workflows/${workflow}.yml`));
     for (const [job, { steps }] of Object.entries(jobs)) {
-      const installs = steps.filter(step => step.uses === actionPath || step.uses?.startsWith("sigstore/cosign-installer@"));
-      assert.deepEqual(installs.map(step => step.uses), expectedJobs.includes(job) ? [actionPath] : [], `${workflow}/${job}`);
+      const installs = steps.filter(step => step.uses === cosignAction || step.uses?.startsWith("sigstore/cosign-installer@"));
+      assert.deepEqual(installs.map(step => step.uses), expectedJobs.includes(job) ? [cosignAction] : [], `${workflow}/${job}`);
     }
   }
 
-  const { runs } = parse(await read(`${actionPath}/action.yml`));
+  const { runs } = parse(await read(`${cosignAction}/action.yml`));
   const [version, install, verify] = runs.steps;
   assert.match(version.run, /jq -er '.version' scripts\/release\/cosign-pin\.json/u);
   assert.equal(install.with["cosign-release"], "${{ steps.pin.outputs.version }}");
