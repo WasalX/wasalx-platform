@@ -279,6 +279,7 @@ test("restore runner cannot target a database endpoint and keeps the disposable 
   const script = await readFile(new URL("../scripts/dr/rehearse-postgres-restore.mjs", import.meta.url), "utf8");
   assert.doesNotMatch(script, /--target-url|DATABASE_URL|DROP DATABASE|--publish|\s-p\s/u);
   assert.match(script, /"--network", "none"/);
+  assert.match(script, /"--pull=never"/u);
   assert.match(script, /target=\/backup\/input\.dump,readonly/);
   assert.match(script, /docker", \["rm", "--force", "--volumes"/);
   assert.match(script, /flag: "wx"/);
@@ -291,19 +292,23 @@ test("quarterly restore uses the exact archive version and cleans scratch on fai
   t.after(() => rm(directory, { recursive: true, force: true }));
   const value = manifest();
   value.storage.objectVersionId = "-opaque-version-id";
-  const environment = {
+  const requiredEnvironment = {
     BACKUP_S3_BUCKET: value.storage.bucket, BACKUP_S3_REGION: value.workload.region,
     BACKUP_S3_ENDPOINT: "https://s3.example.test", CACHE_DIRECTORY: directory, STATE_DIRECTORY: directory,
+    DOCKER_HOST: "tcp://docker.example.test:2376", DOCKER_CONTEXT: "remote-fixture",
   };
+  let environment;
   const calls = [];
   let failedStage;
   let source = value;
   let scratch;
-  const run = async (program, args) => {
+  const run = async (program, args, options) => {
     const manifestKey = `${source.storage.objectKey}.manifest.json`;
+    const listedKey = failedStage === "key" ? "control-plane/backups/different.dump.manifest.json" : manifestKey;
     if (program === process.execPath) {
       if (args[0].endsWith("decrypt-backup.mjs")) {
         calls.push("decrypt");
+        assert.ok(options.timeout >= 70 * 60_000);
         assert.deepEqual(args.slice(1), [
           join(scratch, "manifest.json"), join(scratch, "artifact"), environment.BACKUP_AGE_IDENTITY,
           join(scratch, "restore.dump"),
@@ -314,23 +319,28 @@ test("quarterly restore uses the exact archive version and cleans scratch on fai
       calls.push("restore");
       assert.match(args[0], /rehearse-postgres-restore\.mjs$/u);
       assert.equal(args[4], join(scratch, failedStage === "client" ? "restore.dump" : "artifact"));
+      assert.equal(options.env.DOCKER_HOST, "unix:///run/docker.sock");
+      assert.equal(options.env.DOCKER_CONTEXT, undefined);
+      assert.equal(args[args.indexOf("--timeout-seconds") + 1], "3600");
+      assert.ok(options.timeout >= 80 * 60_000);
       if (failedStage === "restore") throw new Error("sensitive diagnostics");
-      await writeFile(args.at(-1), "synthetic evidence");
+      await writeFile(args[args.indexOf("--output") + 1], "synthetic evidence");
       return { stdout: "" };
     }
     assert.equal(program, "aws");
     if (args.includes("list-objects-v2")) {
       assert.equal(args[args.indexOf("--prefix") + 1], "control-plane/backups/");
       calls.push("list");
-      return { stdout: JSON.stringify(manifestKey) };
+      return { stdout: JSON.stringify(listedKey) };
     }
     const key = args[args.indexOf("--key") + 1];
     const destination = args.at(-1);
-    if (key === manifestKey) {
+    if (key === listedKey) {
       calls.push("manifest");
       scratch = join(destination, "..");
-      const manifestSha256 = validateBackupManifest(source, now).manifestSha256;
-      await writeFile(destination, JSON.stringify({ ...source, manifestSha256 }));
+      const manifestSha256 = failedStage === "hash" ? "0".repeat(64) : validateBackupManifest(source, now).manifestSha256;
+      const manifestText = JSON.stringify({ ...source, manifestSha256 });
+      await writeFile(destination, failedStage === "size" ? manifestText.padEnd(1_048_577) : manifestText);
       return { stdout: JSON.stringify("manifest-version") };
     }
     calls.push("artifact");
@@ -343,6 +353,12 @@ test("quarterly restore uses the exact archive version and cleans scratch on fai
   for (const [failure, expected, steps] of [
     [undefined, null, ["list", "manifest", "artifact", "restore"]],
     ["client", null, ["list", "manifest", "artifact", "decrypt", "restore"]],
+    ["http", /requires an HTTPS S3 endpoint/u, []],
+    ["credentials", /requires an HTTPS S3 endpoint/u, []],
+    ["missing", /requires a backup bucket/u, []],
+    ["hash", /does not match the selected backup/u, ["list", "manifest"]],
+    ["key", /does not match the selected backup/u, ["list", "manifest"]],
+    ["size", /manifest exceeds the evidence limit/u, ["list", "manifest"]],
     ["identity", /requires a recovery identity/u, ["list", "manifest"]],
     ["artifact", /version could not be verified/u, ["list", "manifest", "artifact"]],
     ["restore", /Disposable PostgreSQL restore failed/u, ["list", "manifest", "artifact", "restore"]],
@@ -352,6 +368,11 @@ test("quarterly restore uses the exact archive version and cleans scratch on fai
     failedStage = failure;
     calls.length = 0;
     source = structuredClone(value);
+    scratch = undefined;
+    environment = { ...requiredEnvironment };
+    if (failure === "http") environment.BACKUP_S3_ENDPOINT = "http://s3.example.test";
+    if (failure === "credentials") environment.BACKUP_S3_ENDPOINT = "https://fixture:placeholder@s3.example.test";
+    if (failure === "missing") delete environment.BACKUP_S3_BUCKET;
     if (failure === "client" || failure === "identity") {
       source.storage.objectKey += ".age";
       source.storage.encryption = { mode: "CLIENT_ENVELOPE", algorithm: "age-x25519", keyReference: `key:age1${"q".repeat(58)}` };
@@ -359,7 +380,6 @@ test("quarterly restore uses the exact archive version and cleans scratch on fai
       source.artifact.ciphertextSizeBytes = 4_300;
     }
     if (failure === "client") environment.BACKUP_AGE_IDENTITY = join(directory, "fixture-identity");
-    else delete environment.BACKUP_AGE_IDENTITY;
     if (failure === "stale") {
       source.createdAt = "2026-08-08T08:20:00.000Z";
       source.completedAt = "2026-08-08T08:30:00.000Z";
@@ -375,7 +395,7 @@ test("quarterly restore uses the exact archive version and cleans scratch on fai
       assert.equal(await readFile(result.evidence, "utf8"), "synthetic evidence");
     }
     assert.deepEqual(calls, steps);
-    await assert.rejects(stat(scratch), { code: "ENOENT" });
+    if (scratch) await assert.rejects(stat(scratch), { code: "ENOENT" });
   }
 });
 
@@ -386,6 +406,18 @@ test("the quarterly systemd timer activates the one-shot restore service", async
   assert.match(timer, /^Persistent=true$/mu);
   assert.match(service, /^Type=oneshot$/mu);
   assert.match(service, /^ExecStart=\/usr\/bin\/node scripts\/dr\/rehearse-control-plane-backup\.mjs$/mu);
+  for (const setting of [
+    "User=wasalx-restore", "NoNewPrivileges=true", "ProtectSystem=strict", "PrivateTmp=true",
+    "UMask=0077", "StateDirectoryMode=0700", "CacheDirectoryMode=0700", "UnsetEnvironment=DOCKER_CONTEXT",
+    "After=network-online.target docker.service",
+  ]) {
+    assert.ok(service.split(/\r?\n/u).includes(setting), setting);
+  }
+  const startCleanup = service.match(/^ExecStartPre=(.+)$/mu)?.[1];
+  const stopCleanup = service.match(/^ExecStopPost=(.+)$/mu)?.[1];
+  assert.match(startCleanup, /docker --host unix:\/\/\/run\/docker\.sock ps -aq --filter label=wasalx\.io\/purpose=dr-rehearsal/u);
+  assert.match(startCleanup, /xargs -r docker --host unix:\/\/\/run\/docker\.sock rm --force --volumes/u);
+  assert.equal(stopCleanup, startCleanup);
 });
 
 test("PITR inspector is read-only and cannot promote database settings into release proof", async () => {

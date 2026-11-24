@@ -8,6 +8,7 @@ import { CONTROL_BACKUP_PREFIX, DR_OBJECTIVES, validateBackupManifest } from "./
 
 const execute = promisify(execFile);
 const manifestSuffix = ".manifest.json";
+const restoreTimeoutSeconds = 3_600;
 
 export async function rehearseControlPlaneBackup(environment, { run = execute, now = () => new Date() } = {}) {
   const {
@@ -28,9 +29,9 @@ export async function rehearseControlPlaneBackup(environment, { run = execute, n
   const temporaryEvidence = join(directory, "evidence.json");
   const output = join(evidence, `control-plane-${randomUUID()}.json`);
 
-  async function command(program, args, stage, timeout = 3_600_000) {
+  async function command(program, args, stage, timeout = 3_600_000, env = environment) {
     try {
-      return (await run(program, args, { env: environment, timeout, windowsHide: true })).stdout;
+      return (await run(program, args, { env, timeout, windowsHide: true })).stdout;
     } catch {
       throw new Error(`${stage} failed`);
     }
@@ -83,10 +84,13 @@ export async function rehearseControlPlaneBackup(environment, { run = execute, n
     if (encrypted) {
       dump = join(directory, "restore.dump");
       await command(process.execPath, [fileURLToPath(new URL("decrypt-backup.mjs", import.meta.url)),
-        manifestFile, artifactFile, identity, dump], "Backup decryption and integrity verification");
+        manifestFile, artifactFile, identity, dump], "Backup decryption and integrity verification", 70 * 60_000);
     }
+    const restoreEnvironment = { ...environment, DOCKER_HOST: "unix:///run/docker.sock", DOCKER_CONTEXT: undefined };
     await command(process.execPath, [fileURLToPath(new URL("rehearse-postgres-restore.mjs", import.meta.url)),
-      "--manifest", manifestFile, "--artifact", dump, "--output", temporaryEvidence], "Disposable PostgreSQL restore", 4_500_000);
+      "--manifest", manifestFile, "--artifact", dump, "--output", temporaryEvidence,
+      "--timeout-seconds", String(restoreTimeoutSeconds)],
+    "Disposable PostgreSQL restore", (restoreTimeoutSeconds + 20 * 60) * 1_000, restoreEnvironment);
     receipt = await readFile(temporaryEvidence);
     result = { backupId: manifest.backupId, manifestVersion, artifactVersion: manifest.storage.objectVersionId, evidence: output };
   } finally {

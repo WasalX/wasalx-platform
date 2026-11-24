@@ -40,7 +40,7 @@ let cleanupError = null;
 
 try {
   docker([
-    "run", "--detach", "--name", containerName,
+    "run", "--detach", "--pull=never", "--name", containerName,
     "--network", "none",
     "--label", "wasalx.io/purpose=dr-rehearsal",
     "--label", `wasalx.io/rehearsal-id=${rehearsalId}`,
