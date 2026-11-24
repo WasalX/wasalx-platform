@@ -121,6 +121,13 @@ test("structured logs redact phones after a hyphen and preserve UUIDs and dates 
   assert.equal(redactLogValue(labelledDates), labelledDates);
 });
 
+test("structured logs keep label-hyphen-digit IDs", () => {
+  const fields = { request_id: "req-1764000000000", job_id: "wa-1764000000000", trace: "req-0123456789" };
+  assert.deepEqual(redactLogValue(fields), fields);
+  const text = "TKT-20261124000123 and import-1764000000000 done";
+  assert.deepEqual(redactLogValue({ detail: text }), { detail: text });
+});
+
 test("structured logs drop split localized phone fragments after a hyphen", () => {
   const prefix = `${"x ".repeat(994)}ID-`;
   assert.equal(redactLogValue(`${prefix}+١ ٢٠٢ ٥٥٥ ٠١٠٢`), `${prefix}…`);

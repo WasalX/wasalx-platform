@@ -27,9 +27,10 @@ const barePhonePattern = String.raw`${phoneNonZero}\p{Nd}{9,14}|${phoneZero}\p{N
 const barePhoneLike = new RegExp(`^(?:${barePhonePattern})$`, "u");
 const dateAfterHyphen = String.raw`(?<=-)(?:\p{Nd}{4}-\p{Nd}{2}-\p{Nd}{2}|\p{Nd}{2}-\p{Nd}{2}-\p{Nd}{4})(?![\p{Nd}-])`;
 // Allow a hyphen after a text label while protecting date fragments and UUID tails.
+// Only formatted numbers may follow a label hyphen, so label-hyphen-digits IDs (req-<digits>) survive.
 const phoneStart = String.raw`(?<![\p{L}\p{N}_.]|\p{Nd}-|[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-)(?!${dateAfterHyphen})`;
 const phoneLike = new RegExp(
-  String.raw`${phoneStart}(?:\+(?:\p{Nd}[\s().-]*){7,14}\p{Nd}|(?:\(?\p{Nd}{2,4}\)?[\s.-]+){2,3}\p{Nd}{4}|${barePhonePattern})(?![\p{L}\p{N}_-]|\.\p{Nd})`,
+  String.raw`${phoneStart}(?:\+(?:\p{Nd}[\s().-]*){7,14}\p{Nd}|(?:\(?\p{Nd}{2,4}\)?[\s.-]+){2,3}\p{Nd}{4}|(?<!-)(?:${barePhonePattern}))(?![\p{L}\p{N}_-]|\.\p{Nd})`,
   "gu",
 );
 const trailingToken = /(?<!\S)\S+$/u;
