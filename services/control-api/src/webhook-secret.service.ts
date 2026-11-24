@@ -41,7 +41,10 @@ function sidecarUrl(value:string){
   return url;
 }
 
-function validateReference(reference:string){if(Buffer.byteLength(reference,"utf8")>512||!SECRET_REFERENCE.test(reference))throw invalidSecret()}
+export function isWebhookSecretReference(reference:unknown):reference is string {
+  return typeof reference==="string"&&Buffer.byteLength(reference,"utf8")<=512&&SECRET_REFERENCE.test(reference);
+}
+function validateReference(reference:string){if(!isWebhookSecretReference(reference))throw invalidSecret()}
 function retryableStatus(status:number){return status===408||status===425||status===429||status>=500}
 function unavailableSecret(){return new WebhookSecretResolutionError("Webhook HMAC secret is temporarily unavailable",true)}
 function invalidSecret(){return new WebhookSecretResolutionError("Webhook HMAC secret is invalid",false)}
