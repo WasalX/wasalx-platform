@@ -16,7 +16,7 @@ import { accountObservationJourney, consumeExpectedObservationFailure, workspace
 import { consumeExpectedDirectSetupDenial, metaDirectConsentJourney } from "./meta-direct-consent.fixture";
 import { consumeExpectedSignupDenial, metaSignupJourney } from "./meta-signup.fixture";
 import { ticketEventWorkflowJourney } from "./ticket-event-workflows.fixture";
-import AxeBuilder from "@axe-core/playwright";
+import { expectAxeClean } from "../helpers/axe";
 import { expect, test, type Page } from "@playwright/test";
 import { arabicMessages } from "../../lib/i18n/messages/ar/index.ts";
 
@@ -161,20 +161,13 @@ async function open(page: Page, view: string) {
   await expect(page).toHaveTitle(`${title} · WasalX`);
 }
 
-async function expectAccessible(page: Page) {
-  const result = await new AxeBuilder({ page })
-    .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"])
-    .analyze();
-  expect(result.violations.map(({ id }) => id)).toEqual([]);
-}
-
 test("all authorized tenant routes render public Arabic copy and RTL", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "desktop owns the exhaustive Arabic route pass");
   test.setTimeout(90_000);
   for (const view of viewsByRole[role]) await open(page, view);
   await expect(page.getByRole("navigation", { name: arabicMessages["tenant.navigation.primary"] })).toBeVisible();
   await expect(page.locator(".workspace-switcher")).not.toContainText(/Managed|Standard/u);
-  await expectAccessible(page);
+  await expectAxeClean(page);
 });
 
 test("Arabic mobile and tablet layouts remain bounded with tenant context visible", async ({ page }, testInfo) => {
@@ -184,7 +177,7 @@ test("Arabic mobile and tablet layouts remain bounded with tenant context visibl
   await expect(page.locator(".environment")).toBeVisible();
   const width = await page.evaluate(() => ({ viewport: innerWidth, document: document.documentElement.scrollWidth }));
   expect(width.document).toBeLessThanOrEqual(width.viewport);
-  await expectAccessible(page);
+  await expectAxeClean(page);
 });
 
 test("Arabic data-service connections keep recovery and read-only states clear", async ({ page }, testInfo) => {
@@ -214,7 +207,7 @@ test("Arabic data-service connections keep recovery and read-only states clear",
     const overflow = await page.locator(".data-connections").evaluate((element) => element.scrollWidth - element.clientWidth);
     expect(overflow, "Arabic data services must remain bounded at narrow 200% zoom").toBeLessThanOrEqual(1);
   }
-  await expectAccessible(page);
+  await expectAxeClean(page);
 });
 
 test("Arabic modal focus, cancellation, and bidi values stay isolated", async ({ page }, testInfo) => {
