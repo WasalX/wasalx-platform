@@ -26,6 +26,14 @@ jobs:
         run: |
           pnpm run zammad:fetch
           pnpm exec playwright install --with-deps chromium
+      - name: Preload the pinned mailbox fixture image
+        run: |
+          # The fixture uses pull_policy: never and cannot rely on BuildKit's cache.
+          mailbox_image=$(node --input-type=module -e "
+            import { MAILBOX_FIXTURE_NODE_IMAGE } from './scripts/contracts/prepare-mailbox-tls-fixture.mjs';
+            console.log(MAILBOX_FIXTURE_NODE_IMAGE);
+          ")
+          docker pull "$mailbox_image"
       - name: Build the full-profile Zammad image
         run: |
           node --input-type=module <<'NODE'
