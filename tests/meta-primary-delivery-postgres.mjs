@@ -160,8 +160,11 @@ export async function verifyMetaPrimaryDelivery({admin,db,pool,controller,reques
 
    await c.query('SAVEPOINT reply_signal_privacy');
    const privacyJobId=randomUUID();
-   await c.query(`INSERT INTO privacy_jobs(id,tenant_id,job_type,scope_type,scope_value,disposition,idempotency_key)
-    VALUES($1::uuid,$2::uuid,'RETENTION_SWEEP','TENANT',$2::text,'RETENTION_DELETE',$1::text)`,[privacyJobId,tenantId]);
+   const privacyJob=await c.query(`INSERT INTO privacy_jobs(id,tenant_id,job_type,scope_type,scope_value,disposition,
+    idempotency_key,unmatched_diagnostic_hours_snapshot)
+    SELECT $1::uuid,tenant_id,'RETENTION_SWEEP','TENANT',tenant_id::text,'RETENTION_DELETE',$1::text,
+      unmatched_diagnostic_hours FROM retention_policies WHERE tenant_id=$2`,[privacyJobId,tenantId]);
+   assert.equal(privacyJob.rowCount,1);
    await c.query(`INSERT INTO privacy_job_targets(tenant_id,job_id,target_type,target_id,target_sha256)
     SELECT tenant_id,$1,'NORMALIZED_MESSAGE',id::text,encode(digest(id::text,'sha256'),'hex')
     FROM normalized_messages WHERE tenant_id=$2 AND connection_id=$3 AND external_message_id=$4`,
