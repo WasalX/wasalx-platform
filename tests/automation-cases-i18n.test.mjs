@@ -201,7 +201,7 @@ test("workflow step labels disambiguate duplicate types and use each version's o
       const description = helpers.nodeDescription(nodes[0], locale, t, [], definition.nodes);
       assert.equal(description, t("bot.node.description.action", { action: helpers.isolate("approved.lookup"), success: helpers.isolate(alphaLabel), failure: helpers.isolate(betaLabel) }));
       const entrySummary = helpers.comparisonSettingValue("entryCommands", "", definition, locale, t);
-      assert.equal(entrySummary, `Sales → ${helpers.isolate(alphaLabel)} · ${t("bot.entry.enabled")}`);
+      assert.equal(entrySummary, `${helpers.isolate("Sales")} ${locale === "ar" ? "←" : "→"} ${helpers.isolate(alphaLabel)} · ${t("bot.entry.enabled")}`);
       assert.equal(helpers.comparisonSettingValue("start", definition.start, definition, locale, t), label(action, "action"));
       assert.equal(helpers.comparisonSettingValue("mainMenuNodeId", "", definition, locale, t).split(" · ")[0], label(menu, "choice"));
       assert.doesNotMatch(`${description} ${entrySummary}`, /machine_/u);

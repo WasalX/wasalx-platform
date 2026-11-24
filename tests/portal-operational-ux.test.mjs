@@ -964,3 +964,18 @@ test("lazy slots in panels, drawers and dialogs use a compact, accurately labell
   assert.match(english, /"tenant\.loading\.section": "Loading this section…"/u);
   assert.match(arabic, /"tenant\.loading\.section": "جارٍ تحميل هذا القسم…"/u);
 });
+
+test("decorative arrows follow the reading direction and stay hidden from screen readers", async () => {
+  const [styles, ...sources] = await Promise.all([
+    read("app/globals.css"),
+    read("app/WasalXApp.tsx"),
+    read("app/BotAutomation.tsx"),
+    read("app/platform/MetaTransitionOperator.tsx"),
+  ]);
+  assert.match(styles, /\.reading-arrow\{display:inline-block\}\[dir="rtl"\] \.reading-arrow\{transform:scaleX\(-1\)\}/u);
+  for (const source of sources) {
+    const arrows = source.split("→").length - 1;
+    assert.ok(arrows > 0);
+    assert.equal(source.split('<span className="reading-arrow" aria-hidden="true">→</span>').length - 1, arrows, "every arrow is a mirrored, aria-hidden reading-arrow");
+  }
+});
