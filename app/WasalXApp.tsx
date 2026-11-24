@@ -698,8 +698,8 @@ function TenantWasalXApp({
   const executeWorkspace = useCallback(async <T,>(operation: string, input: Record<string, unknown>, signal?: AbortSignal): Promise<T> => {
     const response = await fetch("/api/inbox", { method: "POST", headers: mutationHeaders, signal,
       body: JSON.stringify({ operation, input }) });
-    const result = await response.json() as { error?: string; code?: string };
-    if (!response.ok) throw Object.assign(new Error(result.error || t("teamsAdmin.failed")), { status: response.status, code: result.code });
+    const result = await response.json() as { code?: string };
+    if (!response.ok) throw Object.assign(new Error(t("teamsAdmin.failed")), { status: response.status, code: result.code });
     return result as T;
   }, [mutationHeaders, t]);
   const [signingOut, setSigningOut] = useState(false);

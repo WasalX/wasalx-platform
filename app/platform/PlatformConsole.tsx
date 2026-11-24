@@ -553,7 +553,7 @@ function Progress({ tenant }: { tenant: TenantOperation }) {
   const { locale, t } = useI18n();
   const progress = Math.min(100, Math.max(0, Number(tenant.progress_percent ?? 0)));
   const step = tenant.current_step ? stateLabel(tenant.current_step, t) : t(progress === 100 ? "platform.states.complete" : "platform.states.queued");
-  return <div className={styles.progress}><span><i style={{ inlineSize: `${progress}%` }} /></span><small>{formatNumber(progress / 100, locale, { style: "percent", maximumFractionDigits: 0 })} · {step}</small>{tenant.safe_error ? <small className={styles.progressError}>{tenant.safe_error}</small> : null}{tenant.attempts !== undefined && tenant.max_attempts !== undefined ? <small>{t("platform.tenants.attempts", { attempts: formatNumber(tenant.attempts, locale), maximum: formatNumber(tenant.max_attempts, locale) })}</small> : null}</div>;
+  return <div className={styles.progress}><span><i style={{ inlineSize: `${progress}%` }} /></span><small>{formatNumber(progress / 100, locale, { style: "percent", maximumFractionDigits: 0 })} · {step}</small>{tenant.safe_error ? <small className={styles.progressError}>{t("platform.tenants.operationFailed")}</small> : null}{tenant.attempts !== undefined && tenant.max_attempts !== undefined ? <small>{t("platform.tenants.attempts", { attempts: formatNumber(tenant.attempts, locale), maximum: formatNumber(tenant.max_attempts, locale) })}</small> : null}</div>;
 }
 
 function Status({ value, label }: { value: string; label?: string }) {
