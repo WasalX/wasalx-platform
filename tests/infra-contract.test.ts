@@ -1299,6 +1299,11 @@ test("Docker smoke may reuse only a complete, explicitly verified local image se
 
 
 
+test("Helm explicitly leaves invitation mail unrestricted in staging and production", async () => {
+  const workloads = await read("infra/helm/wasalx/templates/workloads.yaml");
+  assert.match(workloads, /\{\{- if and \(eq \$name "invitation-mailer"\) \(has \$root\.Values\.environment \(list "staging" "production"\)\) \}\}\s+- \{ name: WASALX_TEST_EMAIL_RECIPIENT_ALLOWLIST, value: "\*" \}\s+\{\{- end \}\}/u);
+});
+
 test("Helm and Terraform keep workload, migration, and secret-cleanup credentials isolated", async () => {
   const workloads = await read("infra/helm/wasalx/templates/workloads.yaml");
   const config = await read("infra/helm/wasalx/templates/config.yaml");

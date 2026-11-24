@@ -29,7 +29,8 @@ DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 # Keep this grammar identical to the D1 consumer's RC tag grammar.
 RC = re.compile(r"v[A-Za-z0-9_.-]{0,108}-rc\.[A-Za-z0-9_.-]{1,16}")
 IMAGE_NAME = r"[a-z0-9]+(?:[._-][a-z0-9]+)*(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)*"
-REF = re.compile(rf"(?!docker\.io/){IMAGE_NAME}@{DIGEST.pattern}")
+DOCKER_HUB_PREFIX = r"(?:(?:docker|index\.docker|registry-1\.docker)\.io/(?:library/)?|library/)"
+REF = re.compile(rf"(?!{DOCKER_HUB_PREFIX}){IMAGE_NAME}@{DIGEST.pattern}")
 COMPOSE_REF = re.compile(
     rf"({IMAGE_NAME})(?::[A-Za-z0-9_][A-Za-z0-9_.-]{{0,127}})?@((?ai:{DIGEST.pattern}))"
 )
@@ -354,7 +355,7 @@ def compose_refs(api, commit, product_refs):
             pinned = COMPOSE_REF.fullmatch(ref)
             require(pinned is not None)
             image, digest = pinned.groups()
-            image = image.removeprefix("docker.io/library/").removeprefix("docker.io/")
+            image = re.sub(rf"^{DOCKER_HUB_PREFIX}", "", image, count=1)
             ref = f"{image}@{digest.lower()}"
             require(bool(REF.fullmatch(ref)) and not ref.startswith(PRODUCT_PREFIX))
             refs.add(ref)

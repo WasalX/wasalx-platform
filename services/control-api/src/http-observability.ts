@@ -65,7 +65,7 @@ function statusClass(value: number) {
 
 function webhookProvider(url: string) {
   if (url.startsWith("/webhooks/waha/")) return "waha";
-  if (url === "/webhooks/meta" || url.startsWith("/webhooks/meta?")) return "meta";
+  if (url === "/webhooks/meta" || url.startsWith("/webhooks/meta?") || url.startsWith("/webhooks/meta/apps/")) return "meta";
   return "unknown";
 }
 

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { readTenantPortalSource } from "./helpers/tenant-portal-source.mjs";
 
 const read = (path) => readFile(new URL(`../${path}`, import.meta.url), "utf8");
 
@@ -27,7 +28,7 @@ test("logical UI retries retain one idempotency key through every bridge", async
 test("group mutations are revision fenced, immutable, and reject missing keys", async () => {
   const [migration, controller, drawer, bindingRoute, workspaceSettings, workspaceGroup, grants, revoke] = await Promise.all([
     read("services/control-api/migrations/0113_group_binding_revision_and_operation_receipts.sql"),
-    read("services/control-api/src/groups.controller.ts"), read("app/WasalXApp.tsx"),
+    read("services/control-api/src/groups.controller.ts"), readTenantPortalSource(),
     read("app/api/groups/[id]/binding/route.ts"), read("app/api/group-workspace/settings/route.ts"),
     read("app/api/group-workspace/groups/[id]/route.ts"), read("app/api/group-workspace/groups/[id]/grants/route.ts"),
     read("app/api/group-workspace/groups/[id]/grants/[grantId]/route.ts"),
@@ -56,7 +57,7 @@ test("group, case, and rule lists expose bounded cursor pagination without chang
     read("services/control-api/src/groups.controller.ts"), read("services/control-api/src/cases.controller.ts"),
     read("services/control-api/src/rule-governance.service.ts"), read("services/control-api/src/rules.controller.ts"),
     read("app/api/groups/route.ts"), read("app/api/cases/route.ts"), read("app/api/rule-sets/route.ts"),
-    read("app/WasalXApp.tsx"),read("app/CaseLifecycle.tsx"),
+    readTenantPortalSource(),read("app/CaseLifecycle.tsx"),
   ]);
   assert.match(groups,/@Query\("after"\)[\s\S]*@Query\("q"\)[\s\S]*position\(lower\(\$4\)[\s\S]*LIMIT \$3/u);
   assert.match(cases,/@Query\("before"\)[\s\S]*LIMIT \$3/u);

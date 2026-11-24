@@ -185,10 +185,11 @@ test("scoped metadata synchronization preserves excluded groups and all particip
 });
 
 test("final WAHA send boundary refuses excluded targets and cross-chat replies/reactions before network",async(t)=>{
-  const before=process.env.WASALX_TEST_RECIPIENT_ALLOWLIST, fetchBefore=globalThis.fetch, warnBefore=console.warn;
-  t.after(()=>{if(before===undefined)delete process.env.WASALX_TEST_RECIPIENT_ALLOWLIST;else process.env.WASALX_TEST_RECIPIENT_ALLOWLIST=before;globalThis.fetch=fetchBefore;console.warn=warnBefore});
+  const before=process.env.WASALX_TEST_RECIPIENT_ALLOWLIST, fetchBefore=globalThis.fetch;
+  t.after(()=>{if(before===undefined)delete process.env.WASALX_TEST_RECIPIENT_ALLOWLIST;else process.env.WASALX_TEST_RECIPIENT_ALLOWLIST=before;globalThis.fetch=fetchBefore});
   process.env.WASALX_TEST_RECIPIENT_ALLOWLIST=raw;
-  const calls=[],warnings=[];console.warn=(...args)=>warnings.push(args);
+  const calls=[],warnings=[];
+  t.mock.method(process.stderr, "write", (line) => { warnings.push(String(line)); return true; });
   globalThis.fetch=async(url,init)=>{calls.push({url:String(url),body:JSON.parse(init.body)});return new Response(JSON.stringify({id:`true_${group}_SENT`}),{status:200})};
   const adapter=new WahaAdapter({baseUrl:"http://fixture.invalid",apiKey:"synthetic-key",sessionFor:()=>"synthetic-session"});
   const input={connectionId:"synthetic",groupId:group,text:"synthetic",idempotencyKey:"synthetic"};
@@ -205,7 +206,15 @@ test("final WAHA send boundary refuses excluded targets and cross-chat replies/r
     {...input,groupId:otherGroup,media:{bytes:new Uint8Array([1]),mimeType:"image/png",filename:"synthetic.png"}},
   ]) await assert.rejects(adapter.send(rejected),error=>error.code==="WAHA_TEST_RECIPIENT_NOT_ALLOWED"&&error.outcomeKnown===true);
   assert.equal(calls.length,acceptedCalls);assert.equal(warnings.length,7);
-  assert(warnings.every(args=>args.length===1&&args[0]==="WAHA test recipient scope refused outbound send"));
+  for (const line of warnings) {
+    const { timestamp, request_id, ...entry } = JSON.parse(line);
+    assert.deepEqual(entry, {
+      level: "warn", event: "waha.test_recipient_scope_refused",
+      component: "waha-connector", error_code: "WAHA_TEST_RECIPIENT_NOT_ALLOWED",
+    });
+    assert.match(timestamp, /^\d{4}-\d{2}-\d{2}T/u);
+    assert.match(request_id, /^[a-f0-9-]{36}$/u);
+  }
   for(const raw of [undefined,""," ","[]","not-json"]){
     if(raw===undefined)delete process.env.WASALX_TEST_RECIPIENT_ALLOWLIST;else process.env.WASALX_TEST_RECIPIENT_ALLOWLIST=raw;
     if(raw==="not-json")assert.throws(()=>new WahaAdapter({baseUrl:"http://fixture.invalid",apiKey:"synthetic-key",sessionFor:()=>"synthetic-session"}));
@@ -221,9 +230,9 @@ test("final WAHA send boundary refuses excluded targets and cross-chat replies/r
 });
 
 test("excluded deliveries fail before begin-send, secret reads, native writes or media staging",async(t)=>{
-  const previous=process.env.WASALX_TEST_RECIPIENT_ALLOWLIST,warnBefore=console.warn;
-  t.after(()=>{if(previous===undefined)delete process.env.WASALX_TEST_RECIPIENT_ALLOWLIST;else process.env.WASALX_TEST_RECIPIENT_ALLOWLIST=previous;console.warn=warnBefore});
-  process.env.WASALX_TEST_RECIPIENT_ALLOWLIST=raw;console.warn=()=>{};
+  const previous=process.env.WASALX_TEST_RECIPIENT_ALLOWLIST;
+  t.after(()=>{if(previous===undefined)delete process.env.WASALX_TEST_RECIPIENT_ALLOWLIST;else process.env.WASALX_TEST_RECIPIENT_ALLOWLIST=previous});
+  process.env.WASALX_TEST_RECIPIENT_ALLOWLIST=raw;
   const effects=[],failures=[];
   const repository={beginSend:async()=>effects.push("begin"),fail:async(_job,_lease,retryable,error)=>failures.push({retryable,error})};
   const processor=new DeliveryProcessor(repository,{resolve:async()=>{effects.push("secret");throw new Error("Unexpected secret read")}},{metaGraphVersion:"v24.0"},8,{prepare:async()=>{effects.push("media");throw new Error("Unexpected media preparation")}});
