@@ -66,7 +66,17 @@ export async function auditWorkspaceJourney(page: Page, locale: "en" | "ar", rol
   await expect(page.getByText(copy["tenant.audit.noMatchesTitle"], { exact: true })).toBeVisible();
   await search.fill("");
   await expect(entries).toHaveCount(rows.length);
-  if (["tenant_owner", "auditor"].includes(role)) await info.attach("audit-workspace", { body: await page.screenshot(), contentType: "image/png" });
+  if (info.project.name === "tablet-820") {
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(820);
+    await info.attach("audit-workspace-dark", { body: await page.screenshot(), contentType: "image/png" });
+    await page.getByRole("button", { name: copy["tenant.theme.switchLight"], exact: true }).click();
+    const darkThemeButton = page.getByRole("button", { name: copy["tenant.theme.switchDark"], exact: true });
+    await expect(darkThemeButton).toBeVisible();
+    await info.attach("audit-workspace-light", { body: await page.screenshot(), contentType: "image/png" });
+    await darkThemeButton.click();
+  } else if (["tenant_owner", "auditor"].includes(role)) {
+    await info.attach("audit-workspace", { body: await page.screenshot(), contentType: "image/png" });
+  }
   expect((await new AxeBuilder({ page }).include(".table-panel").withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze()).violations).toEqual([]);
   if (role === "supervisor") await expect(exportButton).toHaveCount(0);
   else {

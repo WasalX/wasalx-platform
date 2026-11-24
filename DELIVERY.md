@@ -29,9 +29,11 @@ WasalX Delivery owns this document, releases, deploys, rollback, and alerts. See
 - The [pnpm cache action](.github/actions/ci-pnpm/action.yml) saves pnpm dependency and service build caches on main pushes only. A workspace dependency cache miss clears partial module directories before the frozen install. PostgreSQL integration and portal integration always force clean service builds.
 - Run CI on free GitHub-hosted runners. Cancel older CI runs only for the same PR. Keep workflow permissions read-only at the top level, grant writes per job, and pin actions by full commit SHA. Prohibit `pull_request_target`. Fork PRs receive no secrets.
 - Set job time limits from the measured p95 plus 25 percent, rounded up to a whole minute. Review limits monthly. A higher limit needs new measurements in a separate PR. See the [CI timing sample](.github/ci-timings.json) and [current coverage](#deviations).
-- The [workflow lint job](.github/workflows/ci.yml) verifies the pinned actionlint release archive by SHA-256. It compares all workflow findings against the base on workflow-changing PRs and records the base, candidate and new counts. Merge groups and main pushes always run the comparison. `ci-gate` requires zero new findings.
+- The [workflow lint job](.github/workflows/ci.yml) verifies the pinned actionlint release archive by SHA-256. It uses the maintained actionlint fork for GitHub's `concurrency.queue` syntax and checks all workflows on every CI run. `ci-gate` requires zero actionlint findings.
 
 ## Test policy
+
+- The [application Playwright config](playwright.application.config.ts) selects the journeys that run at 820 px. Mark tablet coverage on each journey with `@tablet`.
 
 - Fix a failing test or the defect it found. Keep required checks and lint rules in place. CI must pass on its first attempt without skipping tests or widening timeouts. File a flaky test as a High-priority bug and fix it or revert the change that introduced it.
 - WasalX QA owns tests at every layer, the end-to-end journey catalogue, samples and fixtures, coverage, failing and flaky tests, and nightly suite results. QA runs the pre-release sweep. WasalX Delivery owns the [merge gate](#branching-and-merging), pipeline faults, and [CI speed](#checks).

@@ -13,10 +13,10 @@ export type CostAccount={id:string;names:string[]};
 export type CostUsage=MetaCostUsageSnapshot&{accounts?:CostAccount[];tariffs?:Array<Record<string,unknown>>};
 type PlatformScope={tenantId:string;csrfToken:string};
 
-export function MetaCostUsage({canExport,platform,management,refreshKey=0}:{canExport:boolean;platform?:PlatformScope;refreshKey?:number;
+export function MetaCostUsage({open,canExport,platform,management,refreshKey=0}:{open:boolean;canExport:boolean;platform?:PlatformScope;refreshKey?:number;
   management?:(snapshot:CostUsage,accountId:string,window:{from:string;to:string})=>ReactNode}){
   const{locale,t}=useI18n();
-  const[open,setOpen]=useState(Boolean(platform)),[accounts,setAccounts]=useState<CostAccount[]>([]),[account,setAccount]=useState("unattributed");
+  const[accounts,setAccounts]=useState<CostAccount[]>([]),[account,setAccount]=useState("unattributed");
   const[window,setWindow]=useState(()=>{const now=new Date();return{from:new Date(Date.UTC(now.getUTCFullYear(),now.getUTCMonth(),1)).toISOString().slice(0,16),to:new Date(Date.UTC(now.getUTCFullYear(),now.getUTCMonth()+1,1)).toISOString().slice(0,16)}});
   const[loaded,setLoaded]=useState<{scope:string;value:CostUsage}|null>(null),[loading,setLoading]=useState(false),[failed,setFailed]=useState(false),[downloading,setDownloading]=useState(false),[page,setPage]=useState(0);
   const sequence=useRef(0),alive=useRef(true);
@@ -57,9 +57,7 @@ export function MetaCostUsage({canExport,platform,management,refreshKey=0}:{canE
   };
   const currentPage=Math.min(page,Math.max(0,Math.ceil((snapshot?.rows.length??0)/100)-1));
   const rows=snapshot?.rows.slice(currentPage*100,(currentPage+1)*100)??[];
-  return <details className={styles.section} open={open} onToggle={event=>setOpen(event.currentTarget.open)}>
-    <summary>{t("cost.title")}</summary>
-    {open?<div className={styles.content}>
+  return open?<div className={styles.content}>
       <p className={styles.help}>{t("cost.description")}</p>
       <div className={styles.filters}>
         <label>{t("cost.account")}<select value={account} onChange={event=>{setAccount(event.target.value);setPage(0);}}><option value="unattributed">{t("cost.unattributed")}</option>{accounts.map((item,index)=><option key={item.id} value={item.id}>{item.names.join(" / ")||t("cost.accountFallback",{count:formatNumber(index+1,locale)})}</option>)}</select></label>
@@ -78,6 +76,5 @@ export function MetaCostUsage({canExport,platform,management,refreshKey=0}:{canE
         {!platform&&account!=="unattributed"?<MetaCostStatements key={account} query={query} canExport={canExport}/>:null}
         {management?.(snapshot,account,{from:`${window.from}:00.000Z`,to:`${window.to}:00.000Z`})}
       </>:null}
-    </div>:null}
-  </details>;
+    </div>:null;
 }
