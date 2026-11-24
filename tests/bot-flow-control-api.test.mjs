@@ -16,6 +16,7 @@ import {
 } from "../lib/bot-conversations.ts";
 import { assignBotFlow as assignFixtureFlow, commandBotConversation as commandFixtureConversation, getBotAssignments as getFixtureAssignments, getBotConversationEvents as getFixtureConversationEvents, getBotConversations as getFixtureConversations, getBotFlows as getFixtureFlows, setBotAssignmentAttribution as setFixtureAttribution } from "../lib/fixture-data.ts";
 import { advanceBotFlow } from "../packages/core/src/bot-flow.ts";
+import { BotFlowsController } from "../services/control-api/dist/bot-flows.controller.js";
 import { BotFlowsService } from "../services/control-api/dist/bot-flows.service.js";
 import { can } from "../services/control-api/dist/rbac.js";
 import { RuleGovernanceService } from "../services/control-api/dist/rule-governance.service.js";
@@ -26,6 +27,68 @@ const userId = "10100000-0000-4000-8000-000000000001";
 const familyId = "41000000-0000-4000-8000-000000000001";
 const versionId = "42000000-0000-4000-8000-000000000001";
 const principal = { subject: "owner", userId, tenantId, email: "owner@example.invalid", displayName: "Owner", role: "tenant_owner", authenticatedAt: Math.floor(Date.now()/1000), authenticationMethods: ["mfa"] };
+test("bot lists continue through the old 200-row cap", async t => {
+  const records = Array.from({ length: 203 }, (_, index) => {
+    const id = "44000000-0000-4000-8000-" + String(index + 1).padStart(12, "0");
+    return { id, flow_version_id: id, action_key: "orders.lookup", kind: "HTTP_JSON",
+      endpoint_url: "https://example.test/lookup?token=fixture", headers: { "x-fixture": "value" } };
+  });
+  const selected = records.at(-1);
+  for (const [method, table] of [
+    ["list", "bot_flow_versions"], ["listActions", "bot_action_definitions"],
+    ["listActionRevisions", "bot_action_revisions"], ["listRouting", "client_routing_versions"],
+    ["listMediaAssets", "bot_media_assets"],
+  ]) {
+    await t.test(method, async () => {
+      const media = method === "listMediaAssets";
+      const revising = method === "listActionRevisions";
+      const redact = revising || method === "listActions";
+      let queries = 0;
+      const database = { rows: async (tenant, sql, values) => {
+        queries += 1;
+        assert.equal(tenant, tenantId);
+        assert.equal(values[0], tenantId);
+        assert.ok(sql.includes(table));
+        assert.match(sql, /LIMIT \$[34]/u);
+        if (revising) assert.equal(values[1], "orders.lookup");
+        if (media) assert.deepEqual(values[1], [selected.id]);
+        const cursor = values.at(-2);
+        const available = media ? records.slice(0, -1) : records;
+        const position = cursor ? available.findIndex(row => row.id === cursor) + 1 : 0;
+        const rows = available.slice(position, position + values.at(-1));
+        if (!media) return rows;
+        const normal = rows.map(row => ({ ...row, pagination_requested: false }));
+        return cursor ? normal : [...normal, { ...selected, pagination_requested: true }];
+      } };
+      const controller = new BotFlowsController(new BotFlowsService(database));
+      assert.equal(Reflect.getMetadata("wasalx:permission", controller[method]), "bot:read");
+      const request = { principal: redact ? { ...principal, role: "auditor" } : principal };
+      const headers = new Map();
+      const reply = { header: (name, value) => headers.set(name, value) };
+      const list = query => revising ? controller[method](request, "orders.lookup", query, reply)
+        : controller[method](request, { ...(media ? { id: selected.id } : {}), ...query }, reply);
+      const ids = rows => rows.map(row => row.id);
+      const first = await list({});
+      assert.deepEqual(ids(first), ids(media ? [...records.slice(0, 200), selected] : records.slice(0, 200)));
+      const cursor = headers.get("x-next-cursor");
+      assert.equal(cursor, records[199].id);
+      headers.clear();
+      const next = await list({ cursor });
+      assert.deepEqual(ids(next), ids(media ? records.slice(200, -1) : records.slice(200)));
+      assert.equal(headers.has("x-next-cursor"), false);
+      if (redact) {
+        assert.equal(next[0].endpoint_url, "https://example.test/lookup");
+        assert.deepEqual(next[0].headers, {});
+      }
+      if (media) assert.ok([...first, ...next].every(row => !("pagination_requested" in row)));
+
+      await assert.rejects(() => list({ cursor: "invalid" }), /cursor is invalid/);
+      await assert.rejects(() => list({ limit: ["2"] }), /Page limit/);
+      assert.equal(queries, 2);
+    });
+  }
+});
+
 const definition = {
   schemaVersion: 1,
   name: "Support",
@@ -538,11 +601,11 @@ test("active flows pin action behavior and read-only roles receive no secret met
   }};
   const service=new BotFlowsService({withTenant:async(_tenant,callback)=>callback(client),rows:async()=>[{id:existingId,kind:"NOTION_CREATE_PAGE",endpoint_url:"https://api.notion.com/v1/pages?workspace=northstar",http_method:"POST",auth_scheme:"BEARER",secret_reference:"secret://tenant/action",headers:{"x-safe":"value"}}]});
   await assert.rejects(()=>service.saveAction(principal,"request",{actionKey:"orders.lookup",name:"Lookup",kind:"HTTP_JSON",endpointUrl:"https://example.com/action",httpMethod:"POST",authScheme:"NONE",secretReference:null,headers:{},responseMapping:{},timeoutMs:5000,maxResponseBytes:2048,state:"ACTIVE",expectedRevision:2}),/pinned by an active flow/);
-  const visible=await service.listActions({...principal,role:"auditor"});
+  const {items:visible}=await service.listActions({...principal,role:"auditor"});
   assert.deepEqual(visible[0]?.headers,{});
   assert.equal(visible[0]?.secret_reference,null);
   assert.equal(visible[0]?.endpoint_url,"https://api.notion.com/v1/pages");
-  assert.equal((await service.listActions(principal))[0]?.endpoint_url,"https://api.notion.com/v1/pages?workspace=northstar");
+  assert.equal((await service.listActions(principal)).items[0]?.endpoint_url,"https://api.notion.com/v1/pages?workspace=northstar");
   assert.deepEqual(visible[0]?.capabilities,{invocation_surfaces:["DIRECT_FLOW","GROUP_COMMAND"],retry_semantics:"OUTCOME_UNKNOWN_ON_AMBIGUOUS_FAILURE"});
 });
 
@@ -698,7 +761,7 @@ test("plugin qualification refuses write-capable actions and advertises only act
     {action_key:"paused.get",kind:"HTTP_JSON",endpoint_url:"https://api.example.test/status",http_method:"GET",auth_scheme:"NONE",secret_reference:null,state:"PAUSED"},
   ]});
   await assert.rejects(()=>service.qualifyAction(principal,"unsafe.post","qualify-post","request-post",{expectedRevision:1,input:{}}),/Only replay-safe GET actions/);
-  assert.deepEqual((await service.listActions(principal)).map(row=>row.qualification_supported),[true,false,false]);
+  assert.deepEqual((await service.listActions(principal)).items.map(row=>row.qualification_supported),[true,false,false]);
 });
 
 test("action revision integrity migration pins behavior and fails closed at tenant and secret boundaries",async()=>{
@@ -898,7 +961,7 @@ test("direct media is tenant pinned, projected to Zammad, and claimed as provide
   assert.match(inbound,/bot_media_asset\.upload_failed[\s\S]*UPLOAD_REJECTED/);
   
   const service=await readFile(new URL("../services/control-api/src/bot-flows.service.ts",import.meta.url),"utf8");
-  assert.match(service,/requestedIds\.length>100[\s\S]*WITH requested AS[\s\S]*id=ANY\(\$2::uuid\[\]\)[\s\S]*recent AS[\s\S]*LIMIT 200[\s\S]*UNION ALL[\s\S]*DISTINCT ON \(id\)/);
+  assert.match(service,/requestedIds\.length\s*>\s*100[\s\S]*WITH requested AS[\s\S]*state=\x27READY\x27[\s\S]*id=ANY\(\$2::uuid\[\]\)[\s\S]*recent AS[\s\S]*state=\x27READY\x27[\s\S]*LIMIT \$4/u);
   assert.match(service,/validateMediaAssets\(client,principal\.tenantId,target\.flow_version_id[\s\S]*target\.provider,false\)/);
   assert.match(service,/\$3::boolean=false OR media\.expires_at>now\(\)/);
   assert.match(service,/pg_advisory_xact_lock[\s\S]*bot-media-upload:/);
