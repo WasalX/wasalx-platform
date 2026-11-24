@@ -13,7 +13,9 @@ const readRows=rows=>async(id,ids)=>{assert.equal(id,tenant);return structuredCl
 test("exact native DISCOVER observation is shared by Team and Workspace Access without source/native writes",async(t)=>{
   const row=snapshot(),original=structuredClone(row),queries=[];let inside=false,calls=0;
   const database={rows:async(id,sql,values)=>{
-    assert.equal(id,tenant);inside=true;queries.push(sql);assert.match(sql,/^SELECT/u);
+    assert.equal(id,tenant);inside=true;queries.push(sql);
+    assert.match(sql,/^(?:SELECT|WITH \w+ AS \(\s*SELECT)\b/u);
+    assert.doesNotMatch(sql,/\b(?:INSERT|UPDATE|DELETE|MERGE)\b/u);
     try{
       if(sql.includes("FROM tenant_settings"))return[{native_membership_sync_enabled:true}];
       if(sql.includes("FROM tenant_memberships m"))return[{id:"membership",user_id:user,email:row.email,display_name:row.display_name,role:"agent",state:"ACTIVE",version:17}];

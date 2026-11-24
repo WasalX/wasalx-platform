@@ -798,8 +798,24 @@ export async function updateWorkspaceSettings(input: Record<string, unknown>) {
   });
 }
 
-export async function getTeamAccess() {
-  return call<TeamAccessData>(await currentPortalSession(), "/v1/team");
+export async function getTeamAccess(): Promise<TeamAccessData> {
+  type TeamPage = TeamAccessData & { members_next_cursor?: string | null; invitations_next_cursor?: string | null };
+  const session = await currentPortalSession();
+  const first = await call<TeamPage>(session, "/v1/team");
+  let page = first;
+  const seen = new Set<string>();
+  while (page.members_next_cursor || page.invitations_next_cursor) {
+    const query = new URLSearchParams();
+    if (page.members_next_cursor) query.set("member_cursor", page.members_next_cursor);
+    if (page.invitations_next_cursor) query.set("invitation_cursor", page.invitations_next_cursor);
+    const continuation = query.toString();
+    if (seen.has(continuation)) throw new ControlPlaneError("The control plane repeated a team page cursor", 502);
+    seen.add(continuation);
+    page = await call<TeamPage>(session, "/v1/team?" + continuation);
+    first.members.push(...page.members);
+    first.invitations.push(...page.invitations);
+  }
+  return { members: first.members, invitations: first.invitations, capabilities: first.capabilities };
 }
 
 export async function workspaceAccess(input: Record<string, unknown>) {
