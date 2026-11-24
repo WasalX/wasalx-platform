@@ -94,6 +94,7 @@ test("structured logs preserve long numeric IDs and timestamps in fields", () =>
     timestamp: "2026-11-24T12:05:00.000Z",
     waba_id: "123456789012345",
     business_id: 123456789012345,
+    customer_id: "12025550102",
     ticket_number: "20261124000123",
     request_id: "120255501020",
     external_id: "٠٧٧٠٠٩٠٠٠٠٠",

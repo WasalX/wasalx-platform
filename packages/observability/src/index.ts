@@ -15,16 +15,24 @@ const INSTRUMENTATION_VERSION = "0.1.0";
 
 const sensitiveKey = /(?:^|_)(?:body|text|payload|secret|token|authorization|cookie|password|qr|pass_?key|phone|reference|url|group_name|messages?|title|filename|api_key|access_key|credentials?|private_key|signature|t?otp|passphrase|hmac|sessions?|jwt|key|sig)(?:_|$)/iu;
 // Provider message, chat, and recipient identifiers can contain phone numbers.
-const personalFieldKey = /(?:^|_)(?:e_?mails?|recipients?|subjects?|contacts?|senders?|user_?names?|push_?names?|chat_ids?|wamids?|wa_?ids?|participants?|authors?|nicknames?|(?:first|last|full|display|recipient|customer|agent|profile|nick)_names?)(?:_|$)|^names?$/iu;
+const personalFieldKey = /(?:^|_)(?:e_?mails?|recipients?|subjects?|contacts?|senders?|user_?names?|push_?names?|chat_ids?|wamids?|wa_?ids?|participants?|authors?|nicknames?|mobiles?|msisdns?|tels?|jids?|(?:first|last|full|display|recipient|customer|agent|profile|nick)_names?)(?:_|$)|^(?:names?|customer)$/iu;
 const addressKey = /(?:^|\.)(?:to|from|cc|bcc|reply[ _-]?to|mail[ _-]?from|address)$/iu;
 const internalIdKey = /^(?:contact|sender|subject|e_?mail)_ids?$/iu;
 const messageCounterKey = /^messages?_(?:count|sent)$/iu;
 const providerMessageIdLike = /\b(?:wamid\.[A-Za-z0-9+/_=-]+|(?:true|false)_[\d-]+@(?:c\.us|g\.us|lid|s\.whatsapp\.net)_[A-Za-z0-9_-]+(?:@(?:c\.us|lid|s\.whatsapp\.net))?|[\d-]+@lid\b(?!-|\.[\p{L}\p{N}-]))/gu;
 const emailLike = /[\p{L}\p{N}.!#$%&'*+/=?^`{|}~-]{1,64}@[\p{L}\p{N}-]{1,63}(?:\.[\p{L}\p{N}-]{1,63})+/gu;
-const barePhoneLike = /^[1-9]\d{9,14}$/u;
-const phoneLike = /(?<![\p{L}\p{N}_.-])(?:\+(?:\d[\s().-]*){7,14}\d|(?:\(?\d{2,4}\)?[\s.-]+){2,3}\d{4}|[1-9]\d{9,14})(?![\p{L}\p{N}_-]|\.\d)/gu;
+const phoneZero = String.raw`[0\u0660\u06f0]`;
+const phoneNonZero = String.raw`[1-9\u0661-\u0669\u06f1-\u06f9]`;
+const barePhonePattern = String.raw`${phoneNonZero}\p{Nd}{9,14}|${phoneZero}\p{Nd}{8,13}|${phoneZero}{2}${phoneNonZero}\p{Nd}{7,13}`;
+const barePhoneLike = new RegExp(`^(?:${barePhonePattern})$`, "u");
+// Allow a hyphen after a text label while protecting date fragments and UUID tails.
+const phoneStart = String.raw`(?<![\p{L}\p{N}_.]|\p{Nd}-|[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-)`;
+const phoneLike = new RegExp(
+  String.raw`${phoneStart}(?:\+(?:\p{Nd}[\s().-]*){7,14}\p{Nd}|(?:\(?\p{Nd}{2,4}\)?[\s.-]+){2,3}\p{Nd}{4}|${barePhonePattern})(?![\p{L}\p{N}_-]|\.\p{Nd})`,
+  "gu",
+);
 const trailingToken = /(?<!\S)\S+$/u;
-const trailingPhoneFragment = /(?<![\p{L}\p{N}_.-])\+?[\d(][\d\s().-]*$/u;
+const trailingPhoneFragment = new RegExp(String.raw`${phoneStart}\+?[\p{Nd}(][\p{Nd}\s().-]*$`, "u");
 const logTextLimit = 2_000;
 const bearerLike = /\b(?:bearer|basic)\s+[A-Za-z0-9._~+/=-]+/giu;
 const jwtLike = /\beyJ[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+){2,4}(?![\w-])/gu;
@@ -144,7 +152,7 @@ function redactValue(value: unknown, key: string, ancestors?: WeakSet<object>, u
   if (typeof value === "string") {
     const prefix = truncateLogText(value);
     // A field label distinguishes an opaque digit-only value from unlabelled phone text.
-    if (key && /^\d+$/u.test(prefix)) return prefix;
+    if (key && /^\p{Nd}+$/u.test(prefix)) return prefix;
     const scrubbed = prefix.replace(bearerLike, "[CREDENTIAL]").replace(jwtLike, "[CREDENTIAL]")
       .replace(providerMessageIdLike, "[REDACTED]");
     const cleaned = (scrubbed.includes("@") ? scrubbed.replace(emailLike, "[EMAIL]") : scrubbed)
