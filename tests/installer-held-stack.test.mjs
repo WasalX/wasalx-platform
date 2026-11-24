@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import childProcess, { spawnSync } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import fsPromises, { mkdtemp, readFile, rm } from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import os from "node:os";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { parse } from "yaml";
-import { projectStack, devHeldServices, devPreservedServices, devContainerPreimage, devValueDigest, assertInstallHostname, devReviewAuthConfiguration, verifyStack } from "../scripts/release/installer-stack.mjs";
+import { activeServiceNames, projectStack, devFreshHeldPlan, devHeldServices, devPreservedServices, devContainerPreimage, devValueDigest, assertInstallHostname, devReviewAuthConfiguration, verifyStack } from "../scripts/release/installer-stack.mjs";
 import { executeStage, run, stageFailureReason } from "../scripts/release/installer-stages.mjs";
 import { repositoryDigestMatches } from "../scripts/installer-evidence.mjs";
 
@@ -349,29 +350,167 @@ test("held-stack smoke requires zero restarts for new held containers and non-he
   assert.throws(() => projectStack(fixture), /restart history changed/);
 });
 
-test("fresh held smoke requires stopped holds and checks every other service normally", () => {
+function freshHeldStackFixture() {
   const fixture = devHeldStackFixture();
   delete fixture.devPreimages;
+  fixture.devFreshHeld = true;
   fixture.imageInspections.pop();
   for (const row of fixture.containers) {
     row.Image = fixture.imageInspections.find(({ reference }) => reference === fixture.compose.services[row.service].image).details.Id;
     row.Config.Image = fixture.compose.services[row.service].image;
+    if (devHeldServices.includes(row.service) || row.service === "public-webhook-preflight") {
+      row.State.Status = "created";
+      row.State.StartedAt = "0001-01-01T00:00:00Z";
+    }
   }
-  for (const service of Object.values(fixture.compose.services)) delete service.depends_on?.["public-webhook-preflight"];
-  fixture.compose.services["waha-gows"].depends_on["public-webhook-preflight"] = { condition: "service_completed_successfully" };
-  const webhook = fixture.containers.find(row => row.service === "public-webhook-preflight");
-  webhook.State.Status = "created";
-  assert.throws(() => projectStack(fixture), /is not running|must resume|one-shot did not exit/);
-  const held = { ...fixture, devFreshHeld: true };
-  const projection = projectStack(held);
-  assert.deepEqual(projection.heldServices, [...devHeldServices, webhook.service].sort());
-  assert.equal(projection.fullLiveAcceptance, false);
+  const { services } = fixture.compose;
+  for (const service of Object.values(services)) delete service.depends_on?.["public-webhook-preflight"];
+  services["waha-gows"].depends_on["public-webhook-preflight"] = { condition: "service_completed_successfully" };
+  services["connector-worker"].read_only = true;
+  return fixture;
+}
+
+test("fresh held smoke requires stopped holds and checks every other service normally", () => {
+  const fixture = freshHeldStackFixture();
+  assert.throws(() => projectStack({ ...fixture, devFreshHeld: false }), /is not running|must resume|one-shot did not exit/);
+  assert.doesNotThrow(() => projectStack(fixture));
   const sender = fixture.containers.find(row => row.service === "connector-worker");
   sender.State.Running = true;
-  assert.throws(() => projectStack(held));
+  assert.throws(() => projectStack(fixture));
   sender.State.Running = false;
   fixture.containers.find(row => row.service === "app").State.Health.Status = "unhealthy";
-  assert.throws(() => projectStack(held), /app is unhealthy/);
+  assert.throws(() => projectStack(fixture), /app is unhealthy/);
   fixture.compose.services.app.depends_on["waha-gows"] = { condition: "service_healthy" };
-  assert.throws(() => projectStack(held), /app depends on held service waha-gows/);
+  assert.throws(() => projectStack(fixture), /app depends on held service waha-gows/);
+});
+
+test("fresh held smoke rejects started holds and names the service", () => {
+  const fixture = freshHeldStackFixture();
+  for (const service of ["connector-worker", "public-webhook-preflight"]) {
+    const row = fixture.containers.find(item => item.service === service);
+    const created = row.State;
+    for (const state of [
+      { Status: "exited", StartedAt: "2026-08-24T09:00:00Z" },
+      { Status: "running", Running: true, Pid: 100 },
+      { Status: "paused", Running: true, Paused: true, Pid: 100 },
+      { Status: "restarting", Restarting: true },
+      { Status: "dead", Dead: true },
+      { Status: "removing" },
+    ]) {
+      row.State = { ...created, ...state };
+      assert.throws(() => projectStack(fixture), { message: service + " fresh hold must be in the created state" });
+    }
+    row.State = created;
+  }
+});
+
+test("fresh held smoke checks the runtime root filesystem of a read-only service", () => {
+  const fixture = freshHeldStackFixture();
+  assert.doesNotThrow(() => projectStack(fixture));
+  fixture.containers.find(row => row.service === "connector-worker").HostConfig.ReadonlyRootfs = false;
+  assert.throws(() => projectStack(fixture), { code: "ERR_ASSERTION" });
+});
+
+test("fresh held plan refuses an incomplete hold inventory", () => {
+  const { compose, activeServices } = freshHeldStackFixture();
+  assert.throws(() => devFreshHeldPlan(compose, activeServices.filter(name => name !== "connector-worker")),
+    /fresh DEV hold inventory is incomplete/u);
+});
+
+for (const [key, value] of [
+  ["links", ["waha-gows:sender"]],
+  ["volumes_from", ["waha-gows:ro"]],
+  ["network_mode", "service:waha-gows"],
+  ["ipc", "service:waha-gows"],
+  ["pid", "service:waha-gows"],
+]) {
+  test("fresh held plan rejects a held dependency in " + key, () => {
+    const { compose, activeServices } = freshHeldStackFixture();
+    compose.services.app[key] = value;
+    assert.throws(() => devFreshHeldPlan(compose, activeServices), /app depends on held service waha-gows/u);
+  });
+}
+
+test("fresh held simulator smoke writes a project-scoped receipt with hold evidence", async t => {
+  const directory = await mkdtemp(join(os.tmpdir(), "wasalx-held-receipt-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const originalArgv = process.argv;
+  t.after(() => { process.argv = originalArgv; });
+  const project = "wasalx-dev-fresh";
+  const profiles = ["full", "runtime-workers"];
+  process.argv = ["node", "installer-stack.mjs", project, "--full", "--dev-fresh-held", "--dev-simulator",
+    "--env-file", join(directory, "fixture.env"), "--profile", profiles[0], "--profile", profiles[1],
+    "--compose-file", "compose.yaml", "--compose-file", "compose.full.yaml"];
+  for (const [name, value] of Object.entries({
+    WASALX_CANDIDATE_SHA: sha, WASALX_CANDIDATE_TREE: tree, WASALX_INSTALL_EXPECTED_HOSTNAME: "fixture",
+    DOCKER_HOST: "", DOCKER_CONTEXT: "", DEPLOY_ENVIRONMENT: "", WASALX_ENVIRONMENT: "",
+  })) {
+    operatorEnvironment(t, name);
+    process.env[name] = value;
+  }
+
+  const fullCompose = parse(await readFile(new URL("../compose.full.yaml", import.meta.url), "utf8"), { merge: true, logLevel: "error" });
+  const names = activeServiceNames(fullCompose, profiles);
+  const { reference: image, details } = stackFixture().imageInspections[1];
+  const services = Object.fromEntries(names.map(name => [name, { image }]));
+  const prerequisite = "public-webhook-preflight";
+  const oneShots = ["full-qualification-seed", "keycloak-bootstrap", "migrate", "minio-bootstrap",
+    "runtime-role-bootstrap", "zammad-activation", "zammad-init", "zammad-package", "zammad-runtime-bootstrap"];
+  const completed = { condition: "service_completed_successfully" };
+  services.portal.depends_on = Object.fromEntries(oneShots.map(name => [name, completed]));
+  services.portal.environment = { PORTAL_DATA_BACKEND: "control-plane", NODE_ENV: "production" };
+  services["waha-gows"].depends_on = { [prerequisite]: completed };
+  const held = [...devHeldServices, prerequisite].sort();
+  const containers = Object.fromEntries(names.map(name => {
+    const running = !held.includes(name) && !oneShots.includes(name);
+    return [name, {
+      Config: { Image: image }, Image: details.Id, RestartCount: 0, HostConfig: {},
+      State: { Status: running ? "running" : held.includes(name) ? "created" : "exited", Running: running,
+        Pid: running ? 100 : 0, Paused: false, Dead: false, ExitCode: 0,
+        StartedAt: held.includes(name) ? "0001-01-01T00:00:00Z" : "2026-08-24T09:00:00Z" },
+    }];
+  }));
+  t.mock.method(childProcess, "spawnSync", (command, args) => {
+    let stdout;
+    if (command === "git") stdout = { HEAD: sha, "HEAD^{tree}": tree }[args[1]] ?? "";
+    else if (args[0] === "context") stdout = "default";
+    else if (args[0] === "image") stdout = JSON.stringify([details]);
+    else if (args[0] === "inspect") stdout = JSON.stringify([containers[args[1]]]);
+    else if (args.includes("config")) stdout = JSON.stringify({ services });
+    else if (args.includes("ps")) stdout = JSON.stringify(names.map(name => ({ ID: name, Service: name })));
+    else if (args.includes("version")) stdout = "1.0.0";
+    else assert.fail("Unexpected stack verification command");
+    return { status: 0, stdout };
+  });
+  const originalReadFile = fsPromises.readFile;
+  t.mock.method(fsPromises, "readFile", (path, ...args) => {
+    if (path === "/etc/machine-id") return Promise.resolve("a".repeat(32));
+    if (path === resolve(repositoryRoot, "release", "installer-images.json")) return Promise.resolve('{"images":[]}');
+    return originalReadFile(path, ...args);
+  });
+  const originalRealpath = fsPromises.realpath;
+  t.mock.method(fsPromises, "realpath", (path, ...args) => originalRealpath(path === resolve(repositoryRoot) ? directory : path, ...args));
+  t.mock.method(os, "hostname", () => "fixture");
+  t.mock.method(os, "platform", () => "linux");
+  t.mock.method(os, "arch", () => "x64");
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+
+  const manifest = await verifyStack();
+  const path = join(directory, "output", "release-evidence", sha, "dev-fresh-held-stack-" + project + ".json");
+  const receipt = JSON.parse(await readFile(path, "utf8"));
+  assert.deepEqual(receipt, manifest);
+  assert.equal(receipt.kind, "dev-fresh-held-stack");
+  assert.equal(receipt.stackProfile, "dev-fresh-held");
+  assert.equal(receipt.project, project);
+  assert.equal(receipt.devSimulator, true);
+  assert.equal(receipt.fullLiveAcceptance, false);
+  assert.deepEqual(receipt.heldServices, held);
+  assert.deepEqual(receipt.heldPrerequisites, { [prerequisite]: ["waha-gows"] });
+  for (const service of held) {
+    const row = receipt.services.find(item => item.service === service);
+    assert.equal(row.state, "created");
+    assert.equal(row.startedAt, "0001-01-01T00:00:00Z");
+    assert.equal(row.health, null);
+  }
 });
