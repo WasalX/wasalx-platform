@@ -32,6 +32,8 @@ WasalX Delivery owns this document, releases, deploys, rollback, and alerts. See
 
 ## Test policy
 
+- The [application Playwright config](playwright.application.config.ts) selects the journeys that run at 820 px. Mark tablet coverage on each journey with `@tablet`.
+
 - Fix a failing test or the defect it found. Keep required checks and lint rules in place. CI must pass on its first attempt without skipping tests or widening timeouts. File a flaky test as a High-priority bug and fix it or revert the change that introduced it.
 - WasalX QA owns tests at every layer, the end-to-end journey catalogue, samples and fixtures, coverage, failing and flaky tests, and nightly suite results. QA runs the pre-release sweep. WasalX Delivery owns the [merge gate](#branching-and-merging), pipeline faults, and [CI speed](#checks).
 - Revert the offending change if `main` or the merge queue stays red for 30 minutes. Replacements must preserve the original regression coverage. A test file that only detects changes may be removed after two weeks of evidence. Keep authorization, privacy, migration, and concurrency tests.
