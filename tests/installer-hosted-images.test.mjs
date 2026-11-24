@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import cosignPin from "../scripts/release/cosign-pin.json" with { type: "json" };
 import { hostedIssuer, verifyHostedImages } from "../scripts/release/installer-hosted-images.mjs";
 import { artifactPath, preimagePath, preserveReplacement, readBoundArtifacts, sha256 } from "../scripts/release/installer-artifacts.mjs";
 import { createCandidatePlan, executeStage } from "../scripts/release/installer-stages.mjs";
@@ -68,7 +69,7 @@ async function fixture(t) {
   context.command = async (name, args) => {
     calls.push({ name, args });
     if (name === "cosign") {
-      if (args[0] === "version") return JSON.stringify({ gitVersion: "v3.1.4" });
+      if (args[0] === "version") return JSON.stringify({ gitVersion: cosignPin.version });
       assert.equal(args[0], "verify-blob-attestation");
       assert.ok(args.includes("--offline") && args.includes("--trusted-root"));
       const identity = args[args.indexOf("--certificate-identity") + 1];

@@ -382,7 +382,11 @@ class PullTest(unittest.TestCase):
         identity.update(mode="report", trusted_root_sha256="a" * 64)
         bundle = self.work / "package"
         render.render_pull(identity, bundle)
-        for entry in (bundle / "SHA256SUMS").read_text().splitlines():
+        seals = (bundle / "SHA256SUMS").read_text().splitlines()
+        pin = Path("scripts/release/cosign-pin.json")
+        self.assertEqual((bundle / pin).read_bytes(), (HERE.parents[1] / pin).read_bytes())
+        self.assertTrue(any(entry.endswith(f"  {pin.as_posix()}") for entry in seals))
+        for entry in seals:
             digest, name = entry.split("  ")
             self.assertEqual(digest, sha256((bundle / name).read_bytes()).hexdigest())
         unit = (bundle / render.PULL_SERVICE).read_text().splitlines()

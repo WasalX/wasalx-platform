@@ -531,6 +531,35 @@ test("CI seeds pnpm caches on main and builds cleanly in the merge queue", async
   }
 });
 
+test("signing, promotion and nightly workflows use the same Cosign pin", async () => {
+  const actionPath = "./.github/actions/cosign";
+  const pinPath = "scripts/release/cosign-pin.json";
+  const pin = JSON.parse(await read(pinPath));
+  assert.match(pin.version, /^v\d+\.\d+\.\d+$/u);
+  assert.match(pin.linuxAmd64Sha256, /^[0-9a-f]{64}$/u);
+
+  const installJobs = { "branch-image": ["publish"], release: ["stg", "prod"], "nightly-install": ["nightly-install"] };
+  for (const [workflow, expectedJobs] of Object.entries(installJobs)) {
+    const { jobs } = parse(await read(`.github/workflows/${workflow}.yml`));
+    for (const [job, { steps }] of Object.entries(jobs)) {
+      const installs = steps.filter(step => step.uses === actionPath || step.uses?.startsWith("sigstore/cosign-installer@"));
+      assert.deepEqual(installs.map(step => step.uses), expectedJobs.includes(job) ? [actionPath] : [], `${workflow}/${job}`);
+    }
+  }
+
+  const { runs } = parse(await read(`${actionPath}/action.yml`));
+  const [version, install, verify] = runs.steps;
+  assert.match(version.run, /jq -er '.version' scripts\/release\/cosign-pin\.json/u);
+  assert.equal(install.with["cosign-release"], "${{ steps.pin.outputs.version }}");
+  assert.match(install.uses, /^sigstore\/cosign-installer@[0-9a-f]{40}$/u);
+  for (const script of [verify.run, await read("scripts/release/promote-tag.sh")]) {
+    assert.match(script, /jq -er '.linuxAmd64Sha256' scripts\/release\/cosign-pin\.json/u);
+    assert.match(script, /sha256sum --check --strict/u);
+  }
+  assert.match(await read("scripts/dev-install/pull-verify.mjs"),
+    /assert\.equal\(hash\.digest\("hex"\), cosignPin\.linuxAmd64Sha256/u);
+});
+
 test("PR image results are advisory while the merge queue requires the full image matrix", async t => {
   const { jobs } = parse(await read(".github/workflows/ci.yml"));
   const branch = parse(await read(".github/workflows/branch-image.yml")).jobs;
