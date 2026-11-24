@@ -17,7 +17,7 @@ const reservedHost = /(?:^|\.)(?:localhost|test|example|invalid|example\.(?:com|
 const reservedIpv4 = /^(?:127\.|0\.0\.0\.0$|192\.0\.2\.|198\.51\.100\.|203\.0\.113\.)/u;
 const namespace = /^(?:https?:\/\/www\.w3\.org\/(?:2000\/svg|1999\/(?:xhtml|xlink)|XML\/1998\/namespace|2000\/xmlns\/|2001\/XMLSchema(?:-instance)?)|https?:\/\/json-schema\.org\/(?:draft(?:-\d+|\/\d{4}-\d{2})\/schema)#?|https:\/\/(?:slsa\.dev\/provenance\/(?:v0\.2|v1)|sigstore\.dev\/cosign\/sign\/v1)|http:\/\/schemas\.openid\.net\/event\/backchannel-logout)$/u;
 
-const endpoint = /(?:(?<![\w+.-])(?<scheme>[a-z][\w+.-]*):|(?<![\w+.:/-]))\/\/(?<authority>(?:[^\s"'\x60<>(){},;|\\/$?#]+@)?(?:\[[\da-f:.]+\]|[\p{L}\p{N}_%][\p{L}\p{N}_.%\-]*)(?::\d*)?)(?:[/?#][^\s"'\x60<>(){},;|\\$]*)?|(?<![\w.])(?<ipv4>(?:\d{1,3}\.){3}\d{1,3})(?!\w|\.\w)|(?<![\w.:])(?<ipv6>[\da-f]*:[\da-f:.]*:[\da-f:.]*)(?![\w.:])/giu;
+const endpoint = /(?:(?<![\w+.-])(?<scheme>[a-z][\w+.-]*):|(?<![\w+.:/-]))\/\/(?<authority>(?:[^\s"'\x60<>(){},;|\\/$?#]+@)?(?:\[[\da-f:.]+\]|[\p{L}\p{N}_%][\p{L}\p{N}_.%-]*)(?::\d*)?)(?:[/?#][^\s"'\x60<>(){},;|\\$]*)?|(?<![\w.])(?<ipv4>(?:\d{1,3}\.){3}\d{1,3})(?!\w|\.\w)|(?<![\w.:])(?<ipv6>[\da-f]*:[\da-f:.]*:[\da-f:.]*)(?![\w.:])/giu;
 const quoted = /"(?:\\[^\r\n]|[^"\\\r\n])*"|'(?:\\[^\r\n]|[^'\\\r\n])*'|`(?:\\[^]|[^`\\])*`/u;
 
 function omitComments(path, source) {
