@@ -824,6 +824,7 @@ async function main() {
     devRecord = JSON.parse(bytes.toString("utf8"));
     devReviewAuthEnvironment(devRecord?.devReviewAuth);
   }
+  if (devSkipPublicWebhookPreflight) process.stderr.write("public webhook preflight skipped by DEV option\n");
   if (action === "verify-hosted") {
     const candidateSha = run("git", ["rev-parse", "HEAD"], process.env);
     const candidateTree = run("git", ["rev-parse", "HEAD^{tree}"], process.env);
@@ -885,7 +886,6 @@ async function main() {
   const safeCompose = JSON.parse(run("docker", [
     ...composeArguments, "config", "--no-interpolate", "--no-env-resolution", "--format", "json",
   ], environment));
-  if (devSkipPublicWebhookPreflight) process.stderr.write("public webhook preflight skipped by DEV option\n");
   const catalogBytes = await readFile(resolve(repository, "release/installer-images.json"));
   const catalog = JSON.parse(catalogBytes.toString("utf8"));
   const plan = createCandidatePlan(catalog, safeCompose);
