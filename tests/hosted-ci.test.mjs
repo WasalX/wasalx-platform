@@ -10,7 +10,7 @@ import { parse } from "yaml";
 import { collectFile, collectionFiles, inventory, isTestFile, shardFiles } from "../scripts/hosted-ci.mjs";
 import { selectUnitFiles } from "../scripts/affected-unit-tests.mjs";
 import { unitAllowlist, unitFiles } from "../scripts/test-unit.mjs";
-import reportTimings, { validateQuarantine } from "../scripts/hosted-ci-timing-reporter.mjs";
+import { reportTimingsWithQuarantine, validateQuarantine } from "../scripts/hosted-ci-timing-reporter.mjs";
 import { addonSkips, skipPattern } from "../scripts/hosted-ci-policy.mjs";
 import { generateBaseline } from "../scripts/generate-hosted-ci-baseline.mjs";
 import baseline from "../scripts/hosted-ci-baseline.mjs";
@@ -47,12 +47,27 @@ test("test quarantine expires at midnight UTC and annotates failures only", asyn
   assert.throws(() => validateQuarantine([{ ...known, expiresOn: "2030-02-30" }], "2030-01-01"), /valid UTC expiry/u);
   assert.throws(() => validateQuarantine([{ ...known, owner: "" }], "2030-01-01"), /requires a file, test name and owner/u);
   const data = { file: join(process.cwd(), file), name: known.name };
-  const reports = await Array.fromAsync(reportTimings([
+  const reports = await Array.fromAsync(reportTimingsWithQuarantine([
     { type: "test:pass", data },
     { type: "test:fail", data: { ...data, name: "other failure" } },
     { type: "test:fail", data },
   ], entries));
   assert.deepEqual(reports, ["KNOWN TEST FAILURE " + JSON.stringify(known) + "\n"]);
+});
+
+test("hosted CLI reporters preserve an unquarantined test failure", () => {
+  const env = { ...process.env };
+  delete env.NODE_TEST_CONTEXT;
+  const { error, status, stdout, stderr } = spawnSync(process.execPath, [
+    "--test", "--test-reporter=spec", "--test-reporter=./scripts/hosted-ci-timing-reporter.mjs",
+    "--test-reporter-destination=stdout", "--test-reporter-destination=stdout",
+    "tests/fixtures/hosted-ci-reporter-failure.mjs",
+  ], { cwd: repository, env, encoding: "utf8", timeout: 10_000, windowsHide: true });
+  if (error) throw error;
+  assert.doesNotMatch(stderr, /entries\.find is not a function/u);
+  assert.equal(status, 1, stderr);
+  assert.match(stdout, /Error: intentional reporter fixture failure/u);
+  assert.match(stdout, /^UNIT_TIMING /mu);
 });
 
 test("runner ownership recognizes a bare sudo interpreter", () => {
