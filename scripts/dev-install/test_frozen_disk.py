@@ -8,12 +8,13 @@ from pathlib import Path
 import tempfile
 import subprocess
 import sys
+import time
 import unittest
 from unittest.mock import patch
 
 
 def load(name, parent="templates"):
-    spec = importlib.util.spec_from_file_location(name, Path(__file__).with_name(parent) / f"{name}.py")
+    spec = importlib.util.spec_from_file_location(name, Path(__file__).parent / parent / f"{name}.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -21,13 +22,23 @@ def load(name, parent="templates"):
 
 disk = load("frozen-disk")
 maintenance = load("host-maintenance")
+renderer = load("render", parent=".")
 
 
 SECOND = 10**9
+CAPTURED_NS = 1_700_000_000 * SECOND
+RENDER_NS = CAPTURED_NS + 40 * SECOND
+ORIGIN = {"host_sha256": "1" * 64, "disk_device": 7, "disk_inode": 19}
+POLICY = {**ORIGIN, "max_age_seconds": 60}
+
+
+def receipt_origin(**overrides):
+    values = {**ORIGIN, "captured_ns": CAPTURED_NS, **overrides}
+    return "LEASE_RECEIPT_ORIGIN " + " ".join(f"{key}={value}" for key, value in values.items()) + "\n"
 
 
 def timing(phase, step, duration, size=None):
-    start = 1_700_000_000 * SECOND
+    start = CAPTURED_NS
     byte_count = f" bytes={size}" if size is not None else ""
     return (
         f"PHASE_TIMING phase={phase} step={step} event=start epoch_ns={start} at=2023-11-14T22:13:20Z{byte_count}\n"
@@ -105,18 +116,20 @@ class HostPacketTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             parent = Path(directory)
             install = parent / "install.raw"
-            install.write_text(lease_receipt("install", 24 * SECOND, timing("install", "full-top-hash", 8 * SECOND, 2 * SECOND)),
-                               encoding="utf-8")
+            install_text = lease_receipt("install", 24 * SECOND, timing("install", "full-top-hash", 8 * SECOND, 2 * SECOND))
+            install.write_text(receipt_origin() + install_text, encoding="utf-8")
             rollback = parent / "rollback.raw"
-            rollback.write_text(lease_receipt("rollback", 7 * SECOND), encoding="utf-8")
+            rollback.write_text(receipt_origin(captured_ns=CAPTURED_NS + 1) + lease_receipt("rollback", 7 * SECOND),
+                                encoding="utf-8")
             receipt_hashes = [hashlib.sha256(path.read_bytes()).hexdigest() for path in (install, rollback)]
             identity = parent / "identity.json"
-            identity.write_text(json.dumps({**json.loads(self.example.read_bytes()),
-                                            "LEASE_RECEIPT_SHA256S": receipt_hashes}), encoding="utf-8")
+            fields = {**json.loads(self.example.read_bytes()), "LEASE_RECEIPT_POLICY": POLICY,
+                      "LEASE_RECEIPT_SHA256S": receipt_hashes}
+            identity.write_text(json.dumps(fields), encoding="utf-8")
             packet = parent / "packet"
             args = ("--lease-receipt", install, "--lease-receipt", rollback)
-            result = self.render(packet, *args, identity=identity)
-            self.assertEqual(result.returncode, 0, result.stderr)
+            with patch.object(time, "time_ns", return_value=RENDER_NS):
+                renderer.render_host(fields, "20000101T000000Z", "1" * 40, [install, rollback], packet)
             hashes = dict(line.split("  ", 1)[::-1] for line in (packet / "SHA256SUMS").read_text().splitlines())
             self.assertEqual(set(hashes), {file.name for file in packet.iterdir()} - {"SHA256SUMS"})
             self.assertTrue({"overlay-action.sh", "frozen-disk.py", "register.sh", "host.env"}.issubset(hashes))
@@ -124,6 +137,11 @@ class HostPacketTest(unittest.TestCase):
             for name, sha256 in hashes.items():
                 self.assertEqual(hashlib.sha256((packet / name).read_bytes()).hexdigest(), sha256)
             env = (packet / "host.env").read_text()
+            action = (packet / "overlay-action.sh").read_text()
+            capture = action.index('timing-origin "$TOP"')
+            self.assertLess(action.index('lease_start="$(stamp lease start)"'), action.index("sha256sum --check"))
+            self.assertLess(action.index("sha256sum --check"), capture)
+            self.assertLess(capture, action.index('printf \'%s\\n\' "$lease_start"'))
             self.assertIn("export INSTALL_SECONDS=30", env)
             self.assertIn("export DISCARD_SECONDS=9", env)
             self.assertIn("export HASH_NS_PER_GB=4000000000", env)
@@ -138,6 +156,54 @@ class HostPacketTest(unittest.TestCase):
             self.assertIn("lease receipt SHA-256 mismatch", result.stderr)
             self.assertNotEqual(result.returncode, 0)
             self.assertFalse(rejected.exists())
+
+    def test_renderer_falls_back_for_legacy_receipts_even_when_their_digests_match(self):
+        with tempfile.TemporaryDirectory() as directory:
+            parent = Path(directory)
+            receipt = parent / "legacy.raw"
+            receipt.write_text(lease_receipt("install", 24 * SECOND,
+                               timing("install", "full-top-hash", SECOND, SECOND)) + "\n"
+                               + lease_receipt("rollback", 7 * SECOND), encoding="utf-8")
+            identity = parent / "identity.json"
+            identity.write_text(json.dumps({**json.loads(self.example.read_bytes()),
+                                            "LEASE_RECEIPT_SHA256S": [hashlib.sha256(receipt.read_bytes()).hexdigest()]}),
+                                encoding="utf-8")
+            packet = parent / "packet"
+            result = self.render(packet, "--lease-receipt", receipt, identity=identity)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            env = (packet / "host.env").read_text()
+            self.assertIn("export INSTALL_SECONDS=13400", env)
+            self.assertIn("export DISCARD_SECONDS=11400", env)
+            self.assertIn("export COMMIT_FALLBACK_SECONDS=25050", env)
+
+    def test_renderer_falls_back_when_any_receipt_has_the_wrong_origin(self):
+        with tempfile.TemporaryDirectory() as directory:
+            parent = Path(directory)
+            install, rollback = (parent / name for name in ("install.raw", "rollback.raw"))
+            install.write_text(receipt_origin() + lease_receipt(
+                "install", 24 * SECOND, timing("install", "full-top-hash", 8 * SECOND, 2 * SECOND)), encoding="utf-8")
+            for name, override in (
+                ("other-host", {"host_sha256": "2" * 64}),
+                ("other-device", {"disk_device": 8}),
+                ("other-inode", {"disk_inode": 20}),
+                ("expired", {"captured_ns": RENDER_NS - 60 * SECOND - 1}),
+                ("future", {"captured_ns": RENDER_NS + 1}),
+                ("older-timings", {"captured_ns": CAPTURED_NS + 8 * SECOND}),
+            ):
+                with self.subTest(name=name):
+                    rollback.write_text(receipt_origin(**override) + lease_receipt("rollback", 7 * SECOND),
+                                        encoding="utf-8")
+                    inputs = [install, rollback]
+                    fields = {**json.loads(self.example.read_bytes()), "LEASE_RECEIPT_POLICY": POLICY,
+                              "LEASE_RECEIPT_SHA256S": [hashlib.sha256(path.read_bytes()).hexdigest() for path in inputs]}
+                    packet = parent / name
+                    with patch.object(time, "time_ns", return_value=RENDER_NS):
+                        renderer.render_host(fields, "20000101T000000Z", "1" * 40, inputs, packet)
+                    env = (packet / "host.env").read_text()
+                    self.assertIn("export INSTALL_SECONDS=13400", env)
+                    self.assertIn("export DISCARD_SECONDS=11400", env)
+                    self.assertIn("export HASH_NS_PER_GB=0", env)
+                    self.assertIn("export COMMIT_FALLBACK_SECONDS=25050", env)
 
     def test_renderer_seals_reviewed_reservations_and_refuses_hand_typed_budgets(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -240,6 +306,20 @@ class DiskProofTest(unittest.TestCase):
 
 
 class LeaseBudgetTest(unittest.TestCase):
+    def test_timing_origin_records_local_machine_and_top_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            top = Path(directory) / "top.qcow2"
+            top.write_bytes(b"fixture")
+            machine_id = "12" * 16
+            with (patch.object(maintenance.Path, "read_text", return_value=machine_id),
+                  patch.object(time, "time_ns", return_value=CAPTURED_NS)):
+                origin = maintenance.timing_origin(top)
+            self.assertNotIn(machine_id, origin)
+            host, device, inode, captured = maintenance.ORIGIN.fullmatch(origin).groups()
+            self.assertEqual(host, "ff3ecd23b6c8f19a456114fa7ecbbc2de378b6f45b0fd660485c9ef0780299c7")
+            self.assertEqual((int(device), int(inode), int(captured)),
+                             (top.stat().st_dev, top.stat().st_ino, CAPTURED_NS))
+
     def test_p100_and_rounded_margin_scale_hashes_with_current_top_size(self):
         install = lease_receipt("install", 8_000 * SECOND + 1, timing("install", "full-top-hash", 10 * SECOND + 1, 100))
         rollback = lease_receipt("rollback", 3_000 * SECOND, timing("rollback", "disk-recovery", 2_500 * SECOND))
