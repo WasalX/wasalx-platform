@@ -101,11 +101,12 @@ test("signed Meta marketing preferences are replay-stable and strip profile and 
   }));
   [process.env.META_APP_SECRET_REFERENCE,process.env.META_APP_ID,process.env.WASALX_TEST_RECIPIENT_ALLOWLIST]=["secret://meta/app","123450987","*"];
   const route={tenant_id:"tenant-a",connection_id:"connection-a",provider:"META",hmac_secret_reference:"secret://route"};
-  const accepted=[];
+  const accepted=[],verifiedApps=[];
   const controller=new WebhookIngressController({
     resolveMetaWebhookRoute:async phone=>{assert.equal(phone,"123456789");return route;},
-    acceptWebhookEvent:async(actualRoute,input)=>{
+    acceptWebhookEvent:async(actualRoute,input,verifiedAppId)=>{
       assert.equal(actualRoute,route);
+      verifiedApps.push(verifiedAppId);
       const duplicate=accepted.some(item=>item.providerEventId===input.providerEventId);
       accepted.push(input);
       return{id:"event-a",duplicate};
@@ -136,6 +137,12 @@ test("signed Meta marketing preferences are replay-stable and strip profile and 
   assert.equal(accepted[3].marketingPreference.observedAt,new Date(olderStop.timestamp*1000).toISOString());
   assert.equal(accepted[0].payloadSha256,createHmac("sha256",secret)
     .update(JSON.stringify([route.tenant_id,route.connection_id,accepted[0].marketingPreference])).digest("hex"));
+  t.mock.method(controller,"selectMetaApp",()=>({appId:"123450987",secretReference:"secret://meta/app"}));
+  assert.equal((await send(stop)).unrouted,1,"Consent cannot cross a verified app boundary");
+  assert.equal(accepted.length,4);
+  route.hmac_secret_reference="secret://meta/app";
+  assert.equal((await send(stop)).duplicates,1);
+  assert.equal(verifiedApps.at(-1),"123450987");
 });
 
 test("Meta pricing observations preserve strict classifications, canonical revisions and bounded source context",async()=>{

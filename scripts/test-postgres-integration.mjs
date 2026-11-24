@@ -6016,7 +6016,7 @@ if(shouldRun("nativeRouting"))try{process.stdout.write(`${JSON.stringify(await r
   for(const [name,verify] of [
     ["worker",()=>verifyMetaLifecycleWorker(adminUrl,connectorWorkerConfig)],
     ["consumers",()=>verifyMetaLifecycleConsumers(adminUrl,connectorWorkerConfig,appUrl)],
-    ["ingress",()=>verifyMetaLifecycleIngress(adminUrl,appUrl)],
+    ["ingress",()=>verifyMetaLifecycleIngress(adminUrl,appUrl,connectorWorkerConfig)],
   ]){
     const scenario="metaLifecycle/"+name;
     if(!shouldRun(scenario))continue;

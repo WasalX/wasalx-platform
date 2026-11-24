@@ -14,6 +14,7 @@ ALTER TABLE whatsapp_marketing_preferences ENABLE ROW LEVEL SECURITY;
 ALTER TABLE whatsapp_marketing_preferences FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON whatsapp_marketing_preferences
   USING (tenant_id=app.current_tenant_id()) WITH CHECK (tenant_id=app.current_tenant_id());
+REVOKE ALL ON whatsapp_marketing_preferences FROM PUBLIC, wasalx_app, wasalx_connector_worker;
 GRANT SELECT ON whatsapp_marketing_preferences TO wasalx_app, wasalx_connector_worker;
 GRANT DELETE ON whatsapp_marketing_preferences TO wasalx_connector_worker;
 

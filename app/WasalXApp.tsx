@@ -2992,7 +2992,7 @@ function TeamAccess({ role, currentUserId, canManage, mutationHeaders }: { role:
     finally { setBusyId(null); }
   };
   const closeResendConfirmation = () => { setResendConfirmation(null); setResendText(""); window.requestAnimationFrame(() => resendTrigger.current?.focus()); };
-  if (loading && !data) return <section className="panel team-skeleton" role="status" aria-live="polite" aria-busy="true" aria-label={t("tenant.team.loading")}><span aria-hidden="true" className="group-skeleton group-skeleton-title" /><span aria-hidden="true" className="group-skeleton" /><span aria-hidden="true" className="group-skeleton" /></section>;
+  if (loading && !data) return <section className="panel team-skeleton" aria-busy="true"><p className="sr-only" role="status" aria-label={t("tenant.team.loading")}>{t("tenant.team.loading")}</p><span aria-hidden="true" className="group-skeleton group-skeleton-title" /><span aria-hidden="true" className="group-skeleton" /><span aria-hidden="true" className="group-skeleton" /></section>;
   if (!data) return <section className="panel settings-load-error" role="alert"><span>!</span><div><b>{t("tenant.team.errors.unavailable")}</b><p>{error ?? t("tenant.team.errors.empty")}</p><button className="button small" onClick={() => void load()}>{t("tenant.team.actions.tryAgain")}</button></div></section>;
   const active = data.members.filter((member) => member.state === "ACTIVE").length;
   const pending = data.invitations.filter((invitation) => invitation.state === "PENDING").length;

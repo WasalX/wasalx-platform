@@ -199,12 +199,13 @@ export async function verifyMetaPrimaryDelivery({admin,db,pool,controller,reques
   return{eventType:'user_preferences',providerEventId:'preference:v1:'+payloadSha256,marketingPreference,
    payload:{redacted:true,payload_sha256:payloadSha256},payloadSha256,routeKey:phoneNumberId,providerSessionKey:phoneNumberId,providerEngine:'CLOUD_API'};
  };
+ const acceptPreference=(...args)=>db.acceptWebhookEvent(route,preference(...args),appId);
  const optedOut=c=>whatsappMarketingOptedOut(c,tenantId,connectionId,last.job.metaDirectRecipientSnapshot);
  assert.equal(await worker(optedOut),false);
- await assert.rejects(()=>db.acceptWebhookEvent(route,preference(true,0,'999999')),/Webhook route was not found/);
- const stop=await db.acceptWebhookEvent(route,preference(true,1));
+ await assert.rejects(()=>acceptPreference(true,0,'999999'),/Webhook route was not found/);
+ const stop=await acceptPreference(true,1);
  assert.equal(stop.duplicate,false);
- assert.deepEqual(await db.acceptWebhookEvent(route,preference(true,1)),{id:stop.id,duplicate:true});
+ assert.deepEqual(await acceptPreference(true,1),{id:stop.id,duplicate:true});
  assert.equal(await worker(optedOut),true,'The signed phone preference is resolved for the verified direct recipient');
  assert.equal(await db.withTenant(foreignTenant,optedOut),false);
  await assert.rejects(()=>db.withTenant(foreignTenant,c=>c.query(
@@ -214,11 +215,11 @@ export async function verifyMetaPrimaryDelivery({admin,db,pool,controller,reques
  await assert.rejects(()=>db.withTenant(foreignTenant,c=>c.query(
   "INSERT INTO whatsapp_marketing_preferences (tenant_id,subject_kind,subject,opted_out,observed_at) VALUES ($1,'PHONE',$2,true,$3)",
   [tenantId,phone,'2026-11-24T10:00:00Z'])),{code:'42501'});
- await db.acceptWebhookEvent(route,preference(false,1));
+ await acceptPreference(false,1);
  assert.equal(await worker(optedOut),true,'Stop wins an ambiguous same-second update');
- const resume=await db.acceptWebhookEvent(route,preference(false,3));
- assert.equal((await db.acceptWebhookEvent(route,preference(false,3))).duplicate,true);
- await db.acceptWebhookEvent(route,preference(true,2));
+ const resume=await acceptPreference(false,3);
+ assert.equal((await acceptPreference(false,3)).duplicate,true);
+ await acceptPreference(true,2);
  assert.equal(await worker(optedOut),false,'An older Stop cannot roll back a confirmed Resume');
  const seedMarketingDelivery=async(context,state,lease,externalId)=>{
   const deliveryId=randomUUID();
@@ -290,8 +291,9 @@ export async function verifyMetaPrimaryDelivery({admin,db,pool,controller,reques
  assert.deepEqual(await preferenceRows(),priorPreferences,'A receipt without a direct recipient leaves preferences intact');
  assert.equal(await receiptAuditCount(groupReceiptId),0);
  await db.withTenant(tenantId,async c=>{
-  const accepted=(await c.query('SELECT status,payload FROM event_inbox WHERE id=$1',[stop.id])).rows[0];
-  assert.deepEqual(accepted,{status:'PROCESSED',payload:preference(true,1).payload});
+  const accepted=await withFixtureTenant(admin,tenantId,async()=>(await admin.query(
+   'SELECT status,payload,meta_webhook_app_id FROM event_inbox WHERE tenant_id=$1 AND id=$2',[tenantId,stop.id])).rows[0]);
+  assert.deepEqual(accepted,{status:'PROCESSED',payload:preference(true,1).payload,meta_webhook_app_id:appId});
   const audit=(await c.query("SELECT target_id,new_value,request_id FROM audit_events WHERE request_id=ANY($1::text[]) AND action='whatsapp.marketing_preference_changed'",
    [[stop.id,resume.id,syncDelivery]])).rows;
   assert.equal(audit.filter(row=>row.request_id===stop.id&&row.new_value.opted_out&&row.new_value.reason==='PREFERENCE_WEBHOOK').length,1);
