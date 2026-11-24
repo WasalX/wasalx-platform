@@ -29,8 +29,8 @@ const WAHA_EVENTS=new Set(["message","message.any","message.edited","message.rev
 @SetMetadata(PUBLIC_ROUTE,true)
 export class WebhookIngressController{
   private readonly testRecipients=parseWahaTestRecipientAllowlist(process.env.WASALX_TEST_RECIPIENT_ALLOWLIST);
-  private readonly metaApps=loadMetaWebhookApps(process.env.META_WEBHOOK_APPS_FILE);
   private readonly defaultMetaAppId=process.env.META_APP_ID;
+  private readonly metaApps=loadMetaWebhookApps(process.env.META_WEBHOOK_APPS_FILE,this.defaultMetaAppId,process.env.META_APP_SECRET_REFERENCE);
   constructor(private readonly database:DatabaseService,private readonly secrets:WebhookSecretService,private readonly drains:TenantDrainService,private readonly routingConnectors?:RoutingConnectorsConfig,private readonly secretProvisioning?:SecretProvisioningService){}
 
   @Post("waha/:token")@HttpCode(202)

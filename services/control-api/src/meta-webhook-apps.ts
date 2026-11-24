@@ -3,7 +3,11 @@ import { isWebhookSecretReference } from "./webhook-secret.service.js";
 
 export type MetaWebhookApp = Readonly<{ appId: string; secretReference: string; verifyTokenReference: string }>;
 
-export function loadMetaWebhookApps(path: string | undefined): ReadonlyMap<string, MetaWebhookApp> | undefined {
+export function loadMetaWebhookApps(
+  path: string | undefined,
+  defaultAppId: string | undefined,
+  defaultSecretReference: string | undefined,
+): ReadonlyMap<string, MetaWebhookApp> | undefined {
   if (!path) return undefined;
   let config: unknown;
   try {
@@ -28,6 +32,11 @@ export function loadMetaWebhookApps(path: string | undefined): ReadonlyMap<strin
     apps.set(appId, Object.freeze({ appId, secretReference, verifyTokenReference }));
     references.add(secretReference);
     references.add(verifyTokenReference);
+  }
+  const defaultApp = defaultAppId === undefined ? undefined : apps.get(defaultAppId);
+  if (!defaultApp) throw new Error("META_APP_ID must identify an app in META_WEBHOOK_APPS_FILE");
+  if (defaultApp.secretReference !== defaultSecretReference) {
+    throw new Error("META_APP_SECRET_REFERENCE must match the META_APP_ID row in META_WEBHOOK_APPS_FILE");
   }
   return apps;
 }

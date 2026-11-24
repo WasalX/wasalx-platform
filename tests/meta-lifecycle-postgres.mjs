@@ -330,6 +330,21 @@ export async function verifyMetaLifecycleIngress(adminUrl,appUrl,workerConfig){
 
     const baseData={wabaId,metaAccountProof:proof(0)};
     const setData=data=>withFixtureTenant(admin,tenantId,()=>admin.query('UPDATE provider_sessions SET provider_state_data=$2::jsonb WHERE id=$1',[sessions[0],JSON.stringify(data)]));
+    const messageRoute=await database.resolveMetaWebhookRoute(phones[0]);
+    const admitStatus=()=>database.acceptWebhookEvent(messageRoute,{
+      providerEventId:`webhook-app-binding-${randomUUID()}`,eventType:'message.status',
+      payload:{entry:[{changes:[{value:{statuses:[{id:'wamid.synthetic',status:'delivered'}]}}]}]},
+      payloadSha256:'c'.repeat(64),routeKey:phones[0],providerSessionKey:phones[0],providerEngine:'CLOUD_API',
+    },appId);
+    await setData({...baseData,metaAccountProof:{...baseData.metaAccountProof,credentialMetadata:{appId:'999999999'}}});
+    await assert.rejects(admitStatus,{status:404},'A session bound to another app rejects the signed event');
+    const legacyProof={...baseData.metaAccountProof};delete legacyProof.credentialMetadata;
+    await setData({...baseData,metaAccountProof:legacyProof});
+    assert.equal((await admitStatus()).duplicate,false,'A legacy session without credential metadata can use its app-bound route');
+    await setData(baseData);
+    assert.equal((await admitStatus()).duplicate,false,'A session bound to the signing app remains admissible');
+    const check=(await admin.query("SELECT convalidated FROM pg_constraint WHERE conrelid='public.event_inbox'::regclass AND conname='event_inbox_meta_webhook_app'")).rows[0];
+    assert.equal(check?.convalidated,true);
     const guard=()=>database.withTenant(tenantId,async client=>(await client.query('SELECT * FROM app.meta_lifecycle_guard($1,$2,$3,$4,$5,$6)',[connections[0],sessions[0],phones[0],wabaId,appId,0])).rows);
     for(const status of ['ACCEPTED','PROCESSING','FAILED_RETRYABLE','FAILED_TERMINAL']){
       await admin.query('UPDATE event_inbox SET status=$2 WHERE id=$1',[first.id,status]);assert.equal((await guard())[0].unresolved_hold,true,`${status} negative holds before projection`);

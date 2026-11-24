@@ -17,11 +17,17 @@ import { SecretProvisioningService } from "../services/control-api/dist/secret-p
 import { META_WEBHOOK_MAX_BYTES } from "../services/control-api/dist/webhook-security.js";
 import { metaDirectIdentityChangeEvidence, metaDirectTransitionEvidence } from "../packages/core/dist/meta-direct-identity.js";
 
-test("Meta app callbacks isolate signatures, verification tokens and tenant routes", async t => {
+async function metaAppRegistry(t) {
   t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-01-01T00:00:00Z") });
   const folder = await mkdtemp(join(tmpdir(), "wasalx-meta-apps-"));
   const path = join(folder, "apps.json");
-  const defaults = { META_WEBHOOK_APPS_FILE: path, META_APP_ID: "10001", WASALX_TEST_RECIPIENT_ALLOWLIST: "*" };
+  const apps = ["10001", "10002"].map(appId => ({
+    appId, secretReference: `secret://synthetic/${appId}/hmac`, verifyTokenReference: `secret://synthetic/${appId}/verify`,
+  }));
+  const defaults = {
+    META_WEBHOOK_APPS_FILE: path, META_APP_ID: apps[0].appId,
+    META_APP_SECRET_REFERENCE: apps[0].secretReference, WASALX_TEST_RECIPIENT_ALLOWLIST: "*",
+  };
   const previous = Object.fromEntries(Object.keys(defaults).map(key => [key, process.env[key]]));
   for (const [key, value] of Object.entries(defaults)) process.env[key] = value;
   t.after(async () => {
@@ -31,11 +37,25 @@ test("Meta app callbacks isolate signatures, verification tokens and tenant rout
     }
     await rm(folder, { recursive: true });
   });
-  const apps = ["10001", "10002"].map(appId => ({
-    appId, secretReference: `secret://synthetic/${appId}/hmac`, verifyTokenReference: `secret://synthetic/${appId}/verify`,
-  }));
-  const config = rows => JSON.stringify({ schemaVersion: 1, apps: rows });
-  await writeFile(path, config(apps));
+  const writeRows = rows => writeFile(path, JSON.stringify({ schemaVersion: 1, apps: rows }));
+  await writeRows(apps);
+  return { apps, writeRows };
+}
+
+test("Meta registry without a row for META_APP_ID prevents startup", async t => {
+  const { apps, writeRows } = await metaAppRegistry(t);
+  await writeRows([apps[1]]);
+  assert.throws(() => new WebhookIngressController({}, {}, {}), /META_APP_ID must identify an app/u);
+});
+
+test("Meta registry with a different default secret reference prevents startup", async t => {
+  const { apps, writeRows } = await metaAppRegistry(t);
+  await writeRows([{ ...apps[0], secretReference: "secret://synthetic/replacement" }, apps[1]]);
+  assert.throws(() => new WebhookIngressController({}, {}, {}), /META_APP_SECRET_REFERENCE must match/u);
+});
+
+test("Meta app callbacks isolate signatures, verification tokens and tenant routes", async t => {
+  const { apps, writeRows } = await metaAppRegistry(t);
   const lookups = [], secrets = [], admitted = [], wakes = [];
   const routes = new Map(apps.map((app, index) => [`2000${index + 1}`, {
     tenant_id: `fixture-tenant-${index}`, connection_id: `fixture-connection-${index}`,
@@ -100,9 +120,130 @@ test("Meta app callbacks isolate signatures, verification tokens and tenant rout
 
   for (const row of [{ ...apps[1], appId: apps[0].appId }, { ...apps[1], secretReference: apps[0].secretReference },
     { ...apps[1], verifyTokenReference: "plaintext-is-not-a-reference" }]) {
-    await writeFile(path, config([apps[0], row]));
+    await writeRows([apps[0], row]);
     assert.throws(() => new WebhookIngressController(database, secretSidecar, {}), /invalid or duplicate app row at index 1/u);
   }
+});
+
+test("Meta app binding covers each webhook admission path", async t => {
+  const { apps: [app, foreignApp] } = await metaAppRegistry(t);
+  const account = "30001", phone = "20001", peer = "15550009999";
+  const time = Date.now() / 1000;
+  const metadata = { phone_number_id: phone };
+  const text = { id: "wamid.synthetic", from: peer, timestamp: String(time), type: "text", text: { body: "Fixture" } };
+  const identity = { field: "messages", value: { metadata, messages: [{
+    id: "wamid.identity", from: peer, timestamp: String(time), type: "system",
+    system: { type: "user_changed_number", wa_id: "15550009998" },
+  }] } };
+  const passive = { field: "standby", value: { messaging_product: "whatsapp", metadata, standby: { messages: [text] } } };
+  const malformed = { ...passive, value: { ...passive.value, standby: null } };
+  const coexistence = { field: "history", value: { messaging_product: "whatsapp",
+    metadata: { ...metadata, display_phone_number: "15550009997" },
+    history: [{ metadata: { phase: 0, chunk_order: 1, progress: 100 }, threads: [{ id: peer, messages: [text] }] }],
+  } };
+  const lifecycle = { field: "account_update", value: { event: "ACCOUNT_OFFBOARDED" } };
+  const template = { field: "message_template_status_update", value: { event: "PAUSED", message_template_id: 60001 } };
+  const cases = [
+    { name: "guarded identity hold", change: identity, kind: "messages", guarded: true, paused: true },
+    { name: "unresolved routing hold", change: malformed, kind: "meta.routing.unresolved" },
+    { name: "passive routing unit", change: passive, kind: "meta.routing.passive" },
+    { name: "coexistence history", change: coexistence, kind: "coexistence" },
+    { name: "paused identity fallback", change: identity, kind: "messages", paused: true },
+    { name: "account lifecycle hold", change: lifecycle, kind: "meta.account.lifecycle.block" },
+    { name: "template safety marker", change: template, kind: "template" },
+  ];
+  for (const { name, change, kind, guarded, paused } of cases) await t.test(name, async () => {
+    process.env.WASALX_TEST_RECIPIENT_ALLOWLIST = guarded ? JSON.stringify([peer]) : "*";
+    const route = { tenant_id: "tenant-a", connection_id: "connection-a", provider: "META",
+      provider_session_id: "session-a", phone_number_id: phone, waba_id: account, app_id: app.appId,
+      route_state: paused ? "PAUSED" : "ACTIVE", hmac_secret_reference: app.secretReference };
+    const accepted = [], wakes = [];
+    let templateTransactions = 0;
+    let active = true;
+    let lockedReference = app.secretReference;
+    const accept = async (selected, event, verifiedAppId) => {
+      assert.equal(selected, route);
+      assert.equal(verifiedAppId, app.appId);
+      accepted.push(event.eventType ?? "coexistence");
+      return { id: "synthetic", duplicate: false };
+    };
+    const database = {
+      resolveMetaWebhookRoute: async () => paused ? null : route,
+      resolveMetaIdentityWebhookRoute: async () => route,
+      resolveMetaRoutingRoutes: async (_account, _phone, appId, reference) => {
+        assert.deepEqual([appId, reference], [app.appId, app.secretReference]);
+        return [route];
+      },
+      resolveMetaLifecycleRoutes: async () => [route],
+      acceptWebhookEvent: accept, acceptMetaRoutingEvent: accept,
+      acceptMetaCoexistenceEvent: accept, acceptMetaLifecycleEvent: accept,
+      withTenant: async (_tenant, work) => {
+        templateTransactions++;
+        return work({ query: async (sql, params) => {
+          if (sql.includes("lock_current_active_tenant")) return { rows: [{ active }] };
+          if (sql.includes("FROM webhook_routes")) {
+            assert.match(sql, /hmac_secret_reference=\$3[\s\S]+FOR SHARE/u);
+            assert.equal(params[2], app.secretReference);
+            return { rowCount: Number(lockedReference === params[2]) };
+          }
+          assert.match(sql, /invalidate_meta_template_account/u);
+          accepted.push("template");
+          return { rows: [{ value: { accepted: true, duplicate: false } }] };
+        } });
+      },
+    };
+    const body = { object: "whatsapp_business_account", entry: [{ id: account, time, changes: [change] }] };
+    const rawBody = Buffer.from(JSON.stringify(body));
+    const secret = "synthetic-webhook-app-a";
+    const request = { rawBody, headers: { "x-hub-signature-256": `sha256=${createHmac("sha256", secret).update(rawBody).digest("hex")}` } };
+    const controller = new WebhookIngressController(database, { resolveHmac: async () => secret }, {
+      wakeInbound: async tenant => wakes.push(tenant),
+    });
+    const receive = () => controller.meta(request, body, app.appId);
+    assert.equal((await receive()).count, 1);
+    assert.deepEqual(accepted.splice(0), [kind]);
+    assert.deepEqual(wakes.splice(0), kind === "template" ? [] : [route.tenant_id]);
+    const before = templateTransactions;
+    route.hmac_secret_reference = foreignApp.secretReference;
+    assert.equal((await receive()).count, 0);
+    assert.deepEqual(accepted, []);
+    assert.deepEqual(wakes, []);
+    assert.equal(templateTransactions, before);
+
+    if (kind === "template") {
+      route.hmac_secret_reference = app.secretReference;
+      lockedReference = foreignApp.secretReference;
+      assert.equal((await receive()).count, 0, "A route rebound after lookup cannot invalidate templates");
+      assert.equal(templateTransactions, before + 1);
+      lockedReference = app.secretReference;
+      active = false;
+      assert.equal((await receive()).count, 0, "An inactive tenant cannot admit a template marker");
+      assert.deepEqual(accepted, []);
+    }
+  });
+});
+
+test("lifecycle transaction rejects a newly resolved route with a different secret reference", async () => {
+  const route = { tenant_id: "tenant-a", connection_id: "connection-a", waba_id: "30001",
+    app_id: "10001", provider_session_id: "session-a", session_ownership_state: "ACTIVE",
+    phone_number_id: "20001", route_state: "ACTIVE", hmac_secret_reference: "secret://synthetic/10001/hmac" };
+  const rebound = { ...route, hmac_secret_reference: "secret://synthetic/10002/hmac" };
+  const database = Object.create(DatabaseService.prototype);
+  let inserts = 0;
+  database.withTenant = async (_tenant, work) => work({ query: async (sql, params) => {
+    if (sql.includes("lock_current_active_tenant")) return { rows: [{ active: true }] };
+    if (sql.includes("FROM event_inbox")) return { rows: [] };
+    if (sql.includes("app.resolve_meta_lifecycle_routes")) {
+      const rows = sql.includes("hmac_secret_reference=$5") && params[4] !== rebound.hmac_secret_reference ? [] : [rebound];
+      return { rows };
+    }
+    if (sql.startsWith("INSERT INTO event_inbox")) { inserts++; return { rows: [{ id: "synthetic" }] }; }
+    return { rowCount: 1 };
+  } });
+  await assert.rejects(() => database.acceptMetaLifecycleEvent(route, {
+    providerEventId: "synthetic", eventType: "meta.account.lifecycle.block", payload: {}, payloadSha256: "a".repeat(64),
+  }, route.app_id), { status: 404 });
+  assert.equal(inserts, 0);
 });
 
 test("Meta verification rejects repeated query values and only echoes a decimal challenge as plain text", async (t) => {

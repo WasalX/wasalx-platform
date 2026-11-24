@@ -3,7 +3,8 @@
 Set `META_WEBHOOK_APPS_FILE` on the control API to the path of a read-only JSON
 configuration file. Keep one row per app in the deployment's versioned
 configuration. The API validates the registry on startup and holds a snapshot
-until restart. The file contains sidecar references only.
+until restart. The registry must include `META_APP_ID` with the same secret
+reference as `META_APP_SECRET_REFERENCE`. The file contains sidecar references only.
 
 ```json
 {
