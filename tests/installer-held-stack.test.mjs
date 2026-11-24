@@ -464,7 +464,7 @@ test("fresh held simulator smoke writes a project-scoped receipt with hold evide
   const containers = Object.fromEntries(names.map(name => {
     const running = !held.includes(name) && !oneShots.includes(name);
     return [name, {
-      Config: { Image: image }, Image: details.Id, RestartCount: 0, HostConfig: {},
+      Id: name, Config: { Image: image }, Image: details.Id, RestartCount: 0, HostConfig: {},
       State: { Status: running ? "running" : held.includes(name) ? "created" : "exited", Running: running,
         Pid: running ? 100 : 0, Paused: false, Dead: false, ExitCode: 0,
         StartedAt: held.includes(name) ? "0001-01-01T00:00:00Z" : "2026-08-24T09:00:00Z" },
