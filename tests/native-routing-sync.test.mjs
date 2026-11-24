@@ -120,6 +120,29 @@ test("native routing persists the exact before-effect fence and requires actual 
   await f.service.status(tenant);assert.equal(f.requests.length,1,"GET does not poll native");
 });
 
+test("a queued CHECK replaces a stale failure until the verified readback settles",async t=>{
+  const now=Date.parse("2026-10-16T10:00:00Z");
+  t.mock.timers.enable({apis:["Date"],now});
+  const f=fixture({checkedAt:null});
+  await usingFetch(f.install(()=>{throw new Error("native unavailable");}),()=>f.service.syncTenant(tenant));
+  const failed=await f.service.status(tenant);
+  assert.equal(failed.state,"FAILED");
+  assert.equal(failed.errorCode,"NATIVE_ROUTING_CONFIGURATION_UNAVAILABLE");
+
+  const queued=await f.service.command(f.client,tenant,{action:"CHECK",expectedRevision:1});
+  assert.equal(queued.state,"PENDING");
+  assert.equal(queued.errorCode,null);
+  assert.equal(queued.safeRetry,false);
+  assert.deepEqual(await f.service.status(tenant),queued);
+
+  await usingFetch(f.install(f.success),()=>f.service.syncTenant(tenant));
+  const verified=await f.service.status(tenant);
+  assert.deepEqual(f.requests.map(request=>request.action),["CHECK","CHECK"]);
+  assert.equal(verified.state,"SYNCED");
+  assert.equal(verified.errorCode,null);
+  assert.equal(verified.lastCheckedAt,new Date(now).toISOString());
+});
+
 test("lost APPLY response followed by newer desired state CHECKs the original immutable attempt first",async()=>{
   const f=fixture();await usingFetch(f.install(()=>{throw new Error("response lost");}),()=>f.service.syncTenant(tenant));
   const attempted=structuredClone(f.row.attempted_request);assert.equal(f.row.sync_state,"OUTCOME_UNKNOWN");
