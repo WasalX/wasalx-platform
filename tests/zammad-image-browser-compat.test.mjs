@@ -279,6 +279,7 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
   const observedGroupActors = new Set();
   const state = { customerId: null, ticketId: null, ticketNumber: null, articleId: null, closedTicketId: null, closedTicketNumber: null, closedArticleId: null, links: [], requests: [], sentMessages: [], liveMessages: [] };
   try {
+    const replyPreviewPath = "/internal/v1/zammad/reply-preview";
     const handleFixtureRequest = async (request, response) => {
       const body = [];
       for await (const chunk of request) body.push(chunk);
@@ -318,6 +319,21 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
           ? "12125550104@c.us" : "120363118@g.us");
         assert.match(url.searchParams.get("ticket_id") ?? "", /^[1-9]\d*$/u);
         value = { available: true };
+      }
+      else if (request.method === "POST" && url.pathname === replyPreviewPath) {
+        const payload = JSON.parse(raw);
+        const direct = Number(payload.ticket_id) === state.directReplyTicketId;
+        assert.equal(claims.scope, "zammad:outbound");
+        assert.equal(payload.agent?.id, String(claims.zammad_user_id));
+        assert.equal(payload.tenant_id, tenantId);
+        assert.equal(payload.connection_id, connectionId);
+        assert.ok(direct || Number(payload.ticket_id) === Number(state.ticketId));
+        assert.equal(payload.group_id, direct ? "12125550104@c.us" : "120363118@g.us");
+        assert.equal(payload.internal, false);
+        assert.equal(typeof payload.has_attachments, "boolean");
+        assert.equal(typeof payload.body, "string");
+        assert.ok(payload.has_attachments || payload.body.trim(), "Preview requires a draft or attachment");
+        value = { text: payload.body, replyToMessageId: null };
       }
       else if (request.method === "POST" && url.pathname === "/internal/v1/zammad/outbound") {
         const payload = JSON.parse(raw); assert.equal(claims.scope, "zammad:outbound");
@@ -1751,7 +1767,15 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
       await reply.getByRole("combobox", { name: "Channel", exact: true }).click();
       await mobilePage.getByRole("dialog", { name: "Dialog window with selections", exact: true }).getByRole("option", { name: "WhatsApp", exact: true }).click();
       assert.ok((await reply.getByRole("combobox", { name: "Channel", exact: true }).innerText()).includes("WhatsApp"));
-      await reply.locator('[contenteditable="true"]').pressSequentially("Mobile draft \u2014 do not send.", { delay: 20 });
+      const mobileDraft = "Mobile draft \u2014 do not send.";
+      const [preview] = await Promise.all([
+        mobilePage.waitForResponse(response => response.request().method() === "POST"
+          && new URL(response.url()).pathname === `/api/v1/wasalx/tickets/${state.ticketId}/reply-preview`
+          && response.request().postDataJSON()?.body?.trim() === mobileDraft),
+        reply.locator('[contenteditable="true"]').pressSequentially(mobileDraft, { delay: 20 }),
+      ]);
+      assert.equal(preview.status(), 200, "The pinned add-on must preview the unsent draft");
+      assert.equal((await preview.json()).text.trim(), mobileDraft);
       // Native cancellation prompts only after FormKit recognizes an article change.
       await reply.getByRole("button", { name: "Done", exact: true }).click({ trial: true });
       const chooserPromise = mobilePage.waitForEvent("filechooser");
@@ -1779,10 +1803,16 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
       assert.equal(await stateField.innerText(), originalStateLabel);
       mobilePhase = "read-only-mutation-guards";
       assert.equal(mobileMutations.some((name) => /ticketUpdate|formUploadCacheAdd/iu.test(name)), false);
-      const mobileControlMutations = state.requests.slice(mobileStart).filter((request) => request.method !== "GET");
-      assert.ok(mobileControlMutations.every((request) => request.method === "POST"
-        && request.path === `/internal/v1/zammad/group-workspace/groups/${groupId}/read`),
-      "mobile navigation may only advance the exact owned group's read cursor");
+      const mobileControlMutations = state.requests.slice(mobileStart).filter(({ method, path, body }) => {
+        if (method === "GET") return false;
+        // The preview sends draft text in a POST but never admits a delivery.
+        return !(method === "POST" && path === replyPreviewPath && Number(body.ticket_id) === Number(state.ticketId)
+          && body.has_attachments === false && typeof body.body === "string" && mobileDraft.startsWith(body.body.trim()));
+      });
+      const unexpectedMobileMutations = mobileControlMutations.filter(({ method, path }) =>
+        method !== "POST" || path !== `/internal/v1/zammad/group-workspace/groups/${groupId}/read`);
+      assert.deepEqual(unexpectedMobileMutations.map(({ method, path }) => ({ method, path })), [],
+        "mobile navigation may only advance the exact owned group's read cursor");
       await writeFile(join(evidenceDirectory, "native-mobile-evidence.json"), JSON.stringify({
         candidate: process.env.GITHUB_SHA ?? "local", image, evidenceMode: "simulated", nativeUi: true,
         viewport: { width: 390, height: 844 }, coarsePointer: true, locale: "en",
