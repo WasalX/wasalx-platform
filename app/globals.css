@@ -65,7 +65,6 @@ main { grid-column:2; min-width:0; }
 .metric { border:0; border-inline-end:1px solid var(--border); background:transparent; color:var(--text); padding:18px; text-align:start; min-width:0; }
 .metric:last-child{border-inline-end:0}.metric:hover{background:var(--surface-2)}.metric.attention{background:linear-gradient(135deg,transparent,color-mix(in srgb,var(--danger) 5%,transparent))}
 .metric>span { color:var(--muted); font-size:var(--wx-font-size-1); display:flex; align-items:center; gap:6px; }
-.info { width:var(--wx-space-4);height:var(--wx-space-4);border:1px solid var(--border-strong);border-radius:50%;font:600 var(--wx-font-size-1)/14px var(--font-mono);text-align:center;color:var(--subtle)}
 .metric>strong { display:block; font:620 var(--wx-font-size-7)/1.2 var(--font-sans); letter-spacing:-.04em; margin:13px 0 16px; }.metric>strong small{font-size:var(--wx-font-size-3);color:var(--subtle)}
 .metric footer { display:flex; justify-content:space-between; gap:10px; color:var(--subtle); font-size:var(--wx-font-size-1); }.metric footer b{font-weight:550;color:var(--muted)}.metric footer .positive{color:var(--success)}.metric footer .warning-text{color:var(--warning)}
 .panel { min-width:0; max-width:100%; background:var(--surface); border:1px solid var(--border); border-radius:var(--wx-radius-panel); overflow:hidden; }

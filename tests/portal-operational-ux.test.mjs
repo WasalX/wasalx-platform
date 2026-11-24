@@ -102,6 +102,13 @@ test("operator data refreshes automatically while visible and preserves manual r
   assert.doesNotMatch(cases, /\{t\("cases\.refresh"\)\}/u);
 });
 
+test("overview metric titles carry no empty info marks", async () => {
+  const [app, styles] = await Promise.all([read("app/WasalXApp.tsx"), read("app/globals.css")]);
+  assert.doesNotMatch(app, /className="info"/u, "an info mark without a description offers nothing");
+  assert.doesNotMatch(styles, /(?:^|\})\s*\.info\s*\{/mu, "the unused info mark style is removed");
+  assert.match(app, /<span>\s*\{t\("tenant\.overview\.workingConnections"\)\}\s*<\/span>/u);
+});
+
 test("visible refresh lets slow requests finish and recovers after cancellation and callback failure", async () => {
   const source = await read("app/use-visible-refresh.ts");
   const emitted = ts.transpileModule(source, {
