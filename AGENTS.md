@@ -26,6 +26,7 @@ Live-provider qualification is a separate release milestone.
 - Use `pnpm run dev` to run the portal from source with the dependencies needed by the journey. The full Compose profile adds Keycloak, object storage, provider adapters, and Zammad. Start it with `docker compose -f compose.yaml -f compose.full.yaml --profile full up --build`. Use disposable data and supply the values required by that profile.
 - Build the portal with `pnpm run build` and the services with `pnpm run build:services`.
 - For affected checks, use `pnpm run lint`, `pnpm run typecheck`, and the relevant test runner. For a focused Node test, use `node --test path/to/test-file.mjs` after building its prerequisites.
+- On Windows, put `jq` on your PATH. In Git Bash, run `jq --version` before running `node --test tests/hosted-ci.test.mjs` from the same shell.
 - There is no formatter command yet. See the [delivery deviations](DELIVERY.md#deviations).
 - Run the root suite with `pnpm test`. Unit tests require a Ruby toolchain for the add-on. Database integration uses `pnpm run test:postgres` with disposable PostgreSQL and both admin and application database URLs. Browser integration uses `pnpm run test:e2e` with Playwright Chromium and its fixture services. Run the full release checks through CI. See [Checks](DELIVERY.md#checks).
 
