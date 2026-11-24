@@ -640,7 +640,7 @@ test("portal UX has no dead operational controls and keeps sensitive content fai
   assert.match(app, /window\.matchMedia\("\(prefers-color-scheme: dark\)"\)/u);
   assert.match(app, /rememberBoundaryTheme\("tenant",next\)/u);
   assert.match(css, /@media\(max-width:760px\).*\.top-actions \.icon-button\{display:grid\}/su);
-  assert.match(css, /@media\(max-width:760px\).*\.workspace-switcher\{[^}]*grid-column:1;[^}]*grid-row:1;[^}]*min-width:0/u);
+  assert.match(css, /@media\(max-width:760px\).*\.workspace-switcher\{[^}]*grid-column:1\/-1;[^}]*grid-row:1;[^}]*min-width:0/u);
   assert.match(css, /@media\(max-width:760px\).*\.profile\{[^}]*grid-template-columns:auto auto/su);
   assert.match(css, /@media\(max-width:760px\).*\.profile-logout\{display:grid;width:44px;height:44px/su);
   assert.match(css, /@media\(max-width:760px\).*\.environment\{display:flex;/su);
