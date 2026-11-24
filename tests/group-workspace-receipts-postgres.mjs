@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
+import { mock } from "node:test";
 import { Client } from "pg";
 import { ZammadGroupWorkspaceController } from "../services/control-api/dist/group-workspace.controller.js";
 import { groupWorkspaceOperationKey } from "../services/control-api/dist/group-workspace-operation.js";
@@ -180,9 +181,11 @@ export async function verifyGroupWorkspaceReceipts(admin,appUrl){
     // Restoring authority must preserve the monotonically increasing projection revision.
     let managedRevision=4;
     for(const changed of ["membership","subject","email","native_sync","expiry"]){
-      const actor=changed==="expiry"?{...claims,expiresAt:Math.floor(Date.now()/1000)+2}:{...claims,userId:"877194",membershipRevision:managedRevision};
+      let now=Date.now();
+      const actor=changed==="expiry"?{...claims,expiresAt:Math.floor(now/1000)+2}:{...claims,userId:"877194",membershipRevision:managedRevision};
       const requestId=randomUUID(),key=groupWorkspaceOperationKey("SEND",actor.userId,requestId);
       await clients[0].query("BEGIN");await clients[0].query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))",[`group-workspace-operation:${tenantId}:${key}`]);
+      const clock=changed==="expiry"?mock.method(Date,"now",()=>now):undefined;
       const waiting=receipt(controller(clients[1],{actor}),"SEND",requestId,"CANCEL_IF_UNADMITTED").then(value=>({value}),error=>({error}));
       try{
         await overlap(pids[0],pids[1]);
@@ -190,8 +193,11 @@ export async function verifyGroupWorkspaceReceipts(admin,appUrl){
         else if(changed==="subject")await tx(admin,tenantId,c=>c.query("UPDATE users SET oidc_subject=$2 WHERE id=$1",[userId,`drift-${userId}`]));
         else if(changed==="email")await tx(admin,tenantId,c=>c.query("UPDATE users SET email=$2 WHERE id=$1",[userId,`drift-${userId}@example.invalid`]));
         else if(changed==="native_sync")await tx(admin,tenantId,c=>c.query("UPDATE tenant_settings SET native_membership_sync_enabled=false WHERE tenant_id=$1",[tenantId]));
-        else await admin.query("SELECT pg_sleep(GREATEST(0,$1-extract(epoch FROM clock_timestamp()))+0.05)",[actor.expiresAt]);
-      }finally{await clients[0].query("COMMIT");}
+        else now=actor.expiresAt*1000;
+      }finally{
+        try{await clients[0].query("COMMIT");await waiting;}
+        finally{clock?.mock.restore();}
+      }
       assert.equal((await waiting).error?.getStatus(),401,`stale ${changed} passed after advisory wait`);
       await tx(admin,tenantId,async c=>{
         await c.query("UPDATE users SET oidc_subject=$2,email=$3 WHERE id=$1",[userId,`receipt-${userId}`,`receipt-${userId}@example.invalid`]);

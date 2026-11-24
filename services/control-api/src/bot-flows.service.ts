@@ -14,6 +14,7 @@ import { appendAudit } from "./audit.js";
 import { DatabaseService } from "./database.service.js";
 import { TenantDrainService } from "./tenant-drain.service.js";
 import type { Principal } from "./types.js";
+import { listCursor, listLimit, takeListPage, type ListPageQuery } from "./list-pagination.js";
 import { ZammadRoutingCatalogService } from "./zammad-routing-catalog.service.js";
 import { WebhookSecretService } from "./webhook-secret.service.js";
 import { RoutingConnectorsConfig } from "./routing-connectors.config.js";
@@ -39,7 +40,6 @@ type ConversationEventCursor = { v:1; tenant:string; conversation:string; at:str
 const CONVERSATION_PAGE_MAX=100;
 const LEGACY_CONVERSATION_LIMIT=200;
 const CATALOG_PAGE_MAX=100;
-const LEGACY_CATALOG_LIMIT=200;
 type CatalogKind="FLOW"|"ROUTING"|"ACTION";
 type CatalogCursor={v:1;tenant:string;kind:CatalogKind;sort:string;id:string};
 
@@ -49,10 +49,18 @@ export class BotFlowsService {
 
   constructor(private readonly database: DatabaseService,private readonly drain:TenantDrainService,private readonly catalogs:ZammadRoutingCatalogService,private readonly webhookSecrets?:WebhookSecretService,private readonly routingConnectors?:RoutingConnectorsConfig,private readonly secretProvisioning?:SecretProvisioningService) {}
 
-  list(principal: Principal) {
-    return this.database.rows(
+  async list(principal: Principal, query: ListPageQuery = {}) {
+    const limit = listLimit(query.limit);
+    const cursor = listCursor(query.cursor);
+    const rows = await this.database.rows<Record<string, unknown> & { flow_version_id: string }>(
       principal.tenantId,
-      `SELECT family.id AS family_id,COALESCE(NULLIF(version.definition->>'name',''),family.name) AS name,version.id AS flow_version_id,
+      `WITH cursor_position AS (
+         SELECT family.name,version.version,version.id
+           FROM bot_flow_versions version JOIN bot_flow_families family
+             ON family.tenant_id=version.tenant_id AND family.id=version.family_id
+          WHERE version.tenant_id=$1 AND version.id=$2::uuid
+       )
+       SELECT family.id AS family_id,COALESCE(NULLIF(version.definition->>'name',''),family.name) AS name,version.id AS flow_version_id,
               version.version,version.state,version.revision,version.snapshot_sha256,
               version.definition,version.created_at,version.activated_at,version.retired_at,
               COALESCE(assignment_data.assignment_count,0)::bigint AS assignment_count
@@ -65,11 +73,15 @@ export class BotFlowsService {
               AND assignment.flow_family_id=family.id AND assignment.flow_version_id=version.id
               AND assignment.state='ACTIVE'
          ) assignment_data ON true
-        WHERE family.tenant_id=$1
-        ORDER BY family.name,version.version DESC
-        LIMIT $2`,
-      [principal.tenantId,LEGACY_CATALOG_LIMIT],
+        WHERE family.tenant_id=$1 AND ($2::uuid IS NULL OR EXISTS (
+          SELECT 1 FROM cursor_position boundary
+           WHERE family.name>boundary.name OR
+              (family.name=boundary.name AND (version.version,version.id)<(boundary.version,boundary.id))
+        ))
+        ORDER BY family.name,version.version DESC,version.id DESC LIMIT $3`,
+      [principal.tenantId,cursor,limit+1],
     );
+    return takeListPage(rows, limit, row => row.flow_version_id);
   }
 
   async ticketEventConfiguration(principal:Principal){
@@ -167,17 +179,38 @@ export class BotFlowsService {
         AND assignment.flow_family_id=family.id AND assignment.flow_version_id=version.id AND assignment.state='ACTIVE') assignment_data ON true
       WHERE family.tenant_id=$1 AND version.id=$2`,[principal.tenantId,id]))[0];if(!row)throw new NotFoundException("Bot flow version was not found");return row}
 
-  listMediaAssets(principal:Principal,requestedIds:string[]=[]){if(requestedIds.length>100)throw new BadRequestException("Too many media files were requested");const ids=[...new Set(requestedIds.map(value=>uuid(value,"Media asset ID")))];return this.database.rows(principal.tenantId,`WITH requested AS (
-      SELECT id,filename,mime_type,byte_size,state,created_at,updated_at FROM bot_media_assets
-       WHERE tenant_id=$1 AND state='READY' AND id=ANY($2::uuid[])
-    ),recent AS (
-      SELECT id,filename,mime_type,byte_size,state,created_at,updated_at FROM bot_media_assets
-       WHERE tenant_id=$1 AND state='READY' ORDER BY created_at DESC,id LIMIT 200
-    ),catalog AS (
-      SELECT * FROM requested UNION ALL SELECT * FROM recent
-    ) SELECT id,filename,mime_type,byte_size,state,created_at,updated_at FROM (
-      SELECT DISTINCT ON (id) * FROM catalog ORDER BY id,created_at DESC
-    ) bounded ORDER BY created_at DESC,id`,[principal.tenantId,ids])}
+  async listMediaAssets(principal: Principal, requestedIds: string[] = [], query: ListPageQuery = {}) {
+    if (requestedIds.length > 100) throw new BadRequestException("Too many media files were requested");
+    const ids = [...new Set(requestedIds.map(value => uuid(value, "Media asset ID")))];
+    const limit = listLimit(query.limit);
+    const cursor = listCursor(query.cursor);
+    const rows = await this.database.rows<Record<string, unknown> & { id: string; pagination_requested: boolean }>(
+      principal.tenantId, `WITH requested AS (
+        SELECT id,filename,mime_type,byte_size,state,created_at,updated_at,true AS pagination_requested
+          FROM bot_media_assets WHERE tenant_id=$1 AND state='READY' AND $3::uuid IS NULL AND id=ANY($2::uuid[])
+      ), cursor_position AS (
+        SELECT created_at,id FROM bot_media_assets WHERE tenant_id=$1 AND state='READY' AND id=$3::uuid
+      ), recent AS (
+        SELECT id,filename,mime_type,byte_size,state,created_at,updated_at,false AS pagination_requested
+          FROM bot_media_assets WHERE tenant_id=$1 AND state='READY' AND NOT (id=ANY($2::uuid[]))
+           AND ($3::uuid IS NULL OR EXISTS (
+             SELECT 1 FROM cursor_position boundary WHERE
+               bot_media_assets.created_at<boundary.created_at OR
+               (bot_media_assets.created_at=boundary.created_at AND bot_media_assets.id>boundary.id)
+           ))
+         ORDER BY created_at DESC,id LIMIT $4
+      ) SELECT * FROM requested UNION ALL SELECT * FROM recent ORDER BY created_at DESC,id`,
+      [principal.tenantId, ids, cursor, limit+1],
+    );
+    const { items: normal, next_cursor } = takeListPage(rows.filter(row => !row.pagination_requested), limit, row => row.id);
+    const normalIds = new Set(normal.map(row => row.id));
+    const items = rows.filter(row => row.pagination_requested || normalIds.has(row.id)).map(row => {
+      const item: Record<string, unknown> = { ...row };
+      delete item.pagination_requested;
+      return item;
+    });
+    return { items, next_cursor };
+  }
 
   async createMediaAsset(principal:Principal,idempotencyKey:string,requestId:string,body:unknown){
     requireOperationKey(idempotencyKey);uuid(idempotencyKey,"Media upload idempotency key");const input=mediaAssetInput(body);const requestSha256=hash(input);
@@ -207,16 +240,22 @@ export class BotFlowsService {
     });
   }
 
-  async listActions(principal: Principal) {
-    const rows=await this.database.rows<Record<string,unknown>>(principal.tenantId,`SELECT id,action_key,name,kind,endpoint_url,http_method,
+  async listActions(principal: Principal, query: ListPageQuery = {}) {
+    const limit = listLimit(query.limit);
+    const cursor = listCursor(query.cursor);
+    const rows=await this.database.rows<Record<string,unknown>&{id:string}>(principal.tenantId,`SELECT id,action_key,name,kind,endpoint_url,http_method,
       auth_scheme,secret_reference,headers,response_mapping,timeout_ms,max_response_bytes,state,revision,
       active_revision_id,revision AS active_action_revision,created_at,updated_at
-      FROM bot_action_definitions WHERE tenant_id=$1 ORDER BY name,action_key LIMIT $2`,[principal.tenantId,LEGACY_CATALOG_LIMIT]);
-    const visible:Array<Record<string,unknown>&{capabilities:ReturnType<typeof botActionCapabilities>}>=rows.map(row=>{const capabilities=botActionCapabilities({
+      FROM bot_action_definitions WHERE tenant_id=$1 AND ($2::uuid IS NULL OR (name,action_key)>
+        (SELECT name,action_key FROM bot_action_definitions WHERE tenant_id=$1 AND id=$2::uuid))
+      ORDER BY name,action_key LIMIT $3`,[principal.tenantId,cursor,limit+1]);
+    const page = takeListPage(rows, limit, row => row.id);
+    const visible:Array<Record<string,unknown>&{capabilities:ReturnType<typeof botActionCapabilities>}>=page.items.map(row=>{const capabilities=botActionCapabilities({
       kind:row.kind,endpointUrl:row.endpoint_url,httpMethod:row.http_method,authScheme:row.auth_scheme,secretReference:row.secret_reference,
     });return{...row,capabilities,qualification_supported:row.state==="ACTIVE"&&capabilities.retry_semantics==="REPLAY_SAFE"}});
-    if(principal.role==="tenant_owner"||principal.role==="tenant_admin")return visible;
-    return visible.map(row=>({...row,endpoint_url:redactEndpointQuery(row.endpoint_url),secret_reference:null,headers:{}}));
+    const items = principal.role==="tenant_owner"||principal.role==="tenant_admin" ? visible
+      : visible.map(row=>({...row,endpoint_url:redactEndpointQuery(row.endpoint_url),secret_reference:null,headers:{}}));
+    return { items, next_cursor: page.next_cursor };
   }
 
   async actionCatalog(principal:Principal,input:{cursor?:unknown;limit?:string}={}){
@@ -238,17 +277,25 @@ export class BotFlowsService {
     return principal.role==="tenant_owner"||principal.role==="tenant_admin"?visible:{...visible,endpoint_url:redactEndpointQuery(visible.endpoint_url),secret_reference:null,headers:{}};
   }
 
-  async listActionRevisions(principal:Principal,actionKeyValue:string){
+  async listActionRevisions(principal:Principal,actionKeyValue:string,query:ListPageQuery={}){
     const actionKey=actionKeyPath(actionKeyValue);
-    const rows=await this.database.rows<Record<string,unknown>>(principal.tenantId,`SELECT revision.id,revision.revision,revision.name,revision.kind,
+    const limit = listLimit(query.limit);
+    const cursor = listCursor(query.cursor);
+    const rows=await this.database.rows<Record<string,unknown>&{id:string}>(principal.tenantId,`SELECT revision.id,revision.revision,revision.name,revision.kind,
       revision.endpoint_url,revision.http_method,revision.auth_scheme,revision.headers,revision.response_mapping,
       revision.timeout_ms,revision.max_response_bytes,revision.state,revision.snapshot_sha256,revision.created_at,
       revision.id=action.active_revision_id AS active
       FROM bot_action_definitions action JOIN bot_action_revisions revision
         ON revision.tenant_id=action.tenant_id AND revision.action_definition_id=action.id
-      WHERE action.tenant_id=$1 AND action.action_key=$2 ORDER BY revision.revision DESC LIMIT $3`,[principal.tenantId,actionKey,LEGACY_CATALOG_LIMIT]);
-    if(!rows.length)throw new NotFoundException("Bot action was not found");
-    return rows.map(row=>principal.role==="tenant_owner"||principal.role==="tenant_admin"?row:{...row,endpoint_url:redactEndpointQuery(row.endpoint_url),headers:{}});
+      WHERE action.tenant_id=$1 AND action.action_key=$2 AND ($3::uuid IS NULL OR revision.revision<
+        (SELECT boundary.revision FROM bot_action_revisions boundary
+          WHERE boundary.tenant_id=$1 AND boundary.action_definition_id=action.id AND boundary.id=$3::uuid))
+      ORDER BY revision.revision DESC LIMIT $4`,[principal.tenantId,actionKey,cursor,limit+1]);
+    if(!rows.length && !cursor)throw new NotFoundException("Bot action was not found");
+    const page = takeListPage(rows, limit, row => row.id);
+    const items = principal.role==="tenant_owner"||principal.role==="tenant_admin" ? page.items
+      : page.items.map(row=>({...row,endpoint_url:redactEndpointQuery(row.endpoint_url),headers:{}}));
+    return { items, next_cursor: page.next_cursor };
   }
 
   async restoreActionRevision(principal:Principal,actionKeyValue:string,revisionValue:string,idempotencyKey:string,requestId:string,body:unknown){
@@ -341,7 +388,7 @@ export class BotFlowsService {
     WHERE conversation.tenant_id=$1
       AND ($2::timestamptz IS NULL OR (conversation.last_activity_at,conversation.id)<($2::timestamptz,$3::uuid))
     ORDER BY conversation.last_activity_at DESC,conversation.id DESC LIMIT $4`,[
-      principal.tenantId,cursor?.at??null,cursor?.id??null,limit+(paginated?1:0),
+      principal.tenantId,cursor?.at??null,cursor?.id??null,limit+1,
     ]);
     const pageRows=rows.slice(0,limit);
     const items=pageRows.map(row=>{
@@ -349,7 +396,6 @@ export class BotFlowsService {
       delete item.pagination_activity_at;
       return item;
     });
-    if(!paginated)return items;
     return{items,next_cursor:rows.length>limit?encodeConversationCursor(principal.tenantId,pageRows.at(-1)!):null};
   }
 
@@ -385,11 +431,18 @@ export class BotFlowsService {
     });
   }
 
-  async listRouting(principal:Principal){
-    const rows=await this.database.rows<Record<string,unknown>>(principal.tenantId,`SELECT id,version,state,revision,definition,snapshot_sha256,
-      created_at,activated_at,retired_at FROM client_routing_versions WHERE tenant_id=$1 ORDER BY version DESC LIMIT $2`,[principal.tenantId,LEGACY_CATALOG_LIMIT]);
-    if(principal.role==="tenant_owner"||principal.role==="tenant_admin")return rows;
-    return rows.map(row=>({...row,definition:redactRoutingSecrets(row.definition)}));
+  async listRouting(principal:Principal,query:ListPageQuery={}){
+    const limit = listLimit(query.limit);
+    const cursor = listCursor(query.cursor);
+    const rows=await this.database.rows<Record<string,unknown>&{id:string}>(principal.tenantId,`SELECT id,version,state,revision,definition,snapshot_sha256,
+      created_at,activated_at,retired_at FROM client_routing_versions
+      WHERE tenant_id=$1 AND ($2::uuid IS NULL OR (version,id)<
+        (SELECT version,id FROM client_routing_versions WHERE tenant_id=$1 AND id=$2::uuid))
+      ORDER BY version DESC,id DESC LIMIT $3`,[principal.tenantId,cursor,limit+1]);
+    const page = takeListPage(rows, limit, row => row.id);
+    const items = principal.role==="tenant_owner"||principal.role==="tenant_admin" ? page.items
+      : page.items.map(row=>({...row,definition:redactRoutingSecrets(row.definition)}));
+    return { items, next_cursor: page.next_cursor };
   }
 
   async routingCatalog(principal:Principal,input:{cursor?:unknown;limit?:string}={}){
@@ -1265,8 +1318,8 @@ function assignmentState(value:unknown){const body=object(value,"Assignment stat
 function assignmentAttribution(value:unknown){const body=object(value,"Assignment attribution request");return{agentPrefix:boundedText(body.agentPrefix,"Agent prefix",80),agentIdentityPlacement:agentIdentityPlacement(body.agentIdentityPlacement),expectedRevision:boundedNumber(body.expectedRevision,1,Number.MAX_SAFE_INTEGER,"Expected revision")}}
 function agentIdentityPlacement(value:unknown):"HEADER"|"FOOTER"|"OFF"{if(value===undefined)return"HEADER";if(value!=="HEADER"&&value!=="FOOTER"&&value!=="OFF")throw new BadRequestException("Agent identity placement is invalid");return value}
 
-function conversationPageLimit(value:string){
-  if(!/^[1-9][0-9]{0,2}$/u.test(value))throw new BadRequestException("Conversation page limit is invalid");
+function conversationPageLimit(value:unknown){
+  if(typeof value!=="string"||!/^[1-9][0-9]{0,2}$/u.test(value))throw new BadRequestException("Conversation page limit is invalid");
   const limit=Number(value);
   if(limit>CONVERSATION_PAGE_MAX)throw new BadRequestException("Conversation page limit is invalid");
   return limit;

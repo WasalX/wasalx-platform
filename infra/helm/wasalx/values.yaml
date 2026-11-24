@@ -24,6 +24,8 @@ connectorRetries:
   wahaDeliveryMaxAttempts: 8
   metaDeliveryMaxAttempts: 8
   zammadStatusMaxAttempts: 8
+  botActionMaxAttempts: 8
+  botHandoffMaxAttempts: 8
 observability:
   enabled: true
   otlpEndpoint: "https://otel-collector.observability.svc.cluster.local:4318"
