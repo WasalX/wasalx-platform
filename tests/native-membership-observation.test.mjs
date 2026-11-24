@@ -102,15 +102,59 @@ test("simultaneous surfaces coalesce exact identities, cache briefly, and never 
   observer.cache.forEach(entry=>{entry.expires=Date.now()-1;});await observer.observe(tenant);assert.equal(calls,3);
 });
 
-test("global four-call limit, total deadline and rotating starts keep later members observable",async()=>{
-  const rows=[...Array.from({length:20},(_,index)=>({...snapshot(index+100),sync_state:"PENDING"})),...Array.from({length:8},(_,index)=>snapshot(index+1))];let active=0,maximum=0;const visited=[];
-  const observer=new NativeMembershipObserver(readRows(rows),async(row,signal)=>{
-    active++;maximum=Math.max(maximum,active);visited.push(row.user_id);
-    try{await new Promise((resolve,reject)=>{signal.addEventListener("abort",()=>reject(Error("deadline")),{once:true});});return ready(row);}finally{active--;}
-  },60);
-  const start=Date.now();const [first]=await Promise.all([observer.observe(tenant),observer.observe(tenant)]);assert.ok(Date.now()-start<400);assert.ok([...first.values()].every(value=>value.state==="UNVERIFIED"));assert.equal(maximum,4);
-  await new Promise(done=>setTimeout(done,5));await Promise.all([observer.observe(tenant),observer.observe(tenant)]);
-  assert.equal(new Set(visited).size,8,"Later members receive a slot on the next visible refresh");assert.equal(maximum,4);
+test("global four-call limit, total deadline and rotating starts keep later members observable", async (t) => {
+  const budgetMs = 60;
+  const clock = t.mock.timers;
+  clock.enable({ apis: ["Date", "setTimeout"] });
+  // AbortSignal.timeout uses internal timers that node:test does not mock.
+  t.mock.method(AbortSignal, "timeout", (delay) => {
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), delay);
+    return controller.signal;
+  });
+
+  const pending = Array.from({ length: 20 }, (_, index) => ({ ...snapshot(index + 100), sync_state: "PENDING" }));
+  const eligible = Array.from({ length: 8 }, (_, index) => snapshot(index + 1));
+  const rows = [...pending, ...eligible];
+  const ids = eligible.map((row) => row.user_id);
+  const firstIds = ids.slice(0, 4);
+  const laterIds = ids.slice(4);
+  const visited = [];
+  let active = 0;
+  let maximum = 0;
+  const observer = new NativeMembershipObserver(readRows(rows), async (row, signal) => {
+    active++;
+    maximum = Math.max(maximum, active);
+    visited.push(row.user_id);
+    try {
+      await new Promise((_, reject) => {
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      });
+    } finally {
+      active--;
+    }
+  }, budgetMs);
+
+  for (const [expectedIds, competingIds] of [[firstIds, laterIds], [laterIds, firstIds]]) {
+    let finished = false;
+    const refresh = Promise.all([observer.observe(tenant), observer.observe(tenant, competingIds)]).then((results) => {
+      finished = true;
+      return results;
+    });
+    await new Promise((done) => setImmediate(done));
+    clock.tick(budgetMs - 1);
+    await new Promise((done) => setImmediate(done));
+    assert.equal(finished, false);
+    assert.equal(active, 4);
+    clock.tick(1);
+    const [observations, competing] = await refresh;
+    assert.equal(active, 0);
+    assert.equal(maximum, 4);
+    assert.deepEqual(visited.splice(0), expectedIds, "Only the four members at the rotating start receive a slot");
+    assert.equal(observations.size, rows.length);
+    assert.equal(competing.size, competingIds.length);
+    assert.ok([...observations.values(), ...competing.values()].every((value) => value.state === "UNVERIFIED"));
+  }
 });
 
 test("observation cache is bounded and source/read outages return warnings instead of page errors",async()=>{
