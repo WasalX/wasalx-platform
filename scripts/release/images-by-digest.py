@@ -34,7 +34,7 @@ RERUN_ALL = {
     "zammad-addon.json",  # Pins the public add-on source passed to image builds.
 }
 CACHED_IMAGES = {
-    "production-prometheus", "zammad", "production-otel", "control-api", "connector-worker", "portal",
+    "production-alertmanager", "production-prometheus", "zammad", "production-otel", "control-api", "connector-worker", "portal",
     "tenant-provisioner", "tenant-workspace-controller", "workspace-provider", "identity-policy-activator",
     "invitation-mailer",
 }
