@@ -55,7 +55,7 @@ export const arabicCaseMessages = {
   "cases.dialog.title": "تجهيز الحالة التالية؟",
   "cases.dialog.description": "سيُنهي هذا الإجراء الرابط الحالي بين {reference} وحالة الدعم {ticket}. تبقى الحالة في السجل، وتُنشئ الرسالة المطابقة التالية حالة دعم جديدة.",
   "cases.dialog.guardrail": "هذا الإجراء لا يغلق حالة الدعم الحالية ولا يحذفها.",
-  "cases.dialog.reauthHelp": "يلزم تسجيل دخول حديث. إذا انتهت جلستك ذات الصلاحيات، فسيطلب منك WasalX المصادقة مجددا.",
+  "cases.dialog.reauthHelp": "يلزم تسجيل دخول حديث. إذا انتهت جلستك ذات الصلاحيات، فسيطلب منك WasalX المصادقة مجددًا.",
   "cases.dialog.reauthenticate": "إعادة المصادقة",
   "cases.dialog.cancel": "إلغاء",
   "cases.dialog.starting": "جار التجهيز…",

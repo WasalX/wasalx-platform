@@ -1,3 +1,4 @@
+import { withPostgresClock } from "./support/postgres-clock.mjs";
 import {withFixtureTenant} from './meta-routing-fixture.mjs';
 import assert from 'node:assert/strict';
 import {Client} from 'pg';
@@ -161,15 +162,10 @@ async function signedReadbackRace(f){
  assert.deepEqual(await checkpoints(f,id),original);assert.deepEqual(await originalHistory(f),history);assert.equal(f.providerPosts(),1);
 }
 
-async function awaitEvidenceExpiry(f,expiresAt){
- const remaining=(await f.admin.query('SELECT greatest(0,extract(epoch FROM ($1::timestamptz-clock_timestamp()))::float8)+0.02 AS seconds',[expiresAt])).rows[0].seconds;
- assert.ok(remaining<11,'Finite expiry oracle never waits for a full production TTL');
- await f.admin.query('SELECT pg_sleep($1)',[remaining]);
-}
-async function fundingRecovery(f){
+async function fundingRecovery(f,advance){
  const expiry=await f.shortTargetFunding(),{id}=await completed(f);
  const original=await checkpoints(f,id),reserved=await reservations(f,id),beforePlan=await plan(f,id);
- await awaitEvidenceExpiry(f,expiry);
+ await advance(expiry);
  const account=async()=>(await f.rows(f.app,'SELECT * FROM meta_messaging_accounts WHERE id=$1',[f.targetAccountId]))[0];
  const expired=await account(),view=await f.legacyView(id);assert.equal(view.actions.observe,true);assert.equal(view.actions.reconcile,false);
  await assert.rejects(()=>f.controller.requestMetaBillingDiagnostic(f.request,f.targetConnectionId,randomUUID(),{}),denied,'Ordinary funding refresh stays reservation-blocked');
@@ -199,7 +195,7 @@ async function fundingRecovery(f){
  assert.equal((await plan(f,id)).legacy_state,'RECONCILED_PAUSED');assert.deepEqual(await checkpoints(f,id),original);assert.equal(f.providerPosts(),1);
 }
 
-async function fundingRecoveryWithIdentityDrift(f){
+async function fundingRecoveryWithIdentityDrift(f,advance){
  const expiry=await f.shortTargetFunding(),{id}=await completed(f);
  const original=await checkpoints(f,id),reserved=await reservations(f,id),originalPlan=await plan(f,id);
  const account=async()=>(await f.rows(f.app,'SELECT * FROM meta_messaging_accounts WHERE id=$1',[f.targetAccountId]))[0];
@@ -221,7 +217,7 @@ async function fundingRecoveryWithIdentityDrift(f){
   assert.equal(p.legacy_target_scope_sha256,originalPlan.legacy_target_scope_sha256);
   assert.deepEqual(await checkpoints(f,id),original);assert.deepEqual(await reservations(f,id),reserved);assert.equal(f.providerPosts(),1);
  };
- await signedChange();await awaitEvidenceExpiry(f,expiry);
+ await signedChange();await advance(expiry);
  const expired=await account(),view=await f.legacyView(id);
  assert.equal(view.actions.observe,true,'Signed identity drift cannot strand explicit target funding readback');assert.equal(view.actions.reconcile,false);
  // Every request captures the current identity while retaining original account,
@@ -263,11 +259,11 @@ async function fundingRecoveryWithIdentityDrift(f){
  assert.equal((await f.rows(f.app,'SELECT state FROM connections WHERE id=$1',[f.connectionId]))[0].state,'PAUSED');
 }
 
-async function expiredRuntimeRenewal(f,afterEffect){
+async function expiredRuntimeRenewal(f,afterEffect,advance){
  const {id}=await f.createLegacy();await f.authorize(id);
  if(afterEffect){const work=await f.legacyAction(id,'register');await assert.rejects(()=>f.runLegacy(work,{fault:'disconnect'}));}
  const original=await checkpoints(f,id),reserved=await reservations(f,id),originalPlan=await plan(f,id);
- await awaitEvidenceExpiry(f,f.candidate.expiresAt);
+ await advance(f.candidate.expiresAt);
  const current=await f.legacyView(id);assert.equal(current.actions.register,false);
  if(!afterEffect){assert.equal(current.authorization,null);assert.equal(original.length,0);assert.equal(f.providerPosts(),0);return;}
  assert.equal(current.authorization.targetLegacyMigrationId,id);assert.equal(current.authorization.canPrepare,true);
@@ -296,9 +292,19 @@ async function rotationHold(options){
 }
 
 export async function verifyMetaLegacyMigration(options){
- {const f=await createMetaLegacyMigrationFixture(options,{withIdentity:true});try{await fundingRecoveryWithIdentityDrift(f);}finally{await f.close();}}
- {const f=await createMetaLegacyMigrationFixture(options);try{await fundingRecovery(f);}finally{await f.close();}}
- for(const afterEffect of [false,true]){const f=await createMetaLegacyMigrationFixture(options,{runtimeLifetimeMs:10000});try{await expiredRuntimeRenewal(f,afterEffect);}finally{await f.close();}}
+ for(const withIdentity of [true,false]){
+  const f=await createMetaLegacyMigrationFixture(options,{withIdentity});
+  try{
+   await withPostgresClock(f.admin,'app.meta_legacy_destination_ready(uuid)',advance=>
+    (withIdentity?fundingRecoveryWithIdentityDrift:fundingRecovery)(f,advance));
+  }finally{await f.close();}
+ }
+ for(const afterEffect of [false,true]){
+  const f=await createMetaLegacyMigrationFixture(options);
+  try{
+   await withPostgresClock(f.admin,'app.meta_legacy_fixture_capability(uuid,uuid,uuid)',advance=>expiredRuntimeRenewal(f,afterEffect,advance));
+  }finally{await f.close();}
+ }
  await rotationHold(options);
  for(const resolveFirst of [true,false]){const f=await createMetaLegacyMigrationFixture(options);try{await createOrdering(f,resolveFirst);}finally{await f.close();}}
  for(const resolveFirst of [true,false]){const f=await createMetaLegacyMigrationFixture(options);try{const created=await f.createLegacy();await f.authorize(created.id);await actionOrdering(f,created.id,resolveFirst);}finally{await f.close();}}
