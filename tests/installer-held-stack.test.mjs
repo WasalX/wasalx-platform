@@ -240,6 +240,26 @@ test("installer subprocess failures retain a bounded stderr tail with sensitive 
   });
 });
 
+test("installer Docker pull failures report the reference, exit code and redacted stderr tail", t => {
+  const ref = `registry.example.test/project/image@sha256:${"a".repeat(64)}`;
+  const args = ["pull", "--platform", "linux/amd64", "--quiet", ref];
+  t.mock.method(childProcess, "spawnSync", (command, arguments_) => {
+    assert.equal(command, "docker");
+    assert.deepEqual(arguments_, args);
+    return { status: 17, stderr: `${"padding ".repeat(300)}\nregistry refused pull\nBearer fixture-token\n` };
+  });
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+  assert.throws(() => run("docker", args, {}), error => {
+    const reason = stageFailureReason(error);
+    const prefix = `docker pull ${ref} exit=17: `;
+    assert.ok(reason.startsWith(prefix));
+    assert.ok(reason.endsWith(" registry refused pull Bearer [redacted]"));
+    assert.equal(Buffer.byteLength(reason.slice(prefix.length)), 2048);
+    return true;
+  });
+});
+
 function stackFixture() {
   const candidateReference = "wasalx/portal:test";
   const thirdPartyDigest = `sha256:${"2".repeat(64)}`;

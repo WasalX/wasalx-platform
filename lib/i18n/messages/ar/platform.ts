@@ -171,6 +171,7 @@ export const arabicPlatformMessages = {
   "platform.tenants.tableLabel": "جدول عمليات مساحات العمل",
   "platform.tenants.scrollHint": "مرّر أفقياً لمراجعة جميع حقول وإجراءات مساحة العمل.",
   "platform.tenants.attempts": "المحاولة {attempts} من {maximum}",
+  "platform.tenants.operationFailed": "أبلغت الخطوة الأخيرة عن خطأ.",
   "platform.zammad.notReady": "غير جاهز",
   "platform.zammad.pinned": "مثبّت أثناء التهيئة",
   "platform.workers.title": "سعة عوامل تشغيل WAHA",

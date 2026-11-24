@@ -268,7 +268,7 @@ test("primary navigation exposes bypass and current-page semantics", async () =>
   assert.match(source, /<main id="main-content" tabIndex=\{-1\} inert=\{mobileNavigationOpen\|\|undefined\}>/u);
   assert.match(source, /aria-current=\{view === id \? "page" : undefined\}/u);
   assert.match(styles, /\.skip-link:focus \{ transform:none; \}/u);
-  assert.match(styles, /\.audit-row small\{display:block;margin-block-start:3px\}/u);
+  assert.match(styles, /\.audit-row small\{display:block;margin-block-start:var\(--wx-space-1\)\}/u);
 });
 
 test("tenant shell fails closed on expiry and adapts its persisted sidebar without hiding navigation", async () => {
