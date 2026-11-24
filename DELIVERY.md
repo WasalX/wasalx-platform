@@ -28,7 +28,7 @@ WasalX Delivery owns this document, releases, deploys, rollback, and alerts. See
 - The [pnpm cache action](.github/actions/ci-pnpm/action.yml) saves pnpm dependency and service build caches on main pushes only. A workspace dependency cache miss clears partial module directories before the frozen install. PostgreSQL integration and portal integration always force clean service builds.
 - Run CI on free GitHub-hosted runners. Cancel older CI runs only for the same PR. Keep workflow permissions read-only at the top level, grant writes per job, and pin actions by full commit SHA. Prohibit `pull_request_target`. Fork PRs receive no secrets.
 - Set job time limits from the measured p95 plus 25 percent, rounded up to a whole minute. Review limits monthly. A higher limit needs new measurements in a separate PR. See the [CI timing sample](.github/ci-timings.json) and [current coverage](#deviations).
-- The [workflow lint job](.github/workflows/ci.yml) verifies the pinned actionlint release archive by SHA-256. It compares all workflow findings against the base on workflow-changing PRs and records the base, candidate and new counts. Merge groups and main pushes always run the comparison. `ci-gate` requires zero new findings.
+- The [workflow lint job](.github/workflows/ci.yml) verifies the pinned actionlint release archive by SHA-256. It uses the maintained actionlint fork for GitHub's `concurrency.queue` syntax and checks all workflows on every CI run. `ci-gate` requires zero actionlint findings.
 
 ## Test policy
 
