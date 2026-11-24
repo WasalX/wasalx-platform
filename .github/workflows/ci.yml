@@ -151,10 +151,13 @@ jobs:
           findings() {
             local status=0
             # Ignore line movement and keep duplicate findings for the comparison.
-            "$scratch/actionlint" -shellcheck= -pyflakes= -format '{{range .}}{{printf "%q\t%q\t%q\n" .Filepath .Kind .Message}}{{end}}' > "$1" || status=$?
+            "$scratch/actionlint" -shellcheck= -pyflakes= -format '{{json .}}' > "$scratch/findings.json" || status=$?
             case "$status" in
-              0) test ! -s "$1" ;;
-              1) test -s "$1" ;;
+              0) : > "$1" ;;
+              1)
+                jq -ce '.[] | [.filepath, .kind, .message]' "$scratch/findings.json" > "$1" || return 1
+                test -s "$1" || return 1
+                ;;
               *) return "$status" ;;
             esac
             LC_ALL=C sort -o "$1" "$1"
