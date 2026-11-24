@@ -58,6 +58,12 @@ const eslintConfig = defineConfig([
       "react-hooks/rules-of-hooks": "off",
     },
   },
+  {
+    rules: {
+      // Checkbox labels wrap their text as <span><b>title</b><small>hint</small></span>, one level past the default depth of 2.
+      "jsx-a11y/label-has-associated-control": ["error", { depth: 3 }],
+    },
+  },
 ]);
 
 export default eslintConfig;

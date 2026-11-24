@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import ts from "typescript";
 import {
   FixtureRuleTestError,
   testFixtureRules,
@@ -159,4 +160,33 @@ test("rule tester uses correct bilingual zero, one, and many result phrases", as
 test("rule creation is named as a rule in both operator languages", () => {
   assert.equal(englishTenantMessages["tenant.rules.modal.eyebrow"], "New rule");
   assert.equal(arabicTenantMessages["tenant.rules.modal.eyebrow"], "قاعدة جديدة");
+});
+
+test("every rule-modal control has an accessible name from a translated label or aria-label", async () => {
+  const path = new URL("../app/Rules.tsx", import.meta.url);
+  const file = ts.createSourceFile("Rules.tsx", await readFile(path, "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const modal = file.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === "RuleModal");
+  assert.ok(modal);
+  const attribute = (element, name) => element.attributes.properties.find(item => ts.isJsxAttribute(item) && item.name.getText(file) === name)?.initializer?.getText(file);
+  const controls = [], labels = new Map();
+  const visit = node => {
+    if (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) {
+      const tag = node.tagName.getText(file);
+      if (["input", "select", "textarea"].includes(tag)) controls.push(node);
+      if (tag === "label" && attribute(node, "htmlFor")) labels.set(attribute(node, "htmlFor"), node.parent.getText(file));
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(modal);
+  // Covers every branch: name, matcher, team policy, prefix, digits, pattern, command toggle, action, two input rows, two replies, sample.
+  assert.ok(controls.length >= 13, `found ${controls.length} controls`);
+  const ids = [];
+  for (const control of controls) {
+    if (attribute(control, "aria-label")) continue;
+    const id = attribute(control, "id");
+    assert.match(id ?? "", /^\{`\$\{id\}-[a-z-]+`\}$/u, `${control.getText(file).slice(0, 80)} needs a useId-based id`);
+    assert.match(labels.get(id) ?? "", /\bt\(/u, `${id} needs a translated label with a matching htmlFor`);
+    ids.push(id);
+  }
+  assert.equal(new Set(ids).size, ids.length);
 });

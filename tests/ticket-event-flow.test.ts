@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFile } from "node:fs/promises";
+import ts from "typescript";
 import { parseTicketEventFlow, planTicketEvent, selectTicketQuote, TicketCommandAuthorizationError, ticketCommandAllowed, validateTicketEventCapabilities } from "../packages/core/dist/ticket-event-flow.js";
 const memberId = "10100000-0000-4000-8000-000000000001";
 const base = { schemaVersion: 1, kind: "TICKET_EVENT", name: "Ticket feedback", event: "reference_received", start: "send", maxSteps: 8, nodes: [{ id: "send", type: "send_text", text: "Received {{case.number}}", quote: "ORIGINAL", next: "done" }, { id: "done", type: "end" }] };
@@ -154,4 +156,25 @@ test("all reference messages is one configurable closure reaction, never a text 
   }
   assert.throws(()=>parseTicketEventFlow({...definition,nodes:[{...base.nodes[0],quote:"REFERENCE_MESSAGES"},base.nodes[1]]}),/quote policy/);
   assert.throws(()=>planTicketEvent(flow,{...input,provider:"META",variables:{"event.kind":"ticket_closed","provider.kind":"META"}}),/capability/);
+});
+
+test("the preview renders outside the draft form, so Enter in a preview value cannot save a version", async () => {
+  const parse = async (name: string) => ts.createSourceFile(name, await readFile(new URL(`../app/${name}`, import.meta.url), "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const tags = (file: ts.SourceFile, node: ts.Node, found: string[] = []) => {
+    if (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) found.push(node.tagName.getText(file));
+    ts.forEachChild(node, child => { tags(file, child, found); });
+    return found;
+  };
+  const component = (file: ts.SourceFile, name: string) => file.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === name)!;
+  const editor = await parse("TicketEventEditor.tsx"), workflows = await parse("TicketEventWorkflows.tsx");
+  // Implicit submission only reaches controls the form owns; the editor sits in the draft form, so it must not render the preview.
+  assert.deepEqual(tags(editor, component(editor, "TicketEventEditor")).filter(tag => tag.startsWith("TicketEventPreview")), []);
+  const findForm = (node: ts.Node): ts.JsxElement | undefined => ts.isJsxElement(node) && node.openingElement.tagName.getText(workflows) === "form" && /onSubmit=\{saveDraft\}/u.test(node.openingElement.getText(workflows)) ? node : ts.forEachChild(node, findForm);
+  const draftForm = findForm(workflows);
+  assert.ok(draftForm);
+  const inside = tags(workflows, draftForm);
+  assert.ok(inside.includes("TicketEventEditor"));
+  assert.ok(!inside.some(tag => tag.startsWith("TicketEventPreview")));
+  assert.ok(tags(workflows, draftForm.parent).includes("TicketEventPreviewPanel"));
+  assert.doesNotMatch(component(editor, "TicketEventPreview").getText(editor), /onKeyDown/u);
 });
