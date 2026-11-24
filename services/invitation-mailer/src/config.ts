@@ -15,6 +15,7 @@ export type InvitationMailerConfig = {
   providerSecretReference: string;
   sender: string;
   templateId: string;
+  testRecipients?: ReadonlySet<string>;
   portalOrigin: string;
 };
 
@@ -65,8 +66,24 @@ export function loadInvitationMailerConfig(
     ),
     sender: canonicalEmail(required(environment.INVITATION_EMAIL_FROM, "INVITATION_EMAIL_FROM"), "INVITATION_EMAIL_FROM"),
     templateId: boundedToken(required(environment.INVITATION_EMAIL_TEMPLATE_ID, "INVITATION_EMAIL_TEMPLATE_ID"), "INVITATION_EMAIL_TEMPLATE_ID"),
+    testRecipients: parseTestRecipients(environment.WASALX_TEST_EMAIL_RECIPIENT_ALLOWLIST),
     portalOrigin: portalUrl.origin,
   };
+}
+
+function parseTestRecipients(raw: string | undefined) {
+  if (raw === undefined) return undefined;
+  const name = "WASALX_TEST_EMAIL_RECIPIENT_ALLOWLIST";
+  let entries: unknown;
+  try {
+    entries = JSON.parse(raw.trim() || "[]");
+  } catch {
+    throw new Error(`${name} must be a JSON array of email addresses`);
+  }
+  if (!Array.isArray(entries) || entries.some(entry => typeof entry !== "string")) {
+    throw new Error(`${name} must be a JSON array of email addresses`);
+  }
+  return new Set(entries.map((entry, index) => canonicalEmail(entry, `${name}[${index}]`)));
 }
 
 function parsePrivateKeyReferences(raw: string) {

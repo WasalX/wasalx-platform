@@ -408,8 +408,11 @@ services:
 
   keycloak:
     profiles: [full]
-    image: quay.io/keycloak/keycloak:26.7.1@sha256:f1f1f01e472c8a78df40d8f2a49a925274eda4d3d80d5f6edbb5c880ee3c01c6
-    command: [start, --import-realm]
+    build:
+      context: .
+      dockerfile: Dockerfile.foundation-keycloak
+    image: wasalx/foundation-keycloak:local
+    command: [start, --import-realm, --spi-email-sender--provider=wasalx-fenced, --spi-email-template--provider=wasalx-fenced]
     environment:
       KC_DB: postgres
       KC_DB_URL: jdbc:postgresql://keycloak-postgresql:5432/keycloak
@@ -423,6 +426,8 @@ services:
       KC_HEALTH_ENABLED: "true"
       KC_METRICS_ENABLED: "true"
       KC_CACHE: local
+      WASALX_TEST_EMAIL_RECIPIENT_ALLOWLIST: ${WASALX_TEST_EMAIL_RECIPIENT_ALLOWLIST:-}
+      WASALX_KEYCLOAK_PASSWORD_RESET_ENABLED: ${WASALX_KEYCLOAK_PASSWORD_RESET_ENABLED:-false}
       WASALX_PORTAL_PUBLIC_ORIGIN: ${WASALX_DEV_REVIEW_PORTAL_PUBLIC_ORIGIN:-${PORTAL_PUBLIC_ORIGIN:-http://127.0.0.1:3000}}
     volumes:
       - ./infra/docker/full/keycloak/wasalx-realm.json:/opt/keycloak/data/import/wasalx-realm.json:ro
@@ -471,6 +476,7 @@ services:
       WASALX_KEYCLOAK_SMTP_FROM: ${WASALX_FULL_KEYCLOAK_SMTP_FROM:-}
       WASALX_KEYCLOAK_SMTP_USER: ${WASALX_FULL_KEYCLOAK_SMTP_USER:-}
       WASALX_KEYCLOAK_SMTP_PASSWORD: ${WASALX_FULL_KEYCLOAK_SMTP_PASSWORD:-}
+      WASALX_KEYCLOAK_PASSWORD_RESET_ENABLED: ${WASALX_KEYCLOAK_PASSWORD_RESET_ENABLED:-false}
       HOME: /tmp/keycloak-bootstrap
     volumes:
       - ./infra/docker/full/keycloak/bootstrap-user.mjs:/bootstrap/bootstrap-user.mjs:ro

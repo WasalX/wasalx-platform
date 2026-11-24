@@ -60,6 +60,19 @@ test("mailer production configuration requires a live HTTPS or TLS-required SMTP
   assert.equal(config.tenantId, tenantId);
   assert.equal(config.privateKeyReferences.get("v1"), "secret://platform/invitations/v1");
   assert.equal(config.port, 8085);
+  assert.equal(config.testRecipients, undefined);
+  const mailFence = "WASALX_TEST_EMAIL_RECIPIENT_ALLOWLIST";
+  const email = ["fixture-2718", "example.home.arpa"].join("@");
+  const withFence = value => loadInvitationMailerConfig({
+    ...base,
+    INVITATION_EMAIL_PROVIDER_URL: "https://email.internal/v1/send",
+    [mailFence]: value,
+  });
+  assert.deepEqual(withFence("").testRecipients, new Set());
+  assert.deepEqual(withFence(JSON.stringify([email.toUpperCase()])).testRecipients, new Set([email]));
+  for (const invalid of ["*", "null", "{}", '[1]', JSON.stringify([email, "*"])]) {
+    assert.throws(() => withFence(invalid), /WASALX_TEST_EMAIL_RECIPIENT_ALLOWLIST/u);
+  }
   const shared = loadInvitationMailerConfig({
     ...base,
     INVITATION_EMAIL_PROVIDER_URL: "https://email.internal/v1/send",
@@ -410,6 +423,31 @@ test("retryable provider failures back off, exhaust to terminal, and stale lease
   assert.equal((await stale.processor.drainOnce()).stale, 1);
 });
 
+test("the invitation mail fence stops non-members before secret access or provider delivery", async () => {
+  const recipient = ["fixture-2718", "example.home.arpa"].join("@");
+  let sends = 0;
+  let secretReads = 0;
+  const provider = { send: async input => {
+    assert.equal(input.recipient, recipient);
+    sends++;
+    return { messageId: "provider-allowed" };
+  } };
+  const fixture = testRecipients => mailerFixture({
+    recipient, testRecipients, provider, onResolve: () => { secretReads++; },
+  });
+  for (const recipients of [new Set(), new Set([["fixture-0002", "example.home.arpa"].join("@")])]) {
+    const denied = fixture(recipients);
+    assert.equal((await denied.processor.drainOnce()).terminal, 1);
+    assert.equal(denied.calls.fail[0].input.code, "EMAIL_TEST_RECIPIENT_NOT_ALLOWED");
+    assert.equal(denied.calls.fail[0].input.retryable, false);
+  }
+  assert.equal(secretReads, 0);
+  assert.equal(sends, 0);
+  assert.equal((await fixture(new Set([recipient])).processor.drainOnce()).sent, 1);
+  assert.equal(secretReads, 1);
+  assert.equal(sends, 1);
+});
+
 test("retry schedule is bounded and source logging never includes token, recipient, or ciphertext fields", async () => {
   const earliest = Date.now() + 1_400;
   const latest = Date.now() + 2_600;
@@ -509,7 +547,7 @@ function mailerFixture(options = {}) {
     tenant_id: tenantId,
     invitation_id: "44444444-4444-4444-8444-444444444444",
     action: "INVITE",
-    recipient_email: "invitee@example.com",
+    recipient_email: options.recipient ?? "invitee@example.com",
     token_ciphertext: publicEncrypt({
       key: publicKey,
       padding: constants.RSA_PKCS1_OAEP_PADDING,
@@ -538,7 +576,10 @@ function mailerFixture(options = {}) {
   };
   const secrets = {
     ready: async () => true,
-    resolve: async () => ({ keyVersion: "v1", privateKeyPem: privateKey.export({ type: "pkcs8", format: "pem" }).toString() }),
+    resolve: async () => {
+      options.onResolve?.();
+      return { keyVersion: "v1", privateKeyPem: privateKey.export({ type: "pkcs8", format: "pem" }).toString() };
+    },
   };
   const provider = options.provider ?? { send: async () => ({ messageId: "provider-123" }) };
   const processor = new InvitationMailerProcessor({
@@ -549,6 +590,7 @@ function mailerFixture(options = {}) {
     portalOrigin: "https://portal.example.com",
     sender: "operations@example.com",
     templateId: "invite-v1",
+    testRecipients: options.testRecipients,
   }, store, secrets, provider);
   return { processor, calls };
 }
