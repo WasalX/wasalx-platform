@@ -280,12 +280,13 @@ export async function verifyMetaLifecycleConsumers(adminUrl,workerConfig,appUrl)
 
 // Append beside verifyMetaLifecycleWorker/verifyMetaLifecycleConsumers and call from
 // the existing isolated PostgreSQL gate after migration 0161 and the control-api build.
-export async function verifyMetaLifecycleIngress(adminUrl,appUrl){
+export async function verifyMetaLifecycleIngress(adminUrl,appUrl,workerConfig){
   const admin=new Client({connectionString:adminUrl});await admin.connect();
   const previousUrl=process.env.DATABASE_URL,previousPool=process.env.DATABASE_POOL_SIZE;
   process.env.DATABASE_URL=appUrl;process.env.DATABASE_POOL_SIZE='2';
   const {DatabaseService}=await import('../services/control-api/dist/database.service.js');
-  const database=new DatabaseService();
+  const database=new DatabaseService(),workerPool=new Pool(workerConfig);
+  const inbound=new InboundRepository(workerPool);
   const tenantId=randomUUID(),appId='12025550130',wabaId='987654321098775';
   const connections=[randomUUID(),randomUUID()],sessions=[randomUUID(),randomUUID()];
   const phones=['15550003001','15550003002'],displays=['12025550170','12025550171'];
@@ -320,10 +321,12 @@ export async function verifyMetaLifecycleIngress(adminUrl,appUrl){
     const payload={...unit,admission:{schemaVersion:1,observedAt:new Date(unit.entry[0].time*1000).toISOString(),providerPayloadSha256:payloadSha256,
       kind:'BLOCK',reasons:['ACCOUNT_OFFBOARDED'],asset:{providerSessionId:route.provider_session_id,phoneNumberId:route.phone_number_id,wabaId,appId},phoneScope:'ACCOUNT'}};
     const input={providerEventId,eventType:'meta.account.lifecycle.block',payload,payloadSha256};
-    const first=await database.acceptMetaLifecycleEvent(route,input);assert.equal(first.duplicate,false);
+    const first=await database.acceptMetaLifecycleEvent(route,input,appId);assert.equal(first.duplicate,false);
     const duplicate=await database.acceptMetaLifecycleEvent(route,input);assert.equal(duplicate.duplicate,true);assert.equal(duplicate.id,first.id);
     await assert.rejects(()=>database.acceptMetaLifecycleEvent(route,{...input,payloadSha256:'f'.repeat(64)}),/conflicts/u);
     assert.equal((await admin.query('SELECT count(*)::integer AS count FROM event_inbox WHERE tenant_id=$1 AND id=$2',[tenantId,first.id])).rows[0].count,1);
+    const claimed=await inbound.claim(tenantId,randomUUID());
+    assert.deepEqual(claimed.map(event=>[event.id,event.metaWebhookAppId]),[[first.id,appId]]);
 
     const baseData={wabaId,metaAccountProof:proof(0)};
     const setData=data=>withFixtureTenant(admin,tenantId,()=>admin.query('UPDATE provider_sessions SET provider_state_data=$2::jsonb WHERE id=$1',[sessions[0],JSON.stringify(data)]));
@@ -370,9 +373,10 @@ export async function verifyMetaLifecycleIngress(adminUrl,appUrl){
     assert.equal((await resolve()).some(row=>row.provider_session_id===sessions[1]),true,'Unique latest retained matching asset resolves');
     await withFixtureTenant(admin,tenantId,()=>admin.query('UPDATE provider_sessions SET created_at=$2 WHERE id=$1',[retiredId,tiedAt]));
     assert.equal((await resolve()).some(row=>row.connection_id===connections[1]),false);
-    return{resolverFanout:true,roleBoundary:true,admissionIdempotency:true,admissionConflict:true,pendingNegativeStatuses:true,malformedStateDenied:true,proofBindingMatrix:true,retainedPauseRevokeAdmission:true,staleRouteDenied:true,suspendedTenantDenied:true,newGenerationNoFallback:true,tiedRetainedRejected:true};
+    return{resolverFanout:true,roleBoundary:true,admissionIdempotency:true,admissionConflict:true,admittedAppClaimed:true,pendingNegativeStatuses:true,malformedStateDenied:true,proofBindingMatrix:true,retainedPauseRevokeAdmission:true,staleRouteDenied:true,suspendedTenantDenied:true,newGenerationNoFallback:true,tiedRetainedRejected:true};
   }finally{
     await database.onModuleDestroy();
+    await workerPool.end();
     if(previousUrl===undefined)delete process.env.DATABASE_URL;else process.env.DATABASE_URL=previousUrl;
     if(previousPool===undefined)delete process.env.DATABASE_POOL_SIZE;else process.env.DATABASE_POOL_SIZE=previousPool;
     await admin.query('DELETE FROM tenants WHERE id=$1',[tenantId]);await admin.end();

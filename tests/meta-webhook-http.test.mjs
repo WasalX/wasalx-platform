@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { createHash, createHmac } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import { connect } from "node:net";
 import { ConflictException, Controller, Get, Module, RequestMethod, ValidationPipe } from "../services/control-api/node_modules/@nestjs/common/index.js";
@@ -14,6 +16,94 @@ import { RoutingConnectorsConfig } from "../services/control-api/dist/routing-co
 import { SecretProvisioningService } from "../services/control-api/dist/secret-provisioning.service.js";
 import { META_WEBHOOK_MAX_BYTES } from "../services/control-api/dist/webhook-security.js";
 import { metaDirectIdentityChangeEvidence, metaDirectTransitionEvidence } from "../packages/core/dist/meta-direct-identity.js";
+
+test("Meta app callbacks isolate signatures, verification tokens and tenant routes", async t => {
+  t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-01-01T00:00:00Z") });
+  const folder = await mkdtemp(join(tmpdir(), "wasalx-meta-apps-"));
+  const path = join(folder, "apps.json");
+  const defaults = { META_WEBHOOK_APPS_FILE: path, META_APP_ID: "10001", WASALX_TEST_RECIPIENT_ALLOWLIST: "*" };
+  const previous = Object.fromEntries(Object.keys(defaults).map(key => [key, process.env[key]]));
+  for (const [key, value] of Object.entries(defaults)) process.env[key] = value;
+  t.after(async () => {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    await rm(folder, { recursive: true });
+  });
+  const apps = ["10001", "10002"].map(appId => ({
+    appId, secretReference: `secret://synthetic/${appId}/hmac`, verifyTokenReference: `secret://synthetic/${appId}/verify`,
+  }));
+  const config = rows => JSON.stringify({ schemaVersion: 1, apps: rows });
+  await writeFile(path, config(apps));
+  const lookups = [], secrets = [], admitted = [], wakes = [];
+  const routes = new Map(apps.map((app, index) => [`2000${index + 1}`, {
+    tenant_id: `fixture-tenant-${index}`, connection_id: `fixture-connection-${index}`,
+    provider: "META", hmac_secret_reference: app.secretReference,
+  }]));
+  const database = {
+    resolveMetaWebhookRoute: async phone => { lookups.push(phone); return routes.get(phone) ?? null; },
+    acceptWebhookEvent: async (route, input, appId) => {
+      admitted.push([route.tenant_id, appId, input.metaRoutingEvidence.accountId]);
+      return { id: "synthetic", duplicate: false };
+    },
+  };
+  const secretValue = reference => `synthetic-value:${reference}`;
+  const secretSidecar = { resolveHmac: async (reference, owner) => {
+    assert.deepEqual(owner, { kind: "exact", expectedReference: reference });
+    secrets.push(reference);
+    return secretValue(reference);
+  } };
+  class TestModule {}
+  Module({ controllers: [WebhookIngressController], providers: [
+    { provide: DatabaseService, useValue: database },
+    { provide: WebhookSecretService, useValue: secretSidecar },
+    { provide: TenantDrainService, useValue: { wakeInbound: async tenant => wakes.push(tenant) } },
+    { provide: RoutingConnectorsConfig, useValue: {} },
+    { provide: SecretProvisioningService, useValue: {} },
+  ] })(TestModule);
+  const app = await NestFactory.create(TestModule, new FastifyAdapter(), { logger: false, rawBody: true });
+  t.after(() => app.close());
+  await app.init();
+  const send = (path, signer, phone) => {
+    const payload = JSON.stringify({ object: "whatsapp_business_account", entry: [{ id: "30001", changes: [{
+      field: "messages", value: { messaging_product: "whatsapp", metadata: { phone_number_id: phone },
+        statuses: [{ id: "wamid.synthetic", status: "delivered", timestamp: String(Date.now() / 1000) }] },
+    }] }] });
+    const digest = createHmac("sha256", secretValue(signer.secretReference)).update(payload).digest("hex");
+    return app.inject({ method: "POST", url: path, payload, headers: {
+      "content-type": "application/json", "x-hub-signature-256": `sha256=${digest}`,
+    } });
+  };
+  const verify = (appId, signer) => app.inject({ method: "GET", url: `/webhooks/meta/apps/${appId}?` + new URLSearchParams({
+    "hub.mode": "subscribe", "hub.challenge": "123", "hub.verify_token": secretValue(signer.verifyTokenReference),
+  }) });
+  for (const [index, registered] of apps.entries()) {
+    const other = apps[1 - index], phone = `2000${index + 1}`, url = `/webhooks/meta/apps/${registered.appId}`;
+    assert.equal((await verify(registered.appId, registered)).body, "123");
+    assert.equal((await verify(registered.appId, other)).statusCode, 401);
+    const previousLookups = lookups.length;
+    assert.equal((await send(url, other, phone)).statusCode, 401);
+    assert.equal(lookups.length, previousLookups);
+    assert.deepEqual((await send(url, registered, `2000${2 - index}`)).json(), {
+      accepted: true, count: 0, duplicates: 0, unrouted: 1,
+    });
+    assert.equal((await send(url, registered, phone)).json().count, 1);
+  }
+  assert.equal((await send("/webhooks/meta", apps[1], "20002")).statusCode, 401);
+  const before = [secrets.length, lookups.length];
+  assert.equal((await send("/webhooks/meta/apps/99999", apps[0], "20001")).statusCode, 404);
+  assert.equal((await verify("99999", apps[0])).statusCode, 404);
+  assert.deepEqual([secrets.length, lookups.length], before);
+  assert.deepEqual(admitted, [["fixture-tenant-0", "10001", "30001"], ["fixture-tenant-1", "10002", "30001"]]);
+  assert.deepEqual(wakes, ["fixture-tenant-0", "fixture-tenant-1"]);
+
+  for (const row of [{ ...apps[1], appId: apps[0].appId }, { ...apps[1], secretReference: apps[0].secretReference },
+    { ...apps[1], verifyTokenReference: "plaintext-is-not-a-reference" }]) {
+    await writeFile(path, config([apps[0], row]));
+    assert.throws(() => new WebhookIngressController(database, secretSidecar, {}), /invalid or duplicate app row at index 1/u);
+  }
+});
 
 test("Meta verification rejects repeated query values and only echoes a decimal challenge as plain text", async (t) => {
   const previous = process.env.META_VERIFY_TOKEN;
