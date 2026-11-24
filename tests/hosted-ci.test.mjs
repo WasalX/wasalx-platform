@@ -777,8 +777,16 @@ test("PR unit selection catches a hidden transitive regression and falls back on
     await writeFile(join(directory, file), files[file]);
   }
 
+  await writeFile(join(directory, "lib/added.mjs"), "export const added = true;\n");
+  mergeFixture();
+  assert.equal(git("diff", "--name-status", base, "HEAD"), "A\tlib/added.mjs");
+  const addition = select("pull_request");
+  assert.deepEqual(addition.files, all);
+  assert.match(addition.reason, /structural changes/u);
+
   const { jobs } = parse(await read(".github/workflows/ci.yml"));
   const fullUnit = jobs["full-unit"];
+  assert.equal(fullUnit.name, "Full ${{ matrix.name }}");
   assert.equal(fullUnit.if, "github.event_name == 'push' || github.event_name == 'workflow_dispatch'");
   assert.deepEqual(fullUnit.strategy.matrix.include, jobs.checks.strategy.matrix.include.filter(row => row.mode === "unit"));
   assert.deepEqual(fullUnit.steps, jobs.checks.steps);

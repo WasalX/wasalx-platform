@@ -241,7 +241,7 @@ jobs:
 
   full-unit:
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
-    name: ${{ matrix.name }}
+    name: Full ${{ matrix.name }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     strategy:
