@@ -132,7 +132,7 @@ test("rejected platform OIDC callbacks log only presence flags and correlation",
     else process.env.PORTAL_PUBLIC_ORIGIN = previousOrigin;
   });
   const warnings: string[] = [];
-  t.mock.method(process.stderr, "write", (line) => { warnings.push(String(line)); return true; });
+  t.mock.method(process.stderr, "write", (line: string) => { warnings.push(String(line)); return true; });
   const response = await GET(new Request(
     "https://portal.example.test/platform/auth/callback?error=fixture-error&code=fixture-code&state=invalid",
   ));
