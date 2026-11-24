@@ -1,5 +1,5 @@
 import AxeBuilder from "@axe-core/playwright";
-import { chromium } from "@playwright/test";
+import { chromium, expect } from "@playwright/test";
 import assert from "node:assert/strict";
 import { fixtureNetwork, fixtureNetworkArgs } from "./support/ci-fixture-network.mjs";
 import { createHash, randomUUID } from "node:crypto";
@@ -13,6 +13,7 @@ import test from "node:test";
 import Redis from "ioredis";
 import { exportJWK, generateKeyPair, SignJWT } from "jose";
 import { Client } from "pg";
+import { arabicPlatformMessages } from "../lib/i18n/messages/ar/platform.ts";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const postgresImage = "postgres:17.10-alpine3.23@sha256:8189a1f6e40904781fc9e2612687877791d21679866db58b1de996b31fc312e4";
@@ -21,7 +22,7 @@ const tenantId = "10000000-0000-4000-8000-000000000001";
 const invitationToken = Buffer.alloc(32, 7).toString("base64url");
 const expiredInvitationToken = Buffer.alloc(32, 8).toString("base64url");
 
-test("platform and invitation journeys cross signed OIDC, portal, API, Redis, and PostgreSQL", { timeout: 300_000 }, async () => {
+test("platform and invitation journeys cross signed OIDC, portal, API, Redis, and PostgreSQL", { timeout: 300_000 }, async (t) => {
   const suffix = `${process.pid}-${Date.now()}`;
   const pgName = `wasalx-platform-pg-${suffix}`;
   const redisName = `wasalx-platform-redis-${suffix}`;
@@ -142,7 +143,34 @@ test("platform and invitation journeys cross signed OIDC, portal, API, Redis, an
     const platformRead = await context.request.get(`${portalOrigin}/api/platform-console/operations/tenants?limit=50`);
     assert.equal(platformRead.status(), 200);
     assert.equal(platformRead.headers()["cache-control"], "no-store");
-    assert.equal((await platformRead.json()).items[0].tenant_id, tenantId);
+    const tenantOperations = await platformRead.json();
+    assert.equal(tenantOperations.items[0].tenant_id, tenantId);
+
+    await t.test("Arabic platform workspace operations localize failed provisioning", async () => {
+      const arabic = await resources.browser.newContext({ storageState: await context.storageState(), locale: "ar-SA" });
+      try {
+        await arabic.addCookies([{ name: "wasalx_locale", value: "ar", url: portalOrigin }]);
+        const arabicPage = await arabic.newPage();
+        const englishError = "The provisioning worker could not finish its last step.";
+        await arabicPage.route("**/api/platform-console/operations/tenants?*", (route) => route.fulfill({
+          json: {
+            ...tenantOperations,
+            items: tenantOperations.items.map(operation => ({
+              ...operation, status: "FAILED", error_code: "PROVISIONING_FAILED", safe_error: englishError,
+            })),
+          },
+        }));
+        await arabicPage.goto(`${portalOrigin}/platform#tenants`);
+        await expect(arabicPage.locator("html")).toHaveAttribute("lang", "ar");
+        await arabicPage.getByRole("textbox", { name: arabicPlatformMessages["platform.tenants.searchLabel"], exact: true })
+          .fill("Invitation Proof Workspace");
+        const row = arabicPage.getByRole("row").filter({ hasText: "Invitation Proof Workspace" });
+        await expect(row.getByText(arabicPlatformMessages["platform.tenants.operationFailed"], { exact: true })).toBeVisible();
+        await expect(arabicPage.getByText(englishError, { exact: false })).toHaveCount(0);
+      } finally {
+        await arabic.close();
+      }
+    });
 
     const forbiddenSuspend = await page.evaluate(async (id) => {
       const response = await fetch(`/api/platform-console/tenants/${id}/suspend`, {

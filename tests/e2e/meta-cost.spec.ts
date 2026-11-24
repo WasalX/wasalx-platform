@@ -69,7 +69,13 @@ test("cost usage preserves exact money, role boundaries, account changes and com
    await page.keyboard.press(key);
    await expect.poll(()=>tableScroll.evaluate(element=>element.scrollLeft)).not.toBe(scroll.left);
   }
+  // A bounded viewport also exercises vertical keyboard scrolling in the same table.
+  await tableScroll.evaluate(element=>{element.style.maxBlockSize="16rem";});
+  const top=await tableScroll.evaluate(element=>element.scrollTop);
+  await page.keyboard.press("End");
+  await expect.poll(()=>tableScroll.evaluate(element=>element.scrollTop)).toBeGreaterThan(top);
   await testInfo.attach(`cost-table-keyboard-${locale}-${testInfo.project.name}`,{body:await page.screenshot(),contentType:"image/png"});
+  await tableScroll.evaluate(element=>{element.style.removeProperty("max-block-size");});
   expect((await new AxeBuilder({page}).include("details[open]").analyze()).violations).toEqual([]);
   await testInfo.attach(`meta-cost-${locale}-${testInfo.project.name}`,{body:await cost.screenshot(),contentType:"image/png"});
 });
