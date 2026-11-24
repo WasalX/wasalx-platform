@@ -454,6 +454,12 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
             with self.subTest(key=key), self.assertRaises(ValueError):
                 images.assemble(bad)
 
+    def test_alertmanager_module_transport_is_scoped_to_the_build(self):
+        dockerfile = (ROOT / "Dockerfile.production-alertmanager").read_text(encoding="utf-8")
+        build, runtime = dockerfile.rsplit("\nFROM ", 1)
+        self.assertIn("ENV GODEBUG=http2client=0", build.splitlines())
+        self.assertNotIn("GODEBUG", runtime)
+
     def test_registry_cache_roles_are_disjoint(self):
         self.assertEqual(len(images.CACHED_IMAGES), 12)
         self.assertLessEqual(images.CACHED_IMAGES, {row["image"] for row in images.catalog()})
