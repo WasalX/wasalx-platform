@@ -341,3 +341,13 @@ test("group selection checkboxes have 24 px targets and 44 px targets on coarse 
   assert.deepEqual(size(globals.match(/@media\(any-pointer:coarse\)\{\.select-column\{[^}]*\}[^}]*\}\}/u)[0]), [44, 44]);
 });
 
+
+test("mobile header keeps one sidebar grid and a top bar that grows with its text", async () => {
+  const globals = await read("app/globals.css");
+  const rules = (selector) => [...globals.matchAll(/([^{}]+)\{([^{}]*)\}/gu)].filter(([, found]) => found.trim() === selector).map(([, , body]) => body);
+  for (const selector of [".sidebar", ".workspace-switcher", ".mobile-navigation-toggle", ".sidebar-bottom", ".sidebar nav"]) {
+    assert.ok(rules(selector).filter((body) => /grid-(?:row|column|template-columns)\s*:/u.test(body)).length <= 1, `${selector} has one mobile grid placement`);
+  }
+  for (const body of rules(".topbar")) assert.doesNotMatch(body, /(?:^|[;\s])height\s*:/u, "a fixed top bar height lets wrapped text overflow onto the menu toggle at 200% text");
+  assert.match(rules(".topbar")[0], /min-height:57px/u);
+});
