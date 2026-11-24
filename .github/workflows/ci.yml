@@ -35,6 +35,7 @@ jobs:
       dev-install: ${{ steps.dev-install.outputs.needed }}
       integration: ${{ steps.integration.outputs.needed }}
       storybook: ${{ steps.storybook.outputs.needed }}
+      zammad: ${{ steps.zammad.outputs.needed }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -82,6 +83,23 @@ jobs:
             scripts/serve-storybook-static.mjs scripts/storybook-visual-regression.mjs \
             playwright.storybook.config.ts package.json pnpm-lock.yaml pnpm-workspace.yaml \
             patches/ .npmrc tsconfig.json .github/actions/ci-pnpm/ .github/workflows/ci.yml; then
+            needed=false
+          fi
+          echo "needed=$needed" >> "$GITHUB_OUTPUT"
+      - id: zammad
+        if: github.event_name == 'pull_request'
+        run: |
+          needed=true
+          if git diff --quiet --no-ext-diff --no-renames HEAD^1 HEAD -- \
+            compose.full.yaml .dockerignore infra/docker/Dockerfile.zammad infra/docker/full/zammad/ \
+            zammad-addon.json zammad-package/ build/zammad/ release/installer-images.json \
+            ':(glob)scripts/*zammad*' ':(glob)scripts/contracts/*mailbox*' scripts/release/operator-input.mjs \
+            tests/zammad-image-browser-compat.test.mjs tests/fixtures/native-compat-cleanup.mjs ':(glob)tests/**/*.rb' \
+            services/control-api/ services/connector-worker/ packages/ lib/domain.ts lib/literal-matcher.ts \
+            scripts/build-services.mjs tsconfig.json ':(glob)services/*/tsconfig*.json' .gitattributes \
+            tests/outbound-media.test.mjs tests/helpers/operator-input-fixtures.mjs \
+            ':(glob)**/package.json' pnpm-lock.yaml pnpm-workspace.yaml .npmrc patches/ \
+            .github/actions/ci-pnpm/ .github/workflows/ci.yml .github/workflows/zammad-compatibility.yml; then
             needed=false
           fi
           echo "needed=$needed" >> "$GITHUB_OUTPUT"
@@ -594,9 +612,14 @@ jobs:
       id-token: write
     uses: ./.github/workflows/branch-image.yml
 
+  zammad-compatibility:
+    needs: changes
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.changes.outputs.zammad != 'false') }}
+    uses: ./.github/workflows/zammad-compatibility.yml
+
   ci-gate:
     if: always()
-    needs: [changes, workflow-lint, storybook, privacy, dependency-review, checks, full-unit, images, installer-portal, integration, portal-integration, integration-coverage, infra-validate, dev-install-dryrun]
+    needs: [changes, workflow-lint, storybook, privacy, dependency-review, checks, full-unit, images, installer-portal, integration, portal-integration, integration-coverage, infra-validate, dev-install-dryrun, zammad-compatibility]
     runs-on: ubuntu-slim
     timeout-minutes: 2
     permissions: {}
@@ -623,6 +646,8 @@ jobs:
           INFRA: ${{ needs.infra-validate.result }}
           DEV_INSTALL_NEEDED: ${{ needs.changes.outputs.dev-install }}
           DEV_INSTALL: ${{ needs.dev-install-dryrun.result }}
+          ZAMMAD_NEEDED: ${{ needs.changes.outputs.zammad }}
+          ZAMMAD_COMPATIBILITY: ${{ needs.zammad-compatibility.result }}
         run: |
           test "$WORKFLOW_LINT" = success || exit 1
           case "$EVENT:$STORYBOOK_NEEDED:$STORYBOOK" in
@@ -632,6 +657,12 @@ jobs:
           case "$EVENT:$PRIVACY" in
             pull_request:success|merge_group:success|push:success|workflow_dispatch:skipped) ;;
             *) echo 'Privacy scan did not pass.'; exit 1 ;;
+          esac
+          case "$EVENT:$ZAMMAD_NEEDED:$ZAMMAD_COMPATIBILITY" in
+            *:*:success) ;;
+            pull_request:false:skipped)
+              echo 'Zammad compatibility skipped because its inputs did not change.' >> "$GITHUB_STEP_SUMMARY" ;;
+            *) echo "::error::Zammad compatibility result: $ZAMMAD_COMPATIBILITY"; exit 1 ;;
           esac
           if [[ "$EVENT" == push || "$EVENT" == workflow_dispatch ]]; then
             test "$CHANGES:$CHECKS:$REVIEW:$IMAGES:$DEV_INSTALL:$INSTALLER_PORTAL" = skipped:skipped:skipped:skipped:skipped:skipped || exit 1

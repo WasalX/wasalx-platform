@@ -273,11 +273,14 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
   let fixture;
   let runnerConnected = false;
   let primaryError;
+  const fixtureRequests = [];
+  const fixtureErrors = [];
   const groupActorExpectations = new Map();
   const observedGroupActors = new Set();
   const state = { customerId: null, ticketId: null, ticketNumber: null, articleId: null, closedTicketId: null, closedTicketNumber: null, closedArticleId: null, links: [], requests: [], sentMessages: [], liveMessages: [] };
   try {
-    fixture = createServer(async (request, response) => {
+    const replyPreviewPath = "/internal/v1/zammad/reply-preview";
+    const handleFixtureRequest = async (request, response) => {
       const body = [];
       for await (const chunk of request) body.push(chunk);
       const raw = Buffer.concat(body).toString("utf8");
@@ -317,6 +320,21 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
         assert.match(url.searchParams.get("ticket_id") ?? "", /^[1-9]\d*$/u);
         value = { available: true };
       }
+      else if (request.method === "POST" && url.pathname === replyPreviewPath) {
+        const payload = JSON.parse(raw);
+        const direct = Number(payload.ticket_id) === state.directReplyTicketId;
+        assert.equal(claims.scope, "zammad:outbound");
+        assert.equal(payload.agent?.id, String(claims.zammad_user_id));
+        assert.equal(payload.tenant_id, tenantId);
+        assert.equal(payload.connection_id, connectionId);
+        assert.ok(direct || Number(payload.ticket_id) === Number(state.ticketId));
+        assert.equal(payload.group_id, direct ? "12125550104@c.us" : "120363118@g.us");
+        assert.equal(payload.internal, false);
+        assert.equal(typeof payload.has_attachments, "boolean");
+        assert.equal(typeof payload.body, "string");
+        assert.ok(payload.has_attachments || payload.body.trim(), "Preview requires a draft or attachment");
+        value = { text: payload.body, replyToMessageId: null };
+      }
       else if (request.method === "POST" && url.pathname === "/internal/v1/zammad/outbound") {
         const payload = JSON.parse(raw); assert.equal(claims.scope, "zammad:outbound");
         const direct = Number(payload.ticket_id) === state.directReplyTicketId;
@@ -341,8 +359,16 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
         group_id: groupId, message_id: existingMessageId,
       };
       else if (request.method === "GET" && url.pathname.endsWith("/group-workspace/groups")) {
-        assert.equal(url.searchParams.get("limit"), "50");
-        assert.ok(["MY", "TEAM", "UNASSIGNED", "ALL"].includes(url.searchParams.get("scope") ?? ""));
+        const limit = url.searchParams.get("limit");
+        const scope = url.searchParams.get("scope");
+        if (limit === "1") {
+          assert.equal(url.searchParams.get("selected"), groupId, "Group operation must authorize its exact group");
+          assert.equal(scope, "ALL");
+          assert.equal(url.searchParams.has("after"), false);
+        } else {
+          assert.equal(limit, "50", "Browser group pagination must request 50 groups");
+          assert.ok(["MY", "TEAM", "UNASSIGNED", "ALL"].includes(scope));
+        }
         value = { items: [{ id: groupId, name: "Riyadh Operations", access_scope: "MY", unread_count: 2, send_available: true,
           media_capabilities: { accepted: [{ mime_type: "image/png", maximum_bytes: 15_000_000 }, { mime_type: "audio/webm", maximum_bytes: 25_000_000 }], voice_recording: true, maximum_files: 10, maximum_total_bytes: 250_000_000 } }], next_cursor: null };
       }
@@ -391,6 +417,13 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
       } else if (request.method === "POST" && url.pathname.endsWith("/read")) value = { state: "QUEUED" };
       else { response.writeHead(404).end(); return; }
       response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(value));
+    };
+    fixture = createServer((request, response) => {
+      fixtureRequests.push(handleFixtureRequest(request, response).catch(error => {
+        fixtureErrors.push(error);
+        if (response.headersSent) response.destroy();
+        else response.writeHead(500).end();
+      }));
     });
     await new Promise((resolve, reject) => fixture.once("error", reject).listen(fixturePort, fixtureEndpointAddress.listenHost, resolve));
     const fixtureAddress = fixture.address();
@@ -506,7 +539,7 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
       puts JSON.generate(receipt: Package::Migration.exists?(name: 'wasalx', version: '202609020014'), package_version: package&.version, package_state: package&.state, attributes: attributes)
     `).split("\n").find((line) => line.startsWith("{")) ?? "");
     assert.equal(blockedState.receipt, false);
-    assert.equal(blockedState.package_version, "0.5.84");
+    assert.equal(blockedState.package_version, "0.5.85");
 
     assert.equal(blockedState.package_state, "installed");
     assert.deepEqual(blockedState.attributes, [
@@ -912,10 +945,17 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
       service = Token.find_by!(action: 'api', token: '${serviceToken}')
       service_permissions = Array(service.preferences[:permission] || service.preferences['permission'])
       scheduler = Scheduler.find_by(method: 'WasalxGroupWorkspaceUploadCleanupJob.perform_now')
-      ${nativeCloseScenario}
+      seeded_ids = [ticket.id, article.id]
+      # Define the proof lambdas outside the seed's local scope.
+      def native_compatibility_proofs
+        ${nativeCloseScenario}
+        [native_close_proof, native_direct_keep_open_proof, native_denied_command_proof]
+      end
+      native_close_proof, native_direct_keep_open_proof, native_denied_command_proof = native_compatibility_proofs
       native_close = native_close_proof.call(owner: owner, customer: customer, group: group, service_token: '${serviceToken}', namespace: 'wasalx-native-close-compat')
       native_direct = native_direct_keep_open_proof.call(owner: owner, customer: customer, group: group, namespace: 'wasalx-native-direct-compat')
       native_denied = native_denied_command_proof.call(owner: owner, customer: customer, group: group, service_token: '${serviceToken}', namespace: 'wasalx-native-denied-compat')
+      raise 'Native proof changed the browser seed identity' unless [ticket.id, article.id] == seeded_ids
       # The dispatcher Agent article correctly moved this fixture to OPEN.
       # Prepare NEW through the fixture model, not the edit API (which rejects NEW).
       fixture_article_ids = Ticket::Article.where(ticket_id: ticket.id).order(:id).pluck(:id)
@@ -940,9 +980,8 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
     for (const key of ["stateOwnershipPreserved", "duplicateReceipt", "unknownReadOnly", "noCommunicationOrStateCallbacks", "historicalJobsPreserved"]) assert.equal(seeded.native_denied[key], true);
     assert.equal(seeded.native_denied.providerActions, 0);
     Object.assign(state, { customerId: seeded.customer_id, ticketId: seeded.ticket_id, ticketNumber: seeded.ticket_number, articleId: seeded.article_id, closedTicketId: seeded.closed_ticket_id, closedTicketNumber: seeded.closed_ticket_number, closedArticleId: seeded.closed_article_id });
-    const outboundPreflight = state.requests.find((request) => request.path === "/internal/v1/zammad/outbound/preflight");
-    assert.ok(outboundPreflight);
-    assert.equal(new URLSearchParams(outboundPreflight.query).get("ticket_id"), seeded.ticket_id);
+    assert.ok(state.requests.some((request) => request.method === "GET" && request.path === "/internal/v1/zammad/outbound/preflight"
+      && new URLSearchParams(request.query).get("ticket_id") === seeded.ticket_id), "Missing outbound preflight for the seeded ticket");
     assert.equal(seeded.staged_present, true);
     assert.equal(seeded.stale_present, false);
     assert.equal(seeded.cleanup_scheduler_active, true);
@@ -1118,12 +1157,14 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
       await adminPage.waitForFunction(() => window.App?.WebSocket?.channel()
         && !window.App.Config.get('core_workflow_ajax_mode')
         && Object.keys(window.App.FormHandlerCoreWorkflow.getRequests()).length === 0);
-      const machineSave = adminPage.waitForResponse(response => new URL(response.url()).pathname === `/api/v1/users/${machineUiSeed.id}`
-        && ['PUT', 'PATCH'].includes(response.request().method()), { timeout: 30_000 });
       await adminPage.screenshot({ path: join(evidenceDirectory, `native-permission-${scenario.name}-before.png`), fullPage: false });
       saveAttempted = true;
-      await machineDialog.getByRole('button', { name: language.submit, exact: true }).click();
-      assert.equal((await machineSave).status(), 200);
+      const [machineSave] = await Promise.all([
+        adminPage.waitForResponse(response => new URL(response.url()).pathname === `/api/v1/users/${machineUiSeed.id}`
+          && ['PUT', 'PATCH'].includes(response.request().method()), { timeout: 30_000 }),
+        machineDialog.getByRole('button', { name: language.submit, exact: true }).click(),
+      ]);
+      assert.equal(machineSave.status(), 200);
       await machineDialog.waitFor({ state: 'hidden' });
       await adminPage.reload({ waitUntil: "domcontentloaded" });
       await adminPage.waitForFunction(locale => window.App?.i18n?.get() === locale
@@ -1221,9 +1262,10 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
 
     const fileInput = page.locator('input[type="file"][multiple]');
     await page.getByRole("button", { name: "Attach files" }).waitFor();
-    const uploadResponsePromise = page.waitForResponse((response) => response.url().includes("/api/v1/upload_caches/") && response.request().method() === "POST");
-    await fileInput.setInputFiles({ name: "proof.png", mimeType: "image/png", buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WlU4XcAAAAASUVORK5CYII=", "base64") });
-    const uploadResponse = await uploadResponsePromise;
+    const [uploadResponse] = await Promise.all([
+      page.waitForResponse(response => response.url().includes("/api/v1/upload_caches/") && response.request().method() === "POST"),
+      fileInput.setInputFiles({ name: "proof.png", mimeType: "image/png", buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WlU4XcAAAAASUVORK5CYII=", "base64") }),
+    ]);
     const uploadPayload = await uploadResponse.json();
     assert.equal(uploadResponse.status(), 200, JSON.stringify(uploadPayload));
     await page.getByText("proof.png").first().waitFor();
@@ -1233,9 +1275,11 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
     }));
     assert.equal(uploadUi.error, null, JSON.stringify({ uploadPayload, uploadUi }));
     assert.equal(uploadUi.visible, true, JSON.stringify({ uploadPayload, uploadUi }));
-    const attachmentSendResponsePromise = page.waitForResponse((response) => response.url().includes("/api/v1/wasalx/group_workspace/groups/") && response.url().endsWith("/send") && response.request().method() === "POST");
-    await page.getByRole("button", { name: "Send", exact: true }).click();
-    const attachmentSendResponse = await attachmentSendResponsePromise;
+    const [attachmentSendResponse] = await Promise.all([
+      page.waitForResponse(response => response.url().includes("/api/v1/wasalx/group_workspace/groups/")
+        && response.url().endsWith("/send") && response.request().method() === "POST"),
+      page.getByRole("button", { name: "Send", exact: true }).click(),
+    ]);
     const attachmentSendPayload = await attachmentSendResponse.json();
     assert.equal(attachmentSendResponse.status(), 202, JSON.stringify(attachmentSendPayload));
     await page.locator(`[data-message-id="${state.sentMessages[0].id}"]`)
@@ -1260,18 +1304,24 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
     await page.getByRole("link", { name: `Ticket #${state.ticketNumber}` }).waitFor();
 
     const createMessage = page.locator(`[data-message-id="${createMessageId}"]`);
+    const selectedGroupAuthorizedSince = start => state.requests.slice(start).some(request => request.method === "GET"
+      && request.path === "/internal/v1/zammad/group-workspace/groups" && new URLSearchParams(request.query).get("limit") === "1");
     await createMessage.getByRole("button", { name: "Create ticket" }).click();
     const createForm = createMessage.locator("form");
     assert.equal(await createForm.getByLabel("Ticket title").inputValue(), "Riyadh Operations — Create shipment SHIP-42");
+    const ticketCreateStart = state.requests.length;
     await createForm.getByRole("button", { name: "Create ticket" }).click();
     await page.getByRole("link", { name: /Open ticket #/u }).waitFor();
+    assert.ok(selectedGroupAuthorizedSince(ticketCreateStart), "Create must authorize the selected group");
 
     const linkMessage = page.locator(`[data-message-id="${linkMessageId}"]`);
     await linkMessage.getByRole("button", { name: "Link to ticket" }).click();
     const linkForm = linkMessage.locator("form");
     await linkForm.getByLabel("Ticket number").fill(String(state.ticketNumber));
+    const ticketLinkStart = state.requests.length;
     await linkForm.getByRole("button", { name: "Link message" }).click();
     await page.getByRole("link", { name: `Open ticket #${state.ticketNumber}` }).waitFor();
+    assert.ok(selectedGroupAuthorizedSince(ticketLinkStart), "Link must authorize the selected group");
 
     const heading = page.getByRole("heading", { name: "WhatsApp Groups" });
     await heading.evaluate((element) => element.closest(".flex.h-full")?.setAttribute("data-wasalx-test-root", ""));
@@ -1338,11 +1388,13 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
       return JSON.parse(raw.split('\n').find(line => line.startsWith('{')) ?? '');
     };
     const submitReplyTicket = async (articleExpected) => {
-      const pending = page.waitForResponse(response => new URL(response.url()).pathname.endsWith('/graphql')
-        && response.request().method() === 'POST'
-        && /^ticketUpdate$/iu.test(response.request().postDataJSON()?.operationName ?? ''), { timeout: 60_000 });
-      await page.getByRole('button', { name: 'Update', exact: true }).click();
-      const response = await pending; const data = await response.json();
+      const [response] = await Promise.all([
+        page.waitForResponse(response => new URL(response.url()).pathname.endsWith('/graphql')
+          && response.request().method() === 'POST'
+          && /^ticketUpdate$/iu.test(response.request().postDataJSON()?.operationName ?? ''), { timeout: 60_000 }),
+        page.getByRole('button', { name: 'Update', exact: true }).click(),
+      ]);
+      const data = await response.json();
       assert.equal(response.status(), 200); assert.ok(!data.errors?.length);
       assert.ok(!data.data?.ticketUpdate?.errors?.length); assert.ok(data.data?.ticketUpdate?.ticket);
       assert.equal(response.request().postDataJSON()?.variables?.input?.article != null, articleExpected);
@@ -1715,7 +1767,15 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
       await reply.getByRole("combobox", { name: "Channel", exact: true }).click();
       await mobilePage.getByRole("dialog", { name: "Dialog window with selections", exact: true }).getByRole("option", { name: "WhatsApp", exact: true }).click();
       assert.ok((await reply.getByRole("combobox", { name: "Channel", exact: true }).innerText()).includes("WhatsApp"));
-      await reply.locator('[contenteditable="true"]').pressSequentially("Mobile draft \u2014 do not send.", { delay: 20 });
+      const mobileDraft = "Mobile draft \u2014 do not send.";
+      const [preview] = await Promise.all([
+        mobilePage.waitForResponse(response => response.request().method() === "POST"
+          && new URL(response.url()).pathname === `/api/v1/wasalx/tickets/${state.ticketId}/reply-preview`
+          && response.request().postDataJSON()?.body?.trim() === mobileDraft),
+        reply.locator('[contenteditable="true"]').pressSequentially(mobileDraft, { delay: 20 }),
+      ]);
+      assert.equal(preview.status(), 200, "The pinned add-on must preview the unsent draft");
+      assert.equal((await preview.json()).text.trim(), mobileDraft);
       // Native cancellation prompts only after FormKit recognizes an article change.
       await reply.getByRole("button", { name: "Done", exact: true }).click({ trial: true });
       const chooserPromise = mobilePage.waitForEvent("filechooser");
@@ -1743,10 +1803,16 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
       assert.equal(await stateField.innerText(), originalStateLabel);
       mobilePhase = "read-only-mutation-guards";
       assert.equal(mobileMutations.some((name) => /ticketUpdate|formUploadCacheAdd/iu.test(name)), false);
-      const mobileControlMutations = state.requests.slice(mobileStart).filter((request) => request.method !== "GET");
-      assert.ok(mobileControlMutations.every((request) => request.method === "POST"
-        && request.path === `/internal/v1/zammad/group-workspace/groups/${groupId}/read`),
-      "mobile navigation may only advance the exact owned group's read cursor");
+      const mobileControlMutations = state.requests.slice(mobileStart).filter(({ method, path, body }) => {
+        if (method === "GET") return false;
+        // The preview sends draft text in a POST but never admits a delivery.
+        return !(method === "POST" && path === replyPreviewPath && Number(body.ticket_id) === Number(state.ticketId)
+          && body.has_attachments === false && typeof body.body === "string" && mobileDraft.startsWith(body.body.trim()));
+      });
+      const unexpectedMobileMutations = mobileControlMutations.filter(({ method, path }) =>
+        method !== "POST" || path !== `/internal/v1/zammad/group-workspace/groups/${groupId}/read`);
+      assert.deepEqual(unexpectedMobileMutations.map(({ method, path }) => ({ method, path })), [],
+        "mobile navigation may only advance the exact owned group's read cursor");
       await writeFile(join(evidenceDirectory, "native-mobile-evidence.json"), JSON.stringify({
         candidate: process.env.GITHUB_SHA ?? "local", image, evidenceMode: "simulated", nativeUi: true,
         viewport: { width: 390, height: 844 }, coarsePointer: true, locale: "en",
@@ -1935,21 +2001,37 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
     const nativeRaceSource = await readFile(join(process.cwd(), "tests/team-admin-race-native.rb"));
     const nativeMailboxSource = await readFile(join(process.cwd(), "tests/mailbox-admin-native.rb"));
     const nativeTlsSource = await readFile(join(process.cwd(), "tests/mailbox-driver-tls-native.rb"));
-    const nativeOutput = await privateNative("run", "--rm", "--no-deps",
-      "--env", "WASALX_TEST_ISOLATED=1", "--env", `WASALX_NATIVE_MAILBOX_TEST_B64=${nativeMailboxSource.toString("base64")}`, "zammad-package", "bundle", "exec", "rails", "runner",
+    const nativeScripts = join(directory, "native-scripts");
+    const nativeMount = "/run/wasalx-native-scripts";
+    const driverName = "native-diagnostics.rb";
+    const mailboxName = "mailbox-admin-native.rb";
+    const driverPath = `${nativeMount}/${driverName}`;
+    const mailboxPath = `${nativeMount}/${mailboxName}`;
+    await mkdir(nativeScripts, { mode: 0o700 });
+    await writeFile(join(nativeScripts, mailboxName), nativeMailboxSource, { mode: 0o600 });
+    // Linux bounds each argument and environment entry, including encoded Ruby sources.
+    await writeFile(join(nativeScripts, driverName),
       `require 'base64'; ENV['WASALX_NATIVE_DIAGNOSTIC'] = 'true'
-       Module.new.module_eval(Base64.decode64('${nativeInitializeSource.toString("base64")}'), 'portal-service-initialize-native.rb')
-       Module.new.module_eval(Base64.decode64('${nativeIdentitySource.toString("base64")}'), 'portal-service-identity-native.rb')
-       eval(Base64.decode64('${nativeSource.toString("base64")}'), TOPLEVEL_BINDING, 'portal-workspace-native.rb')
+       Module.new.module_eval(Base64.decode64('${nativeInitializeSource.toString("base64")}').force_encoding(Encoding::UTF_8), 'portal-service-initialize-native.rb')
+       Module.new.module_eval(Base64.decode64('${nativeIdentitySource.toString("base64")}').force_encoding(Encoding::UTF_8), 'portal-service-identity-native.rb')
+       eval(Base64.decode64('${nativeSource.toString("base64")}').force_encoding(Encoding::UTF_8), TOPLEVEL_BINDING, 'portal-workspace-native.rb')
        saved = JSON.parse(File.read('/var/tmp/portal-workspace-fixture.json'))
        ENV['WASALX_ADMIN_TEST_MODE'] = 'simulated'
        ENV['WASALX_ADMIN_TEST_OWNER'] = WasalxMembership.find(saved.fetch('owner')).portal_user_id
        ENV['WASALX_ADMIN_TEST_MEMBER'] = WasalxMembership.find(saved.fetch('agent')).portal_user_id
-       Module.new.module_eval(Base64.decode64('${nativeIdentityRaceSource.toString("base64")}'), 'portal-service-identity-race-native.rb')
-       Module.new.module_eval(Base64.decode64('${nativeTeamSource.toString("base64")}'), 'team-admin-native.rb')
-       Module.new.module_eval(Base64.decode64('${nativeRaceSource.toString("base64")}'), 'team-admin-race-native.rb')
+       Module.new.module_eval(Base64.decode64('${nativeIdentityRaceSource.toString("base64")}').force_encoding(Encoding::UTF_8), 'portal-service-identity-race-native.rb')
+       Module.new.module_eval(Base64.decode64('${nativeTeamSource.toString("base64")}').force_encoding(Encoding::UTF_8), 'team-admin-native.rb')
+       Module.new.module_eval(Base64.decode64('${nativeRaceSource.toString("base64")}').force_encoding(Encoding::UTF_8), 'team-admin-race-native.rb')
        ENV['WASALX_ADMIN_TLS_TRUST_MODE'] = 'trusted'
-       Module.new.module_eval(Base64.decode64('${nativeTlsSource.toString("base64")}'), 'mailbox-driver-tls-native.rb')`);
+       Module.new.module_eval(Base64.decode64('${nativeTlsSource.toString("base64")}').force_encoding(Encoding::UTF_8), 'mailbox-driver-tls-native.rb')`, { mode: 0o600 });
+    // The host runner UID can differ from the Zammad image's UID.
+    await privateNative("run", "--rm", "--no-deps", "--user", "0:0", "--entrypoint", "chown",
+      "--volume", `${nativeScripts}:${nativeMount}:rw`, "zammad-package", "1000:1000", driverPath, mailboxPath);
+    const nativeOutput = await privateNative("run", "--rm", "--no-deps",
+      "--volume", `${join(nativeScripts, driverName)}:${driverPath}:ro`,
+      "--volume", `${join(nativeScripts, mailboxName)}:${mailboxPath}:ro`,
+      "--env", "WASALX_TEST_ISOLATED=1", "--env", `WASALX_NATIVE_MAILBOX_TEST_PATH=${mailboxPath}`,
+      "zammad-package", "bundle", "exec", "rails", "runner", driverPath);
     assert.match(nativeOutput, /"fixture":"owner-service-initialize"/);
     assert.match(nativeOutput, /"fixture":"fresh-service-identity"/);
     const nativeInitializeProof = JSON.parse(nativeOutput.split("\n").find(line => line.startsWith('{"fixture":"owner-service-initialize"')) ?? "");
@@ -1967,9 +2049,9 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
     assert.ok(trustedTls.proof.every(row => row.result === "PASS"));
     const untrustedOutput = await privateNative("run", "--rm", "--no-deps", "--env", "WASALX_ADMIN_TLS_TRUST_MODE=untrusted",
       "--env", "SSL_CERT_FILE=/run/wasalx-mailbox-fixture/untrusted-ca.crt", "zammad-package", "bundle", "exec", "rails", "runner",
-      `require 'base64'; saved = JSON.parse(File.read('/var/tmp/portal-workspace-fixture.json'))
-       ENV['WASALX_ADMIN_TEST_OWNER'] = WasalxMembership.find(saved.fetch('owner')).portal_user_id
-       Module.new.module_eval(Base64.decode64('${nativeTlsSource.toString("base64")}'), 'mailbox-driver-tls-native.rb')`);
+      `require 'base64'
+       ENV['WASALX_ADMIN_TEST_OWNER'] = Wasalx::ServiceIdentity.receipt.fetch('human_portal_user_id')
+       Module.new.module_eval(Base64.decode64('${nativeTlsSource.toString("base64")}').force_encoding(Encoding::UTF_8), 'mailbox-driver-tls-native.rb')`);
     const untrustedTls = JSON.parse(untrustedOutput.split("\n").find(line => line.startsWith('{"mode":"SIMULATED","boundary":"NATIVE_MAILBOX_TLS"')) ?? "");
     assert.equal(untrustedTls.trust_mode, "untrusted");
     assert.equal(untrustedTls.check_count, 4);
@@ -2003,6 +2085,7 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
       "native-ticket-transfer-create-workflow-and-email-driver",
       "native-full-article-text-bounds-version-and-policy",
       "native-ticket-upload-ownership-target-and-selected-set",
+      "native-attachment-only-group-reply-keeps-empty-caption",
       "native-group-receipt-fences-races-and-savepoints",
       "native-binary-staging-target-ownership-and-idempotent-retry",
       "native-portal-preview-reuses-route-and-does-not-admit-effects",
@@ -2035,7 +2118,12 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
   } finally {
     await settleNativeCompatibility({ project, directory, runnerContainer, runnerConnected, primaryError,
       closeBrowser: async () => { if (browser) await browser.close(); },
-      closeFixture: async () => { if (fixture) await new Promise((resolve, reject) => fixture.close((error) => error ? reject(error) : resolve())); },
+      closeFixture: async () => {
+        const closeError = fixture && await new Promise(resolve => fixture.close(resolve));
+        await Promise.all(fixtureRequests);
+        if (closeError) fixtureErrors.push(closeError);
+        if (fixtureErrors.length) throw new AggregateError(fixtureErrors, "Control fixture request failed");
+      },
       command: (args) => execFileSync("docker", args, { encoding: "utf8", timeout: 120_000, maxBuffer: 64 * 1024,
         env: { ...process.env, WASALX_ZAMMAD_TEST_IMAGE: image }, stdio: ["ignore", "pipe", "pipe"] }),
       removeWorkspace: () => rm(directory, { recursive: true, force: true }),
