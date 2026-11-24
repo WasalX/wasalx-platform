@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { generateKeyPairSync, privateDecrypt, constants } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { readTenantPortalSource } from "./helpers/tenant-portal-source.mjs";
 import {
   BadRequestException,
   ConflictException,
@@ -13,7 +14,7 @@ import { InvitationTokenService } from "../services/control-api/dist/invitation-
 import { can } from "../services/control-api/dist/rbac.js";
 
 const migration = await readFile(new URL("../services/control-api/migrations/0019_tenant_administration.sql", import.meta.url), "utf8");
-const app = await readFile(new URL("../app/WasalXApp.tsx", import.meta.url), "utf8");
+const app = await readTenantPortalSource();
 const tenantMessages = await readFile(new URL("../lib/i18n/messages/en/tenant.ts", import.meta.url), "utf8");
 const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
 const settingsRoute = await readFile(new URL("../app/api/settings/route.ts", import.meta.url), "utf8");

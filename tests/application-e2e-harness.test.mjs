@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { boundedCommand, fixtureStderr } from "./support/bounded-command.mjs";
+import { readTenantPortalSource } from "./helpers/tenant-portal-source.mjs";
 import { runRoleSuites } from "../scripts/application-e2e-pool.mjs";
 
 const read = (path) => readFile(new URL(`../${path}`, import.meta.url), "utf8");
@@ -127,7 +128,7 @@ test("application E2E harness is role-complete, bounded, fixture-only, and artif
     read("tests/e2e/application.spec.ts"),
     read("tests/e2e/arabic.spec.ts"),
     read("app/layout.tsx"),
-    read("app/WasalXApp.tsx"),
+    readTenantPortalSource(),
   ]);
 
   for (const role of ["tenant_owner", "tenant_admin", "supervisor", "agent", "auditor"]) {

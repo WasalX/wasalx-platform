@@ -14,6 +14,8 @@ pub=subprocess.check_output(['openssl','pkey','-pubout'],input=key,stderr=subpro
 values['WASALX_FULL_INVITATION_PRIVATE_KEY_PEM_JSON']=json.dumps(key.decode())
 values['WASALX_INVITATION_TOKEN_PUBLIC_KEY']=pub.decode().strip()
 values['PUBLIC_WEBHOOK_BASE_URL']='https://simulation.invalid'
+values['WASALX_TEST_EMAIL_RECIPIENT_ALLOWLIST']='[]'
+values['WASALX_KEYCLOAK_PASSWORD_RESET_ENABLED']='false'
 rehearsal = sys.argv[4:] == ['--installer-rehearsal']
 if rehearsal:
  # .internal is reserved for private use and does not delegate to a mail provider.
@@ -29,7 +31,9 @@ if rehearsal:
   WASALX_FULL_KEYCLOAK_SMTP_USER='identity@nightly.internal',
   WASALX_FULL_KEYCLOAK_SMTP_PASSWORD='Aa9!'+secrets.token_hex(24),
   WASALX_FULL_QUALIFICATION_OWNER_EMAIL='owner@nightly.internal',
+  WASALX_KEYCLOAK_PASSWORD_RESET_ENABLED='true',
  )
+ values['WASALX_TEST_EMAIL_RECIPIENT_ALLOWLIST']=json.dumps([values['WASALX_FULL_QUALIFICATION_OWNER_EMAIL']])
 else:
  for name in ['PORTAL_PORT','IDENTITY_PORT','ZAMMAD_PORT']:
   with socket.socket() as probe:

@@ -173,6 +173,19 @@ test("portal and public styles use color, type, radius and elevation tokens", as
   assert.deepEqual(sideTabs, [], "no thick one-side accent borders");
 });
 
+test("working surfaces are flat: gradients stay on the brand mark, chart grid and skeletons", async () => {
+  const allowed = new Set([".brand-mark", ".operatorMark", ".chart-grid", ".group-skeleton", ".review-loading span", ".skeleton span", ".wx-skeleton-stack span"]);
+  const gradients = [];
+  for (const path of await readdir(new URL("app/", root), { recursive: true })) {
+    if (!path.endsWith(".css")) continue;
+    const css = (await read(`app/${path.replaceAll("\\", "/")}`)).replace(/\/\*[\s\S]*?\*\//gu, "");
+    for (const [, selector, body] of css.matchAll(/([^{}]*)\{([^{}]*)\}/gu)) {
+      if (/(?:linear|radial|conic)-gradient\(/u.test(body) && !allowed.has(selector.trim())) gradients.push(`${path}: ${selector.trim()}`);
+    }
+  }
+  assert.deepEqual(gradients, [], "use flat token surfaces on working surfaces");
+});
+
 test("form controls keep a visible keyboard focus ring, also in forced colors", async () => {
   const primitives = await read("app/design-system/primitives.css");
   assert.match(primitives, /:where\(button, input, select, textarea\):focus-visible\s*\{\s*outline:\s*2px solid var\(--wx-color-accent\)/u);
@@ -186,6 +199,15 @@ test("form controls keep a visible keyboard focus ring, also in forced colors", 
     }
   }
   assert.deepEqual(removals, [], "form-control rules must not remove the shared focus outline");
+});
+
+test("toggle switches keep a 31 x 18 track with a 44 x 44 hit area on coarse pointers", async () => {
+  const globals = await read("app/globals.css");
+  const [, width, height] = globals.match(/\.switch\{[^}]*width:(\d+)px;height:(\d+)px/u);
+  const coarse = globals.match(/@media\(any-pointer:coarse\)\{:is\(button[^{]*\{min-block-size:44px\}.*?\}\}/u)[0];
+  assert.match(coarse, /^@media\(any-pointer:coarse\)\{:is\(button:not\(\.switch\),/u, "the 44 px button minimum must not stretch the switch track");
+  const [, block, inline] = coarse.match(/\.switch::after\{content:"";position:absolute;inset:-([\d.]+)px -([\d.]+)px\}/u);
+  assert.deepEqual([Number(width) + 2 * Number(inline), Number(height) + 2 * Number(block)], [44, 44]);
 });
 
 test("the production portal consumes governed tokens without duplicate theme values", async () => {
@@ -288,7 +310,7 @@ test("platform case-service labels keep backend identifiers out of visible copy"
 });
 
 test("group selection checkboxes have 24 px targets and 44 px targets on coarse pointers", async () => {
-  const app = await read("app/WasalXApp.tsx");
+  const app = await read("app/Groups.tsx");
   const globals = await read("app/globals.css");
   const cells = [...app.matchAll(/<t[hd] className="select-column">(.*?)<\/t[hd]>/gu)].map((match) => match[1]);
   assert.equal(cells.length, 2);

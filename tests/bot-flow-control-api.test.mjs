@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { readTenantPortalSource } from "./helpers/tenant-portal-source.mjs";
 import {
   BotConversationEventPageError,
   BotConversationPageError,
@@ -1283,7 +1284,7 @@ test("conversation pagination is propagated and exposes an accessible bilingual 
   const client=await readFile(new URL("../lib/control-plane-data.ts",import.meta.url),"utf8");
   const pagination=await readFile(new URL("../lib/bot-conversations.ts",import.meta.url),"utf8");
   const source=await readFile(new URL("../app/BotAutomation.tsx",import.meta.url),"utf8");
-  const shell=await readFile(new URL("../app/WasalXApp.tsx",import.meta.url),"utf8");
+  const shell=await readTenantPortalSource();
   const english=await readFile(new URL("../lib/i18n/messages/en/automation.ts",import.meta.url),"utf8");
   const arabic=await readFile(new URL("../lib/i18n/messages/ar/automation.ts",import.meta.url),"utf8");
   const migration=await readFile(new URL("../services/control-api/migrations/0098_bot_conversation_pagination.sql",import.meta.url),"utf8");
@@ -1354,7 +1355,7 @@ test("automation resolves native team names and links only exact friendly ticket
 test("automation ticket navigation preserves the canonical role permission and native-ID boundary", async () => {
   const [bot, shell] = await Promise.all([
     readFile(new URL("../app/BotAutomation.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../app/WasalXApp.tsx", import.meta.url), "utf8"),
+    readTenantPortalSource(),
   ]);
   assert.match(shell, /openTicket=\{!isPrivateDemo && can\(role, "ticket:read"\) \? ticket => navigate\("inbox", \{ ticket \}\) : undefined\}/u);
   assert.match(bot, /openTicket \? botConversationTicketNumber\(row\.zammad_ticket_number\) : null/u);
