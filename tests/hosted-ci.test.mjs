@@ -286,6 +286,26 @@ test("nightly installer refuses an invalid runner with a command, status and rea
   assert.match(result.stderr, /command=bash scripts\/release\/installer-nightly\.sh exit=1 reason=requires a GitHub-hosted Actions runner/u);
 });
 
+test("nightly smoke surfaces the redacted verifier reason and keeps raw output private", async t => {
+  const directory = await mkdtemp(join(tmpdir(), "nightly-smoke-diagnostic-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const script = await read("scripts/release/installer-nightly.sh");
+  const phase = script.match(/^phase\(\) \{\n[\s\S]*?^\}/mu)?.[0];
+  assert.ok(phase, "nightly phase is missing");
+  const diagnostic = "exact stack verification reason: check=zammad-package-digest reason=image package digest differs from the source catalog pin";
+  const result = runWorkflowScript(`
+work=$PWD
+diagnostics=$PWD
+failure() { printf 'exit=%s reason=%s\\n' "$1" "$3" >&2; }
+timeout() { printf '%s\\n' 'private captured input' "$DIAGNOSTIC"; return 1; }
+${phase}
+phase fresh-smoke 3m node scripts/release/installer-stages.mjs smoke
+`, { DIAGNOSTIC: diagnostic }, directory);
+  assert.equal(result.status, 1);
+  assert.equal(result.stderr.trim(), `exit=1 reason=${diagnostic}`);
+  assert.equal((await readFile(join(directory, "installer.log"), "utf8")).trim(), diagnostic);
+});
+
 test("PR installer skips only when the publication migration tree differs", async t => {
   const { jobs } = parse(await read(".github/workflows/nightly-install.yml"));
   const steps = jobs["nightly-install"].steps;

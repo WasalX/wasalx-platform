@@ -91,6 +91,7 @@ phase() {
   # Copy only installer control messages, never an env file, Compose logs or inspect payloads.
   sed -nE '/^remote full stage [a-z-]+ (passed \(operator authentication\/live acceptance separate\)|failed; inspect before retry|reason: [[:print:]]+)$/p;
     /^remote full qualification reason: [[:print:]]+$/p;
+    /^exact stack verification reason: check=([a-z0-9-]+|installer-stack\.mjs:[0-9]+) reason=[[:print:]]{1,180}$/p;
     /^flock: cannot open lock file \/tmp\/wasalx-compose-stage\.lock: [[:print:]]+$/p;
     /^unrecreatable fields: \[("[a-zA-Z0-9_.-]+"(,|\]))+$/p;
     /^hosted bundle staging reason: [[:print:]]+$/p' "$work/$name.raw" >> "$diagnostics/installer.log"
@@ -110,6 +111,7 @@ phase() {
   if (( status != 0 )); then
     reason=$(sed -nE '/^probe-scan error=(Error|AssertionError|SyntaxError|TypeError|RangeError) message=[[:print:]]{1,480}$/p;
       /^remote full (stage [a-z-]+|qualification) reason: [[:print:]]+$/p;
+      /^exact stack verification reason: check=([a-z0-9-]+|installer-stack\.mjs:[0-9]+) reason=[[:print:]]{1,180}$/p;
       /^flock: cannot open lock file \/tmp\/wasalx-compose-stage\.lock: [[:print:]]+$/p;
       /^hosted bundle staging reason: [[:print:]]+$/p' "$work/$name.raw" | tail -n 1)
     if (( status == 124 )); then

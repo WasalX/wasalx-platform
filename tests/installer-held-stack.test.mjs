@@ -7,7 +7,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { parse } from "yaml";
-import { activeServiceNames, projectStack, devFreshHeldPlan, devHeldServices, devPreservedServices, devContainerPreimage, devValueDigest, assertInstallHostname, devReviewAuthConfiguration, verifyStack } from "../scripts/release/installer-stack.mjs";
+import { activeServiceNames, projectStack, devFreshHeldPlan, devHeldServices, devPreservedServices, devContainerPreimage, devValueDigest, assertInstallHostname, devReviewAuthConfiguration, rehearsalImageSource, stackVerificationDiagnostic, verifyStack } from "../scripts/release/installer-stack.mjs";
 import { executeStage, run, stageFailureReason } from "../scripts/release/installer-stages.mjs";
 import { repositoryDigestMatches } from "../scripts/installer-evidence.mjs";
 
@@ -275,6 +275,56 @@ function stackFixture() {
     candidateImages: [{ id: "portal", reference: candidateReference }], candidateSha: sha, candidateTree: tree, repositoryRoot,
   };
 }
+
+test("nightly stack verifies the Zammad package pinned by the signed image source", t => {
+  operatorEnvironment(t, "GITHUB_ACTIONS");
+  process.env.GITHUB_ACTIONS = "true";
+  const sourceCommit = "c".repeat(40);
+  const sourceTree = "d".repeat(40);
+  const sourcePackage = "e".repeat(64);
+  const candidatePackage = "f".repeat(64);
+  const source = rehearsalImageSource("wasalx-nightly", sourceCommit, args => {
+    if (args[0] === "rev-list") return `${sha}\n${sourceCommit}`;
+    if (args[0] === "rev-parse") return sourceTree;
+    assert.deepEqual(args, ["show", `${sourceCommit}:release/installer-images.json`]);
+    return JSON.stringify({ tenantProvisioning: { package: { sha256: sourcePackage } } });
+  });
+
+  const fixture = stackFixture();
+  fixture.catalog.tenantProvisioning = { package: { sha256: candidatePackage } };
+  fixture.catalog.smokeImageIds.push("zammad");
+  const reference = "wasalx/zammad:test";
+  fixture.candidateImages.push({ id: "zammad", reference });
+  const labels = {
+    "org.opencontainers.image.revision": sourceCommit,
+    "io.wasalx.source.tree": sourceTree,
+    "com.wasalx.zammad.package.sha256": sourcePackage,
+  };
+  fixture.imageInspections[0].details.Config.Labels = { ...labels };
+  fixture.imageInspections.push({ reference, details: { Id: `sha256:${"7".repeat(64)}`, Config: { Labels: labels } } });
+
+  const observed = projectStack({ ...fixture, imageSource: source }).images.find(row => row.candidateIds.includes("zammad"));
+  assert.equal(observed.packageSha256, sourcePackage);
+  labels["com.wasalx.zammad.package.sha256"] = candidatePackage;
+  assert.throws(() => projectStack({ ...fixture, imageSource: source }), error => {
+    assert.equal(stackVerificationDiagnostic(error),
+      "check=zammad-package-digest reason=image package digest differs from the source catalog pin");
+    return true;
+  });
+
+  for (const details of [fixture.imageInspections[0].details, fixture.imageInspections[2].details]) {
+    details.Config.Labels["org.opencontainers.image.revision"] = sha;
+    details.Config.Labels["io.wasalx.source.tree"] = tree;
+  }
+  assert.doesNotThrow(() => projectStack(fixture));
+});
+
+test("stack smoke diagnostic identifies the assertion without private input or absolute paths", () => {
+  const error = new Error("private fixture value");
+  error.code = "ERR_ASSERTION";
+  error.stack = "Error: private fixture value\n    at verifyStack (/private/path/scripts/release/installer-stack.mjs:123:1)";
+  assert.equal(stackVerificationDiagnostic(error), "check=installer-stack.mjs:123 reason=stack assertion failed");
+});
 
 function devHeldStackFixture() {
   const fixture = stackFixture();
