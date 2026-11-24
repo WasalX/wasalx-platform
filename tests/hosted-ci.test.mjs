@@ -277,7 +277,56 @@ test("nightly install is report-only, read-only and fails open on PR diff errors
   assert(job.steps.some(step => step.if?.startsWith("always()")));
   assert(!parse(await read(".github/workflows/ci.yml")).jobs["ci-gate"].needs.includes("nightly-install"));
   const rehearsal = await read("scripts/release/installer-nightly.sh");
-  assert.match(rehearsal, /phase native-preflight [^]*phase probe-scan 5m sudo -H env "PATH=\$PATH" node scripts\/dev-install\/probe\.mjs [^]*--held-services ''[^]*\.census == "PASS" and \.services == 37 and \.rerendered_hashes == \.services[^]*phase configured-reinstall/u);
+  const probe = await read("scripts/dev-install/probe.mjs");
+  assert.match(rehearsal, /phase native-preflight [^]*phase probe-scan 5m sudo -H env "PATH=\$PATH" node scripts\/dev-install\/probe\.mjs [^]*--held-services ''[^]*\.services == \.expected_services[^]*\.rerendered_hashes == \.expected_services[^]*phase configured-reinstall/u);
+  assert.match(probe, /const active = activeServiceNames\(model, composeProfiles\);[^]*expected_services: active\.length/u);
+  for (const source of [probe, rehearsal, await read(path)]) {
+    assert.doesNotMatch(source, /\b37\b/u);
+  }
+});
+
+test("nightly census confirmation accepts matching counts from the rehearsal", async t => {
+  const { jobs } = parse(await read(".github/workflows/nightly-install.yml"));
+  const confirmation = jobs["nightly-install"].steps.find(step => step.name === "Confirm census PASS");
+  const directory = await mkdtemp(join(tmpdir(), "nightly-census-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const diagnostics = join(directory, "wasalx-nightly", "diagnostics");
+  await mkdir(diagnostics, { recursive: true });
+  const log = join(diagnostics, "phases.log");
+  const [commit, tree] = execFileSync("git", ["rev-parse", "HEAD", "HEAD^{tree}"], {
+    cwd: repository, encoding: "utf8", windowsHide: true,
+  }).trim().split(/\s+/u);
+  for (const [services, hashes, status] of [[12, 12, 0], [38, 38, 0], [38, 37, 1], [0, 0, 1]]) {
+    await writeFile(log, `installer=${commit} tree=${tree} images=${commit}\nprobe-scan services=${services} rerendered_hashes=${hashes} census=PASS\n`);
+    const result = runWorkflowScript(confirmation.run, { COMMIT: commit, RUNNER_TEMP: directory }, repository);
+    assert.equal(result.status, status, result.error?.message ?? result.stderr);
+  }
+});
+
+test("nightly registry probe reports blocked only for a TCP rejection", async () => {
+  const rehearsal = await read("scripts/release/installer-nightly.sh");
+  assert.match(rehearsal, /phase registry-egress 30s bash -euo pipefail -c 'block_registry_egress; verify_registry_egress'/u);
+  const verify = rehearsal.match(/^verify_registry_egress\(\) \{\r?\n[^]*?^\}/mu)?.[0];
+  assert.ok(verify);
+  const results = [
+    [1, "dial tcp 192.0.2.1:443: connect: connection refused", 0, ""],
+    [0, "", 1, "public pull succeeded after the block"],
+    [1, "manifest unknown", 1, "public pull failed without a TCP rejection (exit=1)"],
+    [124, "", 1, "public pull failed without a TCP rejection (exit=124)"],
+  ];
+  for (const [status, output, expected, reason] of results) {
+    const result = runWorkflowScript(`${verify}
+      timeout() {
+        [[ "$*" == '15s docker pull fixture@sha256:test' ]] || return 125
+        printf '%s\\n' "$PULL_OUTPUT" >&2
+        return "$PULL_STATUS"
+      }
+      verify_registry_egress
+    `, { registry_image: "fixture@sha256:test", PULL_STATUS: String(status), PULL_OUTPUT: output }, repository);
+    assert.equal(result.status, expected, result.error?.message ?? result.stderr);
+    assert.equal(result.stdout.trim(), expected === 0 ? "public-registry-egress=blocked" : "");
+    assert.equal(result.stderr.trim(), reason ? `registry-egress reason: ${reason}` : "");
+  }
 });
 
 test("nightly installer refuses an invalid runner with a command, status and reason", () => {
