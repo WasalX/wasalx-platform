@@ -17,6 +17,8 @@ import time
 import urllib.request
 from urllib.error import HTTPError
 
+from image_registry_retry import retry
+
 
 ROOT = Path(__file__).resolve().parents[2]
 REPOSITORY = "WasalX/wasalx-platform"
@@ -27,6 +29,7 @@ SHA = re.compile(r"[0-9a-f]{40}")
 ADDON_STAGED = ("zammad-package/", "build/zammad/", "build/addon-licenses/", "tests/fixtures/")
 RERUN_ALL = {
     "scripts/release/images-by-digest.py",  # Selects, builds, and inspects images.
+    "scripts/release/image_registry_retry.py",  # Shared by image builds and publishing.
     ".github/workflows/ci.yml",  # Configures the PR image build jobs and their inputs.
     "scripts/release/product-images.json",  # Supplies the Dockerfile and image matrix.
     "zammad-addon.json",  # Pins the public add-on source passed to image builds.
@@ -71,17 +74,6 @@ def require(condition, message):
 
 def run(*args, cwd=None):
     return subprocess.check_output(args, cwd=cwd, text=True).strip()
-
-
-def retry(action):
-    # shortcut: retry command failures with fixed backoff until error classes are needed.
-    for attempt in range(1, 4):
-        try:
-            return action()
-        except subprocess.CalledProcessError:
-            if attempt == 3:
-                raise
-            time.sleep(10 * attempt)
 
 
 def run_retry(*args):
