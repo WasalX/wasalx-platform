@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useLayoutEffect, useRef, useState } from "react";
 import type { MetaSignupAttemptView, MetaSignupCapabilities, MetaSignupStartResponse, MetaSignupVariant } from "../lib/meta-signup-contract";
 import { launchMetaSignup, loadMetaSignupSdk } from "../lib/meta-signup-sdk";
 import { localizedUiError } from "../lib/ui-error";
@@ -132,6 +132,47 @@ function MetaSignupSession({ name, mutationHeaders, busyChanged, created, back, 
     if (!signal?.aborted && version === generation.current && current.current?.attemptId === id) { accept(view, id); setUncertain(false); setError(null); }
   }
 
+  // Effect events read the latest locale and props without restarting the session:
+  // a locale change does not restart an authorization invocation.
+  const loadSession = useEffectEvent(async (controller: AbortController) => {
+    const loadSignal = AbortSignal.any([controller.signal, AbortSignal.timeout(20_000)]);
+    try {
+      const [capResponse, resumeResponse] = await Promise.all([
+        fetch(`${base}/capabilities`, { cache: "no-store", signal: loadSignal }),
+        fetch(`${base}/${latestPath}`, { cache: "no-store", signal: loadSignal }),
+      ]);
+      if (controller.signal.aborted) return;
+      const [cap, resumed] = await Promise.all([readResponse<MetaSignupCapabilities>(capResponse),
+        readResponse<{ attempt: MetaSignupAttemptView | null }>(resumeResponse)]);
+      if (controller.signal.aborted) return;
+      setCapability(cap);
+      accept(resumed.attempt);
+      setLoading(false);
+      if (cap.enabled && cap.sdk) {
+        sdk.current = await loadMetaSignupSdk(cap.sdk);
+        if (!controller.signal.aborted) setSdkReady(true);
+      }
+    } catch (failure) {
+      if (!controller.signal.aborted) {
+        setError(failure instanceof Error && ["META_SIGNUP_CONFIGURATION", "META_SIGNUP_CONFIGURATION_CHANGED", "META_SIGNUP_SDK_UNAVAILABLE"].includes(failure.message)
+          ? t(reconnect ? "tenant.metaSignup.reconnect.sdkUnavailable" : "tenant.metaSignup.sdkUnavailable") : localizedUiError(locale, failure).message);
+        setLoading(false);
+      }
+    }
+  });
+  const leaveSession = useEffectEvent(() => {
+    alive.current = false; invalidateCallback(); challenge.current = null; popupOpen.current = false;
+    busyChanged(false);
+    const leaving = current.current;
+    // A late popup code is inert immediately. Cancellation additionally fences
+    // it server-side; exchanged/provisioning work is resumed, never rolled back.
+    if (isTargetConnectionRevoked?.() !== true && leaving?.status === "AWAITING_AUTHORIZATION" && leaving.canCancel) {
+      void fetch(`${base}/attempts/${encodeURIComponent(leaving.attemptId)}/cancel`, {
+        method: "POST", headers, keepalive: true,
+        body: JSON.stringify({ expectedRevision: leaving.revision }),
+      }).catch(() => undefined);
+    }
+  });
   useEffect(() => {
     alive.current = true;
     current.current = null; sdk.current = null; challenge.current = null; preparedSdk.current = null;
@@ -139,49 +180,8 @@ function MetaSignupSession({ name, mutationHeaders, busyChanged, created, back, 
     startKey.current = crypto.randomUUID();
     if (targetConnectionId) heading.current?.focus({ preventScroll: true });
     const controller = new AbortController();
-    const requestHeaders = { "content-type": "application/json", ...(csrf ? { "x-wasalx-csrf": csrf } : {}) };
-    const loadSignal = AbortSignal.any([controller.signal, AbortSignal.timeout(20_000)]);
-    const load = async () => {
-      try {
-        const [capResponse, resumeResponse] = await Promise.all([
-          fetch(`${base}/capabilities`, { cache: "no-store", signal: loadSignal }),
-          fetch(`${base}/${latestPath}`, { cache: "no-store", signal: loadSignal }),
-        ]);
-        if (controller.signal.aborted) return;
-        const [cap, resumed] = await Promise.all([readResponse<MetaSignupCapabilities>(capResponse),
-          readResponse<{ attempt: MetaSignupAttemptView | null }>(resumeResponse)]);
-        if (controller.signal.aborted) return;
-        setCapability(cap);
-        accept(resumed.attempt);
-        setLoading(false);
-        if (cap.enabled && cap.sdk) {
-          sdk.current = await loadMetaSignupSdk(cap.sdk);
-          if (!controller.signal.aborted) setSdkReady(true);
-        }
-      } catch (failure) {
-        if (!controller.signal.aborted) {
-          setError(failure instanceof Error && ["META_SIGNUP_CONFIGURATION", "META_SIGNUP_CONFIGURATION_CHANGED", "META_SIGNUP_SDK_UNAVAILABLE"].includes(failure.message)
-            ? t(reconnect ? "tenant.metaSignup.reconnect.sdkUnavailable" : "tenant.metaSignup.sdkUnavailable") : localizedUiError(locale, failure).message);
-          setLoading(false);
-        }
-      }
-    };
-    void load();
-    return () => {
-      alive.current = false; invalidateCallback(); challenge.current = null; popupOpen.current = false; controller.abort();
-      busyChanged(false);
-      const leaving = current.current;
-      // A late popup code is inert immediately. Cancellation additionally fences
-      // it server-side; exchanged/provisioning work is resumed, never rolled back.
-      if (isTargetConnectionRevoked?.() !== true && leaving?.status === "AWAITING_AUTHORIZATION" && leaving.canCancel) {
-        void fetch(`${base}/attempts/${encodeURIComponent(leaving.attemptId)}/cancel`, {
-          method: "POST", headers: requestHeaders, keepalive: true,
-          body: JSON.stringify({ expectedRevision: leaving.revision }),
-        }).catch(() => undefined);
-      }
-    };
-    // A locale change does not restart an authorization invocation.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    void loadSession(controller);
+    return () => { controller.abort(); leaveSession(); };
   }, [csrf, targetConnectionId, transitionId, legacyMigrationId, purpose]);
 
   useVisibleRefresh(refresh, !scopeMismatch && !loading && !pending && !waitingForMeta && Boolean(attempt || uncertain),
