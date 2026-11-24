@@ -18,12 +18,14 @@ import unittest
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location("images", ROOT / "scripts/release/images-by-digest.py")
-images = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(images)
-alias_spec = importlib.util.spec_from_file_location("aliases", ROOT / "scripts/release/advance-main-image-aliases.py")
-aliases = importlib.util.module_from_spec(alias_spec)
-alias_spec.loader.exec_module(aliases)
+RELEASE = ROOT / "scripts/release"
+with patch.object(sys, "path", [str(RELEASE), *sys.path]):
+    spec = importlib.util.spec_from_file_location("images", RELEASE / "images-by-digest.py")
+    images = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(images)
+    alias_spec = importlib.util.spec_from_file_location("aliases", RELEASE / "advance-main-image-aliases.py")
+    aliases = importlib.util.module_from_spec(alias_spec)
+    alias_spec.loader.exec_module(aliases)
 
 
 class ImagePublicationTests(unittest.TestCase):
@@ -213,7 +215,8 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
 
     def test_pull_request_matrix_reruns_all_for_shared_build_inputs(self):
         rows = images.matrix()["include"]
-        for path in ["scripts/release/images-by-digest.py", ".github/workflows/ci.yml",
+        for path in ["scripts/release/images-by-digest.py", "scripts/release/image_registry_retry.py",
+                     ".github/workflows/ci.yml",
                      ".dockerignore", ".gitattributes", "scripts/release/.gitattributes",
                      "Dockerfile.portal.dockerignore", "infra/docker/Dockerfile.zammad.dockerignore",
                      "infra/docker/.gitattributes", "scripts/release/product-images.json", "zammad-addon.json"]:
@@ -520,8 +523,9 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
             env = {"GITHUB_EVENT_NAME": "push", "GITHUB_REF": "refs/heads/main", "GITHUB_REPOSITORY": images.REPOSITORY,
                    "GITHUB_STEP_SUMMARY": str(summary)}
             with patch.object(subprocess, "check_output", side_effect=registry_read), \
-                    patch.object(subprocess, "run", side_effect=git_or_push) as run, redirect_stdout(io.StringIO()):
-                for candidate, expected in ((newer, newer), (older, newer), (older, None)):
+                    patch.object(subprocess, "run", side_effect=git_or_push) as run, \
+                    redirect_stdout(io.StringIO()) as stdout:
+                for candidate, expected in ((newer, newer), (newer, newer), (older, newer), (older, None)):
                     if expected is None:
                         current = None
                     images.write(manifest, {"commit": candidate, "images": {"portal": {
@@ -532,8 +536,113 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
                 self.assertEqual(sum(call.args[0][0] == "docker" for call in run.call_args_list), 1)
             messages = summary.read_text(encoding="utf-8")
             self.assertIn(f"Advanced `{alias}` from `{older}` to `{newer}`", messages)
+            self.assertIn(f"Kept `{alias}` at `{newer}`.", messages)
             self.assertIn(f"Skipped `{alias}` at `{newer}` because `{older}` does not descend from it", messages)
             self.assertIn(f"Skipped `{alias}` because its current revision could not be determined", messages)
+
+            warnings = [line for line in stdout.getvalue().splitlines() if line.startswith("::warning::")]
+            self.assertEqual(warnings, [f"::warning::{line[2:]}" for line in messages.splitlines()
+                                        if line.startswith("- Skipped ")])
+            self.assertEqual(len(warnings), 2)
+
+    def test_main_alias_retries_create_and_raw_inspect_independently(self):
+        raw = b'{"schemaVersion":2}'
+        alias = "ghcr.io/wasalx/portal:main"
+        reference = "ghcr.io/wasalx/portal@" + images.sha256(raw)
+        commit, older = "a" * 40, "b" * 40
+        create = ["docker", "buildx", "imagetools", "create", "--prefer-index=false", "--tag", alias, reference]
+        inspect = ["docker", "buildx", "imagetools", "inspect", "--raw", alias]
+        ancestry = ["git", "merge-base", "--is-ancestor", older, commit]
+        labels = json.dumps({"org.opencontainers.image.revision": older}).encode()
+        with (patch.object(subprocess, "run", side_effect=[
+                  subprocess.CompletedProcess(ancestry, 0), subprocess.CalledProcessError(1, create),
+                  subprocess.TimeoutExpired(create, 60), subprocess.CompletedProcess(create, 0)]) as run,
+              patch.object(subprocess, "check_output", side_effect=[
+                  labels, subprocess.TimeoutExpired(inspect, 20), subprocess.CalledProcessError(1, inspect), raw]) as read,
+              patch("time.sleep") as sleep):
+            message, skipped = aliases.advance_alias(reference, commit)
+        self.assertTrue(message.startswith("Advanced "))
+        self.assertFalse(skipped)
+        self.assertEqual(run.call_args_list, [mock.call(ancestry, stderr=subprocess.DEVNULL, timeout=10)]
+                         + [mock.call(create, check=True, timeout=60)] * 3)
+        self.assertEqual(read.call_args_list[1:], [mock.call(inspect, timeout=20)] * 3)
+        self.assertEqual(sleep.call_args_list, [mock.call(10), mock.call(20)] * 2)
+
+    def test_main_alias_fails_after_three_registry_attempts(self):
+        labels = json.dumps({"org.opencontainers.image.revision": "b" * 40}).encode()
+        reference = "ghcr.io/wasalx/portal@" + images.sha256(b"manifest")
+        failure = subprocess.CalledProcessError(1, "imagetools")
+        ancestry = subprocess.CompletedProcess("git merge-base", 0)
+        for stage, run_results, read_results, calls in (
+            ("create", [ancestry, failure, failure, failure], [labels], (4, 1)),
+            ("inspect", [ancestry, None], [labels, failure, failure, failure], (2, 4)),
+        ):
+            with self.subTest(stage=stage):
+                with (patch.object(subprocess, "run", side_effect=run_results) as run,
+                      patch.object(subprocess, "check_output", side_effect=read_results) as read,
+                      patch("time.sleep") as sleep, self.assertRaises(subprocess.CalledProcessError)):
+                    aliases.advance_alias(reference, "a" * 40)
+                self.assertEqual((run.call_count, read.call_count), calls)
+                self.assertEqual(sleep.call_args_list, [mock.call(10), mock.call(20)])
+
+    def test_main_alias_digest_mismatch_fails_without_retry(self):
+        labels = json.dumps({"org.opencontainers.image.revision": "b" * 40}).encode()
+        reference = "ghcr.io/wasalx/portal@" + images.sha256(b"manifest")
+        with (patch.object(subprocess, "run", return_value=subprocess.CompletedProcess([], 0)) as run,
+              patch.object(subprocess, "check_output", side_effect=[labels, b"wrong"]) as read,
+              patch("time.sleep") as sleep, self.assertRaisesRegex(ValueError, "alias digest mismatch")):
+            aliases.advance_alias(reference, "a" * 40)
+        self.assertEqual((run.call_count, read.call_count), (2, 2))
+        sleep.assert_not_called()
+
+    def test_main_alias_warns_when_git_ancestry_is_unknown(self):
+        commit, older = "a" * 40, "b" * 40
+        labels = json.dumps({"org.opencontainers.image.revision": older}).encode()
+        row = {"commit": commit, "digest": images.sha256(b"manifest"), "verified": True}
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = Path(directory) / "manifest.json"
+            summary = Path(directory) / "summary.md"
+            images.write(manifest, {"commit": commit, "images": {"portal": row}})
+            env = {"GITHUB_EVENT_NAME": "push", "GITHUB_REF": "refs/heads/main",
+                   "GITHUB_REPOSITORY": images.REPOSITORY, "GITHUB_SHA": commit, "GITHUB_STEP_SUMMARY": str(summary)}
+            with (patch.dict(os.environ, env), patch.object(subprocess, "check_output", return_value=labels) as read,
+                  patch.object(subprocess, "run", return_value=subprocess.CompletedProcess([], 128)) as run,
+                  redirect_stdout(io.StringIO()) as stdout):
+                aliases.advance_main_aliases(manifest)
+            read.assert_called_once()
+            run.assert_called_once_with(["git", "merge-base", "--is-ancestor", older, commit],
+                                        stderr=subprocess.DEVNULL, timeout=10)
+            message = f"Skipped `ghcr.io/wasalx/portal:main` because ancestry from `{older}` could not be verified."
+            self.assertEqual(stdout.getvalue(), f"::warning::{message}\n")
+            self.assertEqual(summary.read_text(encoding="utf-8"), f"- {message}\n")
+
+    def test_main_alias_environment_and_manifest_guards_prevent_registry_access(self):
+        commit = "a" * 40
+        row = {"commit": commit, "digest": images.sha256(b"manifest"), "verified": True}
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = Path(directory) / "manifest.json"
+            summary = Path(directory) / "summary.md"
+            env = {"GITHUB_EVENT_NAME": "push", "GITHUB_REF": "refs/heads/main",
+                   "GITHUB_REPOSITORY": images.REPOSITORY, "GITHUB_SHA": commit, "GITHUB_STEP_SUMMARY": str(summary)}
+            with patch.dict(os.environ, env), patch.object(aliases, "advance_alias") as advance:
+                for key, value in (("GITHUB_EVENT_NAME", "pull_request"), ("GITHUB_REF", "refs/heads/feature"),
+                                   ("GITHUB_REPOSITORY", "example/fork")):
+                    with (self.subTest(guard=key), patch.dict(os.environ, {key: value}),
+                          self.assertRaisesRegex(ValueError, "require a main push")):
+                        aliases.advance_main_aliases(manifest)
+                for candidate, sha in (("b" * 40, commit), ("main", "main")):
+                    images.write(manifest, {"commit": candidate, "images": {"portal": row}})
+                    with (self.subTest(guard="manifest commit", candidate=candidate),
+                          patch.dict(os.environ, {"GITHUB_SHA": sha}),
+                          self.assertRaisesRegex(ValueError, "manifest does not match")):
+                        aliases.advance_main_aliases(manifest)
+                for image, overrides in (("bad/image", {}), ("worker", {"verified": False}),
+                                         ("worker", {"digest": "main"}), ("worker", {"commit": "b" * 40})):
+                    images.write(manifest, {"commit": commit, "images": {"portal": row, image: {**row, **overrides}}})
+                    with self.subTest(image=image, overrides=overrides), self.assertRaisesRegex(ValueError, "Verified publication digest"):
+                        aliases.advance_main_aliases(manifest)
+                advance.assert_not_called()
+            self.assertFalse(summary.exists())
 
     def test_release_verifies_every_digest_against_the_tagged_commit(self):
         commit, tree = "a" * 40, "b" * 40

@@ -8,6 +8,8 @@ import re
 import subprocess
 import sys
 
+from image_registry_retry import retry
+
 
 SHA = re.compile(r"[0-9a-f]{40}")
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
@@ -25,9 +27,9 @@ def advance_alias(reference, commit):
         current = None
 
     if not isinstance(current, str) or not SHA.fullmatch(current):
-        return f"Skipped `{alias}` because its current revision could not be determined."
+        return f"Skipped `{alias}` because its current revision could not be determined.", True
     if current == commit:
-        return f"Kept `{alias}` at `{current}`."
+        return f"Kept `{alias}` at `{current}`.", False
 
     try:
         ancestry = subprocess.run(["git", "merge-base", "--is-ancestor", current, commit],
@@ -35,16 +37,17 @@ def advance_alias(reference, commit):
     except (OSError, subprocess.SubprocessError):
         ancestry = None
     if ancestry == 1:
-        return f"Skipped `{alias}` at `{current}` because `{commit}` does not descend from it."
+        return f"Skipped `{alias}` at `{current}` because `{commit}` does not descend from it.", True
     if ancestry != 0:
-        return f"Skipped `{alias}` because ancestry from `{current}` could not be verified."
+        return f"Skipped `{alias}` because ancestry from `{current}` could not be verified.", True
 
-    subprocess.run([*IMAGETOOLS, "create", "--prefer-index=false", "--tag", alias, reference],
-                   check=True, timeout=60)
-    raw = subprocess.check_output([*IMAGETOOLS, "inspect", "--raw", alias], timeout=20)
+    # Every attempt tags the same immutable digest under the serialized alias job.
+    retry(lambda: subprocess.run(
+        [*IMAGETOOLS, "create", "--prefer-index=false", "--tag", alias, reference], check=True, timeout=60))
+    raw = retry(lambda: subprocess.check_output([*IMAGETOOLS, "inspect", "--raw", alias], timeout=20))
     if "sha256:" + hashlib.sha256(raw).hexdigest() != digest:
         raise ValueError(f"Discovery alias digest mismatch for {alias}")
-    return f"Advanced `{alias}` from `{current}` to `{commit}`."
+    return f"Advanced `{alias}` from `{current}` to `{commit}`.", False
 
 
 def advance_main_aliases(manifest_path):
@@ -67,8 +70,8 @@ def advance_main_aliases(manifest_path):
 
     with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
         for reference in references:
-            message = advance_alias(reference, commit)
-            print(message)
+            message, skipped = advance_alias(reference, commit)
+            print(f"::warning::{message}" if skipped else message)
             summary.write(f"- {message}\n")
 
 

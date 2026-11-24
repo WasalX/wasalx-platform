@@ -38,6 +38,45 @@ jobs:
         with:
           fetch-depth: ${{ github.event_name == 'merge_group' && '0' || '2' }}
           persist-credentials: false
+      - name: Check workflow changes with actionlint
+        env:
+          MERGE_GROUP_BASE: ${{ github.event.merge_group.base_sha }}
+        run: |
+          base=HEAD^1
+          if [[ "$GITHUB_EVENT_NAME" == merge_group ]]; then
+            base="${MERGE_GROUP_BASE:?missing merge group base SHA}"
+          fi
+          changed=$(git diff --name-only --no-ext-diff --no-renames "$base" HEAD -- \
+            .github/workflows .github/actions \
+            scripts/release/fetch-verified-asset.sh)
+          if [[ -z "$changed" ]]; then
+            echo 'Actionlint skipped because workflow and action inputs did not change.' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          work=$(mktemp -d)
+          trap 'rm -rf "$work"' EXIT
+          bash scripts/release/fetch-verified-asset.sh \
+            https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz \
+            "$work/actionlint.tar.gz" 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+          tar -xzf "$work/actionlint.tar.gz" -C "$work" actionlint
+          mkdir "$work/base"
+          git archive "$base" .github | tar -x -C "$work/base"
+          git -C "$work/base" init --quiet
+
+          lint_findings() {
+            local status=0
+            "$work/actionlint" -shellcheck= -pyflakes= -format '{{json .}}' > "$work/findings.json" || status=$?
+            (( status <= 1 )) || return "$status"
+            test -s "$work/findings.json"
+            jq -r '.[] | [.filepath, .kind, .message] | @json' "$work/findings.json" | LC_ALL=C sort
+          }
+          (cd "$work/base" && lint_findings) > "$work/base.txt"
+          lint_findings > "$work/head.txt"
+          LC_ALL=C comm -13 "$work/base.txt" "$work/head.txt" > "$work/new.txt"
+          printf 'Actionlint findings (base/head/new): %s/%s/%s\n' \
+            "$(wc -l < "$work/base.txt")" "$(wc -l < "$work/head.txt")" "$(wc -l < "$work/new.txt")"
+          cat "$work/new.txt"
+          test ! -s "$work/new.txt"
       - id: infra
         if: github.event_name == 'pull_request'
         run: |
