@@ -139,7 +139,7 @@ services:
 
   public-webhook-preflight:
     profiles: [full]
-    image: node:22-bookworm-slim@sha256:de170b39439eb0e5a3444ad7d60b015614a381e10fecae2e30ec9e735122f38d
+    image: node:22-bookworm-slim@sha256:e9f565d32859f0cbfb52125eafe8be39390f24dac302dc3cdf566e8ba3ab21ee
     command:
       - node
       - --input-type=module
@@ -458,7 +458,7 @@ services:
 
   keycloak-bootstrap:
     profiles: [full]
-    image: node:22-bookworm-slim@sha256:de170b39439eb0e5a3444ad7d60b015614a381e10fecae2e30ec9e735122f38d
+    image: node:22-bookworm-slim@sha256:e9f565d32859f0cbfb52125eafe8be39390f24dac302dc3cdf566e8ba3ab21ee
     entrypoint: [node, /bootstrap/bootstrap-user.mjs]
     environment:
       KEYCLOAK_ADMIN: ${WASALX_FULL_KEYCLOAK_ADMIN_USER:-example-admin}

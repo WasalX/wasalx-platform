@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { InlineConfirmation, ModalDialog } from "./ModalDialog";
 import type { RuleMatch, TriggerRule } from "../lib/domain";
 import { describeRuleChange } from "../lib/rule-version-diff";
@@ -434,7 +434,6 @@ function ruleSetFamily(item: RuleSetVersionRow) {
   return String(item.family_id ?? item.familyId ?? "");
 }
 
-/* eslint-disable jsx-a11y/label-has-associated-control -- translated text and nested controls are associated structurally */
 function RuleModal({
   close,
   saved,
@@ -445,6 +444,7 @@ function RuleModal({
   mutationHeaders: Record<string, string>;
 }) {
   const { t } = useI18n();
+  const id = useId();
   const saveKey = useRef<{ body: string; key: string } | null>(null);
   const [form, setForm] = useState({
     name: "",
@@ -570,18 +570,20 @@ function RuleModal({
             ×
           </button>
         </div>
-        <label>
+        <label htmlFor={`${id}-name`}>
           {t("tenant.rules.modal.name")}
           <input
+            id={`${id}-name`}
             required
             value={form.name}
             onChange={(e) => updateForm("name", e.target.value)}
             placeholder={t("tenant.rules.modal.namePlaceholder")}
           />
         </label>
-        <label>
+        <label htmlFor={`${id}-matcher`}>
           {t("tenant.rules.modal.matcherType")}
           <select
+            id={`${id}-matcher`}
             value={form.matcherType}
             onChange={(e) => updateForm("matcherType", e.target.value as TriggerRule["matcherType"])}
           >
@@ -592,10 +594,10 @@ function RuleModal({
             <option value="advanced">{t("tenant.rules.matcher.advanced")}</option>
           </select>
         </label>
-        <label htmlFor="rule-team-policy">{t("tenant.rules.teamPolicy")}<select id="rule-team-policy" value={form.teamSenderPolicy} onChange={(event)=>updateForm("teamSenderPolicy",event.target.value as "include"|"exclude")}><option value="include">{t("tenant.rules.teamPolicy.include")}</option><option value="exclude">{t("tenant.rules.teamPolicy.exclude")}</option></select><small>{t("tenant.rules.teamPolicy.help")}</small></label>
-        {form.matcherType === "exact_length" || form.matcherType === "prefix_length" ? <div className="rule-modal-grid">{form.matcherType === "prefix_length" ? <label>{t("tenant.rules.modal.prefix")}<input required maxLength={64} value={form.prefix} onChange={(event) => updateForm("prefix", event.target.value)} placeholder={t("tenant.rules.modal.prefixPlaceholder")} /></label> : null}<label>{t("tenant.rules.modal.digitLength")}<input type="number" min={1} max={64} value={form.digitLength} onChange={(event) => updateForm("digitLength", Number(event.target.value))} /></label></div> : <label>{t(form.matcherType === "advanced" ? "tenant.rules.modal.safeExpression" : "tenant.rules.modal.literalPattern")}<input className="mono" required maxLength={240} value={form.pattern} onChange={(event) => updateForm("pattern", event.target.value)} placeholder={t(form.matcherType === "advanced" ? "tenant.rules.modal.advancedPlaceholder" : "tenant.rules.modal.literalPlaceholder")} /><small>{t(form.matcherType === "advanced" ? "tenant.rules.modal.advancedHelp" : "tenant.rules.modal.literalHelp")}</small></label>}
-        <fieldset className="rule-command-config"><legend>{t("tenant.rules.command.title")}</legend><label className="check"><input type="checkbox" checked={form.groupCommand} onChange={event=>{const enabled=event.target.checked;setForm(current=>({...current,groupCommand:enabled,...(enabled?{matcherType:"starts_with",pattern:"/status"}:{}),actionId:current.actionId||commandActions[0]?.action_key||""}));if(enabled)setSample("/status ORD-42");setTestedSignature(null);setTestResult(null);setError(null)}}/><span><b>{t("tenant.rules.command.enable")}</b><small>{t("tenant.rules.command.enableBody")}</small></span></label>{form.groupCommand?<div className="rule-command-fields"><label>{t("tenant.rules.command.action")}<select required value={form.actionId} onChange={event=>updateForm("actionId",event.target.value)}><option value="">{t("tenant.rules.command.selectAction")}</option>{commandActions.map(action=><option key={action.action_key} value={action.action_key}>{action.name}</option>)}</select><small>{commandActions.length?t("tenant.rules.command.getOnly"):t("tenant.rules.command.noActions")}</small></label><div><b>{t("tenant.rules.command.input")}</b><small>{t("tenant.rules.command.inputBody")}</small>{commandInputs.map((row,index)=><div className="rule-command-input" key={index}><input aria-label={t("tenant.rules.command.inputKey")} placeholder={t("tenant.rules.command.inputKey")} value={row.key} maxLength={128} onChange={event=>{setCommandInputs(current=>current.map((item,itemIndex)=>itemIndex===index?{...item,key:event.target.value}:item));setTestedSignature(null)}}/><input aria-label={t("tenant.rules.command.inputValue")} placeholder={t("tenant.rules.command.inputValueExample")} value={row.value} maxLength={500} onChange={event=>{setCommandInputs(current=>current.map((item,itemIndex)=>itemIndex===index?{...item,value:event.target.value}:item));setTestedSignature(null)}}/><button type="button" className="button small secondary" disabled={commandInputs.length===1} onClick={()=>setCommandInputs(current=>current.filter((_,itemIndex)=>itemIndex!==index))}>{t("tenant.rules.command.remove")}</button></div>)}<button type="button" className="text-button" onClick={()=>setCommandInputs(current=>[...current,{key:"",value:""}])}>{t("tenant.rules.command.addInput")}</button></div><label>{t("tenant.rules.command.successReply")}<textarea rows={2} required maxLength={1000} value={form.successReply} onChange={event=>updateForm("successReply",event.target.value)}/></label><label>{t("tenant.rules.command.failureReply")}<textarea rows={2} required maxLength={1000} value={form.failureReply} onChange={event=>updateForm("failureReply",event.target.value)}/></label><p className="form-note">{t("tenant.rules.command.variables")}</p></div>:null}</fieldset>
-        <label>{t("tenant.rules.modal.representativeMessage")}<textarea rows={3} required value={sample} onChange={(event) => { setSample(event.target.value); setTestedSignature(null); setTestResult(null); setError(null); }} /></label>
+        <label htmlFor={`${id}-team-policy`}>{t("tenant.rules.teamPolicy")}<select id={`${id}-team-policy`} value={form.teamSenderPolicy} onChange={(event)=>updateForm("teamSenderPolicy",event.target.value as "include"|"exclude")}><option value="include">{t("tenant.rules.teamPolicy.include")}</option><option value="exclude">{t("tenant.rules.teamPolicy.exclude")}</option></select><small>{t("tenant.rules.teamPolicy.help")}</small></label>
+        {form.matcherType === "exact_length" || form.matcherType === "prefix_length" ? <div className="rule-modal-grid">{form.matcherType === "prefix_length" ? <label htmlFor={`${id}-prefix`}>{t("tenant.rules.modal.prefix")}<input id={`${id}-prefix`} required maxLength={64} value={form.prefix} onChange={(event) => updateForm("prefix", event.target.value)} placeholder={t("tenant.rules.modal.prefixPlaceholder")} /></label> : null}<label htmlFor={`${id}-digits`}>{t("tenant.rules.modal.digitLength")}<input id={`${id}-digits`} type="number" min={1} max={64} value={form.digitLength} onChange={(event) => updateForm("digitLength", Number(event.target.value))} /></label></div> : <label htmlFor={`${id}-pattern`}>{t(form.matcherType === "advanced" ? "tenant.rules.modal.safeExpression" : "tenant.rules.modal.literalPattern")}<input id={`${id}-pattern`} className="mono" required maxLength={240} value={form.pattern} onChange={(event) => updateForm("pattern", event.target.value)} placeholder={t(form.matcherType === "advanced" ? "tenant.rules.modal.advancedPlaceholder" : "tenant.rules.modal.literalPlaceholder")} /><small>{t(form.matcherType === "advanced" ? "tenant.rules.modal.advancedHelp" : "tenant.rules.modal.literalHelp")}</small></label>}
+        <fieldset className="rule-command-config"><legend>{t("tenant.rules.command.title")}</legend><label className="check" htmlFor={`${id}-command`}><input id={`${id}-command`} type="checkbox" checked={form.groupCommand} onChange={event=>{const enabled=event.target.checked;setForm(current=>({...current,groupCommand:enabled,...(enabled?{matcherType:"starts_with",pattern:"/status"}:{}),actionId:current.actionId||commandActions[0]?.action_key||""}));if(enabled)setSample("/status ORD-42");setTestedSignature(null);setTestResult(null);setError(null)}}/><span><b>{t("tenant.rules.command.enable")}</b><small>{t("tenant.rules.command.enableBody")}</small></span></label>{form.groupCommand?<div className="rule-command-fields"><label htmlFor={`${id}-action`}>{t("tenant.rules.command.action")}<select id={`${id}-action`} required value={form.actionId} onChange={event=>updateForm("actionId",event.target.value)}><option value="">{t("tenant.rules.command.selectAction")}</option>{commandActions.map(action=><option key={action.action_key} value={action.action_key}>{action.name}</option>)}</select><small>{commandActions.length?t("tenant.rules.command.getOnly"):t("tenant.rules.command.noActions")}</small></label><div><b>{t("tenant.rules.command.input")}</b><small>{t("tenant.rules.command.inputBody")}</small>{commandInputs.map((row,index)=><div className="rule-command-input" key={index}><input aria-label={t("tenant.rules.command.inputKey")} placeholder={t("tenant.rules.command.inputKey")} value={row.key} maxLength={128} onChange={event=>{setCommandInputs(current=>current.map((item,itemIndex)=>itemIndex===index?{...item,key:event.target.value}:item));setTestedSignature(null)}}/><input aria-label={t("tenant.rules.command.inputValue")} placeholder={t("tenant.rules.command.inputValueExample")} value={row.value} maxLength={500} onChange={event=>{setCommandInputs(current=>current.map((item,itemIndex)=>itemIndex===index?{...item,value:event.target.value}:item));setTestedSignature(null)}}/><button type="button" className="button small secondary" disabled={commandInputs.length===1} onClick={()=>setCommandInputs(current=>current.filter((_,itemIndex)=>itemIndex!==index))}>{t("tenant.rules.command.remove")}</button></div>)}<button type="button" className="text-button" onClick={()=>setCommandInputs(current=>[...current,{key:"",value:""}])}>{t("tenant.rules.command.addInput")}</button></div><label htmlFor={`${id}-success`}>{t("tenant.rules.command.successReply")}<textarea id={`${id}-success`} rows={2} required maxLength={1000} value={form.successReply} onChange={event=>updateForm("successReply",event.target.value)}/></label><label htmlFor={`${id}-failure`}>{t("tenant.rules.command.failureReply")}<textarea id={`${id}-failure`} rows={2} required maxLength={1000} value={form.failureReply} onChange={event=>updateForm("failureReply",event.target.value)}/></label><p className="form-note">{t("tenant.rules.command.variables")}</p></div>:null}</fieldset>
+        <label htmlFor={`${id}-sample`}>{t("tenant.rules.modal.representativeMessage")}<textarea id={`${id}-sample`} rows={3} required value={sample} onChange={(event) => { setSample(event.target.value); setTestedSignature(null); setTestResult(null); setError(null); }} /></label>
         <div className="candidate-expression"><small>{t("tenant.rules.modal.generatedExpression")}</small><code><bdi>{candidatePattern || t("tenant.rules.modal.addPattern")}</bdi></code></div>
         {error ? <div className="settings-feedback error rule-modal-feedback" role="alert"><span>!</span><p>{error}</p></div> : null}
         {safeTestCurrent ? <div className="settings-feedback success rule-modal-feedback" role="status"><span>✓</span><p>{t("tenant.rules.modal.testPassed")} <bdi>{testResult?.matches?.map((match) => match.normalizedValue).join(", ")}</bdi>.</p></div> : <div className="rule-test-required" role="status"><span>◇</span><p><b>{t("tenant.rules.modal.testRequired")}</b><small>{t("tenant.rules.modal.testRequiredBody")}</small></p></div>}
@@ -616,5 +618,3 @@ function countForm(count: number) {
   if (count === 1) return "one";
   return "many";
 }
-
-/* eslint-enable jsx-a11y/label-has-associated-control */
