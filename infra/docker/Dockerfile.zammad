@@ -6,13 +6,13 @@ ARG NODE_IMAGE=node:24-trixie-slim@sha256:0711b541c1c33a8a530ac4f0d391baa9a15b3d
 FROM ${NODE_IMAGE} AS node-toolchain
 RUN npm install --global pnpm@10.33.3 && npm cache clean --force
 WORKDIR /src
-ADD https://github.com/WasalX/wasalx-zammad-addon.git#e60cfbd034eb7658200de3da5d69be3efb7036e3 /src
+ADD https://github.com/WasalX/wasalx-zammad-addon.git#449264a385816daa26edf669d0fc6f4a06d822d6 /src
 COPY scripts/build-zammad-package.mjs ./scripts/build-zammad-package.mjs
 RUN node scripts/build-zammad-package.mjs
 
 FROM ${ZAMMAD_BASE_IMAGE} AS package-source
 ARG WASALX_PACKAGE_VERSION=0.5.85
-ARG WASALX_PACKAGE_SHA256=22cf79b1f498e858e4ee017e29ae79ba32f4a2231eb6126a67717aeea8ce4c6b
+ARG WASALX_PACKAGE_SHA256=270ea9b68c0587ef5427c9d0562f28756cc73dca04b9908733705b9053f6ba2f
 USER 0:0
 COPY --from=node-toolchain /usr/local/lib/node_modules /usr/local/lib/node_modules
 COPY --from=node-toolchain /usr/local/bin /usr/local/bin
@@ -73,7 +73,7 @@ RUN rm -rf \
 
 FROM cgr.dev/chainguard/ruby:latest-dev@sha256:a3687c10cbff6873ed5401da21b8902e270e813ce807a9f4a2df57613ba4121d
 ARG WASALX_PACKAGE_VERSION=0.5.85
-ARG WASALX_PACKAGE_SHA256=22cf79b1f498e858e4ee017e29ae79ba32f4a2231eb6126a67717aeea8ce4c6b
+ARG WASALX_PACKAGE_SHA256=270ea9b68c0587ef5427c9d0562f28756cc73dca04b9908733705b9053f6ba2f
 
 USER 0:0
 RUN apk update && apk add --no-cache \

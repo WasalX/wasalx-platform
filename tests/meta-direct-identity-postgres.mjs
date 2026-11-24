@@ -644,11 +644,13 @@ export async function verifyMetaDirectIdentityPostgres(adminUrl,workerConfig,app
   try{
    assert.deepEqual(await controller.outboundPreflight('Synthetic native claims',connectionId,phone,ticketId),{available:true,keep_open:false});
    await queueScenario(async c=>{
-    const lastMessage=(await c.query('SELECT max(provider_timestamp) AS at FROM normalized_messages WHERE tenant_id=$1 AND connection_id=$2 AND external_group_id=$3',
-      [tenantId,connectionId,phone])).rows[0].at;
-    assert(lastMessage);
-    const endsAt=lastMessage.getTime()+24*60*60*1000;
-    let now=new Date(endsAt-1),inventoryReads=0;
+    // Keep the database's microsecond precision at the exact 24-hour boundary.
+    const clock=(await c.query(`SELECT (max(provider_timestamp)+interval '24 hours'-interval '1 microsecond')::text AS before_end,
+      (max(provider_timestamp)+interval '24 hours')::text AS ends_at
+      FROM normalized_messages WHERE tenant_id=$1 AND connection_id=$2 AND external_group_id=$3`,
+      [tenantId,connectionId,phone])).rows[0];
+    assert(clock.ends_at);
+    let now=clock.before_end,inventoryReads=0;
     const query=(sql,values)=>sql==='SELECT app.meta_customer_window_open($1,$2) AS open'
       ? c.query('SELECT app.meta_customer_window_open($1,$2,$3) AS open',[...values,now])
       : c.query(sql,values);
@@ -670,7 +672,7 @@ export async function verifyMetaDirectIdentityPostgres(adminUrl,workerConfig,app
     const target={tenant_id:tenantId,connection_id:connectionId,group_id:phone,ticket_id:ticketId};
     assert.deepEqual(await service.ticketTemplates('Synthetic native claims',target),{window:'OPEN',templates:[]});
     assert.equal(inventoryReads,0);
-    now=new Date(endsAt);
+    now=clock.ends_at;
     const catalog=await service.ticketTemplates('Synthetic native claims',target);
     assert.equal(catalog.window,'CLOSED');
     assert.deepEqual(catalog.templates.map(item=>[item.id,item.parameterCount]),[['341',1]]);
