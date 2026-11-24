@@ -824,7 +824,6 @@ async function main() {
     devRecord = JSON.parse(bytes.toString("utf8"));
     devReviewAuthEnvironment(devRecord?.devReviewAuth);
   }
-  if (devSkipPublicWebhookPreflight) process.stderr.write("public webhook preflight skipped by DEV option\n");
   if (action === "verify-hosted") {
     const candidateSha = run("git", ["rev-parse", "HEAD"], process.env);
     const candidateTree = run("git", ["rev-parse", "HEAD^{tree}"], process.env);
@@ -833,6 +832,8 @@ async function main() {
     const catalog = JSON.parse(await readFile(resolve(repository, "release/installer-images.json"), "utf8"));
     await executeStage(action, { candidateSha, candidateTree, catalog, plan: catalog.images,
       hostedImages, hostedImagesSha256, hostedTrustedRoot, environment: process.env });
+    // verify-hosted never takes the stage lock, so this is its only print; Compose stages print after the lock below.
+    if (devSkipPublicWebhookPreflight) process.stderr.write("public webhook preflight skipped by DEV option\n");
     process.stdout.write("hosted inputs verified; no images loaded or tagged\n");
     return 0;
   }
@@ -886,6 +887,7 @@ async function main() {
   const safeCompose = JSON.parse(run("docker", [
     ...composeArguments, "config", "--no-interpolate", "--no-env-resolution", "--format", "json",
   ], environment));
+  if (devSkipPublicWebhookPreflight) process.stderr.write("public webhook preflight skipped by DEV option\n");
   const catalogBytes = await readFile(resolve(repository, "release/installer-images.json"));
   const catalog = JSON.parse(catalogBytes.toString("utf8"));
   const plan = createCandidatePlan(catalog, safeCompose);
