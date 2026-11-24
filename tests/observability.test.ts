@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { metricNames, parseTraceParent, redactLogValue } from "../packages/observability/src/index.ts";
+import { metricNames, parseTraceParent, recordStructuredLog, redactLogValue } from "../packages/observability/src/index.ts";
 
 test("structured log redaction removes bodies, secrets, tokens, and phone numbers",()=>{const redacted=redactLogValue({tenant_id:"tenant-a",body:"customer message",nested:{authorization:"Bearer secret",phone:"+12025550178"},safe:"connection +12025550179"}) as Record<string,unknown>;assert.equal(redacted.body,"[REDACTED]");assert.deepEqual(redacted.nested,{authorization:"[REDACTED]",phone:"[REDACTED]"});assert.equal(redacted.safe,"connection [PHONE]");assert.equal(redacted.tenant_id,"tenant-a")});
 
@@ -21,6 +21,7 @@ for (const key of [
   "customer_name", "customerName", "agentName", "profile_name", "profile.name", "nickname",
   "cc", "headers.bcc", "reply_to", "replyTo", "mail_from", "address",
   "access_key", "accessKeyId", "passphrase", "hmac",
+  "session", "sessionId", "jwt", "key", "headers.sig",
 ]) {
   test(`structured logs redact ${key}`, () => {
     assert.deepEqual(redactLogValue({ [key]: "synthetic value" }), { [key]: "[REDACTED]" });
@@ -47,11 +48,16 @@ test("structured logs preserve internal UUIDs and message counters", () => {
   const internalId = "10000000-0000-4000-8000-000000000001";
   const fields = {
     contact_id: internalId, senderId: internalId, subject_id: internalId, emailID: internalId,
+    contact_ids: [internalId],
     message_count: 3, messagesSent: 2,
   };
   assert.deepEqual(redactLogValue(fields), fields);
-  assert.deepEqual(redactLogValue({ contact_id: "12025550102", message_count: "fixture message" }), {
-    contact_id: "[REDACTED]", message_count: "[REDACTED]",
+  assert.deepEqual(redactLogValue({
+    contact_id: "12025550102",
+    contact_ids: [internalId, "12025550102"],
+    message_count: "fixture message",
+  }), {
+    contact_id: "[REDACTED]", contact_ids: "[REDACTED]", message_count: "[REDACTED]",
   });
 });
 
@@ -60,6 +66,37 @@ test("structured logs redact phone-shaped numbers and digit strings", () => {
     wa_id: 12025550102,
     detail: [12025550102, "12025550102", 42, "12345"],
   }), { wa_id: "[REDACTED]", detail: ["[PHONE]", "[PHONE]", 42, "12345"] });
+});
+
+test("structured logs preserve long numeric IDs and timestamps in fields", () => {
+  const fields = {
+    at: 1764000000000,
+    timestamp: "2026-11-24T12:05:00.000Z",
+    waba_id: "123456789012345",
+    business_id: 123456789012345,
+    ticket_number: "20261124000123",
+    request_id: "120255501020",
+    job_id: 120255501021,
+  };
+  assert.deepEqual(redactLogValue(fields), fields);
+});
+
+test("structured logs redact phone numbers embedded in text with common separators", () => {
+  const cases = [
+    "12025550102", "+999 50 555 0102", "050-000-0000", "202.555.0102", "(202) 555-0102",
+  ];
+  for (const number of cases) {
+    assert.deepEqual(redactLogValue({ detail: `Customer ${number} called.` }), {
+      detail: "Customer [PHONE] called.",
+    });
+  }
+});
+
+test("structured logs redact JWTs in text", () => {
+  const token = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJmaXh0dXJlIn0.c3ludGhldGlj";
+  assert.deepEqual(redactLogValue({ detail: `Rejected ${token}.` }), {
+    detail: "Rejected [CREDENTIAL].",
+  });
 });
 
 test("structured logs redact provider message and chat identifiers", () => {
@@ -139,16 +176,55 @@ test("structured logs bound long value scans and skip the email regex when there
   });
   const actual = redactLogValue(value);
   scan.mock.restore();
-  assert.equal(actual, `${value.slice(0, 2_000)}…`);
-  assert.deepEqual({ boundedInput: longestInput <= 2_400, scannedForEmail }, {
+  assert.equal(actual, `${prefix}…`);
+  assert.deepEqual({ boundedInput: longestInput <= 2_000, scannedForEmail }, {
     boundedInput: true, scannedForEmail: false,
   });
 });
 
-test("structured logs scrub addresses that straddle the output limit", () => {
-  const prefix = "x ".repeat(994);
-  const value = `${prefix}<fixture@example.test> ${"x".repeat(2_400)}`;
-  assert.equal(redactLogValue(value), `${prefix}<[EMAIL]> xx…`);
+for (const [kind, secret, fragment] of [
+  ["email", "fixture.local@example.test", "fixture"],
+  ["phone", "+1 202 555 0102", "+1"],
+]) {
+  test(`structured logs drop split ${kind} fragments after earlier redaction shrinks text`, () => {
+    const credential = `Bearer ${"A".repeat(1_500)} `;
+    for (const start of [2_394, 1_994]) {
+      const prefix = `${credential.padEnd(start - 1, "x ")} `;
+      const result = redactLogValue(prefix + secret);
+      assert(typeof result === "string");
+      assert(result.startsWith("[CREDENTIAL] "));
+      assert(!result.includes(fragment), `a secret fragment survived at offset ${start}`);
+      assert(result.endsWith("…"));
+    }
+  });
+}
+
+test("structured logs preserve token boundaries when replacement markers expand the text", () => {
+  const result = redactLogValue(`x ${"a@b.c ".repeat(333)}`);
+  assert(typeof result === "string");
+  assert(result.length <= 2_001);
+  assert.match(result, /^x (?:\[EMAIL\] )+…$/u);
+});
+
+test("structured logs redact toJSON output before it reaches the sink", (t) => {
+  const lines: string[] = [];
+  t.mock.method(process.stderr, "write", (line: string) => { lines.push(line); return true; });
+  const projection = {
+    value: "+1 202 555 0102",
+    toJSON() { return { phone: this.value, detail: "fixture@example.test" }; },
+  };
+  const nestedProjection = { toJSON() { return { detail: projection }; } };
+  recordStructuredLog("warn", "fixture", { projected: nestedProjection });
+  assert.deepEqual(JSON.parse(lines[0]).projected, {
+    detail: { phone: "[REDACTED]", detail: "[EMAIL]" },
+  });
+});
+
+test("structured logs serialize BigInt values without losing precision", (t) => {
+  const lines: string[] = [];
+  t.mock.method(process.stderr, "write", (line: string) => { lines.push(line); return true; });
+  recordStructuredLog("warn", "fixture", { counter: BigInt("900719925474099312345") });
+  assert.equal(JSON.parse(lines[0]).counter, "900719925474099312345");
 });
 
 test("structured log redaction still applies to credentials with identifier suffixes", () => {
