@@ -25,7 +25,7 @@ WasalX Delivery owns this document, the merge queue, CI health and speed, releas
 - The [pnpm cache action](.github/actions/ci-pnpm/action.yml) saves pnpm dependency and service build caches on main pushes only. PostgreSQL integration and portal integration always force clean service builds.
 - Run CI on free GitHub-hosted runners. Cancel older CI runs only for the same PR. Keep workflow permissions read-only at the top level, grant writes per job, and pin actions by full commit SHA. Prohibit `pull_request_target`. Fork PRs receive no secrets.
 - Set job time limits from the measured p95 plus 25 percent, rounded up to a whole minute. Review limits monthly. A higher limit needs new measurements in a separate PR. See the [CI timing sample](.github/ci-timings.json) and [current coverage](#deviations).
-- The hosted Lint job in [ci.yml](.github/workflows/ci.yml) verifies the pinned actionlint release archive and rejects new findings on pull requests and merge groups. Its job summary reports the base, candidate, and new finding counts.
+- For every workflow-changing PR, verify the SHA-256 of the pinned actionlint 1.7.12 binary before running it. Require zero new findings compared with the base branch. Older 1.7.x versions misread YAML anchors.
 
 ## Test policy
 
