@@ -1,22 +1,22 @@
 .layout {
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: var(--wx-space-4);
 }
 .summary {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   overflow: hidden;
   border: 1px solid var(--border);
-  border-radius: 9px;
+  border-radius: var(--wx-radius-panel);
   background: var(--surface);
 }
 .summary > div {
   display: flex;
   min-width: 0;
   flex-direction: column;
-  gap: 6px;
-  padding: 18px;
+  gap: var(--wx-space-1);
+  padding: var(--wx-space-4);
   border-inline-end: 1px solid var(--border);
 }
 .summary > div:last-child {
@@ -27,7 +27,7 @@
   font-size: var(--wx-font-size-1);
 }
 .summary strong {
-  font: 650 24px var(--font-mono);
+  font: 650 var(--wx-font-size-6) var(--font-mono);
   letter-spacing: -0.04em;
 }
 .summary small {
@@ -45,9 +45,9 @@
   display: grid;
   grid-template-columns: minmax(240px, 1fr) 180px auto;
   align-items: center;
-  gap: 9px;
-  padding-block: 11px;
-  padding-inline: 14px;
+  gap: var(--wx-space-2);
+  padding-block: var(--wx-space-3);
+  padding-inline: var(--wx-space-3);
   border-block-end: 1px solid var(--border);
   background: var(--surface-2);
 }
@@ -56,11 +56,11 @@
   width: 100%;
   height: 34px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--wx-radius-control);
   background: var(--surface);
   color: var(--text);
-  padding-inline: 10px;
-  font-size: 12px;
+  padding-inline: var(--wx-space-2);
+  font-size: var(--wx-font-size-1);
 }
 .toolbar input:focus,
 .toolbar select:focus {
@@ -87,7 +87,7 @@
   text-decoration-color: currentColor;
 }
 .ticketLink:focus-visible {
-  border-radius: 3px;
+  border-radius: var(--wx-radius-control);
   outline: 2px solid var(--accent);
   outline-offset: 3px;
 }
@@ -98,11 +98,11 @@
 .state {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--wx-space-1);
   border: 1px solid var(--border);
-  border-radius: 11px;
-  padding-block: 3px;
-  padding-inline: 8px;
+  border-radius: var(--wx-radius-dialog);
+  padding-block: var(--wx-space-1);
+  padding-inline: var(--wx-space-2);
   font-size: var(--wx-font-size-1);
   font-weight: 570;
   white-space: nowrap;
@@ -144,11 +144,11 @@
 .loadError {
   display: flex;
   align-items: center;
-  gap: 12px;
-  margin: 18px;
-  padding: 14px;
+  gap: var(--wx-space-3);
+  margin: var(--wx-space-4);
+  padding: var(--wx-space-3);
   border: 1px solid color-mix(in srgb, var(--danger) 35%, var(--border));
-  border-radius: 8px;
+  border-radius: var(--wx-radius-panel);
   background: color-mix(in srgb, var(--danger) 5%, var(--surface));
 }
 .loadError > span {
@@ -156,7 +156,7 @@
   width: 27px;
   height: 27px;
   place-items: center;
-  border-radius: 6px;
+  border-radius: var(--wx-radius-control);
   background: color-mix(in srgb, var(--danger) 14%, transparent);
   color: var(--danger);
 }
@@ -164,10 +164,10 @@
   flex: 1;
 }
 .loadError b {
-  font-size: 12px;
+  font-size: var(--wx-font-size-1);
 }
 .loadError p {
-  margin-block: 4px 0;
+  margin-block: var(--wx-space-1) 0;
   margin-inline: 0;
   color: var(--muted);
   font-size: var(--wx-font-size-1);
@@ -178,16 +178,16 @@
   align-items: center;
   justify-content: center;
   flex-direction: column;
-  gap: 7px;
-  padding: 28px;
+  gap: var(--wx-space-2);
+  padding: var(--wx-space-6);
   text-align: center;
 }
 .empty > span {
-  font-size: 28px;
+  font-size: var(--wx-font-size-6);
   color: var(--subtle);
 }
 .empty b {
-  font-size: 13px;
+  font-size: var(--wx-font-size-2);
 }
 .empty p {
   max-width: 430px;
@@ -202,39 +202,39 @@
   inset: 0;
   display: grid;
   place-items: center;
-  padding: 20px;
-  background: color-mix(in srgb, black 58%, transparent);
+  padding: var(--wx-space-4);
+  background: var(--overlay);
   backdrop-filter: blur(4px);
 }
 .dialog {
   width: min(500px, 100%);
   border: 1px solid var(--border-strong);
-  border-radius: 12px;
+  border-radius: var(--wx-radius-dialog);
   background: var(--surface);
-  box-shadow: 0 22px 70px color-mix(in srgb, black 32%, transparent);
-  padding: 22px;
+  box-shadow: var(--shadow);
+  padding: var(--wx-space-6);
 }
 .dialogIcon {
   display: grid;
   width: 34px;
   height: 34px;
   place-items: center;
-  margin-block-end: 16px;
+  margin-block-end: var(--wx-space-4);
   border: 1px solid color-mix(in srgb, var(--danger) 34%, var(--border));
-  border-radius: 8px;
+  border-radius: var(--wx-radius-panel);
   background: color-mix(in srgb, var(--danger) 8%, var(--surface));
   color: var(--danger);
 }
 .dialog h2 {
-  margin-block: 0 8px;
+  margin-block: 0 var(--wx-space-2);
   margin-inline: 0;
-  font-size: 18px;
+  font-size: var(--wx-font-size-4);
   letter-spacing: -0.025em;
 }
 .dialog > p {
   margin: 0;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--wx-font-size-1);
   line-height: 1.65;
 }
 .dialog code {
@@ -243,12 +243,12 @@
 .guardrail {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  margin-block: 16px;
+  gap: var(--wx-space-1);
+  margin-block: var(--wx-space-4);
   margin-inline: 0;
-  padding: 12px;
+  padding: var(--wx-space-3);
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: var(--wx-radius-control);
   background: var(--surface-2);
 }
 .guardrail b {
@@ -263,11 +263,11 @@
   display: grid;
   grid-template-columns: auto 1fr auto;
   align-items: center;
-  gap: 9px;
-  margin-block-end: 14px;
-  padding: 10px;
+  gap: var(--wx-space-2);
+  margin-block-end: var(--wx-space-3);
+  padding: var(--wx-space-2);
   border: 1px solid color-mix(in srgb, var(--danger) 35%, var(--border));
-  border-radius: 7px;
+  border-radius: var(--wx-radius-control);
   color: var(--danger);
   font-size: var(--wx-font-size-1);
 }
@@ -281,16 +281,16 @@
 .dialogActions {
   display: flex;
   justify-content: flex-end;
-  gap: 8px;
+  gap: var(--wx-space-2);
 }
 .dangerButton {
   min-height: 34px;
-  border: 1px solid color-mix(in srgb, var(--danger) 75%, black);
-  border-radius: 6px;
-  background: var(--danger);
-  color: white;
-  padding-inline: 12px;
-  font-size: 12px;
+  border: 1px solid var(--wx-color-danger-solid);
+  border-radius: var(--wx-radius-control);
+  background: var(--wx-color-danger-solid);
+  color: var(--wx-color-on-solid);
+  padding-inline: var(--wx-space-3);
+  font-size: var(--wx-font-size-1);
   font-weight: 600;
 }
 .dangerButton:hover {
