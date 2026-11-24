@@ -214,7 +214,7 @@ export function ConnectedDataServices({
         <div className="bot-form-actions"><button type="button" className="button secondary" disabled={savingCredential} onClick={()=>setCredentialForm(null)}>{t("automation.common.cancel")}</button><button type="submit" className="button primary" disabled={savingCredential}>{t(savingCredential?"routing.integrations.savingCredential":"routing.integrations.saveCredential")}</button></div>
       </form>:null}
       {loading && !integrations.length ? (
-        <div className="data-connections-loading" role="status" aria-live="polite" aria-busy="true">{t("routing.integrations.loading")}</div>
+        <div className="data-connections-loading" role="status">{t("routing.integrations.loading")}</div>
       ) : integrations.length ? (
         <ul className="data-connection-list">
           {integrations.map((integration) => {
@@ -593,10 +593,8 @@ export function ClientRouting({
   };
   if (loading && !versions.length)
     return (
-      <section
-        className="panel bot-loading"
-        aria-label={t("routing.loading")} role="status" aria-live="polite" aria-busy="true"
-      >
+      <section className="panel bot-loading" aria-busy="true">
+        <p className="sr-only" role="status" aria-label={t("routing.loading")}>{t("routing.loading")}</p>
         <span aria-hidden="true" />
         <span aria-hidden="true" />
         <span aria-hidden="true" />
@@ -686,7 +684,7 @@ export function ClientRouting({
           {versionPaginationError ? <p className="bot-inline-error" role="alert">{versionPaginationError}</p> : null}
           {versionCursor ? <button type="button" className="routing-version-toggle" disabled={loadingMoreVersions} onClick={() => void loadMoreVersions()}>{t(loadingMoreVersions ? "routing.versions.loadingMore" : "routing.versions.loadMore")}</button> : null}
         </aside>
-        {selected && selected.definition === undefined && !selectedDetailErrorMessage ? <section className="panel bot-loading" role="status" aria-live="polite" aria-busy="true" aria-label={t("routing.detail.loading")}><span aria-hidden="true"/><span aria-hidden="true"/><span aria-hidden="true"/></section> : selectedDetailErrorMessage ? <section className="panel settings-load-error" role="alert"><span>!</span><div><b>{t("routing.detail.unavailable")}</b><p>{selectedDetailErrorMessage}</p><button className="button small" onClick={() => { setSelectedDetailError(null); setDetailRetry((value) => value + 1); }}>{t("automation.common.reload")}</button></div></section> : selected && definition ? (
+        {selected && selected.definition === undefined && !selectedDetailErrorMessage ? <section className="panel bot-loading" aria-busy="true"><p className="sr-only" role="status" aria-label={t("routing.detail.loading")}>{t("routing.detail.loading")}</p><span aria-hidden="true"/><span aria-hidden="true"/><span aria-hidden="true"/></section> : selectedDetailErrorMessage ? <section className="panel settings-load-error" role="alert"><span>!</span><div><b>{t("routing.detail.unavailable")}</b><p>{selectedDetailErrorMessage}</p><button className="button small" onClick={() => { setSelectedDetailError(null); setDetailRetry((value) => value + 1); }}>{t("automation.common.reload")}</button></div></section> : selected && definition ? (
           <section className="panel routing-detail">
             <div className="panel-heading">
               <div>
