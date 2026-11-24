@@ -478,7 +478,7 @@ def live():
             work.write_bytes(manifest_bytes)
             command, reason = "node scripts/dev-install/pull-verify.mjs", "cannot verify the main publication signatures"
             # The verifier writes only redacted diagnostics to stderr and JSON refs to stdout.
-            refs = agent.verify(work, commit, tree, config, stderr=None)
+            refs = agent.verify(work, commit, tree, config, stderr=None, trace=True)
         command, reason = LIVE_COMMAND, "cannot validate the publication's Compose image references"
         compose = agent.compose_refs(api, commit, refs)
         print(f"PR_TOOLING={args.candidate} SIGNED_MAIN_PUBLICATION={commit} PRODUCT={len(refs)} COMPOSE={len(compose)} ANONYMOUS_API_GHCR_SIGSTORE=PASS")

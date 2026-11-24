@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { createInterface } from "node:readline";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import cosignPin from "../release/cosign-pin.json" with { type: "json" };
@@ -31,6 +32,32 @@ export async function verifyProductDigests(inventory, trust, execute) {
 
 const run = promisify(execFile);
 const timeout = 30_000;
+
+function runCosign(cosign, args) {
+  if (process.env.WASALX_PULL_VERIFY_TRACE !== "1") return run(cosign, args, { timeout });
+  const started = performance.now();
+  const elapsed = () => Math.ceil(performance.now() - started);
+  const operation = args[0];
+  const ref = args.at(-1);
+  const diagnostic = (event) => console.error(`cosign-trace operation=${operation} image=${ref} elapsed_ms=${elapsed()} ${event}`);
+  diagnostic("event=start");
+  const child = run(cosign, ["--verbose", ...args], {
+    timeout, env: { ...process.env, GODEBUG: "netdns=go+2" },
+  });
+  // Debug output can contain authorization headers and signed URLs. Print fixed labels only.
+  const lines = createInterface({ input: child.child.stderr });
+  lines.on("line", line => {
+    const request = line.match(/\b(GET|HEAD|POST) (?:https?:\/\/[A-Za-z0-9.-]+)?\/v2\/\S+\/(referrers|manifests|blobs)\//u);
+    if (request) diagnostic(`event=registry-request method=${request[1]} endpoint=${request[2]}`);
+    else if (/\b(?:GET|HEAD|POST) (?:https:\/\/ghcr\.io)?\/token\b/u.test(line)) diagnostic("event=registry-token");
+    else if (/\bhostLookupOrder\(ghcr\.io\)/u.test(line)) diagnostic("event=dns service=ghcr");
+    else if (/\bhostLookupOrder\((?:rekor(?:\.[a-z0-9-]+)?\.sigstore\.dev|rekor\.sigstore\.dev)\)/u.test(line)) diagnostic("event=dns service=rekor");
+    else if (/\bhostLookupOrder\((?:fulcio|tuf-repo-cdn|timestamp)\.sigstore\.dev\)/u.test(line)) diagnostic("event=dns service=sigstore");
+    const response = line.match(/\bHTTP\/[12](?:\.\d)? ([1-5]\d\d)\b/u);
+    if (response) diagnostic(`event=response status=${response[1]}`);
+  });
+  return child.finally(() => diagnostic("event=end"));
+}
 
 function cosignReason(error) {
   if (error.killed) return "verification exceeded the 30-second command deadline";
@@ -74,7 +101,7 @@ if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) 
     reason = "cannot decode or validate the signed provenance";
     const refs = await verifyProductDigests(inventory, trust, async args => {
       try {
-        return (await run(cosign, args, { timeout })).stdout;
+        return (await runCosign(cosign, args)).stdout;
       } catch (error) {
         command = `cosign ${args[0]} ${args.at(-1)}`;
         reason = cosignReason(error);

@@ -329,15 +329,18 @@ def command_env(work):
             "DOCKER_CONFIG": str(work / "docker"), "SSH_ASKPASS_REQUIRE": "never"}
 
 
-def verify(manifest, commit, tree, config, *, stderr=subprocess.DEVNULL):
+def verify(manifest, commit, tree, config, *, stderr=subprocess.DEVNULL, trace=False):
     # The verifier also checks the exact root bytes it passes to Cosign.
     root_digest = content_digest(Path(config["trusted_root"]).read_bytes())
     if root_digest != f"sha256:{config['trusted_root_sha256']}":
         raise TrustedRootMismatch
     tools = ["node", TOOLS / "pull-verify.mjs", manifest, commit, tree, config["cosign"],
              config["trusted_root"], config["trusted_root_sha256"]]
+    environment = command_env(manifest.parent)
+    if trace:
+        environment["WASALX_PULL_VERIFY_TRACE"] = "1"
     return json.loads(subprocess.check_output(
-        tools, stdin=subprocess.DEVNULL, stderr=stderr, env=command_env(manifest.parent), timeout=300))
+        tools, stdin=subprocess.DEVNULL, stderr=stderr, env=environment, timeout=300))
 
 
 def compose_refs(api, commit, product_refs):
