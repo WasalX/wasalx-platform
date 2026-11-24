@@ -1341,8 +1341,7 @@ begin
       ENV['WASALX_ADMIN_TEST_PORTAL_SOURCE'] = JSON.generate(source)
       ENV['WASALX_ADMIN_TEST_ASSURANCE_JSON'] = JSON.generate('auth_time' => Time.now.to_i, 'amr' => ['mfa'])
       ENV['WASALX_ADMIN_TLS_PASSWORD'] = auth.fetch('password')
-      require 'base64'
-      Module.new.module_eval(Base64.decode64(ENV.fetch('WASALX_NATIVE_MAILBOX_TEST_B64')), 'mailbox-admin-native.rb')
+      Module.new.module_eval(File.binread(ENV.fetch('WASALX_NATIVE_MAILBOX_TEST_PATH')), 'mailbox-admin-native.rb')
     ensure
       %w[WASALX_ADMIN_TEST_OWNER WASALX_ADMIN_TEST_PORTAL_SOURCE WASALX_ADMIN_TEST_ASSURANCE_JSON WASALX_ADMIN_TLS_PASSWORD].each do |key|
         previous.key?(key) ? ENV[key] = previous[key] : ENV.delete(key)

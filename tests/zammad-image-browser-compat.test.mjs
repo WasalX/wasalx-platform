@@ -1971,8 +1971,16 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
     const nativeRaceSource = await readFile(join(process.cwd(), "tests/team-admin-race-native.rb"));
     const nativeMailboxSource = await readFile(join(process.cwd(), "tests/mailbox-admin-native.rb"));
     const nativeTlsSource = await readFile(join(process.cwd(), "tests/mailbox-driver-tls-native.rb"));
-    const nativeOutput = await privateNative("run", "--rm", "--no-deps",
-      "--env", "WASALX_TEST_ISOLATED=1", "--env", `WASALX_NATIVE_MAILBOX_TEST_B64=${nativeMailboxSource.toString("base64")}`, "zammad-package", "bundle", "exec", "rails", "runner",
+    const nativeScripts = join(directory, "native-scripts");
+    const nativeMount = "/run/wasalx-native-scripts";
+    const driverName = "native-diagnostics.rb";
+    const mailboxName = "mailbox-admin-native.rb";
+    const driverPath = `${nativeMount}/${driverName}`;
+    const mailboxPath = `${nativeMount}/${mailboxName}`;
+    await mkdir(nativeScripts, { mode: 0o700 });
+    await writeFile(join(nativeScripts, mailboxName), nativeMailboxSource, { mode: 0o600 });
+    // Linux bounds each argument and environment entry, including encoded Ruby sources.
+    await writeFile(join(nativeScripts, driverName),
       `require 'base64'; ENV['WASALX_NATIVE_DIAGNOSTIC'] = 'true'
        Module.new.module_eval(Base64.decode64('${nativeInitializeSource.toString("base64")}'), 'portal-service-initialize-native.rb')
        Module.new.module_eval(Base64.decode64('${nativeIdentitySource.toString("base64")}'), 'portal-service-identity-native.rb')
@@ -1985,7 +1993,15 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
        Module.new.module_eval(Base64.decode64('${nativeTeamSource.toString("base64")}'), 'team-admin-native.rb')
        Module.new.module_eval(Base64.decode64('${nativeRaceSource.toString("base64")}'), 'team-admin-race-native.rb')
        ENV['WASALX_ADMIN_TLS_TRUST_MODE'] = 'trusted'
-       Module.new.module_eval(Base64.decode64('${nativeTlsSource.toString("base64")}'), 'mailbox-driver-tls-native.rb')`);
+       Module.new.module_eval(Base64.decode64('${nativeTlsSource.toString("base64")}'), 'mailbox-driver-tls-native.rb')`, { mode: 0o600 });
+    // The host runner UID can differ from the Zammad image's UID.
+    await privateNative("run", "--rm", "--no-deps", "--user", "0:0", "--entrypoint", "chown",
+      "--volume", `${nativeScripts}:${nativeMount}:rw`, "zammad-package", "1000:1000", driverPath, mailboxPath);
+    const nativeOutput = await privateNative("run", "--rm", "--no-deps",
+      "--volume", `${join(nativeScripts, driverName)}:${driverPath}:ro`,
+      "--volume", `${join(nativeScripts, mailboxName)}:${mailboxPath}:ro`,
+      "--env", "WASALX_TEST_ISOLATED=1", "--env", `WASALX_NATIVE_MAILBOX_TEST_PATH=${mailboxPath}`,
+      "zammad-package", "bundle", "exec", "rails", "runner", driverPath);
     assert.match(nativeOutput, /"fixture":"owner-service-initialize"/);
     assert.match(nativeOutput, /"fixture":"fresh-service-identity"/);
     const nativeInitializeProof = JSON.parse(nativeOutput.split("\n").find(line => line.startsWith('{"fixture":"owner-service-initialize"')) ?? "");
@@ -2003,8 +2019,8 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
     assert.ok(trustedTls.proof.every(row => row.result === "PASS"));
     const untrustedOutput = await privateNative("run", "--rm", "--no-deps", "--env", "WASALX_ADMIN_TLS_TRUST_MODE=untrusted",
       "--env", "SSL_CERT_FILE=/run/wasalx-mailbox-fixture/untrusted-ca.crt", "zammad-package", "bundle", "exec", "rails", "runner",
-      `require 'base64'; saved = JSON.parse(File.read('/var/tmp/portal-workspace-fixture.json'))
-       ENV['WASALX_ADMIN_TEST_OWNER'] = WasalxMembership.find(saved.fetch('owner')).portal_user_id
+      `require 'base64'
+       ENV['WASALX_ADMIN_TEST_OWNER'] = Wasalx::ServiceIdentity.receipt.fetch('human_portal_user_id')
        Module.new.module_eval(Base64.decode64('${nativeTlsSource.toString("base64")}'), 'mailbox-driver-tls-native.rb')`);
     const untrustedTls = JSON.parse(untrustedOutput.split("\n").find(line => line.startsWith('{"mode":"SIMULATED","boundary":"NATIVE_MAILBOX_TLS"')) ?? "");
     assert.equal(untrustedTls.trust_mode, "untrusted");
