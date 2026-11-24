@@ -153,3 +153,33 @@ API and independently verifies real GHCR/Sigstore bytes for the recorded main
 publication. The release path requires the RC asset and a successful census on the
 latest nightly push run for that tag and commit. The census step checks the installer
 commit, tree and published image commit against the rehearsal log.
+
+### Re-pin Sigstore after a trusted-root rotation
+
+The verifier checks the installed root against the packet's
+`trusted_root_sha256` before using Cosign. A mismatch fails the unit and emits
+`REPORT_TRUST_ROOT_MISMATCH` at error priority in the journal. The outbox keeps
+its existing receipts. Before enabling unattended ticks, route failed runs of
+`wasalx-dev-pull.service` to the host's alert destination and check the error
+with `journalctl -u wasalx-dev-pull.service -p err`. Investigate verification
+failures even when the installed checksum still matches the old pin.
+
+1. On the trusted networked machine, verify the Linux amd64 Cosign binary
+   against the pin used by the [pull verifier](pull-verify.mjs).
+   Set `COSIGN` to that verified binary's absolute path. Initialize a clean TUF
+   cache and record the SHA-256 of the authenticated target.
+
+   ```sh
+   export TUF_ROOT="$(mktemp -d)"
+   "$COSIGN" initialize
+   root="$TUF_ROOT/tuf-repo-cdn.sigstore.dev/targets/trusted_root.json"
+   sha256sum "$root"
+   ```
+
+2. Stage the authenticated root at a new read-only path for the pull account.
+   Set the private pull identity's `trusted_root` and `trusted_root_sha256`
+   to that path and recorded hash. Render a new report packet, verify
+   `SHA256SUMS`, and have the exact packet and root reviewed and approved.
+3. Install the approved packet and root together, retaining the receipt key and
+   outbox. Under the authorized qualification window, verify the next eligible
+   candidate and confirm D1 accepts the signed receipt before resuming the timer.

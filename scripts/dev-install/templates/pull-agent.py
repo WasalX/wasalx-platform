@@ -55,6 +55,10 @@ class Pending(Exception):
     """Public evidence has yet to qualify this release."""
 
 
+class TrustedRootMismatch(Exception):
+    """The installed Sigstore trusted root does not match the packet."""
+
+
 class RateLimit(Exception):
     def __init__(self, until):
         self.until = until
@@ -325,6 +329,10 @@ def command_env(work):
 
 
 def verify(manifest, commit, tree, config):
+    # The verifier also checks the exact root bytes it passes to Cosign.
+    root_digest = content_digest(Path(config["trusted_root"]).read_bytes())
+    if root_digest != f"sha256:{config['trusted_root_sha256']}":
+        raise TrustedRootMismatch
     tools = ["node", TOOLS / "pull-verify.mjs", manifest, commit, tree, config["cosign"],
              config["trusted_root"], config["trusted_root_sha256"]]
     return json.loads(subprocess.check_output(
@@ -477,8 +485,11 @@ def main():
                 print("PENDING")
             except (URLError, TimeoutError):
                 print("PUBLIC_INPUT_UNAVAILABLE")
+    except TrustedRootMismatch:
+        print("<3>REPORT_TRUST_ROOT_MISMATCH: Re-pin Sigstore trust via TUF", file=sys.stderr)
+        return 1
     except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError):
-        print("REPORT_FAILED", file=sys.stderr)
+        print("<3>REPORT_FAILED", file=sys.stderr)
         return 1
     return 0
 
