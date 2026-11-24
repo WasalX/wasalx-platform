@@ -752,24 +752,33 @@ test("landing uses bundled language fonts and centers its Riyadh footer", async 
 
 test("landing motion can pause, respects reduced motion and yields to inbox interaction", async ({ page }, testInfo) => {
   test.setTimeout(testInfo.project.name === "desktop" ? 75_000 : 45_000);
-  await page.clock.install();
+  const start = new Date("2026-01-01T00:00:00Z");
+  await page.clock.install({ time: start });
+  await page.clock.pauseAt(new Date(start.getTime() + 60_000));
   await page.goto("/");
   await page.locator("#product").scrollIntoViewIfNeeded();
   await page.emulateMedia({ reducedMotion: "no-preference" });
+  await expect(page.locator("#product")).toHaveAttribute("data-running", "true");
   await expect(page.locator(".marketing-shell")).toHaveAttribute("data-motion", "on");
   await expect(page.locator('#product')).toHaveAttribute('data-view','groups');
   await expect(page.locator('#product .inbox-original .inbox-trigger')).toHaveAttribute('data-created','false');
   expect(await page.locator('#product .inbox-message-followup').evaluate(element => element.getBoundingClientRect().height)).toBe(0);
+  // Step through the inbox's 2.6-second phases before checking the next scene.
+  await page.clock.runFor(2600);
   await expect(page.locator('#product .inbox-original .inbox-trigger')).toHaveAttribute('data-created','true');
+  await page.clock.runFor(2600);
   await expect(page.locator('#product')).toHaveAttribute('data-view','tickets');
   await expect(page.locator('#product .inbox-message-followup')).toBeVisible();
+  await page.clock.runFor(2600);
   await expect(page.locator('#product .inbox-message-outbound blockquote').last()).toContainText(arabic ? 'فيه أي تحديث؟' : 'Any update on this?');
+  await page.clock.runFor(2600);
   await expect(page.locator('#product')).toHaveAttribute('data-view','groups');
   await expect(page.locator('#product .inbox-message-outbound blockquote').last()).toContainText(arabic ? 'فيه أي تحديث؟' : 'Any update on this?');
   await page.locator("h1").scrollIntoViewIfNeeded();
   await expect(page.locator(".marketing-caret")).toHaveAttribute("data-running", "true");
   const title = page.locator(".marketing-type-text");
   const initial = await title.textContent();
+  await page.clock.runFor(2200 + 35);
   await expect(title).not.toHaveText(initial ?? "");
   await expect(page.getByRole("heading", { level: 1 })).toHaveAccessibleName(arabic ? "كل محادثاتك، في مكان واحد." : "All your conversations. One shared inbox.");
   await page.locator("#product").scrollIntoViewIfNeeded();
@@ -787,6 +796,7 @@ test("landing motion can pause, respects reduced motion and yields to inbox inte
   await expect(page.locator("#product")).toHaveAttribute("data-view", "tickets");
   await openChooser(page);
   await page.locator('.inbox-row[value="2"]').click();
+  await page.clock.runFor(16);
   await page.locator("#demo-reply").fill("Draft stays while animation stops");
   await page.clock.runFor(6000);
   await expect(page.locator("#demo-reply")).toHaveValue("Draft stays while animation stops");
@@ -804,7 +814,13 @@ test("landing motion can pause, respects reduced motion and yields to inbox inte
     await page.goto("/");
     await page.evaluate(() => window.scrollTo(0, 0));
     const labels = arabic ? ["قروبات واتساب", "بوت واتساب", "الإيميل", "إنستقرام", "إكس", "تيك توك", "سلاك"] : ["WhatsApp groups", "WhatsApp bot", "Email", "Instagram", "X", "TikTok", "Slack"];
+    await expect(page.locator(".marketing-caret")).toHaveAttribute("data-running", "true");
     for (const [index, label] of labels.entries()) {
+      if (index > 0) {
+        // MarketingHeadline holds the word, deletes it, switches words, then types the next one.
+        const previous = labels[index - 1]!;
+        await page.clock.runFor(2200 + (previous.length + 1) * 35 + label.length * 75);
+      }
       await expect(title).toHaveText(label);
       await expect(title).toHaveAttribute("data-whatsapp", String(index < 2));
       await expect(page.locator(".marketing-type-soon")).toHaveAttribute("data-shown", String(index >= 3));

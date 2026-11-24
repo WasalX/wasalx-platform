@@ -358,11 +358,17 @@ test('Account recovery renews exact source read access without replaying or appr
  // Multiple reloads and recovery phases need a bounded scenario budget on shared CI runners.
  test.setTimeout(90_000);
   test.skip(testInfo.project.name==='tablet-820');
+  await page.clock.install();
   const f=await fixture(page),r=await readbackFixture(page,f);
   const messages=(locale()==='ar'?arabicTenantMessages:englishTenantMessages) as Record<string,string>;
   const text=(key:string)=>messages[`tenant.metaSignup.${key}`]!;
   const setup=()=>page.locator('section[aria-labelledby="meta-signup-heading"]');
   const sb=(key:string)=>setup().getByRole('button',{name:text(key),exact:true});
+  const advanceRecoveryPoll=async()=>{
+    await expect(setup().getByText(text('checking'),{exact:true})).toBeVisible();
+    // The uncertain signup attempt polls after three seconds and reads on the next frame.
+    await page.clock.runFor(3_100);
+  };
   const open=async()=>{await section(page).getByRole('button',{name:copy('execution.renewal.open'),exact:true}).click();await expect(setup().getByRole('heading',{name:text('readback.title'),exact:true})).toBeVisible();};
   const visit=async()=>{await page.goto(`/app?view=connections&connection=${connection}`);await expect(section(page).getByRole('heading',{name:copy('execution.title'),exact:true})).toBeVisible();};
   f.set({...f.get(),canRefresh:false,canCancel:false,execution:{...f.get().execution!,state:'HELD',actions:{initiate:false,complete:false,observe:false,reconcile:false,cancel:false},
@@ -382,6 +388,7 @@ test('Account recovery renews exact source read access without replaying or appr
   await sb('readback.prepare').click();await page.reload();await open();
   await expect(setup().getByText(text('resumeAuthorization'),{exact:true})).toBeVisible();await expect(sb('connect')).toHaveCount(0);
   await sb('cancel').click();await sb('readback.prepare').click();await sb('connect').click();r.loseExchange();await r.callback('readback-code-once');
+  await advanceRecoveryPoll();
   await expect(setup().getByRole('radio').first()).toBeEnabled();expect(r.calls.filter(call=>call.path.endsWith('/exchange'))).toHaveLength(1);
   await page.reload();await open();await expect(setup().getByRole('radio').first()).toBeEnabled();expect(r.calls.filter(call=>call.path.endsWith('/exchange'))).toHaveLength(1);
   await expect(setup().locator('input[type="password"]')).toHaveCount(0);await expect(setup().getByRole('radio').nth(1)).toBeDisabled();
@@ -391,6 +398,7 @@ test('Account recovery renews exact source read access without replaying or appr
   f.set({...f.get(),execution:{...f.get().execution!,renewals:[{...f.get().execution!.renewals[0],canPrepare:true}]}});await f.refresh();
   await setup().getByRole('radio').first().check();r.loseSelect();await sb('readback.select').click();
   await expect.poll(()=>r.calls.filter(call=>call.path.endsWith('/select')).length).toBe(1);
+  await advanceRecoveryPoll();
   await expect(sb('readback.select')).toBeEnabled();await page.reload();await open();
   expect(r.calls.filter(call=>call.path.endsWith('/select'))).toHaveLength(1);await setup().getByRole('radio').first().check();
   await sb('readback.select').click();await expect(setup().getByText(text('readback.status.COMPLETED'),{exact:true})).toBeVisible();
