@@ -7,6 +7,7 @@ import {
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { fullEnvironmentCredentialNames, validateFullEnvironment } from "../scripts/release/preflight-full-env.mjs";
 
 import { canonicalEmail, loadInvitationMailerConfig } from "../services/invitation-mailer/dist/config.js";
 import {
@@ -40,6 +41,7 @@ test("mailer production configuration requires a live HTTPS or TLS-required SMTP
     INVITATION_EMAIL_FROM: ["test-user-0456","example.home.arpa"].join("@"),
     INVITATION_EMAIL_TEMPLATE_ID: "wasalx-tenant-invitation-v1",
     PORTAL_PUBLIC_ORIGIN: "https://portal.example.com",
+    WASALX_TEST_EMAIL_RECIPIENT_ALLOWLIST: "*",
   };
   assert.throws(() => loadInvitationMailerConfig(base), /HTTPS endpoint or credential-free SMTP submission URL/);
   assert.throws(() => loadInvitationMailerConfig({
@@ -60,6 +62,20 @@ test("mailer production configuration requires a live HTTPS or TLS-required SMTP
   assert.equal(config.tenantId, tenantId);
   assert.equal(config.privateKeyReferences.get("v1"), "secret://platform/invitations/v1");
   assert.equal(config.port, 8085);
+  assert.equal(config.testRecipients, undefined);
+  const mailFence = "WASALX_TEST_EMAIL_RECIPIENT_ALLOWLIST";
+  const email = ["fixture_2718", "example.test"].join("@");
+  const withFence = value => loadInvitationMailerConfig({
+    ...base,
+    INVITATION_EMAIL_PROVIDER_URL: "https://email.internal/v1/send",
+    [mailFence]: value,
+  });
+  assert.deepEqual(withFence("[]").testRecipients, new Set());
+  assert.equal(withFence("*").testRecipients, undefined);
+  assert.deepEqual(withFence(JSON.stringify([email.toUpperCase()])).testRecipients, new Set([email]));
+  for (const invalid of [undefined, "", " * ", "null", "{}", '[1]', JSON.stringify([email, "*"])]) {
+    assert.throws(() => withFence(invalid), /WASALX_TEST_EMAIL_RECIPIENT_ALLOWLIST/u);
+  }
   const shared = loadInvitationMailerConfig({
     ...base,
     INVITATION_EMAIL_PROVIDER_URL: "https://email.internal/v1/send",
@@ -79,6 +95,32 @@ test("mailer production configuration requires a live HTTPS or TLS-required SMTP
     () => loadInvitationMailerConfig({ ...base, INVITATION_EMAIL_PROVIDER_URL: providerUrl }),
     /HTTPS endpoint or credential-free SMTP submission URL/,
   );
+});
+
+test("full installer preflight requires valid mail and password-reset policies", () => {
+  const recipients = "WASALX_TEST_EMAIL_RECIPIENT_ALLOWLIST";
+  const reset = "WASALX_KEYCLOAK_PASSWORD_RESET_ENABLED";
+  const base = {
+    ...Object.fromEntries(fullEnvironmentCredentialNames.map((key, index) => [key, `fixture-${index}`])),
+    PUBLIC_WEBHOOK_BASE_URL: "https://webhook.fixture.internal",
+    WASALX_FULL_INVITATION_EMAIL_PROVIDER_URL: "https://mail.fixture.internal/send",
+    WASALX_FULL_INVITATION_EMAIL_FROM: ["sender", "fixture.internal"].join("@"),
+    WASALX_FULL_KEYCLOAK_SMTP_FROM: ["identity", "fixture.internal"].join("@"),
+    WASALX_FULL_QUALIFICATION_OWNER_EMAIL: ["owner", "fixture.internal"].join("@"),
+    WASALX_FULL_KEYCLOAK_SMTP_PORT: "587",
+    DEV_SECRET_STORE_ENCRYPTION_KEY: Buffer.alloc(32, 1).toString("base64"),
+    [recipients]: "[]",
+    [reset]: "false",
+  };
+  for (const policy of ["[]", "*", JSON.stringify([["fixture_2718", "example.test"].join("@")])]) {
+    assert.equal(validateFullEnvironment({ ...base, [recipients]: policy, [reset]: "true" }), true);
+  }
+  for (const policy of [undefined, "", " * ", "[1]", '["*"]', '["alias@example.test,other@example.test"]']) {
+    assert.throws(() => validateFullEnvironment({ ...base, [recipients]: policy }), { variables: [recipients] });
+  }
+  for (const enabled of [undefined, "", "True", "yes"]) {
+    assert.throws(() => validateFullEnvironment({ ...base, [reset]: enabled }), { variables: [reset] });
+  }
 });
 
 test("encrypted invitation tokens decrypt only with the referenced key version and stay in URL fragments", async () => {
@@ -410,6 +452,31 @@ test("retryable provider failures back off, exhaust to terminal, and stale lease
   assert.equal((await stale.processor.drainOnce()).stale, 1);
 });
 
+test("the invitation mail fence stops non-members before secret access or provider delivery", async () => {
+  const recipient = ["fixture-2718", "example.home.arpa"].join("@");
+  let sends = 0;
+  let secretReads = 0;
+  const provider = { send: async input => {
+    assert.equal(input.recipient, recipient);
+    sends++;
+    return { messageId: "provider-allowed" };
+  } };
+  const fixture = testRecipients => mailerFixture({
+    recipient, testRecipients, provider, onResolve: () => { secretReads++; },
+  });
+  for (const recipients of [new Set(), new Set([["fixture-0002", "example.home.arpa"].join("@")])]) {
+    const denied = fixture(recipients);
+    assert.equal((await denied.processor.drainOnce()).terminal, 1);
+    assert.equal(denied.calls.fail[0].input.code, "EMAIL_TEST_RECIPIENT_NOT_ALLOWED");
+    assert.equal(denied.calls.fail[0].input.retryable, false);
+  }
+  assert.equal(secretReads, 0);
+  assert.equal(sends, 0);
+  assert.equal((await fixture(new Set([recipient])).processor.drainOnce()).sent, 1);
+  assert.equal(secretReads, 1);
+  assert.equal(sends, 1);
+});
+
 test("retry schedule is bounded and source logging never includes token, recipient, or ciphertext fields", async () => {
   const earliest = Date.now() + 1_400;
   const latest = Date.now() + 2_600;
@@ -509,7 +576,7 @@ function mailerFixture(options = {}) {
     tenant_id: tenantId,
     invitation_id: "44444444-4444-4444-8444-444444444444",
     action: "INVITE",
-    recipient_email: "invitee@example.com",
+    recipient_email: options.recipient ?? "invitee@example.com",
     token_ciphertext: publicEncrypt({
       key: publicKey,
       padding: constants.RSA_PKCS1_OAEP_PADDING,
@@ -538,7 +605,10 @@ function mailerFixture(options = {}) {
   };
   const secrets = {
     ready: async () => true,
-    resolve: async () => ({ keyVersion: "v1", privateKeyPem: privateKey.export({ type: "pkcs8", format: "pem" }).toString() }),
+    resolve: async () => {
+      options.onResolve?.();
+      return { keyVersion: "v1", privateKeyPem: privateKey.export({ type: "pkcs8", format: "pem" }).toString() };
+    },
   };
   const provider = options.provider ?? { send: async () => ({ messageId: "provider-123" }) };
   const processor = new InvitationMailerProcessor({
@@ -549,6 +619,7 @@ function mailerFixture(options = {}) {
     portalOrigin: "https://portal.example.com",
     sender: "operations@example.com",
     templateId: "invite-v1",
+    testRecipients: options.testRecipients,
   }, store, secrets, provider);
   return { processor, calls };
 }

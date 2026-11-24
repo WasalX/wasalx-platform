@@ -47,6 +47,7 @@ import {
   withSpan,
 } from "@wasalx/observability";
 
+const retryPolicy = retryPolicyFromEnvironment(process.env);
 const databaseUrl = required("DATABASE_URL");
 const redisUrl = validatedRedisUrl(required("REDIS_URL"));
 const jobSecret = required("WORKER_JOB_JWT_SECRET");
@@ -105,7 +106,7 @@ const mediaRuntime = configuredMediaRuntime();
 const processor = new DeliveryProcessor(repository, resolver, {
   metaGraphVersion: required("META_GRAPH_VERSION"),
   metaAppId: process.env.META_APP_ID,
-}, retryPolicyFromEnvironment(process.env), mediaRuntime?.outbound, Number(process.env.OUTBOUND_MEDIA_CONCURRENCY ?? 2));
+}, retryPolicy, mediaRuntime?.outbound, Number(process.env.OUTBOUND_MEDIA_CONCURRENCY ?? 2));
 const inboundMedia = mediaRuntime?.inbound;
 const inboundProcessor = new InboundProcessor(inboundRepository, resolver, inboundMedia);
 const connectionProcessor = new ConnectionOperationProcessor(

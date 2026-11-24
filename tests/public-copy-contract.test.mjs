@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { tenantPortalFiles } from "./helpers/tenant-portal-source.mjs";
 
 const read = (path) => readFile(new URL(`../${path}`, import.meta.url), "utf8");
 
@@ -10,7 +11,7 @@ test("focused marketing skip link keeps contrasting foreground above the anchor 
 });
 
 const tenantFacingFiles = [
-  "app/WasalXApp.tsx",
+  ...tenantPortalFiles,
   "app/BotAutomation.tsx",
   "app/CaseLifecycle.tsx",
   "app/ClientRouting.tsx",
