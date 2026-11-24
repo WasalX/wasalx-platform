@@ -168,9 +168,9 @@ test("a fully verified but still-processing source defers before all effects and
 });
 
 test("adapter keeps BSUID wire identity and rechecks server-private authorization after async work",async t=>{
-  const saved={scope:process.env.WASALX_TEST_RECIPIENT_ALLOWLIST,fetch:globalThis.fetch,warn:console.warn};
-  process.env.WASALX_TEST_RECIPIENT_ALLOWLIST=JSON.stringify([phone]);console.warn=()=>{};
-  t.after(()=>{if(saved.scope===undefined)delete process.env.WASALX_TEST_RECIPIENT_ALLOWLIST;else process.env.WASALX_TEST_RECIPIENT_ALLOWLIST=saved.scope;globalThis.fetch=saved.fetch;console.warn=saved.warn});
+  const saved={scope:process.env.WASALX_TEST_RECIPIENT_ALLOWLIST,fetch:globalThis.fetch};
+  process.env.WASALX_TEST_RECIPIENT_ALLOWLIST=JSON.stringify([phone]);
+  t.after(()=>{if(saved.scope===undefined)delete process.env.WASALX_TEST_RECIPIENT_ALLOWLIST;else process.env.WASALX_TEST_RECIPIENT_ALLOWLIST=saved.scope;globalThis.fetch=saved.fetch});
   const sent=[];globalThis.fetch=async(_url,init)=>{sent.push(JSON.parse(init.body));return Response.json({messages:[{id:"wamid.sent"}]})};
   let allowed=true;
   const config={accessToken:"synthetic-private-token",graphVersion:"v24.0",phoneNumberIdFor:()=>phoneId,baseUrl:"https://graph.test",

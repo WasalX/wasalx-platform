@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { registerHooks } from "node:module";
 import { formatDateTime, formatNumber } from "../lib/i18n/format.ts";
 import { arabicPlatformMessages } from "../lib/i18n/messages/ar/platform.ts";
 import { englishPlatformMessages } from "../lib/i18n/messages/en/platform.ts";
@@ -111,6 +112,39 @@ test("operator browser session has a separate cookie, key, Redis namespace, and 
   assert.match(storeSource, /wasalx:platform-portal:session:/);
   assert.match(storeSource, /Math\.min\(lifetime, 15 \* 60\)/);
   assert.doesNotMatch(storeSource, /refreshOidcSession/);
+});
+
+test("rejected platform OIDC callbacks log only presence flags and correlation", async (t) => {
+  const hook = registerHooks({
+    resolve(specifier, context, nextResolve) {
+      if (context.parentURL?.endsWith("/app/platform/auth/callback/route.ts")) {
+        if (specifier === "next/server") return nextResolve("vinext/shims/server", context);
+        if (specifier.startsWith("../../../../lib/")) return nextResolve(`${specifier}.ts`, context);
+      }
+      return nextResolve(specifier, context);
+    },
+  });
+  const { GET } = await import("../app/platform/auth/callback/route.ts").finally(() => hook.deregister());
+  const previousOrigin = process.env.PORTAL_PUBLIC_ORIGIN;
+  process.env.PORTAL_PUBLIC_ORIGIN = "https://portal.example.test";
+  t.after(() => {
+    if (previousOrigin === undefined) delete process.env.PORTAL_PUBLIC_ORIGIN;
+    else process.env.PORTAL_PUBLIC_ORIGIN = previousOrigin;
+  });
+  const warnings: string[] = [];
+  t.mock.method(process.stderr, "write", (line: string) => { warnings.push(String(line)); return true; });
+  const response = await GET(new Request(
+    "https://portal.example.test/platform/auth/callback?error=fixture-error&code=fixture-code&state=invalid",
+  ));
+  assert.equal(new URL(response.headers.get("location")!).searchParams.get("reason"), "invalid_callback");
+  assert.equal(warnings.length, 1);
+  const { timestamp, request_id, ...entry } = JSON.parse(warnings[0]);
+  assert.deepEqual(entry, {
+    level: "warn", event: "platform_oidc_callback_rejected", providerError: true,
+    codePresent: true, statePresent: true, transactionPresent: false,
+  });
+  assert.match(timestamp, /^\d{4}-\d{2}-\d{2}T/u);
+  assert.match(request_id, /^[a-f0-9-]{36}$/u);
 });
 
 test("successful operator login rotates the previous server-side session", async () => {
