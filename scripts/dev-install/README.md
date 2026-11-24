@@ -163,10 +163,21 @@ staging windows and disk admission.
 The agent publishes one numbered `<20-digit-seq>.json` file per verified tag in
 `handover-outbox` under the unit's `StateDirectory`. The
 `ot3.wasalx.d1-handover/v1` receipt identifies the tag, exact commit and tree, release
-asset digest, and successful nightly run and attempt. The sorted image references
-contain the 21 verified product digests and the digest-pinned third-party Compose
-references at that commit. Each row records its origin and its manifest media type
-when available from an anonymous registry HEAD.
+asset digest, and successful nightly run and attempt. Receipts with
+`source: b2-verified` require a non-null `release_asset_digest` of the form
+`sha256:<64 lowercase hex digits>`. Only operator hand-overs may omit the digest
+value by setting it to null.
+
+Image refs are sorted and unique. They contain the 21 verified product digests and
+the third-party Compose references at that commit. Each uses
+`name@sha256:<64 lowercase hex digits>`. The agent drops Compose tags and Docker Hub
+host and `library/` prefixes. Other registry prefixes are retained. Each row
+records its origin and its manifest media type when available from an anonymous
+registry HEAD.
+
+An outbox containing older receipts that violate this format fails startup. Before
+clearing it, archive the whole outbox and coordinate a new sequence with the
+consumer. A fresh outbox starts at sequence 1.
 
 The first receipt starts at sequence 1 with a null previous hash. Each subsequent
 receipt hashes the entire prior canonical JSON object, including its signature.
