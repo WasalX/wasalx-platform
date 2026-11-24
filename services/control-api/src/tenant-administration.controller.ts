@@ -13,6 +13,7 @@ import {
   Patch,
   Post,
   Put,
+  Query,
   Req,
   SetMetadata,
   UnauthorizedException,
@@ -28,6 +29,7 @@ import { NativeMembershipService } from "./native-membership.service.js";
 import { Requires } from "./permission.guard.js";
 import type { TenantRole } from "./rbac.js";
 import type { AuthenticatedRequest } from "./types.js";
+import { listCursor, listLimit, takeListPage } from "./list-pagination.js";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const EMAIL = /^[a-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[a-z0-9!#$%&'*+/=?^_`{|}~-]+)*@[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/iu;
@@ -178,25 +180,42 @@ export class TenantAdministrationController {
 
   @Get("team")
   @Requires("team:read")
-  async team(@Req() request: AuthenticatedRequest) {
-    const members = await this.database.rows<MemberRow>(
-      request.principal.tenantId,
-      `SELECT m.id,m.user_id,u.email,u.display_name,m.role,m.state,m.version,m.whatsapp_numbers,
-              m.created_at,m.updated_at
-         FROM tenant_memberships m
-         JOIN users u ON u.id=m.user_id
-        WHERE m.tenant_id=$1
-        ORDER BY CASE m.role
-          WHEN 'tenant_owner' THEN 1 WHEN 'tenant_admin' THEN 2
-          WHEN 'supervisor' THEN 3 WHEN 'agent' THEN 4 ELSE 5 END,
-          lower(u.display_name),m.id`,
-      [request.principal.tenantId],
-    );
+  async team(
+    @Req() request: AuthenticatedRequest,
+    @Query() query: { limit?: unknown; member_cursor?: unknown; invitation_cursor?: unknown } = {},
+  ) {
+    const limit = listLimit(query.limit);
+    const memberCursor = listCursor(query.member_cursor);
+    const invitationCursor = listCursor(query.invitation_cursor);
+    const tenantId = request.principal.tenantId;
     const canManage = request.principal.role === "tenant_owner" || request.principal.role === "tenant_admin";
-    const invitations = canManage
+
+    const memberRows = memberCursor || !invitationCursor
+      ? await this.database.rows<MemberRow>(tenantId,
+          `WITH ranked AS (
+            SELECT m.id,m.user_id,u.email,u.display_name,m.role,m.state,m.version,m.whatsapp_numbers,
+                   m.created_at,m.updated_at,
+                   CASE m.role WHEN 'tenant_owner' THEN 1 WHEN 'tenant_admin' THEN 2
+                     WHEN 'supervisor' THEN 3 WHEN 'agent' THEN 4 ELSE 5 END AS role_order,
+                   lower(u.display_name) AS display_order
+              FROM tenant_memberships m JOIN users u ON u.id=m.user_id
+             WHERE m.tenant_id=$1
+          )
+          SELECT id,user_id,email,display_name,role,state,version,whatsapp_numbers,created_at,updated_at
+            FROM ranked
+           WHERE $2::uuid IS NULL OR (role_order,display_order,id)>
+                 (SELECT role_order,display_order,id FROM ranked WHERE id=$2::uuid)
+           ORDER BY role_order,display_order,id LIMIT $3`,
+          [tenantId,memberCursor,limit+1],
+        )
+      : [];
+    const invitationRows = canManage && (invitationCursor || !memberCursor)
       ? await this.database.rows<InvitationRow>(
-          request.principal.tenantId,
-          `SELECT invitation.id,invitation.email,invitation.display_name,invitation.role,
+          tenantId,
+          `WITH cursor_position AS (
+            SELECT created_at,id FROM tenant_invitations WHERE tenant_id=$1 AND id=$2::uuid
+          )
+          SELECT invitation.id,invitation.email,invitation.display_name,invitation.role,
                   CASE WHEN invitation.state='PENDING' AND invitation.expires_at<=now()
                     THEN 'EXPIRED' ELSE invitation.state END AS state,
                   invitation.expires_at,invitation.version,invitation.created_at,invitation.updated_at,
@@ -210,12 +229,14 @@ export class TenantAdministrationController {
                    WHERE tenant_id=invitation.tenant_id AND invitation_id=invitation.id
                    ORDER BY created_at DESC,id DESC LIMIT 1
                 ) delivery ON true
-            WHERE invitation.tenant_id=$1
-            ORDER BY invitation.created_at DESC
-            LIMIT 200`,
-          [request.principal.tenantId],
+            WHERE invitation.tenant_id=$1 AND ($2::uuid IS NULL OR
+                  (invitation.created_at,invitation.id)<(SELECT created_at,id FROM cursor_position))
+            ORDER BY invitation.created_at DESC,invitation.id DESC LIMIT $3`,
+          [tenantId,invitationCursor,limit+1],
         )
       : [];
+    const { items: members, next_cursor: members_next_cursor } = takeListPage(memberRows, limit, row => row.id);
+    const { items: invitations, next_cursor: invitations_next_cursor } = takeListPage(invitationRows, limit, row => row.id);
     const captured=new Map(members.map(member=>[member.user_id,{email:member.email,display_name:member.display_name,role:member.role,member_state:member.state}]));
     const observations=members.length&&this.nativeMembership?await this.nativeMembership.observe(request.principal.tenantId,members.map(member=>member.user_id),captured):new Map();
     return {
@@ -230,6 +251,8 @@ export class TenantAdministrationController {
         version: Number(invitation.version),
         delivery_error_code: publicInvitationDeliveryCode(invitation.delivery_error_code),
       })),
+      members_next_cursor,
+      invitations_next_cursor,
       capabilities: {
         can_invite: canManage,
         can_manage_members: canManage,
