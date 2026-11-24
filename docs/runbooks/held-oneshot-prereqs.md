@@ -75,8 +75,9 @@ Runtime install/release and provider acceptance require separate evidence.
 Set `WASALX_TEST_EMAIL_RECIPIENT_ALLOWLIST` in the private Compose environment.
 On DEV, use a JSON array of exact, approved test email addresses or `[]` to
 deny all mail. For staging and production, set the explicit value `*` for
-unrestricted mail. Use the same key in the invitation mailer Secret for Helm
-deployments. A missing or invalid policy fails startup. Invitation deliveries
+unrestricted mail. Helm supplies `*` in staging and production. Its development
+invitation mailer reads the policy from its Secret. A missing or invalid policy
+fails startup. Invitation deliveries
 outside the list fail without retrying. Set the separate
 `WASALX_KEYCLOAK_PASSWORD_RESET_ENABLED` switch to `true` only when testing
 password reset mail for an approved recipient. Leave it off for other mail
