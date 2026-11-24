@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useId, useRef, useState, type FormEvent } from "react";
+import { Fragment, useCallback, useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { parseTicketEventFlow, ticketEvents, type TicketEvent, type TicketEventDefinition } from "../packages/core/src/ticket-event-flow.ts";
 import { operatorResponseFailure } from "../lib/operator-ui.ts";
 import { localizedUiError } from "../lib/ui-error.ts";
@@ -206,7 +206,10 @@ export function TicketEventWorkflows({ active, flows, canWrite, workspaceId, mut
           {canWrite ? <div className="bot-heading-actions"><button type="button" className="button secondary" disabled={saving || publish} onClick={() => { void fetchDetail(selected).then(row => { setDetail(row); setDetailError(false); setError(""); onFlow(row); }).catch(showError); }}>{t("automation.common.reload")}</button><button type="button" className="button secondary" disabled={Boolean(draft) || saving || publish} onClick={() => openDraft(selectedDefinition, selected)}>{t("ticketEvent.workspace.edit")}</button>{selectedDetail.state === "DRAFT" ? <button type="button" className="button primary" disabled={Boolean(draft) || saving || !configuration || !Object.hasOwn(selectedDetail, "active_flow_version_id")} onClick={() => setPublish(true)}>{t("ticketEvent.workspace.publish")}</button> : null}</div> : null}
         </div>
         {publish ? <InlineConfirmation busy={saving} cancel={() => { if (!saving) setPublish(false); }} aria-labelledby={`${id}-publish-title`}><h4 id={`${id}-publish-title`}>{t("ticketEvent.workspace.publishTitle")}</h4><p>{t("ticketEvent.workspace.publishHelp")}</p><div className="bot-form-actions"><button type="button" data-inline-confirm-initial-focus className="button secondary" disabled={saving} onClick={() => setPublish(false)}>{t("automation.common.cancel")}</button><button type="button" className="button primary" disabled={saving} onClick={() => void publishDraft()}>{t("ticketEvent.workspace.publish")}</button></div></InlineConfirmation> : null}
-        <TicketEventEditor key={selected} definition={selectedDefinition} onChange={() => {}} disabled memberOptions={members} /><TicketEventPreviewPanel key={selected} definition={selectedDefinition} memberOptions={members} /></>
+        <Fragment key={selected}>
+          <TicketEventEditor definition={selectedDefinition} onChange={() => {}} disabled memberOptions={members} />
+          <TicketEventPreviewPanel definition={selectedDefinition} memberOptions={members} />
+        </Fragment></>
           : selected ? <div className="bot-editor-layout"><p role={detailError ? "alert" : "status"}>{t(detailError ? "ticketEvent.workspace.loadFailed" : "bot.loading")}</p>{detailError ? <button type="button" className="button secondary" onClick={() => { void fetchDetail(selected).then(row => { setDetail(row); setDetailError(false); }).catch(showError); }}>{t("automation.common.reload")}</button> : null}</div> : <p className="bot-editor-layout">{t("ticketEvent.workspace.choose")}</p>}
       </section>
     </div>
