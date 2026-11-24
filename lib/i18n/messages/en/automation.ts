@@ -39,6 +39,7 @@ export const englishAutomationMessages = {
   "bot.entry.add": "Add entry command",
   "bot.entry.point": "Entry point",
   "bot.entry.none": "No entry commands",
+  "bot.entry.summary": "{aliases} → {target} · {state}",
   "bot.entry.preview": "Try a customer phrase",
   "bot.entry.previewHelp": "Uses the same command matching rules as the bot. Existing displayed choices take priority; disabled commands do not match.",
   "bot.entry.try": "Preview phrase",

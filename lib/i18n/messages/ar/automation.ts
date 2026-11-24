@@ -40,6 +40,7 @@ export const arabicAutomationMessages = {
   "bot.entry.add": "إضافة أمر دخول",
   "bot.entry.point": "نقطة دخول",
   "bot.entry.none": "لا توجد أوامر دخول",
+  "bot.entry.summary": "{aliases} ← {target} · {state}",
   "bot.entry.preview": "تجربة عبارة عميل",
   "bot.entry.previewHelp": "يستخدم قواعد المطابقة نفسها للبوت. تتقدم الخيارات المعروضة على الأوامر، ولا تطابق الأوامر المعطلة.",
   "bot.entry.try": "معاينة العبارة",
