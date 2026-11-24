@@ -70,6 +70,7 @@ export const metricDefinitions = {
   wasalx_delivery_terminal_failure_total: { kind: "counter", description: "Terminal delivery failures" },
   wasalx_delivery_outcome_unknown_total: { kind: "counter", description: "Provider send outcomes that cannot be determined safely" },
   wasalx_delivery_receipts_total: { kind: "counter", description: "Provider delivery receipt processing outcomes" },
+  wasalx_agent_reply_signal_total: { kind: "counter", description: "Read and typing outcomes for agent replies" },
   wasalx_delivery_persistence_failure_total: { kind: "counter", description: "Provider sends whose durable completion could not be persisted" },
   wasalx_connection_state: { kind: "gauge", description: "Observed connection count by state" },
   wasalx_connection_transition_total: { kind: "counter", description: "Connection lifecycle transitions" },

@@ -279,7 +279,7 @@ export class DeliveryProcessor{
     input: Parameters<MessagingProviderAdapter["send"]>[0],
   ) {
     const record = (signal: string, result: string) =>
-      recordMetric("wasalx_agent_reply_signal_total", 1, { provider: job.provider, signal, result });
+      recordMetric("wasalx_agent_reply_signal_total", 1, { provider: job.provider, operation: signal, result });
     const recordFailure = (signal: string, error: unknown) => {
       record(signal, "failed");
       recordStructuredLog("warn", "delivery.agent_reply_signal_failed", {
