@@ -777,8 +777,14 @@ test("landing motion can pause, respects reduced motion and yields to inbox inte
   await page.locator("h1").scrollIntoViewIfNeeded();
   await expect(page.locator(".marketing-caret")).toHaveAttribute("data-running", "true");
   const title = page.locator(".marketing-type-text");
+  const advanceHeadline = async (matches: (value: string | null) => boolean) => {
+    // Each character schedules the next timer after React commits it.
+    for (let elapsed = 0; elapsed < 5000 && !matches(await title.textContent()); elapsed += 100) {
+      await page.clock.runFor(100);
+    }
+  };
   const initial = await title.textContent();
-  await page.clock.runFor(2200 + 35);
+  await advanceHeadline(value => value !== initial);
   await expect(title).not.toHaveText(initial ?? "");
   await expect(page.getByRole("heading", { level: 1 })).toHaveAccessibleName(arabic ? "كل محادثاتك، في مكان واحد." : "All your conversations. One shared inbox.");
   await page.locator("#product").scrollIntoViewIfNeeded();
@@ -816,11 +822,7 @@ test("landing motion can pause, respects reduced motion and yields to inbox inte
     const labels = arabic ? ["قروبات واتساب", "بوت واتساب", "الإيميل", "إنستقرام", "إكس", "تيك توك", "سلاك"] : ["WhatsApp groups", "WhatsApp bot", "Email", "Instagram", "X", "TikTok", "Slack"];
     await expect(page.locator(".marketing-caret")).toHaveAttribute("data-running", "true");
     for (const [index, label] of labels.entries()) {
-      if (index > 0) {
-        // MarketingHeadline holds the word, deletes it, switches words, then types the next one.
-        const previous = labels[index - 1]!;
-        await page.clock.runFor(2200 + (previous.length + 1) * 35 + label.length * 75);
-      }
+      await advanceHeadline(value => value === label);
       await expect(title).toHaveText(label);
       await expect(title).toHaveAttribute("data-whatsapp", String(index < 2));
       await expect(page.locator(".marketing-type-soon")).toHaveAttribute("data-shown", String(index >= 3));
