@@ -20,7 +20,6 @@ async function downloadText(download:Download){const stream=await download.creat
 // Real publication, calculation, CSV controller and role enforcement have
 // separate API/actual-stack oracles; this is never financial/live authority.
 test('published statement history preserves exact amounts, unknown quantity and stale-account fences',async({page},testInfo)=>{
- test.skip(testInfo.project.name==='tablet-820');
  const errors:string[]=[];page.on('pageerror',error=>errors.push(error.message));
  let statementReads=0,oldRoute:Route|undefined,holdOld=false,initial:Route|undefined,detailRoute:Route|undefined,delayDetail=false;
  let usageModule:Route|undefined;
