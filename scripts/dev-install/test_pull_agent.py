@@ -20,6 +20,7 @@ from unittest.mock import Mock, patch
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import Request
+from urllib.response import addinfourl
 
 
 HERE = Path(__file__).resolve().parent
@@ -129,6 +130,92 @@ class PublicAPI:
 
 
 class RegistryStagingTest(unittest.TestCase):
+    def setUp(self):
+        manifest = json.dumps({"mediaType": "application/vnd.oci.image.manifest.v1+json",
+                               "config": {"digest": PRODUCT_DIGEST}}).encode()
+        self.digest = "sha256:" + sha256(manifest).hexdigest()
+        self.objects = {("manifests", self.digest): manifest}
+        self.referrers = {}
+        bundle_type = "application/vnd.dev.sigstore.bundle.v0.3+json"
+        for predicate in ("https://sigstore.dev/cosign/sign/v1", "https://slsa.dev/provenance/v0.2"):
+            payload = base64.b64encode(json.dumps({"predicateType": predicate}).encode()).decode()
+            blob = json.dumps({"dsseEnvelope": {"payload": payload}}).encode()
+            blob_digest = "sha256:" + sha256(blob).hexdigest()
+            self.objects["blobs", blob_digest] = blob
+            referrer = json.dumps({"artifactType": bundle_type, "subject": {"digest": self.digest},
+                                   "layers": [{"digest": blob_digest}]}).encode()
+            referrer_digest = "sha256:" + sha256(referrer).hexdigest()
+            self.objects["manifests", referrer_digest] = referrer
+            self.referrers[predicate] = {"digest": referrer_digest}
+
+    def stage_fixture(self, *, redirect_host=None):
+        requests = []
+
+        def https_open(_handler, request):
+            requests.append(request)
+            path = urlsplit(request.full_url).path
+            status, headers = 200, {}
+            if path == "/token":
+                body = b'{"token":"fixture"}'
+            else:
+                kind, reference = path.rsplit("/", 2)[-2:]
+                if kind == "referrers":
+                    body = json.dumps({"manifests": list(self.referrers.values())}).encode()
+                elif kind == "blobs" and redirect_host:
+                    status, body = 307, b""
+                    headers["location"] = f"https://{redirect_host}/download/{reference}"
+                else:
+                    body = self.objects["blobs" if kind == "download" else kind, reference]
+            response = addinfourl(io.BytesIO(body), headers, request.full_url, status)
+            response.msg = "fixture"
+            return response
+
+        inventory = json.loads(RAW)
+        for row in inventory["images"].values():
+            row["digest"] = self.digest
+        with tempfile.TemporaryDirectory() as work:
+            path = Path(work) / "images-manifest.json"
+            path.write_text(json.dumps(inventory), encoding="utf-8")
+            with patch.object(stager.urllib.request.HTTPSHandler, "https_open", autospec=True, side_effect=https_open):
+                stager.stage_hosted_bundles(path, {})
+        return requests
+
+    def test_blob_redirects_keep_authorization_only_on_the_registry_host(self):
+        for host, expected in (("ghcr.io", "Bearer fixture"), ("ghcr.io:443", "Bearer fixture"),
+                               ("download.example.test", None), ("ghcr.io:8443", None)):
+            with self.subTest(host=host):
+                requests = self.stage_fixture(redirect_host=host)
+                blob_headers = {req.get_header("Authorization") for req in requests if "/blobs/" in req.full_url}
+                download_headers = {req.get_header("Authorization") for req in requests if "/download/" in req.full_url}
+                self.assertEqual(blob_headers, {"Bearer fixture"})
+                self.assertEqual(download_headers, {expected})
+
+    def test_staging_requires_both_bundles(self):
+        for predicate in list(self.referrers):
+            with self.subTest(missing=predicate), patch.dict(self.referrers):
+                del self.referrers[predicate]
+                with self.assertRaisesRegex(ValueError, "^Signature and provenance bundles required$"):
+                    self.stage_fixture()
+
+    def test_staging_rejects_mismatched_oci_object_digest(self):
+        self.objects["manifests", self.digest] += b"\n"
+        with self.assertRaisesRegex(ValueError, "^OCI object digest mismatch$"):
+            self.stage_fixture()
+
+    def test_oci_response_is_limited_to_one_mib(self):
+        request = Request("https://example.test/v2/portal/blobs/" + self.digest)
+        raw = b"x" * 2**20
+        opener = Mock()
+        reply = Reply(raw)
+        reply.status = 200
+        opener.open.return_value = reply
+        self.assertEqual(stager.registry_bytes(opener, request, "wasalx/portal", {}), raw)
+        reply = Reply(raw + b"x")
+        reply.status = 200
+        opener.open.return_value = reply
+        with self.assertRaisesRegex(ValueError, "^OCI metadata exceeds staging limit$"):
+            stager.registry_bytes(opener, request, "wasalx/portal", {})
+
     def test_redacted_request_errors_identify_http_status_and_read_phase(self):
         request = Request("https://ghcr.io/token?scope=synthetic-private-value",
                           headers={"Authorization": "Bearer fixture-value"})
@@ -307,6 +394,7 @@ class PullTest(unittest.TestCase):
         check_output = subprocess.check_output
 
         def capture(*args, **kwargs):
+            self.assertIsNone(kwargs.get("stderr"))
             return check_output(*args, **(kwargs | {"stderr": subprocess.PIPE}))
 
         with (patch.object(agent, "TOOLS", HERE), patch.object(agent.subprocess, "check_output", side_effect=capture),
@@ -509,8 +597,7 @@ def live():
         config = {"cosign": args.cosign, "trusted_root": args.trust,
                   "trusted_root_sha256": sha256(args.trust.read_bytes()).hexdigest()}
         command, reason = "node scripts/dev-install/pull-verify.mjs", "cannot verify the main publication signatures"
-        # The verifier writes only redacted diagnostics to stderr and JSON refs to stdout.
-        refs = agent.verify(args.manifest, commit, tree, config, stderr=None, staged=True)
+        refs = agent.verify(args.manifest, commit, tree, config, staged=True)
         command, reason = LIVE_COMMAND, "cannot validate the publication's Compose image references"
         compose = agent.compose_refs(api, commit, refs)
         print(f"PR_TOOLING={args.candidate} SIGNED_MAIN_PUBLICATION={commit} PRODUCT={len(refs)} COMPOSE={len(compose)} ANONYMOUS_API_GHCR_SIGSTORE=PASS")

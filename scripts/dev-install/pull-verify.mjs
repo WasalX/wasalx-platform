@@ -10,11 +10,17 @@ import { readHostedInventory, verifyHostedImages } from "../release/installer-ho
 
 const DIGEST = /^[0-9a-f]{64}$/u;
 const run = promisify(execFile);
-const timeout = 30_000;
+
+export function pullCommandTimeout(stage, elapsedMs) {
+  // Leave time to report the failing stage before the pull agent's 300-second watchdog.
+  const remaining = Math.floor(290_000 - elapsedMs);
+  if (remaining <= 0) throw Object.assign(new Error("pull verification deadline expired"), { code: 124 });
+  return Math.min(stage === "staging" ? 240_000 : 30_000, remaining);
+}
 
 function cosignReason(error) {
   if (error.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") return "verification output exceeded the command buffer";
-  if (error.killed) return "verification exceeded the 30-second command deadline";
+  if (error.killed || error.code === 124) return "offline verification deadline expired";
   if (error.code === "ENOENT") return "executable not found";
   if (error.code === "EACCES") return "executable permission denied";
   if (error.signal) return "verification process terminated by a signal";
@@ -22,6 +28,8 @@ function cosignReason(error) {
 }
 
 if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
+  const started = performance.now();
+  const timeoutFor = stage => pullCommandTimeout(stage, performance.now() - started);
   const [hostedImages, candidateSha, candidateTree, cosign, trustedRoot, trustedRootSha256, source] = process.argv.slice(2);
   let command = "node scripts/dev-install/pull-verify.mjs";
   let reason = "cannot load or validate the hosted image inventory";
@@ -43,10 +51,11 @@ if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) 
     if (source !== "--staged") {
       const stager = fileURLToPath(new URL("../release/installer-hosted-bundles.py", import.meta.url));
       try {
-        await run("python3", ["-I", "-B", stager, hostedImages], { timeout: 300_000 });
+        await run("python3", ["-I", "-B", stager, hostedImages], { timeout: timeoutFor("staging"), killSignal: "SIGKILL" });
       } catch (error) {
         command = "python3 -I -B scripts/release/installer-hosted-bundles.py";
-        reason = error.stderr?.match(/^hosted bundle staging reason: ([a-zA-Z0-9 /:._=()-]{1,480})$/mu)?.[1]
+        if (error.killed || error.code === 124) reason = "public manifest and Sigstore bundle staging deadline expired";
+        else reason = error.stderr?.match(/^hosted bundle staging reason: ([a-zA-Z0-9 /:._=()-]{1,480})$/mu)?.[1]
           ?? "cannot acquire the public manifest and Sigstore bundles";
         throw error;
       }
@@ -54,17 +63,17 @@ if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) 
 
     reason = "cannot validate the staged manifest, signature or provenance";
     const { references } = await verifyHostedImages({ ...context, command: async (_tool, args) => {
-      const operation = args[0], started = performance.now();
+      const operation = args[0], commandStarted = performance.now();
       const digest = args[args.indexOf("--digest") + 1];
       try {
-        return (await run(cosign, args, { timeout })).stdout;
+        return (await run(cosign, args, { timeout: timeoutFor("cosign"), killSignal: "SIGKILL" })).stdout;
       } catch (error) {
         command = DIGEST.test(digest) ? `cosign ${operation} sha256:${digest}` : `cosign ${operation}`;
         reason = cosignReason(error);
         throw error;
       } finally {
         if (source === "--staged" && operation === "verify-blob-attestation") {
-          console.error(`cosign-offline operation=${operation} digest=sha256:${digest} elapsed_ms=${Math.ceil(performance.now() - started)}`);
+          console.error(`cosign-offline operation=${operation} digest=sha256:${digest} elapsed_ms=${Math.ceil(performance.now() - commandStarted)}`);
         }
       }
     } }, { verifyOnly: true });
