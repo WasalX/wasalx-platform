@@ -770,7 +770,7 @@ test("large tenant workspaces load only when their route is selected", async () 
   const viewModules = ["BotAutomation", "ClientRouting", "CaseLifecycle", "InboxWorkspace", "SupportTeams", "MailboxAdministration",
     "WorkspaceAccess", "NativeRoutingSync", "MetaCostUsage", "MetaSignup", "MetaNumberRelease", "MetaTemplatePreparation", "MetaLegacyMigration",
     "MetaCoexistence", "MetaBillingDiagnostics", "MetaCustomerPaymentPolicy", "MetaRouting", "MetaSavedAccessActivation",
-    "ConnectionDetail", "Groups", "TenantSettings"];
+    "ConnectionDetail", "Groups", "TenantSettings", "Rules", "Deliveries", "Audit", "TeamAccess"];
   for (const moduleName of viewModules) {
     assert.match(portal, new RegExp(`lazy\\(async \\(\\) => \\([\\s\\S]*import\\(\\"\\./${moduleName}\\"\\)`));
     // The shell and its shared helpers are first-load; a static import there pulls the view back in.
@@ -965,7 +965,7 @@ test("lazy slots in panels, drawers and dialogs use a compact, accurately labell
     read("lib/i18n/messages/en/tenant.ts"),
     read("lib/i18n/messages/ar/tenant.ts"),
   ]);
-  const views = ["Groups", "BotAutomation", "PluginCatalog", "ClientRouting", "InboxWorkspace", "CaseLifecycle", "Settings"];
+  const views = ["Groups", "Rules", "BotAutomation", "PluginCatalog", "ClientRouting", "InboxWorkspace", "CaseLifecycle", "Deliveries", "TeamAccess", "Audit", "Settings"];
   const wrapped = (fallback) => [...source.matchAll(new RegExp(String.raw`<Suspense fallback=\{<${fallback}(?: quiet=\{!metaSectionLoaded\})? />\}>\s*(?:\{[^<]*)?<(\w+)`, "gu"))].map((match) => match[1]);
   assert.deepEqual(wrapped("WorkspaceLoading"), views, "WorkspaceLoading is only for whole views");
   const slots = wrapped("SectionLoading");
@@ -988,7 +988,7 @@ test("lazy slots in panels, drawers and dialogs use a compact, accurately labell
   const skeletons = [readTenantPortalSource(), await read("app/BotAutomation.tsx")].join("\n");
   assert.deepEqual([...skeletons.matchAll(/<\w+ [^>]*role="status"[^>]*>/gu)].map((match) => match[0]).filter((tag) => tag.includes("aria-busy")), [], "a live region is never busy");
   const statuses = [...skeletons.matchAll(/<\w+ className="[^"]*" aria-busy="true"><p className="sr-only" role="status" aria-label=\{t\("([\w.]+)"\)\}>\{t\("\1"\)\}<\/p>/gu)].map((match) => match[1]);
-  assert.deepEqual(statuses, ["tenant.team.loading", "tenant.settings.loading", "tenant.privacy.loading", "tenant.privacy.detail.loading", "bot.flows.loadingDetail", "bot.conversations.loadingExecution", "plugins.loading", "bot.canvas.loading"]);
+  assert.deepEqual(statuses, ["tenant.settings.loading", "tenant.privacy.loading", "tenant.privacy.detail.loading", "tenant.team.loading", "bot.flows.loadingDetail", "bot.conversations.loadingExecution", "plugins.loading", "bot.canvas.loading"]);
   assert.match(skeletons, /className="panel bot-loading"\s+aria-busy="true"\s*>\s*<p className="sr-only" role="status" aria-label=\{t\("bot\.loading"\)\}>/u);
   assert.match(english, /"tenant\.loading\.section": "Loading this section…"/u);
   assert.match(arabic, /"tenant\.loading\.section": "جارٍ تحميل هذا القسم…"/u);
@@ -1001,10 +1001,12 @@ test("decorative arrows follow the reading direction and stay hidden from screen
     read("app/BotAutomation.tsx"),
     read("app/platform/MetaTransitionOperator.tsx"),
   ]);
-  assert.match(styles, /\.reading-arrow\{display:inline-block\}\[dir="rtl"\] \.reading-arrow\{transform:scaleX\(-1\)\}/u);
+  assert.match(styles, /\.reading-arrow\{display:inline-block;vertical-align:-\.125em\}\.reading-arrow svg\{display:block;inline-size:1em;block-size:1em\}\[dir="rtl"\] \.reading-arrow svg\{transform:scaleX\(-1\)\}/u);
   for (const source of sources) {
-    const arrows = source.split("→").length - 1;
+    // Arrows are the icon set's drawn arrow (#326), never a text character that changes with the font.
+    assert.doesNotMatch(source, /[\u2190\u2192]/u, "no text arrows");
+    const arrows = source.split('className="reading-arrow"').length - 1;
     assert.ok(arrows > 0);
-    assert.equal(source.split('<span className="reading-arrow" aria-hidden="true">→</span>').length - 1, arrows, "every arrow is a mirrored, aria-hidden reading-arrow");
+    assert.equal(source.split('<span className="reading-arrow" aria-hidden="true"><MarketingIcon name="arrow" /></span>').length - 1, arrows, "every arrow is a mirrored, aria-hidden drawn reading-arrow");
   }
 });

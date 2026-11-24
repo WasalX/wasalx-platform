@@ -3,7 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { chmod, link, mkdir, mkdtemp, readFile, realpath, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, relative, resolve } from "node:path";
-import { devContainerPreimage, devValueDigest } from "./installer-stack.mjs";
+import { activeServiceNames, devContainerPreimage, devPreservedServices, devValueDigest } from "./installer-stack.mjs";
 import { assertRollbackInventory, observeRollbackState, produceRollbackSafety, readOptionalState, rollbackStatePath } from "./installer-rollback-state.mjs";
 import { hostedIssuer, readHostedInventory } from "./installer-hosted-images.mjs";
 
@@ -22,6 +22,8 @@ export function dockerfileOf(service) {
 }
 export const imageServices = (model, dockerfile) => Object.keys(model.services).filter((name) =>
   model.services[name].build && dockerfileOf(model.services[name]) === dockerfile.replaceAll("\\", "/")).sort();
+export const replacementTargetNames = (model, active, preserveDev) => active.filter((name) =>
+  model.services[name].build && (!preserveDev || !devPreservedServices.includes(name)));
 
 export async function preparePrivateDirectory(context) {
   assert.ok(isAbsolute(context.privateDirectory ?? ""), "private preimage directory required");
@@ -137,7 +139,7 @@ export async function composeServiceHash(context, compose, name, rows) {
   } finally { await rm(directory, { recursive: true, force: true }); }
 }
 
-export async function composePreimage(row, context, image, version, rows) {
+export async function composePreimage(row, context, image, version, rows, { outsideReplacementTargets = false } = {}) {
   const labels = row.Config.Labels;
   const workingDirectory = labels["com.docker.compose.project.working_dir"];
   const files = labels["com.docker.compose.project.config_files"]?.split(",");
@@ -191,17 +193,25 @@ export async function composePreimage(row, context, image, version, rows) {
   for (const input of [...inputs, ...environments, ...serviceEnvironmentFiles]) {
     assert.equal(await fileDigest(input.path), input.sha256, "Compose input changed during capture");
   }
-  if (hash !== labels["com.docker.compose.config-hash"]) {
+  const labelHash = labels["com.docker.compose.config-hash"];
+  let configHashMismatch;
+  if (hash !== labelHash) {
     const families = [...new Set(Object.keys(references).map((field) => field.split(".")[0]))];
-    refuse([`${service}.compose.config-hash`, ...families.map((field) => `${service}.${field}`)], "actual Compose chain changed");
+    if (!outsideReplacementTargets || row.State?.Running !== false || row.HostConfig?.RestartPolicy?.Name !== "no" ||
+        !/^[0-9a-f]{64}$/u.test(labelHash ?? "")) {
+      refuse([`${service}.compose.config-hash`, ...families.map((field) => `${service}.${field}`)], "actual Compose chain changed");
+    }
+    // The hash proves drift. Resolved references identify possible field families only.
+    configHashMismatch = { labelHash, renderedHash: hash, fieldFamilies: families };
   }
   return { workingDirectory, files: inputs, environmentFiles: environments, arguments_, rendered, environment,
-    version, serviceReferences: references, serviceEnvironmentFiles };
+    version, serviceReferences: references, serviceEnvironmentFiles, ...(configHashMismatch && { configHashMismatch }) };
 }
 
 export async function preserveReplacement(context) {
   await mkdir(context.directory, { recursive: true, mode: 0o700 });
   await preparePrivateDirectory(context);
+  const targets = replacementTargetNames(context.model, activeServiceNames(context.model, composeProfiles), context.devPreimagesFile);
   let snapshot;
   try { snapshot = JSON.parse(await readFile(preimagePath(context), "utf8")); }
   catch (error) {
@@ -225,7 +235,7 @@ export async function preserveReplacement(context) {
         rootfsChanges,
         networks: await Promise.all(Object.keys(row.NetworkSettings?.Networks ?? {}).map(async (name) => ({ name,
           inspect: JSON.parse(await context.command("docker", ["network", "inspect", name], context.environment))[0] }))),
-        compose: await composePreimage(row, context, images[0], version, rows) });
+        compose: await composePreimage(row, context, images[0], version, rows, { outsideReplacementTargets: !targets.includes(service) }) });
     }
     assert.deepEqual((await inspectOwned(context)).map(devContainerPreimage), rows.map(devContainerPreimage), "container census changed during capture");
     const buildTags = [];
@@ -241,6 +251,7 @@ export async function preserveReplacement(context) {
     await atomicExclusiveJson(preimagePath(context), snapshot);
   }
   await assertSnapshotHeader(context, snapshot);
+  assertMismatchContainersUntargeted(snapshot, targets);
   await assertRetainedPreimage(context, snapshot);
   for (const container of snapshot.containers) {
     assert.equal(container.id, container.inspect.Id); assert.equal(container.image, container.inspect.Image);
@@ -273,7 +284,7 @@ async function assertSnapshotHeader(context, snapshot) {
   assert.deepEqual(snapshot.host, await dockerIdentity(context), "Docker host changed");
 }
 
-export async function readBoundArtifacts(context, { allowPartial = false } = {}) {
+export async function readBoundArtifacts(context, { allowPartial = false, replacementTargets } = {}) {
   const manifest = JSON.parse(await readFile(artifactPath(context), "utf8"));
   const hosted = context.hostedImages ? await readHostedInventory(context) : null;
   assert.equal(manifest.kind, hosted ? "compose-hosted-image-admission" : "compose-candidate-artifacts"); assert.equal(manifest.schemaVersion, 1);
@@ -309,6 +320,7 @@ export async function readBoundArtifacts(context, { allowPartial = false } = {})
   const snapshot = JSON.parse(bytes);
   assert.equal(manifest.preimage.transactionId, snapshot.transactionId);
   await assertSnapshotHeader(context, snapshot);
+  if (replacementTargets) assertMismatchContainersUntargeted(snapshot, replacementTargets);
   return { manifest, snapshot };
 }
 
@@ -318,6 +330,7 @@ export async function assertRetainedPreimage(context, snapshot) {
   for (const old of snapshot.containers) {
     const row = rows.find(({ Id }) => Id === old.id);
     assert.ok(row, "original container preimage changed"); assert.equal(row.Image, old.image);
+    if (old.compose.configHashMismatch && row.State?.Running !== false) refuse(recreateRefusals(old), "capture-only container is no longer stopped");
     for (const key of ["Name", "Config", "HostConfig", "Mounts"]) {
       let current = row[key], retained = old.inspect[key];
       if (key === "Mounts") {
@@ -372,6 +385,11 @@ function refuse(fields, message = "exact rollback refused") {
   throw error;
 }
 
+function assertMismatchContainersUntargeted(snapshot, targets) {
+  const target = snapshot.containers.find((old) => old.compose.configHashMismatch && targets.includes(old.service));
+  if (target) refuse(recreateRefusals(target), "capture-only container is a replacement target");
+}
+
 function assertContainerFields(old, row, resolved) {
   if (!row) refuse([`${old.service}.container`]);
   for (const key of ["Name", "Config", "HostConfig", "Mounts"]) {
@@ -395,6 +413,10 @@ function assertContainerFields(old, row, resolved) {
 }
 
 async function assertRestoredContainer(context, old, row, rows) {
+  if (old.compose.configHashMismatch) {
+    if (row?.Id !== old.id) refuse(recreateRefusals(old));
+    return assertContainerFields(old, row);
+  }
   const symbolic = old.compose.rendered.services[old.service];
   const { references } = resolveComposeServiceReferences(symbolic, rows, context.project);
   if (row?.Id === old.id) {
@@ -452,6 +474,8 @@ async function assertPreservedNetworks(context, old, row) {
 }
 
 export function recreateRefusals(old) {
+  if (old.compose.configHashMismatch) return [`${old.service}.compose.config-hash`,
+    ...old.compose.configHashMismatch.fieldFamilies.map((field) => `${old.service}.${field}`)];
   const fields = [], service = old.compose.rendered?.services?.[old.service];
   if (!service) return [`${old.service}.compose.rendered`];
   if (old.rootfsChanges !== "") fields.push(`${old.service}.RootFS`);
@@ -505,6 +529,7 @@ export async function rollbackReplacement(context) {
   if (!effects) await assertRetainedPreimage(context, snapshot);
   const targets = effects ? postimage.targets : snapshot.containers.map(({ service }) => service);
   assert.ok(Array.isArray(targets) && targets.every((name) => snapshot.containers.some((old) => old.service === name)), "unowned rollback target");
+  if (effects) assertMismatchContainersUntargeted(snapshot, targets);
   const recreate = [], restart = [], references = new Map(snapshot.buildTags.map((entry) => [entry.reference, entry.image]));
   for (const old of snapshot.containers) {
     const row = rows.find((entry) => entry.Config.Labels["com.docker.compose.service"] === old.service);

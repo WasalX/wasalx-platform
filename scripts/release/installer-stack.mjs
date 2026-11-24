@@ -365,6 +365,8 @@ export function assertSmokePorts(compose) {
   }
 }
 
+class FreshHoldStateError extends Error {}
+
 export function projectStack({ compose, containers, imageInspections, catalog, candidateImages, candidateSha, candidateTree, imageSource, activeServices: selectedServices, repositoryRoot = root, fullCatalog = false, devPreimages = null, devFreshHeld = false }) {
   assert.match(candidateSha, shaPattern);
   assert.match(candidateTree, shaPattern);
@@ -414,6 +416,10 @@ export function projectStack({ compose, containers, imageInspections, catalog, c
     const definition = services[container.service];
     assert.ok(definition, `unknown Compose service: ${container.service}`);
     assert.ok(container.Config && container.State, `Docker inspect failed for ${container.service}`);
+    const isHeld = held.has(container.service);
+    if (freshHold && isHeld && container.State.Status !== "created") {
+      throw new FreshHoldStateError(`${container.service} fresh hold must be in the created state`);
+    }
     const preservedOld = preserved.has(container.service);
     const configuredImageMatches = container.Config.Image === definition.image ||
       (container.Config.Image === container.Image && digestPattern.test(container.Image));
@@ -421,13 +427,13 @@ export function projectStack({ compose, containers, imageInspections, catalog, c
       devPreimages.services.find(({ service }) => service === container.service), `${container.service} preserved state changed`);
     else assert.ok(configuredImageMatches, `${container.service} is running another configured image`);
     const before = devPreimages?.services.find(({ service }) => service === container.service);
-    assert.equal(container.RestartCount, held.has(container.service) && container.Id === before?.id ? before.restartCount : 0,
+    assert.equal(container.RestartCount, isHeld && container.Id === before?.id ? before.restartCount : 0,
       `${container.service} restart history changed`);
     const oneShot = oneShotServices.includes(container.service);
     const configuredRestartPolicy = definition.restart ?? "no";
     const restartPolicy = container.HostConfig?.RestartPolicy?.Name || "no";
     assert.equal(restartPolicy, configuredRestartPolicy, `${container.service} runtime restart policy changed`);
-    if (!held.has(container.service) && ["waha-gows", "waha-noweb"].includes(container.service)) {
+    if (!isHeld && ["waha-gows", "waha-noweb"].includes(container.service)) {
       assert.equal(String(environmentObject(definition.environment).WAHA_WORKER_RESTART_SESSIONS ?? "").toLowerCase(), "true", `${container.service} must resume retained sessions after restart`);
       assert.equal(String(environmentObject(container.Config.Env).WAHA_WORKER_RESTART_SESSIONS ?? "").toLowerCase(), "true", `${container.service} runtime must resume retained sessions after restart`);
     }
@@ -436,9 +442,9 @@ export function projectStack({ compose, containers, imageInspections, catalog, c
     if (definition.healthcheck && definition.healthcheck.disable !== true) {
       assert.equal(healthcheckRequired, true, `${container.service} runtime healthcheck is disabled`);
     }
-    if (held.has(container.service)) {
+    if (isHeld) {
+      if (!freshHold) assert.ok(["created", "exited"].includes(container.State.Status), `${container.service} hold was started`);
       assert.equal(container.State.Running, false); assert.equal(container.State.Pid, 0);
-      assert.ok(["created", "exited"].includes(container.State.Status), `${container.service} hold was started`);
       assert.equal(container.State.Restarting ?? false, false);
       assert.equal(container.State.Paused, false); assert.equal(container.State.Dead, false);
       if (devFreshHeld && definition.read_only) assert.equal(container.HostConfig.ReadonlyRootfs, true);
@@ -483,7 +489,7 @@ export function projectStack({ compose, containers, imageInspections, catalog, c
       service: container.service,
       ...(devPreimages ? { installation: preservedOld ? "PRESERVED_NOT_INSTALLED" : "CANDIDATE_INSTALLED" } : {}),
       state: container.State.Status,
-      health: oneShot || held.has(container.service) ? null : container.State.Health?.Status ?? null,
+      health: oneShot || isHeld ? null : container.State.Health?.Status ?? null,
       image: preservedOld ? container.Config.Image : definition.image,
       imageId: image.Id,
       restartCount: container.RestartCount,
@@ -764,8 +770,9 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   verifyStack().catch((error) => {
     // Parser and subprocess errors can contain private captured input.
     const variable = ["WASALX_INSTALL_EXPECTED_HOSTNAME", "WASALX_DEV_REVIEW_ORIGIN_SUFFIX"].find((name) => error.message?.includes(name));
-    const reason = [devWebhookPreflightOnly, devGuestOnly, devSimulatorSmokeOnly].find(message => error.message === message)
-      ?? (variable ? `check ${variable}` : "");
+    const reason = error instanceof FreshHoldStateError ? error.message
+      : [devWebhookPreflightOnly, devGuestOnly, devSimulatorSmokeOnly].find(message => error.message === message)
+        ?? (variable ? `check ${variable}` : "");
     process.stderr.write(`exact stack verification failed${reason ? `: ${reason}` : ""}\n`);
     process.exitCode = 1;
   });

@@ -13,7 +13,9 @@ directory=$(mktemp -d "$RUNNER_TEMP/wasalx-release.XXXXXX")
 download_main_image_manifest "$commit" "$directory"
 manifest="$directory/images-manifest.json"
 
-echo 'c956e5dfcac53d52bcf058360d579472f0c1d2d9b69f55209e256fe7783f4c74  '"$(command -v cosign)" | sha256sum --check --strict
+sha=$(jq -er '.linuxAmd64Sha256' scripts/release/cosign-pin.json)
+binary=$(command -v cosign)
+printf '%s  %s\n' "$sha" "$binary" | sha256sum --check --strict
 python3 scripts/release/images-by-digest.py verify-publication --manifest "$manifest"
 
 jq -er '.images[].pullReference' "$manifest" | while IFS= read -r ref; do

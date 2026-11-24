@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { readFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { after, before, test } from "node:test";
+import { brotliCompressSync, constants, gzipSync } from "node:zlib";
 
 let port;
 let server;
@@ -121,4 +123,22 @@ test("legacy tenant deep links redirect to the route-backed console", async () =
   const response = await fetch(`${origin()}/?view=connections&connection=connection-1`, { redirect: "manual" });
   assert.equal(response.status, 307);
   assert.equal(response.headers.get("location"), "/app?view=connections&connection=connection-1");
+});
+
+test("reports /app first-load JavaScript as DESIGN.md Speed measures it (#183)", async (t) => {
+  const html = await (await render()).text();
+  const dist = new URL("../dist/", import.meta.url);
+  const manifest = (await import(new URL("server/__vite_rsc_assets_manifest.js", dist).href)).default;
+  // Client references /app renders are the manifest ids present in its server-rendered payload.
+  const refs = Object.entries(manifest.clientReferenceDeps).filter(([id]) => html.includes(id));
+  assert.ok(refs.some(([, deps]) => /\/WasalXApp-[^/]*\.js$/u.test(deps.js[0])), "the /app shell reference is rendered");
+  const files = new Set([...manifest.clientEntryDeps.js, ...refs.flatMap(([, deps]) => deps.js)]);
+  let raw = 0, gzip = 0, brotli = 0;
+  for (const file of files) {
+    const body = await readFile(new URL(`client${file}`, dist));
+    raw += body.length;
+    gzip += gzipSync(body, { level: 9 }).length;
+    brotli += brotliCompressSync(body, { params: { [constants.BROTLI_PARAM_QUALITY]: 11 } }).length;
+  }
+  t.diagnostic(`/app first-load JS: ${JSON.stringify({ references: refs.length, files: files.size, raw, gzip, brotli })}`);
 });

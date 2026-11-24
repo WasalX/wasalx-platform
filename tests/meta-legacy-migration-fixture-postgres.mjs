@@ -168,9 +168,9 @@ export async function createMetaLegacyMigrationFixture(options,{runtimeLifetimeM
   const run=async(work,opts={})=>{try{return await invoke(()=>executeMetaLegacyMigration(work.job,work.lease,f.appId,opts.storeOverride??store,
    {resolve:async reference=>{assert.ok(secretValues.has(reference));return secretValues.get(reference);}},{readTransport:async()=>({transportBindingSha256:options.runtimeEvidence.transportBindingSha256}),readRuntime:async()=>runtimeCandidate}),opts);
   }catch(error){await store.failOperation(work.job,work.lease).catch(()=>{});throw error;}};
-  const shortTargetFunding=async(lifetimeMs=10000)=>{
+  const shortTargetFunding=async(lifetimeMs=60_000)=>{
    // A real admitted diagnostic produces an already-aged same-facts receipt.
-   // Only time passes later; neither immutable receipt nor reserved account is edited.
+   // The fixture clock advances later without editing the receipt or reserved account.
    await f.controller.requestMetaBillingDiagnostic(f.request,f.targetConnectionId,randomUUID(),{});
    const work=await f.claim(),funding=metaAccountFundingProof(f.targetProviderId,
     {id:f.targetProviderId,owner_business:{id:f.businessId}},

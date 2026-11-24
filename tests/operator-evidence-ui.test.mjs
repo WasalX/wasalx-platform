@@ -4,7 +4,7 @@ import test from "node:test";
 
 import { getBoundaryMessages } from "../lib/i18n/messages/boundary.ts";
 import { arabicMessages, englishMessages } from "../lib/i18n/messages/index.ts";
-import { tenantPortalFiles } from "./helpers/tenant-portal-source.mjs";
+import { readTenantPortalSource, tenantPortalFiles } from "./helpers/tenant-portal-source.mjs";
 
 const read = (path) => readFile(new URL(`../${path}`, import.meta.url), "utf8");
 
@@ -44,7 +44,7 @@ test("automation and tenant screens show no raw flow definition or developer ter
 });
 
 test("audit filtering searches only the role-safe presentation already shown on screen", async () => {
-  const source = await read("app/WasalXApp.tsx");
+  const source = readTenantPortalSource();
   assert.match(source, /const filteredEntries = normalizedQuery\s*\? entries\.filter\(\(row\) => Object\.values\(presentation\(row\)\)/u);
   assert.match(source, /<Toolbar query=\{query\} setQuery=\{setQuery\} placeholder=\{t\("tenant\.audit\.search"\)\}>/u);
   assert.match(source, /filteredEntries\.map\(\(row\) =>/u);
