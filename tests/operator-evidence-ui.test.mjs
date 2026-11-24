@@ -14,6 +14,13 @@ test("workflow schema inspection is read-only and restricted to flow administrat
   assert.doesNotMatch(source, /bot\.flow\.schema\.[^\n]+<textarea/u);
 });
 
+test("the saved routing configuration is shown only to routing writers", async () => {
+  const source = await read("app/ClientRouting.tsx");
+  // Writers get the closed disclosure; read-only roles get nothing in its place.
+  assert.match(source, /\{canWrite \? \(\s*<details className="routing-raw">\s*<summary>\{t\("routing\.detail\.raw"\)\}<\/summary>\s*<pre>\{JSON\.stringify\(definition, null, 2\)\}<\/pre>\s*<\/details>\s*\) : null\}/u);
+  assert.equal(source.match(/JSON\.stringify\(definition, null, 2\)/gu)?.length, 1);
+});
+
 test("automation and tenant screens show no raw flow definition or developer terms by default", async () => {
   const source = await read("app/BotAutomation.tsx");
   // The only raw definition sits in a disclosure that starts closed.
