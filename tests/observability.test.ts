@@ -117,6 +117,8 @@ test("structured logs redact phone numbers embedded in text with common separato
 test("structured logs redact phones after a hyphen and preserve UUIDs and dates in text", () => {
   const preserved = "10000000-dead-4000-8abc-000000000001 on 2026-11-24";
   assert.equal(redactLogValue(`ID-(202) 555-0102; ${preserved}`), `ID-[PHONE]; ${preserved}`);
+  const labelledDates = "date-24-11-2026; date-2026-11-24";
+  assert.equal(redactLogValue(labelledDates), labelledDates);
 });
 
 test("structured logs drop split localized phone fragments after a hyphen", () => {
