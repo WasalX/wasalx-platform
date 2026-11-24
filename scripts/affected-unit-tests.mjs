@@ -67,9 +67,9 @@ export function selectUnitFiles(unitFiles, { event = process.env.GITHUB_EVENT_NA
     const opaque = new Set();
     for (const file of sources) {
       if (!tracked.has(file) || !lstatSync(join(cwd, file)).isFile()) return full("tracked module unavailable");
-      const module = importsFrom(file, readFileSync(join(cwd, file), "utf8"));
-      if (module.opaque) opaque.add(file);
-      for (const specifier of module.imports) {
+      const parsed = importsFrom(file, readFileSync(join(cwd, file), "utf8"));
+      if (parsed.opaque) opaque.add(file);
+      for (const specifier of parsed.imports) {
         if (builtins.has(specifier?.replace(/^node:/u, ""))) continue;
         const dependency = specifier?.startsWith(".") && posix.join(posix.dirname(file), specifier);
         if (!dependency || !moduleFile.test(dependency) || !tracked.has(dependency)) {
