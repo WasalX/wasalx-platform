@@ -1,4 +1,5 @@
 import { Injectable } from "@nestjs/common";
+import { recordStructuredLog, safeRequestId } from "@wasalx/observability";
 import { metaThreadControlBody, type MetaRoutingRole } from "@wasalx/core/meta-routing";
 import { parseWahaTestRecipientAllowlist } from "@wasalx/core/waha-test-recipient-scope";
 import { metaTestSendAllowed } from "@wasalx/core/meta-test-recipient-scope";
@@ -231,8 +232,11 @@ export class HttpMetaGroupsClient implements MetaGroupsControlClient {
 
   private assertTestScope(body: unknown = { recipient_type: "group" }) {
     if (metaTestSendAllowed(this.testRecipients, body)) return;
-    console.warn("Meta test recipient scope refused outbound request");
-    throw new MetaGraphClientError("META_TEST_RECIPIENT_NOT_ALLOWED", "The recipient is outside the configured test scope.", false, undefined, true);
+    const errorCode = "META_TEST_RECIPIENT_NOT_ALLOWED";
+    recordStructuredLog("warn", "meta.test_recipient_scope_refused", {
+      request_id: safeRequestId(), component: "meta-groups-client", error_code: errorCode,
+    });
+    throw new MetaGraphClientError(errorCode, "The recipient is outside the configured test scope.", false, undefined, true);
   }
 
   private async request(
