@@ -50,6 +50,12 @@ typography:
     fontFamily: "Geist Mono, ui-monospace, Consolas, monospace"
     fontSize: "0.75rem"
     fontWeight: 400
+  display:
+    fontFamily: "Geist Sans, ui-sans-serif, system-ui, sans-serif"
+    fontSize: "3.75rem"
+    fontWeight: 750
+    lineHeight: 1.1
+    letterSpacing: "-0.04em"
   arabic:
     fontFamily: "Noto Sans Arabic, sans-serif"
 rounded:
@@ -126,11 +132,11 @@ One neutral zinc ramp, one violet accent, three status colors and two provider m
 
 ### Status and provider
 - **Success / Warning / Danger**: light `#167d53 / #a45e09 / #c64343`; dark `#45c58a / #f3ad4e / #f06b6b`. Status color is always paired with a word or an icon, never color alone. **Danger solid** (`--wx-color-danger-solid`, light `#7b2a2a`, dark `#954242`) is the fill behind white text on a destructive button.
-- **Provider marks**: WhatsApp groups green (`--wx-color-provider-waha`: `#16855a` light, `#22a06b` dark) and Meta blue (`--wx-color-provider-meta`, `#1769e0`). Use them only to identify a channel.
+- **Provider marks**: WhatsApp groups green (`--wx-color-provider-waha`: `#16855a` light, `#22a06b` dark) and Meta blue (`--wx-color-provider-meta`, `#1769e0`). Use them only to identify a channel; the public pages' WhatsApp icon uses the WhatsApp groups green.
 
 ### Named Rules
 **The One Accent Rule.** Violet is the only hue used for interaction. Any other color means status or provider.
-**The Token-Only Rule.** New code uses `var(--wx-color-*)` (or the legacy `--bg/--surface/--text/...` aliases). No hex, `rgb()` or named color outside `tokens.css`; tints are `color-mix()` of a token. `tests/design-system-governance.test.mjs` enforces this for `primitives.css` and `globals.css`.
+**The Token-Only Rule.** New code uses `var(--wx-color-*)` (or the legacy `--bg/--surface/--text/...` aliases). No hex, `rgb()` or named color outside `tokens.css`; tints are `color-mix()` of a token. `tests/design-system-governance.test.mjs` enforces this for `primitives.css`, `globals.css` and `marketing.css`.
 **The AA Rule.** Text and solid-action pairs meet 4.5:1 in both themes; the governance test checks it.
 
 ## Typography
@@ -144,9 +150,10 @@ One neutral zinc ramp, one violet accent, three status colors and two provider m
 - **Title** (650, 14-16 px, -0.015em): panel and section heads.
 - **Body** (400, 13-14 px, line height 1.43; 1.6 for prose, max 45-65ch).
 - **Label / table** (550, 12 px): table headers, badges, field labels, buttons.
+- **Display** (750, `--wx-font-size-display` 60 px, -0.04em): the public-page hero only, fluid from 32 px.
 - **Mono** (12 px): only for values an operator may copy (codes, references). Never for raw ids or internal names.
 
-**The Scale Rule.** Use only the 7 size tokens; the governance test rejects a raw `px`/`rem` font size in `globals.css`.
+**The Scale Rule.** Use only the size tokens (the 7 steps, plus display for the public hero). A public heading may be fluid: `clamp(<token>, <token> + <n>vw, <token>)`. The governance test rejects any raw `px`/`rem` in a font size in `globals.css` and `marketing.css`, also inside `clamp()`.
 
 ## Layout
 
@@ -158,14 +165,14 @@ One neutral zinc ramp, one violet accent, three status colors and two provider m
 
 ## Elevation & Depth
 
-Flat with tonal layering: page → surface → raised → selected, separated by 1 px borders. Only these two shadows give elevation; the governance test enforces this for `globals.css`. Rings without blur (`0 0 0 <width> <token color>`) are allowed for focus, status halos and 1 px edges:
+Flat with tonal layering: page → surface → raised → selected, separated by 1 px borders. Only these two shadows give elevation; the governance test enforces this for `globals.css` and `marketing.css`. Rings without blur (`0 0 0 <width> <token color>`) are allowed for focus, status halos and 1 px edges:
 - **Control** (`0 1px 1px var(--wx-color-control-shadow)`): the resting button.
-- **Dialog** (`0 1.5rem 5rem var(--wx-color-shadow)`): dialogs and drawers only, over `--wx-color-overlay`.
+- **Dialog** (`0 1.5rem 5rem var(--wx-color-shadow)`): dialogs and drawers over `--wx-color-overlay`, and the public pages' inbox showcase window.
 In forced-colors mode, dialogs drop the shadow and use `CanvasText` borders.
 
 ## Shapes
 
-Three radii: control 6 px, panel 8 px, dialog 12 px (also the pill radius of status badges). Borders are 1 px; `border-strong` is for controls. Radii in `globals.css` use only these tokens (plus `0` and `50%` for circles). No thick one-side accent borders or inset side bars (detector `side-tab`); a selected row uses a full 1 px accent ring. The governance test checks both.
+Three radii: control 6 px, panel 8 px, dialog 12 px (also the pill radius of status badges). Borders are 1 px; `border-strong` is for controls. Radii in `globals.css` and `marketing.css` use only these tokens (plus `0` and `50%` for circles). No thick one-side accent borders or inset side bars (detector `side-tab`); a selected row uses a full 1 px accent ring. The governance test checks both.
 
 ## Components
 
@@ -173,7 +180,7 @@ The target set is the primitives in `app/design-system/primitives.tsx` and `prim
 
 - **Button** (`Button` / `.wx-button`): 36 px high, 12 px/550, control radius. Variants: `secondary` (the default, raised), `primary` (solid violet), `danger` (danger text plus a tinted border). It has a loading spinner, `disabled` at 0.56 opacity, and focus as a 2 px violet `outline` with a 2 px offset. **Drift:** legacy `.button` is 34 px high, and legacy `.button.primary` is inverted text-on-background (near-black in light, white in dark), not violet. Follow the primitive.
 - **Status badge** (`StatusBadge` / `.wx-status`): pill, dot plus label, tones neutral/success/warning/danger.
-- **Operational state** (`OperationalState`): one panel for loading (skeleton), empty, partial, fatal and recovery states, with a title, one plain sentence and at most one action. Every data view must have all of these states. While a lazy part of a panel, drawer or dialog loads, it shows the compact `SectionLoading` state ("Loading this section…"); `WorkspaceLoading` is only for whole views.
+- **Operational state** (`OperationalState`): one panel for loading (skeleton), empty, partial, fatal and recovery states, with a title, one plain sentence and at most one action. Every data view must have all of these states. While a lazy part of a panel, drawer or dialog loads, it shows the compact `SectionLoading` state ("Loading this section…"); `WorkspaceLoading` is only for whole views. Both are a plain `role="status"` region without `aria-busy`, and a slot that always loads beside another uses `quiet` so the text is announced once.
 - **Data panel** (`DataPanel`): bordered panel with a header row and a table; sparse or dense density.
 - **Dialog** (`ModalDialog.tsx`): at most 520 px, dialog radius, dialog shadow, scroll inside, focus trapped, Escape closes.
 - **Toast**: bottom, inline-end, inverted colors, at most 520 px.
@@ -183,6 +190,7 @@ The target set is the primitives in `app/design-system/primitives.tsx` and `prim
 
 - **Do** write all copy through `lib/i18n/messages/{en,ar}`; both catalogues keep the same keys (enforced by the `DictionaryFor` type and `tests/i18n-foundation.test.mjs`).
 - **Do** write operator language: what happened and what to do next. **Don't** show internal or provider names (Zammad, WAHA, GOWS, Keycloak), raw ids, raw JSON, stack traces, HTTP codes or test words (#186).
+- **Do** name a provider on a staff screen (the platform console) only where it labels that provider's figure, such as its capacity or usage counter. **Don't** name internal components there either: no control API, database identities or worker internals (#287).
 - **Do** keep a visible keyboard focus on every interactive element in both themes and in forced colors. **Don't** remove an `outline` without an equivalent that survives forced colors.
 - **Do** keep touch targets at least 44 px on coarse pointers: `@media (any-pointer: coarse)` sets a 44 px minimum on buttons, inputs, selects and text areas; keep that for new controls.
 - **Do** respect `prefers-reduced-motion` (durations drop to 0, spinners and skeletons stop). Motion is 120-200 ms with the enter/exit eases.

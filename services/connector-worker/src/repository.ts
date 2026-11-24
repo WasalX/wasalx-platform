@@ -405,8 +405,8 @@ export class OutboxRepository{
       if ((await client.query<{ active: boolean }>(
         "SELECT app.lock_current_active_tenant_for_event_admission() AS active",
       )).rows[0]?.active !== true) return;
-      const source = (await client.query<{ id: string; messageId: string }>(`WITH latest AS MATERIALIZED (
-        SELECT message.id, message.external_message_id AS "messageId"
+      const source = (await client.query<{ id: string; messageId: string; canType: boolean }>(`WITH latest AS MATERIALIZED (
+        SELECT message.id, message.external_message_id AS "messageId", delivery.state='SENDING' AS "canType"
         FROM delivery_outbox delivery
         JOIN connections connection ON connection.tenant_id=delivery.tenant_id AND connection.id=delivery.connection_id
         JOIN message_links link ON link.tenant_id=delivery.tenant_id AND link.connection_id=delivery.connection_id
@@ -426,17 +426,19 @@ export class OutboxRepository{
           AND message.created_at<=delivery.created_at AND link.created_at<=delivery.created_at
           AND NOT message.from_me AND NOT message.from_api AND message.provider_metadata->'direct'='true'::jsonb
           AND message.provider_metadata->>'input_type'<>'reaction' AND event.status='PROCESSED'
-          AND NOT EXISTS (SELECT 1 FROM privacy_job_targets target WHERE target.tenant_id=message.tenant_id
-            AND target.target_type='NORMALIZED_MESSAGE' AND target.target_id=message.id::text
-            AND target.state IN ('PENDING','EXTERNAL_COMPLETE','COMPLETE'))
           AND (connection.provider='WAHA' OR event.meta_direct_asset=$5::jsonb)
         ORDER BY message.provider_timestamp DESC, message.created_at DESC, message.id DESC LIMIT 1
+      ), eligible AS (
+        SELECT latest.* FROM latest
+        WHERE NOT EXISTS (SELECT 1 FROM privacy_job_targets target WHERE target.tenant_id=$1
+          AND target.target_type='NORMALIZED_MESSAGE' AND target.target_id=latest.id::text
+          AND target.state IN ('PENDING','EXTERNAL_COMPLETE','COMPLETE'))
       )
       ${sourceId
-        ? 'SELECT id, "messageId" FROM latest WHERE id=$6'
+        ? 'SELECT id, "messageId", "canType" FROM eligible WHERE id=$6'
         : `UPDATE normalized_messages message SET agent_reply_signal_claimed_at=clock_timestamp()
-            FROM latest WHERE message.tenant_id=$1 AND message.id=latest.id AND message.agent_reply_signal_claimed_at IS NULL
-            RETURNING latest.id, latest."messageId"`}`,
+            FROM eligible WHERE message.tenant_id=$1 AND message.id=eligible.id AND message.agent_reply_signal_claimed_at IS NULL
+            RETURNING eligible.id, eligible."messageId", eligible."canType"`}`,
       [job.tenantId, job.id, leaseId, job.attempts, job.metaCredentialContext ? JSON.stringify({
         providerSessionId: job.metaCredentialContext.providerSessionId,
         phoneNumberId: job.metaCredentialContext.phoneNumberId,

@@ -34,13 +34,15 @@ class InboundProcessor extends ProductionInboundProcessor {
 }
 const wahaAssignment={providerBaseUrl:"http://waha-gows.internal:3000/",wahaWorkerId:"30000000-0000-4000-8000-000000000001",wahaAssignmentFencingToken:7,wahaAssignmentLeaseExpiresAt:"2026-08-09T23:59:59.000Z"};
 
-test("agent reply completes during a read timeout, with bounded signal backoff and inbound deduplication", async t => {
-  const chatId = "12025550120@c.us";
-  const inbound = { id: "inbound-link", messageId: `false_${chatId}_3EB0965B123D06E0B70741` };
-  const delivery = { id: "reply-1", tenantId: "tenant-a", connectionId: "c1", groupId: chatId,
+const agentReplyChat = "12025550120@c.us";
+const agentReplyInbound = { id: "inbound-link", messageId: `false_${agentReplyChat}_3EB0965B123D06E0B70741`, canType: true };
+const agentReplyDelivery = { id: "reply-1", tenantId: "tenant-a", connectionId: "c1", groupId: agentReplyChat,
     botConversationId: "conversation-1", recipientType: "DIRECT", directOrigin: "HUMAN", ticketId: "42", articleId: "9",
     text: "Synthetic reply", contentType: "text/plain", idempotencyKey: "reply-1", attempts: 1,
     provider: "waha", ...wahaAssignment, sessionId: "s1", connectionSecretReference: "secret://connection" };
+
+test("agent reply completes during a read timeout, with bounded signal backoff and inbound deduplication", async t => {
+  const delivery = agentReplyDelivery, inbound = agentReplyInbound;
   const completed = Promise.withResolvers(), firstRead = Promise.withResolvers();
   const wakeups = [Promise.withResolvers(), Promise.withResolvers()];
   const backoffs = [];
@@ -59,7 +61,10 @@ test("agent reply completes during a read timeout, with bounded signal backoff a
     return controller.signal;
   });
   t.mock.method(globalThis, "fetch", async (url, init) => {
-    if (url.pathname === "/api/sendText") return Response.json({ id: `sent-${++replies}` });
+    if (url.pathname === "/api/sendText") {
+      await firstRead.promise;
+      return Response.json({ id: `sent-${++replies}` });
+    }
     if (url.pathname === "/api/startTyping") {
       typing++;
       return new Response(null, { status: 501 });
@@ -98,6 +103,24 @@ test("agent reply completes during a read timeout, with bounded signal backoff a
   assert.deepEqual([reads, typing], [3, 1]);
   await processor.drainTenant(delivery.tenantId);
   assert.deepEqual([replies, reads, typing], [2, 3, 1]);
+});
+
+test("when the reply completes first the worker only sends a read receipt", async t => {
+  const completed = Promise.withResolvers();
+  const requests = [];
+  t.mock.method(globalThis, "fetch", async url => {
+    requests.push(url.pathname);
+    return url.pathname === "/api/sendText" ? Response.json({ id: "sent" }) : new Response(null, { status: 201 });
+  });
+  const repository = {
+    claimBotActions: async () => [], claimDeliveries: async () => [agentReplyDelivery], beginSend: async () => true,
+    // Even a SENDING snapshot can be stale by the time its result reaches the dispatcher.
+    admitAgentReplySignal: async () => { await completed.promise; return agentReplyInbound; },
+    complete: async () => completed.resolve(), claimStatuses: async () => [],
+  };
+  const processor = new DeliveryProcessor(repository, { resolve: async () => ({ apiKey: "synthetic" }) }, { metaGraphVersion: "v24.0" });
+  await processor.drainTenant(agentReplyDelivery.tenantId);
+  assert.deepEqual(requests, ["/api/sendText", "/api/sendSeen"]);
 });
 test("tenant drain jobs require a signed, scoped, matching tenant context",async()=>{const now=Math.floor(Date.now()/1000);const token=await signServiceJwt({iss:"wasalx-control",aud:"wasalx-connector-worker",sub:"scheduler",tenant_id:"tenant-a",instance_id:"scheduler-1",scope:"delivery:drain",iat:now,exp:now+120,jti:crypto.randomUUID()},secret);assert.equal((await verifyDrainJob({tenantId:"tenant-a",token},secret)).tenantId,"tenant-a");await assert.rejects(()=>verifyDrainJob({tenantId:"tenant-b",token},secret),ServiceAuthenticationError);const inboxToken=await signServiceJwt({iss:"wasalx-control",aud:"wasalx-connector-worker",sub:"scheduler",tenant_id:"tenant-a",instance_id:"scheduler-1",scope:"inbox:drain",iat:now,exp:now+120,jti:crypto.randomUUID()},secret);assert.equal((await verifyDrainJob({tenantId:"tenant-a",token:inboxToken},secret,"inbox:drain")).tenantId,"tenant-a");await assert.rejects(()=>verifyDrainJob({tenantId:"tenant-a",token:inboxToken},secret),ServiceAuthenticationError)});
 

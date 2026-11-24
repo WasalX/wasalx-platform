@@ -123,7 +123,7 @@ export type AgentReplySignalInput = Pick<SendMessage, "connectionId" | "groupId"
 };
 export type AgentReplySignal = {
   kind: "read" | "typing" | "read-and-typing";
-  send(signal: AbortSignal): Promise<"sent" | "unsupported">;
+  send(signal: AbortSignal, canType: () => boolean): Promise<"sent" | "read-only" | "skipped" | "unsupported">;
 };
 
 export type ProviderGroupParticipant = { id:string; normalizedPhone?:string; displayName?:string };

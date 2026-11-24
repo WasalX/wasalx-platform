@@ -647,7 +647,9 @@ export class WahaAdapter implements MessagingProviderAdapter {
     };
     return [
       { kind: "read", send: signal => post("/api/sendSeen", { session, chatId, messageIds: [inboundMessageId] }, signal) },
-      { kind: "typing", send: signal => post("/api/startTyping", { session, chatId }, signal) },
+      { kind: "typing", send: async (signal, canType) => canType()
+        ? post("/api/startTyping", { session, chatId }, signal)
+        : "skipped" },
     ];
   }
 

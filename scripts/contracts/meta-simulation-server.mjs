@@ -588,9 +588,10 @@ export function createMetaSimulation({token,phoneId,phone,version,recipients,key
  if(req.method!=='POST'||url.pathname!==root+'/messages')return json(404,{error:{code:100,type:'GraphMethodException',message:'Unsupported simulated route'}});
  let size=0,chunks=[];for await(const chunk of req){size+=chunk.length;assert(size<=65536);chunks.push(chunk);}const body=JSON.parse(Buffer.concat(chunks));
  if(body.status==='read'){
-  assert.deepEqual(Object.keys(body).sort(),['message_id','messaging_product','status','typing_indicator']);
+  const keys=['message_id','messaging_product','status'];
+  if(Object.hasOwn(body,'typing_indicator')){keys.push('typing_indicator');assert.deepEqual(body.typing_indicator,{type:'text'});}
+  assert.deepEqual(Object.keys(body).sort(),keys);
   assert.equal(body.messaging_product,'whatsapp');assert(/^wamid\.[A-Za-z0-9._:=+-]{1,506}$/u.test(body.message_id));
-  assert.deepEqual(body.typing_indicator,{type:'text'});
   return json(200,{success:true});
  }
  assert(body.messaging_product==='whatsapp'&&body.recipient_type==='individual');if(transition)assert(body.messaging_account_id===transitionAccount(),'Wrong current Messaging account');else if(Object.hasOwn(body,'messaging_account_id'))assert(wabaId&&body.messaging_account_id===wabaId);assert(!Object.hasOwn(body,'paid_messaging_account_id'));const phoneRecipient=Object.hasOwn(body,'to'),bsuidRecipient=Object.hasOwn(body,'recipient');assert(phoneRecipient!==bsuidRecipient);const destination=phoneRecipient?body.to:body.recipient;assert(typeof destination==='string'&&recipients.includes(destination));assert(phoneRecipient?/^\d+$/.test(destination):/^[A-Z]{2}\.[A-Za-z0-9]{1,128}$/.test(destination));assert(['text','interactive','location','template','image','document'].includes(body.type));

@@ -50,7 +50,8 @@ test('production adapter simulator accepts exclusive BSUID recipient and authent
   const raw=body=>fetch(origin+'/v24.0/10001/messages',{method:'POST',headers:{...headers,'content-type':'application/json'},body:JSON.stringify(body)});
   const [replySignal]=adapter.agentReplySignals({connectionId:'c',groupId:'12025550106',
    inboundMessageId:'wamid.synthetic-inbound',metaDirectRecipient:{kind:'BSUID',value:'SA.Synthetic01'}});
-  assert.equal(await replySignal.send(new AbortController().signal),'sent');
+  assert.equal(await replySignal.send(new AbortController().signal,()=>true),'sent');
+  assert.equal(await replySignal.send(new AbortController().signal,()=>false),'read-only');
   assert.equal((await raw({status:'read',messaging_product:'whatsapp',typing_indicator:{type:'text'}})).status,400);
   const noRecipient={...receipt.body};delete noRecipient.recipient;
   for(const body of [{...receipt.body,to:'12025550106'},{...receipt.body,recipient:'SA.NotAdmitted'},{...receipt.body,recipient:null},noRecipient])assert.equal((await raw(body)).status,400);

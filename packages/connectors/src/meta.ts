@@ -657,16 +657,22 @@ export class MetaGroupsAdapter implements MessagingProviderAdapter {
     const phoneId = this.phoneNumberId(input.connectionId);
     return [{
       kind: "read-and-typing",
-      send: async signal => {
+      send: async (signal, canType) => {
         await this.assertTestRecipient({ recipient_type: "individual", ...this.recipientFields({ ...input, recipientType: "DIRECT" }) });
+        let typing = false;
         const result = await this.request<{ success?: boolean }>(`/${encodeURIComponent(phoneId)}/messages`, {
           method: "POST",
-          body: { messaging_product: "whatsapp", status: "read", message_id: messageId, typing_indicator: { type: "text" } },
+          get body() {
+            // Resolve presence at serialization, after the asynchronous request preflight.
+            typing = canType();
+            return { messaging_product: "whatsapp", status: "read", message_id: messageId,
+              ...(typing ? { typing_indicator: { type: "text" } } : {}) };
+          },
           purpose: "agent-reply-signal",
           signal,
         }, "read");
-        if (result?.success !== true) throw invalidResponse("Meta did not acknowledge the read and typing signal.", true);
-        return "sent";
+        if (result?.success !== true) throw invalidResponse("Meta did not acknowledge the reply signal.", true);
+        return typing ? "sent" : "read-only";
       },
     }];
   }

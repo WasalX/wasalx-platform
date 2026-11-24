@@ -141,13 +141,43 @@ export async function verifyMetaPrimaryDelivery({admin,db,pool,controller,reques
    await c.query(`UPDATE delivery_outbox SET state='SENDING',attempts=1,lease_id=$2,
       lease_expires_at=clock_timestamp()+interval '1 minute' WHERE id=$1`,[result.id,replyLease]);
    const signalRepository=Object.create(OutboxRepository.prototype);
-   signalRepository.tenant=async(scope,operation)=>{assert.equal(scope,tenantId);return operation(c);};
+   signalRepository.tenant=async(scope,operation)=>{
+    assert.equal((await c.query('SELECT app.current_tenant_id() AS tenant')).rows[0].tenant,scope);
+    return operation(c);
+   };
    const signalJob={...job,id:result.id,attempts:1,metaDirectRecipientSnapshot:result.meta_direct_recipient};
    assert.equal(await signalRepository.admitAgentReplySignal(signalJob,randomUUID()),undefined);
+
+   await c.query('SAVEPOINT reply_signal_paused');
+   await c.query("UPDATE connections SET state='PAUSED' WHERE tenant_id=$1 AND id=$2",[tenantId,connectionId]);
+   assert.equal(await signalRepository.admitAgentReplySignal(signalJob,replyLease),undefined);
+   await c.query('ROLLBACK TO SAVEPOINT reply_signal_paused');
+
+   await c.query('SAVEPOINT reply_signal_other_tenant');
+   await c.query("SELECT set_config('app.tenant_id',$1,true)",[foreignTenant]);
+   assert.equal(await signalRepository.admitAgentReplySignal({...signalJob,tenantId:foreignTenant},replyLease),undefined);
+   await c.query('ROLLBACK TO SAVEPOINT reply_signal_other_tenant');
+
+   await c.query('SAVEPOINT reply_signal_privacy');
+   const privacyJobId=randomUUID();
+   await c.query(`INSERT INTO privacy_jobs(id,tenant_id,job_type,scope_type,scope_value,disposition,idempotency_key)
+    VALUES($1::uuid,$2::uuid,'RETENTION_SWEEP','TENANT',$2::text,'RETENTION_DELETE',$1::text)`,[privacyJobId,tenantId]);
+   await c.query(`INSERT INTO privacy_job_targets(tenant_id,job_id,target_type,target_id,target_sha256)
+    SELECT tenant_id,$1,'NORMALIZED_MESSAGE',id::text,encode(digest(id::text,'sha256'),'hex')
+    FROM normalized_messages WHERE tenant_id=$2 AND connection_id=$3 AND external_message_id=$4`,
+    [privacyJobId,tenantId,connectionId,laterMessageId]);
+   assert.equal(await signalRepository.admitAgentReplySignal(signalJob,replyLease),undefined,
+    'A privacy target on the latest inbound prevents signaling an older inbound');
+   await c.query('ROLLBACK TO SAVEPOINT reply_signal_privacy');
+
    const selected=await signalRepository.admitAgentReplySignal(signalJob,replyLease);
    assert.equal(selected?.messageId,laterMessageId);
+   assert.equal(selected.canType,true);
    assert.deepEqual(await signalRepository.admitAgentReplySignal(signalJob,replyLease,selected.id),selected);
    assert.equal(await signalRepository.admitAgentReplySignal(signalJob,replyLease),undefined);
+   await c.query(`UPDATE delivery_outbox SET state='SENT',external_message_id='wamid.synthetic-reply',
+     lease_id=NULL,lease_expires_at=NULL WHERE id=$1`,[result.id]);
+   assert.deepEqual(await signalRepository.admitAgentReplySignal(signalJob,replyLease,selected.id),{...selected,canType:false});
    await c.query('ROLLBACK TO SAVEPOINT agent_reply_signals');
    await c.query('SAVEPOINT primary_config_fence');
    await c.query("UPDATE provider_sessions SET provider_state_data=jsonb_set(provider_state_data,'{metaRouting}','{\"version\":1}') WHERE id=$1",[sessionId]);

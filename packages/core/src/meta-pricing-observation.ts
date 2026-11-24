@@ -35,9 +35,16 @@ export function metaPricingObservation(status: { pricing?: unknown }, accountId?
   if (!pricing || typeof pricing !== "object" || Array.isArray(pricing)) return { ...observation, reason: "SHAPE" };
   const fields = pricing as Record<string, unknown>;
   if (Object.keys(fields).length > 32 || Object.entries(fields).some(([key, value]) => key.length > 64 || (typeof value === "string" && value.length > 4096))) return { ...observation, reason: "SIZE" };
-  if (Object.keys(fields).sort().join(",") !== "billable,category,pricing_model,type") return { ...observation, reason: "FIELDS" };
+  const fieldNames = Object.keys(fields).sort().join(",");
+  const hasSubtype = fieldNames === "billable,category,pricing_model,subtype,type";
+  if (fieldNames !== "billable,category,pricing_model,type" && !hasSubtype) return { ...observation, reason: "FIELDS" };
   if (!includes(META_PRICING_MODELS, fields.pricing_model) || !includes(META_PRICING_CATEGORIES, fields.category)
     || !includes(META_PRICING_TYPES, fields.type) || typeof fields.billable !== "boolean") return { ...observation, reason: "VALUE" };
+  // Meta applies the per-number allowance. Its subtype supplies no separate monetary amount.
+  if (hasSubtype && (fields.subtype !== "free_tier" || fields.pricing_model !== "PMP"
+    || fields.category !== "service" || fields.type !== "free_customer_service" || fields.billable)) {
+    return { ...observation, reason: "VALUE" };
+  }
   return { ...observation, state: "VALID", model: fields.pricing_model, category: fields.category, type: fields.type, billable: fields.billable };
 }
 

@@ -28,6 +28,7 @@ import { executeBotAction } from "./bot-action.js";
 import { SecretResolutionError, type SecretResolver } from "./secrets.js";
 import type { BotActionJob, BotHandoffJob, ConversationStateJob, DirectCustomerCloseJob, DeliveryJob, StatusJob } from "./types.js";
 import {
+  currentTraceCarrier,
   observeDuration,
   recordDeliveryState,
   recordMetric,
@@ -184,9 +185,6 @@ export class DeliveryProcessor{
       // SENDING is the single durable privacy/handoff boundary for every
       // external mutation, including source cleanup and provider media upload.
       if(await this.repository.beginSend(job,leaseId)===false)return false;
-      if(job.directOrigin==="HUMAN"&&job.botConversationId&&job.ticketId&&job.articleId&&(job.batchSequence??0)===0){
-        replySignals.push(this.signalAgentReply(job,leaseId,adapter,sendInput));
-      }
       const ticketEventText=Boolean(job.ticketEventExecutionId)&&job.contentType==="text/plain";
       if(((job.directOrigin==="BOT"&&job.botConversationId)||ticketEventText)&&!job.articleId&&!job.media){
         if(!await this.repository.renewDeliveryLease(job,leaseId))return false;
@@ -253,8 +251,12 @@ export class DeliveryProcessor{
       return false;
     }
     const sendStartedAt=Date.now();let result:Awaited<ReturnType<MessagingProviderAdapter["send"]>>;
+    let replySending = true;
+    if (job.directOrigin==="HUMAN"&&job.botConversationId&&job.ticketId&&job.articleId&&(job.batchSequence??0)===0) {
+      replySignals.push(this.signalAgentReply(job, leaseId, adapter, sendInput, () => replySending));
+    }
     try{
-      result=await adapter.send(sendInput);
+      result=await adapter.send(sendInput).finally(() => { replySending = false; });
     }catch(error){
       const detail=safeError(error);
       if(!(error instanceof ProviderError)||!error.outcomeKnown){await this.repository.outcomeUnknown(job,leaseId,detail,error instanceof ProviderError?error.code:undefined);observeDuration("wasalx_provider_send_seconds",sendStartedAt,{provider:job.provider,result:"outcome_unknown"});observeOutboundToProvider(job,"outcome_unknown");recordDeliveryState(job.provider,"OUTCOME_UNKNOWN",telemetryErrorCode(error));return false}
@@ -277,13 +279,16 @@ export class DeliveryProcessor{
     leaseId: string,
     adapter: MessagingProviderAdapter,
     input: Parameters<MessagingProviderAdapter["send"]>[0],
+    replySending: () => boolean,
   ) {
+    const { traceparent, requestId } = currentTraceCarrier();
     const record = (signal: string, result: string) =>
       recordMetric("wasalx_agent_reply_signal_total", 1, { provider: job.provider, operation: signal, result });
     const recordFailure = (signal: string, error: unknown) => {
       record(signal, "failed");
       recordStructuredLog("warn", "delivery.agent_reply_signal_failed", {
-        request_id: job.id, tenant_id: job.tenantId, delivery_id: job.id, provider: job.provider,
+        request_id: traceparent?.split("-")[1] ?? requestId,
+        tenant_id: job.tenantId, delivery_id: job.id, provider: job.provider,
         signal, error_code: telemetryErrorCode(error),
       });
     };
@@ -303,11 +308,13 @@ export class DeliveryProcessor{
       await Promise.all(operations.map(async operation => {
         for (let attempt = 1; attempt <= AGENT_REPLY_SIGNAL_MAX_ATTEMPTS; attempt++) {
           try {
-            if (!await this.repository.admitAgentReplySignal(job, leaseId, source.id)) {
+            const current = await this.repository.admitAgentReplySignal(job, leaseId, source.id);
+            if (!current) {
               record(operation.kind, "no-longer-eligible");
               return;
             }
-            const result = await operation.send(AbortSignal.timeout(AGENT_REPLY_SIGNAL_TIMEOUT_MS));
+            const result = await operation.send(AbortSignal.timeout(AGENT_REPLY_SIGNAL_TIMEOUT_MS),
+              () => current.canType && replySending());
             record(operation.kind, result);
             return;
           } catch (error) {

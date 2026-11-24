@@ -14,17 +14,29 @@ test("Meta combines read and typing for an inbound webhook message without sendi
     requests.push({ path: url.pathname, method: init.method, body: JSON.parse(init.body) });
     return Response.json({ success: true });
   });
-  const adapter = new MetaGroupsAdapter({ accessToken: "synthetic-token", graphVersion: "v24.0",
+  const preflightEntered = Promise.withResolvers(), preflight = Promise.withResolvers();
+  let finishingReply = false;
+  const adapter = new MetaGroupsAdapter({ accessToken: "synthetic-token-1234", graphVersion: "v24.0",
     phoneNumberIdFor: () => metadata.phone_number_id,
+    beforeRequest: async () => {
+      if (finishingReply) { preflightEntered.resolve(); await preflight.promise; }
+    },
     beforeMessageSend: async () => assert.fail("Read and typing must not consume send admission") });
   const input = { connectionId: "synthetic", groupId: messages[0].from, inboundMessageId: messages[0].id };
   const [operation] = adapter.agentReplySignals(input);
   assert.equal(operation.kind, "read-and-typing");
-  assert.equal(await operation.send(new AbortController().signal), "sent");
+  assert.equal(await operation.send(new AbortController().signal, () => true), "sent");
   assert.deepEqual(requests, [{ path: `/v24.0/${metadata.phone_number_id}/messages`, method: "POST",
     body: { messaging_product: "whatsapp", status: "read", message_id: messages[0].id, typing_indicator: { type: "text" } } }]);
   assert.throws(() => adapter.agentReplySignals({ ...input, inboundMessageId: "not a Meta ID" }), { code: "META_INVALID_REQUEST" });
-  assert.equal(requests.length, 1);
+  finishingReply = true;
+  const lateSignal = operation.send(new AbortController().signal, () => finishingReply);
+  await preflightEntered.promise;
+  finishingReply = false;
+  preflight.resolve();
+  assert.equal(await lateSignal, "read-only");
+  assert.deepEqual(requests[1], { path: `/v24.0/${metadata.phone_number_id}/messages`, method: "POST",
+    body: { messaging_product: "whatsapp", status: "read", message_id: messages[0].id } });
 });
 
 test("WAHA targets one inbound ID and reports an unsupported typing endpoint", async t => {
@@ -41,8 +53,9 @@ test("WAHA targets one inbound ID and reports an unsupported typing endpoint", a
   });
   const input = { connectionId: "synthetic", groupId: inbound.chatId, inboundMessageId: inbound.messageId };
   const [read, typing] = adapter.agentReplySignals(input);
-  assert.equal(await read.send(new AbortController().signal), "sent");
-  assert.equal(await typing.send(new AbortController().signal), "unsupported");
+  assert.equal(await read.send(new AbortController().signal, () => false), "sent");
+  assert.equal(await typing.send(new AbortController().signal, () => false), "skipped");
+  assert.equal(await typing.send(new AbortController().signal, () => true), "unsupported");
   const target = { session: "synthetic-session", chatId };
   assert.deepEqual(requests, [["/api/sendSeen", { ...target, messageIds: [inboundMessageId] }], ["/api/startTyping", target]]);
   assert.throws(() => adapter.agentReplySignals({ ...input, groupId: "12025550121@c.us" }), { code: "WAHA_INVALID_REQUEST" });

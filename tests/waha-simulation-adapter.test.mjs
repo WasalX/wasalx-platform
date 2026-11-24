@@ -33,7 +33,7 @@ test('WAHA read and typing reuse the simulated direct provider session',async()=
   const adapter=new WahaAdapter({baseUrl,apiKey,sessionFor:()=> 'adapter-test'});
   const inboundMessageId=`false_${chatId}_3EB0965B123D06E0B70741`;
   const calls=adapter.agentReplySignals({connectionId:'synthetic-connection',groupId:chatId,inboundMessageId});
-  assert.deepEqual(await Promise.all(calls.map(call=>call.send(new AbortController().signal))),['sent','sent']);
+  assert.deepEqual(await Promise.all(calls.map(call=>call.send(new AbortController().signal,()=>true))),['sent','sent']);
   for(const body of [{session:'adapter-test',chatId},{session:'adapter-test',chatId,messageIds:['false_12025550121@c.us_OTHER']}]){
    const response=await fetch(baseUrl+'/api/sendSeen',{method:'POST',headers:{'x-api-key':apiKey},body:JSON.stringify(body)});
    assert.equal(response.status,400);

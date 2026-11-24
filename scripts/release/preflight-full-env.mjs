@@ -55,6 +55,8 @@ const requiredConfigurationNames = [
   "WASALX_FULL_KEYCLOAK_SMTP_FROM",
   "WASALX_FULL_KEYCLOAK_SMTP_USER",
   "WASALX_FULL_QUALIFICATION_OWNER_EMAIL",
+  "WASALX_TEST_EMAIL_RECIPIENT_ALLOWLIST",
+  "WASALX_KEYCLOAK_PASSWORD_RESET_ENABLED",
 ];
 export const fullEnvironmentCredentialNames = [
   ...new Set([...credentialNames, ...requiredConfigurationNames, "DEV_SECRET_STORE_ENCRYPTION_KEY"]),
@@ -90,11 +92,33 @@ function collectDuplicates(entries, invalid) {
   }
 }
 
+function validEmailAddress(email) {
+  return email.length <= 320 && /^[a-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[a-z0-9!#$%&'*+/=?^_`{|}~-]+)*@[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/u.test(email);
+}
+
+function validMailRecipients(raw) {
+  if (raw === "*") return true;
+  if (typeof raw !== "string") return false;
+  try {
+    const recipients = JSON.parse(raw);
+    return Array.isArray(recipients) && recipients.every(email =>
+      typeof email === "string" && validEmailAddress(email.trim().toLowerCase()));
+  } catch {
+    return false;
+  }
+}
+
 export function validateFullEnvironment(environment) {
   const invalid = new Set();
   if (environment.META_APP_ID && !/^\d{5,32}$/u.test(environment.META_APP_ID)) invalid.add("META_APP_ID");
   const entries = collectStrings(environment, credentialNames, invalid);
   collectStrings(environment, requiredConfigurationNames, invalid);
+  if (!validMailRecipients(environment.WASALX_TEST_EMAIL_RECIPIENT_ALLOWLIST)) {
+    invalid.add("WASALX_TEST_EMAIL_RECIPIENT_ALLOWLIST");
+  }
+  if (!["true", "false"].includes(environment.WASALX_KEYCLOAK_PASSWORD_RESET_ENABLED)) {
+    invalid.add("WASALX_KEYCLOAK_PASSWORD_RESET_ENABLED");
+  }
   try {
     const webhook = new URL(environment.PUBLIC_WEBHOOK_BASE_URL ?? "");
     if (webhook.protocol !== "https:" || webhook.username || webhook.password || webhook.search || webhook.hash
@@ -119,8 +143,7 @@ export function validateFullEnvironment(environment) {
   for (const name of ["WASALX_FULL_INVITATION_EMAIL_FROM", "WASALX_FULL_KEYCLOAK_SMTP_FROM", "WASALX_FULL_QUALIFICATION_OWNER_EMAIL"]) {
     const email = (environment[name] ?? "").trim().toLowerCase();
     const domain = email.slice(email.lastIndexOf("@") + 1);
-    if (email.length > 320
-      || !/^[a-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[a-z0-9!#$%&'*+/=?^_`{|}~-]+)*@[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/u.test(email)
+    if (!validEmailAddress(email)
       || /(?:^|\.)(?:invalid|local|localhost|example|test)$/u.test(domain)
       || /(?:^|\.)example\.(?:com|net|org)$/u.test(domain)) invalid.add(name);
   }
