@@ -4,6 +4,8 @@ Follows engineering standard v1.20.
 
 WasalX Delivery owns this document, the merge queue, CI health and speed, releases, deploys, rollback, and alerts.
 
+Use the [observability runbook](docs/runbooks/alert-response.md) to triage runtime alerts.
+
 ## Branching and merging
 
 - Open PRs from short-lived branches against trunk `main`. Merge, split, or close each PR within two days of its first push. Delete merged branches and branches with no PR after seven days without a push.
