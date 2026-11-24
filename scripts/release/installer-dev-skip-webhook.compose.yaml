@@ -1,0 +1,3 @@
+services:
+  public-webhook-preflight:
+    command: ["node", "--eval", "console.log('public webhook preflight skipped by DEV option')"]

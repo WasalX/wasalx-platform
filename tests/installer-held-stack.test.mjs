@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import childProcess, { spawnSync } from "node:child_process";
+import { readFile } from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { projectStack, devHeldServices, devPreservedServices, devContainerPreimage, devValueDigest, assertInstallHostname, devReviewAuthConfiguration } from "../scripts/release/installer-stack.mjs";
-import { run, stageFailureReason } from "../scripts/release/installer-stages.mjs";
+import { parse } from "yaml";
+import { projectStack, devHeldServices, devPreservedServices, devContainerPreimage, devValueDigest, assertInstallHostname, devReviewAuthConfiguration, verifyStack } from "../scripts/release/installer-stack.mjs";
+import { executeStage, run, stageFailureReason } from "../scripts/release/installer-stages.mjs";
 import { repositoryDigestMatches } from "../scripts/installer-evidence.mjs";
 
 const repositoryRoot = fileURLToPath(new URL("../", import.meta.url));
@@ -90,6 +92,78 @@ test("installer CLIs name refused host configuration before preflight or Docker"
     assert.ok(result.stderr.includes(`check ${variable}`));
     assert.equal(result.stdout, "");
   }
+});
+
+test("both installer CLIs admit webhook preflight skip only for non-rehearsal DEV", () => {
+  const envFile = fileURLToPath(new URL("./missing-installer-env", import.meta.url));
+  const flag = "--dev-skip-public-webhook-preflight";
+  for (const [project, extra, markers, expected] of [
+    ["wasalx-stg", [], {}, /public webhook preflight skip is DEV-only/],
+    ["wasalx-prod", [], {}, /public webhook preflight skip is DEV-only/],
+    ["wasalx-nightly", [], {}, /public webhook preflight skip is DEV-only/],
+    ["wasalx-live", ["--rehearsal-main", sha], { GITHUB_ACTIONS: "true" }, /public webhook preflight skip is DEV-only/],
+    ["wasalx-live", [], { DEPLOY_ENVIRONMENT: "stg" }, /public webhook preflight skip is DEV-only/],
+    ["wasalx-live", [], { WASALX_ENVIRONMENT: "production" }, /public webhook preflight skip is DEV-only/],
+    ["wasalx-dev-bc3ef42", [], {}, /check WASALX_INSTALL_EXPECTED_HOSTNAME/],
+    ["wasalx-live", [], {}, /check WASALX_INSTALL_EXPECTED_HOSTNAME/],
+  ]) {
+    const env = { ...process.env, WASALX_CANDIDATE_SHA: sha, WASALX_CANDIDATE_TREE: tree,
+      WASALX_INSTALL_EXPECTED_HOSTNAME: "", DEPLOY_ENVIRONMENT: "", WASALX_ENVIRONMENT: "", ...markers };
+    for (const args of [
+      ["scripts/release/installer-stages.mjs", "preflight", "--env-file", envFile, "--project-name", project],
+      ["scripts/release/installer-stack.mjs", project, "--full", "--env-file", envFile],
+    ]) {
+      const result = spawnSync(process.execPath, ["--", ...args, flag, ...extra], {
+        cwd: repositoryRoot, env, encoding: "utf8", timeout: 10000, windowsHide: true,
+      });
+      assert.equal(result.error, undefined);
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, expected, `${args[0]} ${project}`);
+      assert.equal(result.stdout, "");
+    }
+  }
+});
+
+test("installer smoke forwards the DEV option and verifies the selected Compose files", async t => {
+  const envFile = fileURLToPath(new URL("./missing-installer-env", import.meta.url));
+  const originalArgv = process.argv;
+  t.after(() => { process.argv = originalArgv; });
+  for (const [name, value] of Object.entries({
+    WASALX_CANDIDATE_SHA: sha, WASALX_CANDIDATE_TREE: tree, WASALX_INSTALL_EXPECTED_HOSTNAME: os.hostname(),
+    DOCKER_HOST: "", DOCKER_CONTEXT: "", DEPLOY_ENVIRONMENT: "", WASALX_ENVIRONMENT: "",
+  })) {
+    operatorEnvironment(t, name);
+    process.env[name] = value;
+  }
+  const rendered = new Error("reached Compose config");
+  const spawn = t.mock.method(childProcess, "spawnSync", (command, args) => {
+    if (command === "git") return { status: 0, stdout: { HEAD: sha, "HEAD^{tree}": tree }[args[1]] ?? "" };
+    assert.equal(command, "docker");
+    if (args[0] === "context") return { status: 0, stdout: "default" };
+    throw rendered;
+  });
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+  for (const [project, skip] of [["wasalx-live", false], ["wasalx-live", true], ["wasalx-dev-bc3ef42", true]]) {
+    await executeStage("smoke", { project, envFile, plan: [], model: { services: {} }, devSkipPublicWebhookPreflight: skip,
+      command: (command, args) => { process.argv = [command, ...args]; return 0; },
+    });
+    await assert.rejects(verifyStack(), error => error === rendered);
+    assert.deepEqual(spawn.mock.calls.at(-1).arguments.slice(0, 2), ["docker", [
+      "compose", "--env-file", envFile, "--file", "compose.yaml", "--file", "compose.full.yaml",
+      ...(skip ? ["--file", "scripts/release/installer-dev-skip-webhook.compose.yaml"] : []),
+      "--profile", "full", "--profile", "runtime-workers", "--project-name", project, "config", "--quiet",
+    ]]);
+  }
+});
+
+test("DEV preflight overlay only runs a local notice", async () => {
+  const overlay = await readFile(new URL("../scripts/release/installer-dev-skip-webhook.compose.yaml", import.meta.url), "utf8");
+  const command = ["node", "--eval", "console.log('public webhook preflight skipped by DEV option')"];
+  assert.deepEqual(parse(overlay), { services: { "public-webhook-preflight": { command } } });
+  const result = spawnSync(process.execPath, command.slice(1), { encoding: "utf8", timeout: 10000, windowsHide: true });
+  assert.equal(result.status, 0);
+  assert.equal(result.stdout, "public webhook preflight skipped by DEV option\n");
 });
 
 test("installer prints a sanitized reason for a failure before the stage loop", () => {
