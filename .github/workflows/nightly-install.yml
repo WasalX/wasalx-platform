@@ -78,7 +78,7 @@ jobs:
             Dockerfile.foundation-keycloak scripts/release/patch-keycloak-jackson.py \
             scripts/release/compose-stage-lock.mjs scripts/release/compose-stage-config.json scripts/release/simulation-rails-json.mjs \
             scripts/release/preflight-full-env.mjs scripts/release/generate-simulation-env.py \
-            scripts/release/images-by-digest.py scripts/release/product-images.json scripts/release/image-manifest.sh \
+            scripts/release/images-by-digest.py scripts/release/image_registry_retry.py scripts/release/product-images.json scripts/release/image-manifest.sh \
             tests/pull-verify.test.mjs scripts/release/cosign-pin.json .github/actions/cosign/action.yml \
             tests/installer-nightly-grafana.test.mjs .github/workflows/nightly-install.yml; then
             needed=false
