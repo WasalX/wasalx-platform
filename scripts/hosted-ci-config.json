@@ -36,10 +36,6 @@
       "runner": "portal-integration",
       "reason": "Starts the built portal to check server-rendered HTML."
     },
-    "tests/storybook-static-contract.test.mjs": {
-      "runner": "test:design-system",
-      "reason": "not run in CI: needs a separate Storybook build to generate the story index."
-    },
     "tests/zammad-image-browser-compat.test.mjs": {
       "runner": "zammad:compat:browser",
       "reason": "not run in CI: requires an explicitly selected Zammad image, Chromium, and a Docker Compose stack."
@@ -60,75 +56,11 @@
       "runner": "test:e2e",
       "reason": "not run in CI: requires Chromium and a configured platform operator environment."
     },
-    "tests/e2e/application.spec.ts": {
-      "runner": "test:e2e",
-      "reason": "not run in CI: requires the application Playwright role and locale harness with a built portal and isolated fixtures."
-    },
-    "tests/e2e/arabic.spec.ts": {
-      "runner": "test:e2e",
-      "reason": "not run in CI: requires the application Playwright role and locale harness with a built portal and isolated fixtures."
-    },
-    "tests/e2e/meta-account-policy.spec.ts": {
-      "runner": "test:e2e",
-      "reason": "not run in CI: requires the application Playwright role and locale harness with a built portal and isolated fixtures."
-    },
-    "tests/e2e/meta-account-transition-execution.spec.ts": {
-      "runner": "test:e2e",
-      "reason": "not run in CI: requires the application Playwright role and locale harness with a built portal and isolated fixtures."
-    },
-    "tests/e2e/meta-account-transition.spec.ts": {
-      "runner": "test:e2e",
-      "reason": "not run in CI: requires the application Playwright role and locale harness with a built portal and isolated fixtures."
-    },
-    "tests/e2e/meta-billing-diagnostic.spec.ts": {
-      "runner": "test:e2e",
-      "reason": "not run in CI: requires the application Playwright role and locale harness with a built portal and isolated fixtures."
-    },
-    "tests/e2e/meta-cost-statements.spec.ts": {
-      "runner": "test:e2e",
-      "reason": "not run in CI: requires the application Playwright role and locale harness with a built portal and isolated fixtures."
-    },
-    "tests/e2e/meta-cost.spec.ts": {
-      "runner": "test:e2e",
-      "reason": "not run in CI: requires the application Playwright role and locale harness with a built portal and isolated fixtures."
-    },
-    "tests/e2e/meta-managed-policy.spec.ts": {
-      "runner": "test:e2e",
-      "reason": "not run in CI: requires the application Playwright role and locale harness with a built portal and isolated fixtures."
-    },
     "tests/e2e/meta-transition-operator.spec.ts": {
       "runner": "test:e2e",
       "reason": "not run in CI: requires the application Playwright role and locale harness with a built portal and isolated fixtures."
     },
-    "tests/e2e/public-site.spec.ts": {
-      "runner": "test:e2e",
-      "reason": "not run in CI: requires the application Playwright role and locale harness with a built portal and isolated fixtures."
-    },
     "tests/visual/design-system.spec.ts": {
-      "runner": "test:visual",
-      "reason": "not run in CI: requires a separate Storybook build, Chromium, and visual or synthetic browser fixtures."
-    },
-    "tests/visual/inbox-synthetic.spec.ts": {
-      "runner": "test:visual",
-      "reason": "not run in CI: requires a separate Storybook build, Chromium, and visual or synthetic browser fixtures."
-    },
-    "tests/admin-browser.mjs": {
-      "runner": "test:visual",
-      "reason": "not run in CI: requires a separate Storybook build, Chromium, and visual or synthetic browser fixtures."
-    },
-    "tests/group-inbox-browser.mjs": {
-      "runner": "test:visual",
-      "reason": "not run in CI: requires a separate Storybook build, Chromium, and visual or synthetic browser fixtures."
-    },
-    "tests/inbox-browser.mjs": {
-      "runner": "test:visual",
-      "reason": "not run in CI: requires a separate Storybook build, Chromium, and visual or synthetic browser fixtures."
-    },
-    "tests/privacy-target-browser.mjs": {
-      "runner": "test:visual",
-      "reason": "not run in CI: requires a separate Storybook build, Chromium, and visual or synthetic browser fixtures."
-    },
-    "tests/service-access-browser.mjs": {
       "runner": "test:visual",
       "reason": "not run in CI: requires a separate Storybook build, Chromium, and visual or synthetic browser fixtures."
     },
