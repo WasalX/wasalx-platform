@@ -130,7 +130,7 @@ jobs:
           git worktree add --detach "$scratch/base" "$base"
           export LC_ALL=C
           # File, rule and message identify findings without counting shifted line numbers as new.
-          format='{{range .}}{{printf "%q\t%q\t%q\n" .Filepath .Kind .Message}}{{end}}'
+          format='{{range .}}{{printf "%q %q %q" .Filepath .Kind .Message}}\n{{end}}'
           findings() {
             local tree="$1" output="$2" status=0
             (cd "$tree" && "$scratch/actionlint" -shellcheck= -pyflakes= -format "$format") > "$output" || status=$?
