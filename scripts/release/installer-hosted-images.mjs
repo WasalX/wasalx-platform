@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import cosignPin from "./cosign-pin.json" with { type: "json" };
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
 const source = "https://github.com/WasalX/wasalx-platform";
@@ -73,7 +74,7 @@ export async function verifyHostedImages(context, { verifyOnly = false } = {}) {
   const inventory = await readHostedInventory(context);
   const execute = context.command;
   const version = JSON.parse(await execute("cosign", ["version", "--json"], context.environment));
-  assert.equal(version.gitVersion, "v3.1.4", "hosted admission requires cosign v3.1.4");
+  assert.equal(version.gitVersion, cosignPin.version, "hosted admission requires the pinned Cosign version");
   const rootBytes = await readFile(context.hostedTrustedRoot), trustedRootSha256 = sha256(rootBytes);
   const temporary = await mkdtemp(join(tmpdir(), "wasalx-hosted-verification-"));
   try {

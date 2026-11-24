@@ -4,7 +4,9 @@ Set `META_WEBHOOK_APPS_FILE` on the control API to the path of a read-only JSON
 configuration file. Keep one row per app in the deployment's versioned
 configuration. The API validates the registry on startup and holds a snapshot
 until restart. The registry must include `META_APP_ID` with the same secret
-reference as `META_APP_SECRET_REFERENCE`. The file contains sidecar references only.
+reference as `META_APP_SECRET_REFERENCE`. The API resolves that row's verification
+token on startup and requires it to match `META_VERIFY_TOKEN`. The file contains
+sidecar references only.
 
 ```json
 {
@@ -27,8 +29,8 @@ reference as `META_APP_SECRET_REFERENCE`. The file contains sidecar references o
 For each app, set the callback to the control API's
 `/webhooks/meta/apps/<appId>`. Give each app its own Meta app secret and
 verification token. In the sidecar, use `hmacKey` or `value` for each referenced
-secret and use a verification token of at least 16 bytes. The control API
-resolves only the credential for the requested app and request method.
+secret and use a verification token of at least 16 bytes. During webhook requests,
+the control API resolves only the credential for the requested app and method.
 
 The tenant's existing Meta webhook route must have the app's HMAC secret
 reference. The API admits events only to matching routes and records the app ID

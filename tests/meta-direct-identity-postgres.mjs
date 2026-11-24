@@ -1,3 +1,4 @@
+import { withPostgresClock } from "./support/postgres-clock.mjs";
 import assert from 'node:assert/strict';
 import {withFixtureTenant,routingFixtureEnvironment,observeRoutingFixture} from './meta-routing-fixture.mjs';
 import {metaRoutingUnits} from '../packages/core/dist/meta-routing.js';
@@ -630,6 +631,18 @@ export async function verifyMetaDirectIdentityPostgres(adminUrl,workerConfig,app
    [historical,tenantId,assignmentId,connectionId,versionId,phone,reference(phone),ticketId]));
   const database={withTenant:(scope,fn)=>tx(fn,scope,apiPool),rows:(scope,sql,values)=>tx(async c=>(await c.query(sql,values)).rows,scope,apiPool)};
   const controller=new ZammadInternalController(database,{verify:async()=>({tenantId,instanceId,userId:'3',groupIds:['2'],groupAdmin:false})},{wake:async()=>{throw new Error('Read-only preflight cannot enqueue')}});
+  await queueScenario(async c=>{
+   await c.query("UPDATE normalized_messages SET provider_timestamp='2035-01-15T19:00:00Z' WHERE tenant_id=$1 AND id=$2",
+    [tenantId,normalizedSource.rows[0].id]);
+   await c.query("UPDATE normalized_messages SET provider_timestamp='2035-01-15T20:00:00Z',from_me=true WHERE tenant_id=$1 AND event_inbox_id=$2",
+    [tenantId,confirm.event.id]);
+   const db={withTenant:async(scope,fn)=>{assert.equal(scope,tenantId);return fn(c)},
+    rows:async(scope,sql,values)=>{assert.equal(scope,tenantId);return(await c.query(sql,values)).rows}};
+   const ticketContext=new ZammadInternalController(db,{verify:async()=>({tenantId,instanceId})},
+    {wake:async()=>assert.fail('context cannot wake workers')});
+   const context=await ticketContext.ticketContext('Synthetic native claims',ticketId);
+   assert.equal(context.service_window_expires_at,'2035-01-16T19:00:00.000Z');
+  },apiPool);
   const previousMetaAppId=process.env.META_APP_ID;process.env.META_APP_ID=appId;
   try{
    assert.deepEqual(await controller.outboundPreflight('Synthetic native claims',connectionId,phone,ticketId),{available:true,keep_open:false});
@@ -910,30 +923,28 @@ export async function verifyMetaDirectIdentityPostgres(adminUrl,workerConfig,app
   });
   // A real alias lock delays the final source CAS past lease expiry. Releasing
   // that lock must roll back the preceding alias hold, not commit half a fence.
-  await transitionScenario(async c=>{
+  await withPostgresClock(admin,'app.drain_meta_direct_transitions(uuid,uuid,boolean)',advance=>transitionScenario(async c=>{
    const item=await conservativeItem(false),blocker=await pool.connect();
    try{
     await blocker.query('BEGIN');await blocker.query("SELECT set_config('app.tenant_id',$1,true)",[tenantId]);
     await blocker.query('SELECT id FROM meta_direct_identity_aliases WHERE id=$1 FOR UPDATE',[bsuidAlias]);
-    const lease=(await c.query("UPDATE event_inbox SET lease_expires_at=clock_timestamp()+interval '2 seconds' WHERE id=$1 RETURNING lease_expires_at",[item.event.id])).rows[0];assert(lease.lease_expires_at);
+    const lease=(await c.query("UPDATE event_inbox SET lease_expires_at=clock_timestamp()+interval '10 minutes' WHERE id=$1 RETURNING lease_expires_at::text",[item.event.id])).rows[0];assert(lease.lease_expires_at);
     const before=await transitionSnapshot(c),pid=(await c.query('SELECT pg_backend_pid() pid')).rows[0].pid;
     await c.query('SAVEPOINT initial_hold_expiry');
     const pending=c.query('SELECT app.drain_meta_direct_transitions($1,$2,true) result',[item.event.id,item.leaseId]).then(value=>({value}),error=>({error}));
     let blocked=false;
-    for(let attempt=0;attempt<100;attempt++){
-     if((await admin.query('SELECT cardinality(pg_blocking_pids($1))>0 blocked',[pid])).rows[0].blocked){blocked=true;break;}
-     await new Promise(resolve=>setTimeout(resolve,10));
-    }
+    const deadline=performance.now()+1000;
+    do{
+     blocked=(await admin.query('SELECT cardinality(pg_blocking_pids($1))>0 blocked',[pid])).rows[0].blocked;
+    }while(!blocked&&performance.now()<deadline);
     assert.equal(blocked,true,'Expiry oracle must reach the actual alias lock after admission');
-    // The lease value was returned from PostgreSQL; the wait is tied to that exact
-    // expiry, not an assumed JS timestamp precision or arbitrary scheduler race.
-    await admin.query('SELECT pg_sleep(GREATEST(0,EXTRACT(EPOCH FROM ($1::timestamptz-clock_timestamp())))+0.02)',[lease.lease_expires_at]);
+    await advance(lease.lease_expires_at);
     await blocker.query('ROLLBACK');
     const settled=await pending;assert.equal(settled.error?.code,'55000','Final live-lease CAS denies partial mutation');
     await c.query('ROLLBACK TO SAVEPOINT initial_hold_expiry');
     assert.deepEqual(await transitionSnapshot(c),before,'Expired final CAS rolls back all alias/source changes');
    }finally{await blocker.query('ROLLBACK');blocker.release();}
-  });
+  }));
 
   await transitionScenario(async c=>{
    const before=(await c.query('SELECT * FROM bot_conversations WHERE id=$1',[conversationId])).rows[0];

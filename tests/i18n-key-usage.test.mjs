@@ -96,3 +96,12 @@ test("tenant-facing translations do not expose internal provider vocabulary", as
     .sort();
   assert.deepEqual(findings, [], `Internal vocabulary in tenant copy:\n${findings.join("\n")}`);
 });
+
+test("catalogues spell Arabic \"again\" one way and never name the control plane (#327)", () => {
+  const findings = [
+    ...Object.entries(arabicMessages).filter(([, message]) => /مجددا(?!\p{Script=Arabic})|مجدداً/u.test(message)).map(([key]) => `ar ${key}: write مجددًا`),
+    ...Object.entries(englishMessages).filter(([, message]) => /control plane/iu.test(message)).map(([key]) => `en ${key}: control plane`),
+    ...Object.entries(arabicMessages).filter(([, message]) => /مستوى (?:ال)?تحكم/u.test(message)).map(([key]) => `ar ${key}: control plane`),
+  ];
+  assert.deepEqual(findings, []);
+});

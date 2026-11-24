@@ -1001,10 +1001,12 @@ test("decorative arrows follow the reading direction and stay hidden from screen
     read("app/BotAutomation.tsx"),
     read("app/platform/MetaTransitionOperator.tsx"),
   ]);
-  assert.match(styles, /\.reading-arrow\{display:inline-block\}\[dir="rtl"\] \.reading-arrow\{transform:scaleX\(-1\)\}/u);
+  assert.match(styles, /\.reading-arrow\{display:inline-block;vertical-align:-\.125em\}\.reading-arrow svg\{display:block;inline-size:1em;block-size:1em\}\[dir="rtl"\] \.reading-arrow svg\{transform:scaleX\(-1\)\}/u);
   for (const source of sources) {
-    const arrows = source.split("→").length - 1;
+    // Arrows are the icon set's drawn arrow (#326), never a text character that changes with the font.
+    assert.doesNotMatch(source, /[\u2190\u2192]/u, "no text arrows");
+    const arrows = source.split('className="reading-arrow"').length - 1;
     assert.ok(arrows > 0);
-    assert.equal(source.split('<span className="reading-arrow" aria-hidden="true">→</span>').length - 1, arrows, "every arrow is a mirrored, aria-hidden reading-arrow");
+    assert.equal(source.split('<span className="reading-arrow" aria-hidden="true"><MarketingIcon name="arrow" /></span>').length - 1, arrows, "every arrow is a mirrored, aria-hidden drawn reading-arrow");
   }
 });

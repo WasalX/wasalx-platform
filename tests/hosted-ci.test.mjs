@@ -8,8 +8,9 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
 import { collectFile, collectionFiles, inventory, isTestFile, shardFiles } from "../scripts/hosted-ci.mjs";
+import { selectUnitFiles } from "../scripts/affected-unit-tests.mjs";
 import { unitAllowlist, unitFiles } from "../scripts/test-unit.mjs";
-import reportTimings, { validateQuarantine } from "../scripts/hosted-ci-timing-reporter.mjs";
+import { reportTimingsWithQuarantine, validateQuarantine } from "../scripts/hosted-ci-timing-reporter.mjs";
 import { addonSkips, skipPattern } from "../scripts/hosted-ci-policy.mjs";
 import { generateBaseline } from "../scripts/generate-hosted-ci-baseline.mjs";
 import baseline from "../scripts/hosted-ci-baseline.mjs";
@@ -17,6 +18,7 @@ import { parsePostgresShardArgs, postgresScenarioGroups, verifyPostgresReports }
 
 const repository = fileURLToPath(new URL("../", import.meta.url));
 const read = file => readFile(join(repository, file), "utf8");
+const cosignAction = "./.github/actions/cosign";
 const commands = text => text.split(/\n|&&|;/u).map(line => line.trim()).filter(line => line && !line.startsWith("#"));
 const words = text => Array.from(text.matchAll(/"([^"]*)"|'([^']*)'|([^\s"'()]+)/gu),
   ([, doubleQuoted, singleQuoted, bare]) => doubleQuoted ?? singleQuoted ?? bare);
@@ -45,12 +47,27 @@ test("test quarantine expires at midnight UTC and annotates failures only", asyn
   assert.throws(() => validateQuarantine([{ ...known, expiresOn: "2030-02-30" }], "2030-01-01"), /valid UTC expiry/u);
   assert.throws(() => validateQuarantine([{ ...known, owner: "" }], "2030-01-01"), /requires a file, test name and owner/u);
   const data = { file: join(process.cwd(), file), name: known.name };
-  const reports = await Array.fromAsync(reportTimings([
+  const reports = await Array.fromAsync(reportTimingsWithQuarantine([
     { type: "test:pass", data },
     { type: "test:fail", data: { ...data, name: "other failure" } },
     { type: "test:fail", data },
   ], entries));
   assert.deepEqual(reports, ["KNOWN TEST FAILURE " + JSON.stringify(known) + "\n"]);
+});
+
+test("hosted CLI reporters preserve an unquarantined test failure", () => {
+  const env = { ...process.env };
+  delete env.NODE_TEST_CONTEXT;
+  const { error, status, stdout, stderr } = spawnSync(process.execPath, [
+    "--test", "--test-reporter=spec", "--test-reporter=./scripts/hosted-ci-timing-reporter.mjs",
+    "--test-reporter-destination=stdout", "--test-reporter-destination=stdout",
+    "tests/fixtures/hosted-ci-reporter-failure.mjs",
+  ], { cwd: repository, env, encoding: "utf8", timeout: 10_000, windowsHide: true });
+  if (error) throw error;
+  assert.doesNotMatch(stderr, /entries\.find is not a function/u);
+  assert.equal(status, 1, stderr);
+  assert.match(stdout, /Error: intentional reporter fixture failure/u);
+  assert.match(stdout, /^UNIT_TIMING /mu);
 });
 
 test("runner ownership recognizes a bare sudo interpreter", () => {
@@ -236,7 +253,10 @@ test("nightly install is report-only, read-only and fails open on PR diff errors
   assert.deepEqual(job.permissions, { contents: "read", actions: "read" });
   assert.equal(job["runs-on"], "ubuntu-24.04");
   const actions = job.steps.filter(step => step.uses);
-  assert(actions.every(step => /@[0-9a-f]{40}$/u.test(step.uses)));
+  const { runs } = parse(await read(cosignAction + "/action.yml"));
+  const remoteActions = actions.flatMap(step => step.uses === cosignAction
+    ? runs.steps.filter(nested => nested.uses) : [step]);
+  assert(remoteActions.every(step => /@[0-9a-f]{40}$/u.test(step.uses)));
   assert.equal(actions.find(step => step.uses.startsWith("actions/checkout@")).with["persist-credentials"], false);
   assert(!JSON.stringify(job).includes("secrets."));
   const changeSelection = job.steps.find(step => step.id === "changes");
@@ -553,7 +573,7 @@ test("CI gate requires each event's jobs and rejects unplanned skips, failures, 
   t.after(() => rm(directory, { recursive: true, force: true }));
   const summary = join(directory, "summary.md");
   const pr = {
-    EVENT: "pull_request", CHANGES: "success", WORKFLOW_LINT: "success", CHECKS: "success", REVIEW: "success", IMAGES: "skipped",
+    EVENT: "pull_request", CHANGES: "success", WORKFLOW_LINT: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: "success", IMAGES: "skipped",
     INTEGRATION_NEEDED: "true", INTEGRATION: "success", PORTAL_INTEGRATION: "success",
     INTEGRATION_COVERAGE: "success", INFRA_NEEDED: "true", INFRA: "success",
     DEV_INSTALL_NEEDED: "true", DEV_INSTALL: "success",
@@ -567,7 +587,7 @@ test("CI gate requires each event's jobs and rejects unplanned skips, failures, 
     ...pr, EVENT: "merge_group", REVIEW: "skipped", IMAGES: "success",
     INTEGRATION_NEEDED: "", INFRA_NEEDED: "", DEV_INSTALL_NEEDED: "", DEV_INSTALL: "skipped",
   };
-  const push = { ...queue, EVENT: "push", CHANGES: "skipped", CHECKS: "skipped", IMAGES: "skipped" };
+  const push = { ...queue, EVENT: "push", CHANGES: "skipped", CHECKS: "skipped", FULL_UNIT: "success", IMAGES: "skipped" };
   const dispatch = { ...push, EVENT: "workflow_dispatch", INFRA: "skipped" };
 
   for (const [lane, result, override, expected] of [
@@ -580,20 +600,24 @@ test("CI gate requires each event's jobs and rejects unplanned skips, failures, 
     ["merge queue", queue, {}, 0],
     ["merge queue with failed images", queue, { IMAGES: "failure" }, 1],
     ["main push", push, {}, 0],
+    ["main push with skipped units", push, { FULL_UNIT: "skipped" }, 1],
+    ["main push with failed units", push, { FULL_UNIT: "failure" }, 1],
+    ["main push with cancelled units", push, { FULL_UNIT: "cancelled" }, 1],
     ["main push with failed integration", push, { INTEGRATION: "failure" }, 1],
     ["main push with skipped infrastructure", push, { INFRA: "skipped" }, 1],
     ["main push with cancelled selection", push, { CHANGES: "cancelled" }, 1],
     ["manual dispatch", dispatch, {}, 0],
+    ["manual dispatch with skipped units", dispatch, { FULL_UNIT: "skipped" }, 1],
     ["manual dispatch with cancelled infrastructure", dispatch, { INFRA: "cancelled" }, 1],
   ]) {
     const execution = runWorkflowScript(run, { ...result, ...override, GITHUB_STEP_SUMMARY: summary });
     assert.ifError(execution.error);
     assert.equal(execution.status, expected, `${lane}: ${execution.stderr}`);
   }
-  assert.match(await readFile(summary, "utf8"), /Event push skips PR and merge queue jobs/u);
+  assert.match(await readFile(summary, "utf8"), /Event push ran both full unit shards/u);
 });
 
-test("CI seeds pnpm caches on main and builds cleanly in the merge queue", async () => {
+test("CI seeds pnpm caches on main and builds cleanly in the merge queue", async t => {
   const { jobs } = parse(await read(".github/workflows/ci.yml"));
   const actionPath = "./.github/actions/ci-pnpm";
   const action = parse(await read(".github/actions/ci-pnpm/action.yml"));
@@ -605,6 +629,31 @@ test("CI seeds pnpm caches on main and builds cleanly in the merge queue", async
   const store = action.runs.steps.find(step => step.id === "store");
   assert(action.runs.steps.indexOf(modules) < action.runs.steps.indexOf(store));
   assert(store?.if.includes("steps.modules.outputs.cache-hit != 'true'"));
+  assert.equal(modules.with.key, "${{ steps.pnpm.outputs.dependency-key }}");
+  assert(!Object.hasOwn(modules.with, "restore-keys"), "Workspace modules require an exact dependency key");
+
+  const keyStep = action.runs.steps.find(step => step.id === "pnpm");
+  assert.deepEqual(keyStep.env, {
+    MODULES_HASH: "${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', '**/package.json', 'patches/**', '.npmrc') }}",
+    RUNNER_PLATFORM: "${{ runner.os }}-${{ runner.arch }}",
+  });
+  const directory = await mkdtemp(join(tmpdir(), "wasalx-cache-key-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const keyScript = 'corepack() { :; }\npnpm() { echo store; }\nnode() { echo "$NODE_VERSION"; }\n' + keyStep.run;
+  for (const [index, platform, version, hash] of [
+    [1, "Linux-X64", "v24.13.1", "hash1"],
+    [2, "Linux-ARM64", "v24.13.1", "hash1"],
+    [3, "Linux-X64", "v24.13.2", "hash1"],
+    [4, "Linux-X64", "v24.13.1", "hash2"],
+  ]) {
+    const output = join(directory, String(index)).replaceAll("\\", "/");
+    const result = runWorkflowScript(keyScript, {
+      GITHUB_OUTPUT: output, MODULES_HASH: hash, RUNNER_PLATFORM: platform, NODE_VERSION: version,
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal((await readFile(output, "utf8")).trim(), "store=store\n" +
+      `dependency-key=pnpm-modules-v1-${platform}-${version}-${hash}`);
+  }
 
   const mainOnly = "github.event_name == 'push' && github.ref == 'refs/heads/main'";
   const saveSteps = action.runs.steps.filter(step => step.uses?.startsWith("actions/cache/save@"));
@@ -624,13 +673,25 @@ test("CI seeds pnpm caches on main and builds cleanly in the merge queue", async
   assert(restore?.if.includes("inputs.force-build != 'true'"));
   assert(restore.if.includes("github.event_name == 'merge_group'"));
   assert(restore.if.includes("github.event_name == 'pull_request'"));
-  assert.match(restore.with["restore-keys"], /github\.event_name == 'pull_request'/u);
+  assert.equal(restore.with.key, "${{ steps.build-key.outputs.key }}");
+  assert.equal(restore.with["restore-keys"], "${{ github.event_name == 'pull_request' && steps.build-key.outputs.prefix || '' }}");
+  assert.equal(action.runs.steps.find(step => step.id === "build-key").env.BUILD_CONFIG,
+    "${{ hashFiles('tsconfig.json', 'services/*/tsconfig*.json', 'packages/*/tsconfig*.json', 'scripts/build-services.mjs', '.gitattributes') }}");
+  assert.equal(action.runs.steps.find(step => step.name === "Report service build cache hit").if,
+    "always() && inputs.task == 'build'");
 
   const commands = name => 'pnpm() { printf "%s\\n" "$*"; }\n' + action.runs.steps.find(step => step.name === name).run;
-  for (const [hit, flags] of [["true", "--offline"], ["", "--fetch-retries=2"]]) {
-    const result = runWorkflowScript(commands("Install workspace dependencies"), { MODULES_HIT: hit });
+  const install = 'rm() { echo "cleanup $*"; }\n' + commands("Install workspace dependencies");
+  for (const [hit, lines] of [
+    ["true", ["install --frozen-lockfile --offline"]],
+    ["false", ["cleanup -rf -- node_modules services/*/node_modules packages/*/node_modules",
+      "install --frozen-lockfile --fetch-retries=2"]],
+    ["", ["cleanup -rf -- node_modules services/*/node_modules packages/*/node_modules",
+      "install --frozen-lockfile --fetch-retries=2"]],
+  ]) {
+    const result = runWorkflowScript("set -f\n" + install, { MODULES_HIT: hit });
     assert.equal(result.status, 0, result.stderr);
-    assert.equal(result.stdout.trim(), `install --frozen-lockfile ${flags}`);
+    assert.deepEqual(result.stdout.trim().split(/\r?\n/u), lines);
   }
   for (const [force, exact, matched, suffix] of [
     ["true", "", "", " --force"],
@@ -644,6 +705,34 @@ test("CI seeds pnpm caches on main and builds cleanly in the merge queue", async
     assert.equal(result.status, 0, result.stderr);
     assert.equal(result.stdout.trim(), `run build:services${suffix}`);
   }
+});
+
+test("signing, promotion and nightly workflows use the same Cosign pin", async () => {
+  const pinPath = "scripts/release/cosign-pin.json";
+  const pin = JSON.parse(await read(pinPath));
+  assert.match(pin.version, /^v\d+\.\d+\.\d+$/u);
+  assert.match(pin.linuxAmd64Sha256, /^[0-9a-f]{64}$/u);
+
+  const installJobs = { "branch-image": ["publish"], release: ["stg", "prod"], "nightly-install": ["nightly-install"] };
+  for (const [workflow, expectedJobs] of Object.entries(installJobs)) {
+    const { jobs } = parse(await read(`.github/workflows/${workflow}.yml`));
+    for (const [job, { steps }] of Object.entries(jobs)) {
+      const installs = steps.filter(step => step.uses === cosignAction || step.uses?.startsWith("sigstore/cosign-installer@"));
+      assert.deepEqual(installs.map(step => step.uses), expectedJobs.includes(job) ? [cosignAction] : [], `${workflow}/${job}`);
+    }
+  }
+
+  const { runs } = parse(await read(`${cosignAction}/action.yml`));
+  const [version, install, verify] = runs.steps;
+  assert.match(version.run, /jq -er '.version' scripts\/release\/cosign-pin\.json/u);
+  assert.equal(install.with["cosign-release"], "${{ steps.pin.outputs.version }}");
+  assert.match(install.uses, /^sigstore\/cosign-installer@[0-9a-f]{40}$/u);
+  for (const script of [verify.run, await read("scripts/release/promote-tag.sh")]) {
+    assert.match(script, /jq -er '.linuxAmd64Sha256' scripts\/release\/cosign-pin\.json/u);
+    assert.match(script, /sha256sum --check --strict/u);
+  }
+  assert.match(await read("scripts/dev-install/pull-verify.mjs"),
+    /assert\.equal\(hash\.digest\("hex"\), cosignPin\.linuxAmd64Sha256/u);
 });
 
 test("PR image results are advisory while the merge queue requires the full image matrix", async t => {
@@ -687,7 +776,7 @@ test("PR image results are advisory while the merge queue requires the full imag
     if (imageResult === "failure") assert.match(advisory.stdout, /::warning::Advisory PR image builds: failure/u);
 
     const result = runWorkflowScript(gate.steps[0].run, {
-      EVENT: "merge_group", CHANGES: "success", WORKFLOW_LINT: "success", CHECKS: "success", REVIEW: "skipped",
+      EVENT: "merge_group", CHANGES: "success", WORKFLOW_LINT: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: "skipped",
       IMAGES: imageResult, INTEGRATION: "success", PORTAL_INTEGRATION: "success",
       INTEGRATION_COVERAGE: "success", DEV_INSTALL: "skipped", INFRA: "success",
     });
@@ -695,7 +784,7 @@ test("PR image results are advisory while the merge queue requires the full imag
   }
   const summary = join(directory, "gate").replaceAll("\\", "/");
   const result = runWorkflowScript(gate.steps[0].run, {
-    EVENT: "pull_request", CHANGES: "success", WORKFLOW_LINT: "success", CHECKS: "success", REVIEW: "success",
+    EVENT: "pull_request", CHANGES: "success", WORKFLOW_LINT: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: "success",
     IMAGES: "skipped", INTEGRATION_NEEDED: "false", INTEGRATION: "skipped",
     PORTAL_INTEGRATION: "skipped", INTEGRATION_COVERAGE: "skipped", DEV_INSTALL_NEEDED: "false", DEV_INSTALL: "skipped",
     INFRA_NEEDED: "false", INFRA: "skipped", GITHUB_STEP_SUMMARY: summary,
@@ -764,7 +853,7 @@ ${detector.run}`, { GITHUB_OUTPUT: outputFile.replaceAll("\\", "/"), DIFF_PATHS:
   ]) {
     const pr = event === "pull_request";
     const result = runWorkflowScript(gateStep.run, {
-      EVENT: event, CHANGES: "success", WORKFLOW_LINT: "success", CHECKS: "success", REVIEW: pr ? "success" : "skipped",
+      EVENT: event, CHANGES: "success", WORKFLOW_LINT: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: pr ? "success" : "skipped",
       IMAGES: pr ? "skipped" : "success", INTEGRATION_NEEDED: "false",
       INTEGRATION: pr ? "skipped" : "success", PORTAL_INTEGRATION: pr ? "skipped" : "success",
       INTEGRATION_COVERAGE: pr ? "skipped" : "success",
@@ -778,7 +867,7 @@ ${detector.run}`, { GITHUB_OUTPUT: outputFile.replaceAll("\\", "/"), DIFF_PATHS:
     ["true", "failure", 1], ["true", "cancelled", 1],
   ]) {
     const result = runWorkflowScript(gateStep.run, {
-      EVENT: "pull_request", CHANGES: "success", WORKFLOW_LINT: "success", CHECKS: "success", REVIEW: "success",
+      EVENT: "pull_request", CHANGES: "success", WORKFLOW_LINT: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: "success",
       IMAGES: "skipped", INTEGRATION_NEEDED: "false",
       INTEGRATION: "skipped", PORTAL_INTEGRATION: "skipped", INTEGRATION_COVERAGE: "skipped",
       DEV_INSTALL_NEEDED: needed, DEV_INSTALL: jobResult, INFRA_NEEDED: "false", INFRA: "skipped",
@@ -797,7 +886,7 @@ ${detector.run}`, { GITHUB_OUTPUT: outputFile.replaceAll("\\", "/"), DIFF_PATHS:
   ]) {
     const pr = event === "pull_request";
     const result = runWorkflowScript(gateStep.run, {
-      EVENT: event, CHANGES: "success", WORKFLOW_LINT: "success", CHECKS: "success", REVIEW: pr ? "success" : "skipped",
+      EVENT: event, CHANGES: "success", WORKFLOW_LINT: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: pr ? "success" : "skipped",
       IMAGES: pr ? "skipped" : "success", DEV_INSTALL_NEEDED: "false", DEV_INSTALL: "skipped",
       INFRA_NEEDED: "true", INFRA: "success", INTEGRATION_NEEDED: needed, GITHUB_STEP_SUMMARY: summary,
       INTEGRATION: postgres, PORTAL_INTEGRATION: portal, INTEGRATION_COVERAGE: coverage,
@@ -824,6 +913,84 @@ test("PostgreSQL coverage requires an exact report from every shard", async t =>
   await assert.rejects(verifyPostgresReports(directory), /coverage in PostgreSQL shard 1/u);
   await rm(join(directory, "postgres-shard-1.json"));
   await assert.rejects(verifyPostgresReports(directory), /one report from each PostgreSQL shard/u);
+});
+
+test("PR unit selection catches a hidden transitive regression and falls back on shared inputs", async t => {
+  const directory = await mkdtemp(join(tmpdir(), "wasalx-unit-selection-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const git = (...args) => execFileSync("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+    ...args], { cwd: directory, encoding: "utf8", windowsHide: true }).trim();
+  const [affected, dynamic, unrelated] = ["tests/affected.test.mjs", "tests/dynamic.test.mjs", "tests/unrelated.test.mjs"];
+  const all = [affected, dynamic, unrelated];
+  const files = {
+    "lib/leaf.mjs": "export const answer = 42;\n",
+    "lib/public.mjs": "export { answer } from './leaf.mjs';\n",
+    "lib/unreached.mjs": "export const unused = 42;\n",
+    "pnpm-lock.yaml": "lockfileVersion: '9.0'\n",
+    "tsconfig.json": "{}\n",
+    ".github/workflows/ci.yml": "name: fixture\n",
+    "tests/fixtures/shared.mjs": "export const fixture = true;\n",
+    [affected]: "import assert from 'node:assert/strict'; import test from 'node:test'; "
+      + "import { answer } from '../lib/public.mjs'; test('hidden transitive regression', () => assert.equal(answer, 42));\n",
+    [dynamic]: "const path = '../lib/leaf.mjs'; await import(path);\n",
+    [unrelated]: "import test from 'node:test'; test('unrelated test', () => {});\n",
+  };
+  for (const [file, contents] of Object.entries(files)) {
+    await mkdir(join(directory, posix.dirname(file)), { recursive: true });
+    await writeFile(join(directory, file), contents);
+  }
+  git("init", "--quiet");
+  git("add", ".");
+  git("commit", "--quiet", "-m", "base");
+  const base = git("rev-parse", "HEAD");
+  const select = event => selectUnitFiles(all, { event, cwd: directory });
+  assert.match(select("pull_request").reason, /merge base unavailable/u);
+
+  function mergeFixture() {
+    git("add", ".");
+    const tree = git("write-tree");
+    const head = git("commit-tree", tree, "-p", base, "-m", "feature");
+    git("update-ref", "HEAD", git("commit-tree", tree, "-p", base, "-p", head, "-m", "PR test merge"));
+  }
+
+  await writeFile(join(directory, "lib/leaf.mjs"), "export const answer = 41;\n");
+  mergeFixture();
+  assert.deepEqual(select("pull_request").files, [affected, dynamic]);
+  assert.deepEqual([1, 2].flatMap(shard => shardFiles(select("pull_request").files, shard, 2)).sort(), [affected, dynamic]);
+  for (const event of ["push", "merge_group", "workflow_dispatch", "release"]) {
+    assert.deepEqual(select(event).files, all);
+  }
+  const env = { ...process.env };
+  delete env.NODE_TEST_CONTEXT;
+  const red = spawnSync(process.execPath, ["--test", "--test-reporter=tap", "--test-concurrency=1", ...select("pull_request").files],
+    { cwd: directory, env, encoding: "utf8", windowsHide: true });
+  assert.equal(red.status, 1, red.error?.message ?? red.stderr);
+  assert.match(red.stdout, /not ok \d+ - hidden transitive regression/u);
+  assert.doesNotMatch(red.stdout, /unrelated test/u);
+
+  await writeFile(join(directory, "lib/leaf.mjs"), files["lib/leaf.mjs"]);
+  for (const file of ["pnpm-lock.yaml", "tsconfig.json", ".github/workflows/ci.yml", "tests/fixtures/shared.mjs", "lib/unreached.mjs"]) {
+    await writeFile(join(directory, file), files[file] + "\n");
+    mergeFixture();
+    assert.deepEqual(select("pull_request").files, all, file);
+    await writeFile(join(directory, file), files[file]);
+  }
+
+  await writeFile(join(directory, "lib/added.mjs"), "export const added = true;\n");
+  mergeFixture();
+  assert.equal(git("diff", "--name-status", base, "HEAD"), "A\tlib/added.mjs");
+  const addition = select("pull_request");
+  assert.deepEqual(addition.files, all);
+  assert.match(addition.reason, /structural changes/u);
+
+  const { jobs } = parse(await read(".github/workflows/ci.yml"));
+  const fullUnit = jobs["full-unit"];
+  assert.equal(fullUnit.name, "Full ${{ matrix.name }}");
+  assert.equal(fullUnit.if, "github.event_name == 'push' || github.event_name == 'workflow_dispatch'");
+  assert.deepEqual(fullUnit.strategy.matrix.include, jobs.checks.strategy.matrix.include.filter(row => row.mode === "unit"));
+  assert.deepEqual(fullUnit.steps, jobs.checks.steps);
+  assert.match(jobs.checks.steps[0].with["fetch-depth"], /github\.event_name == 'pull_request' && matrix\.mode == 'unit' && '2'/u);
+  assert(jobs["ci-gate"].needs.includes("full-unit"));
 });
 
 test("shards cover each file once regardless of inventory order or duplicates", () => {

@@ -24,9 +24,11 @@ async function metaAppRegistry(t) {
   const apps = ["10001", "10002"].map(appId => ({
     appId, secretReference: `secret://synthetic/${appId}/hmac`, verifyTokenReference: `secret://synthetic/${appId}/verify`,
   }));
+  const secretValue = reference => `synthetic-value:${reference}`;
   const defaults = {
     META_WEBHOOK_APPS_FILE: path, META_APP_ID: apps[0].appId,
-    META_APP_SECRET_REFERENCE: apps[0].secretReference, WASALX_TEST_RECIPIENT_ALLOWLIST: "*",
+    META_APP_SECRET_REFERENCE: apps[0].secretReference, META_VERIFY_TOKEN: secretValue(apps[0].verifyTokenReference),
+    WASALX_TEST_RECIPIENT_ALLOWLIST: "*",
   };
   const previous = Object.fromEntries(Object.keys(defaults).map(key => [key, process.env[key]]));
   for (const [key, value] of Object.entries(defaults)) process.env[key] = value;
@@ -39,7 +41,7 @@ async function metaAppRegistry(t) {
   });
   const writeRows = rows => writeFile(path, JSON.stringify({ schemaVersion: 1, apps: rows }));
   await writeRows(apps);
-  return { apps, writeRows };
+  return { apps, writeRows, secretValue };
 }
 
 test("Meta registry without a row for META_APP_ID prevents startup", async t => {
@@ -54,8 +56,25 @@ test("Meta registry with a different default secret reference prevents startup",
   assert.throws(() => new WebhookIngressController({}, {}, {}), /META_APP_SECRET_REFERENCE must match/u);
 });
 
+test("Meta registry with a different default verification token prevents startup without exposing either value", async t => {
+  const { apps: [defaultApp, secondApp], secretValue } = await metaAppRegistry(t);
+  const sidecar = { resolveHmac: async reference => secretValue(reference) };
+  process.env.META_VERIFY_TOKEN = secretValue(secondApp.verifyTokenReference);
+  class TestModule {}
+  Module({ controllers: [WebhookIngressController], providers: [
+    { provide: WebhookSecretService, useValue: sidecar },
+    ...[DatabaseService, TenantDrainService, RoutingConnectorsConfig, SecretProvisioningService]
+      .map(provide => ({ provide, useValue: {} })),
+  ] })(TestModule);
+  const app = await NestFactory.create(TestModule, new FastifyAdapter(), { logger: false });
+  t.after(() => app.getHttpAdapter().close());
+  await assert.rejects(app.init(), {
+    message: `META_WEBHOOK_APPS_FILE app ${defaultApp.appId} verification token must match META_VERIFY_TOKEN`,
+  });
+});
+
 test("Meta app callbacks isolate signatures, verification tokens and tenant routes", async t => {
-  const { apps, writeRows } = await metaAppRegistry(t);
+  const { apps, writeRows, secretValue } = await metaAppRegistry(t);
   const lookups = [], secrets = [], admitted = [], wakes = [];
   const routes = new Map(apps.map((app, index) => [`2000${index + 1}`, {
     tenant_id: `fixture-tenant-${index}`, connection_id: `fixture-connection-${index}`,
@@ -68,7 +87,6 @@ test("Meta app callbacks isolate signatures, verification tokens and tenant rout
       return { id: "synthetic", duplicate: false };
     },
   };
-  const secretValue = reference => `synthetic-value:${reference}`;
   const secretSidecar = { resolveHmac: async (reference, owner) => {
     assert.deepEqual(owner, { kind: "exact", expectedReference: reference });
     secrets.push(reference);
@@ -85,6 +103,7 @@ test("Meta app callbacks isolate signatures, verification tokens and tenant rout
   const app = await NestFactory.create(TestModule, new FastifyAdapter(), { logger: false, rawBody: true });
   t.after(() => app.close());
   await app.init();
+  assert.deepEqual(secrets, [apps[0].verifyTokenReference]);
   const send = (path, signer, phone) => {
     const payload = JSON.stringify({ object: "whatsapp_business_account", entry: [{ id: "30001", changes: [{
       field: "messages", value: { messaging_product: "whatsapp", metadata: { phone_number_id: phone },
