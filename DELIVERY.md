@@ -8,9 +8,9 @@ WasalX Delivery owns this document, the merge queue, CI health and speed, releas
 
 - Open PRs from short-lived branches against trunk `main`. Merge, split, or close each PR within two days of its first push. Delete merged branches and branches with no PR after seven days without a push.
 - Workers push their own branches and open PRs under the project's agent identity. The queue squashes and requires every PR in a group to pass.
-- Only [critical changes](AGENTS.md#risk-paths) need independent review. Critical changes cover production, secrets, real people's or customer data, making anything public, host, network or firewall changes, repo settings or rulesets, and release gates.
+- Only critical changes, mapped to paths in [Critical paths](AGENTS.md#critical-paths), get one independent review.
 - For all other changes, the thread that made the change opens its own PR and merges it once required CI is green. No second review, lead sign-off, or Portfolio GO is required. Never bypass required CI or branch protection.
-- For a critical PR, the author enables auto-merge only after the reviewer's passing verdict comment names the current head SHA. Before any later push, disable auto-merge, check queue membership, and remove the PR if queued. A push touching a critical path needs a new verdict on the new head.
+- For a critical PR, the author enables auto-merge only after the reviewer's passing verdict comment names the current head SHA. Before any later push, disable auto-merge, check queue membership, and remove the PR if queued. A push after the verdict needs a new verdict only when it adds a new critical change. Tests check the fix for a finding, not another review.
 - Update `main` only through the protected queue, which qualifies the exact combined tree. Never force-push or rewrite history.
 - Run agent pushes, PR operations, merges, reruns, and issue and board writes only through the project's reviewed GitHub App helper. Never print its installation token. Use the owner login only for approved settings changes and authorized tag creation.
 
@@ -30,7 +30,9 @@ WasalX Delivery owns this document, the merge queue, CI health and speed, releas
 
 - Fix a failing test or the defect it found. Keep required checks and lint rules in place. CI must pass on its first attempt without skipping tests or widening timeouts. File a flaky test as a High-priority bug and fix it or revert the change that introduced it.
 - Revert the offending change if `main` or the merge queue stays red for 30 minutes. Replacements must preserve the original regression coverage. A test file that only detects changes may be removed after two weeks of evidence. Keep authorization, privacy, migration, and concurrency tests.
+- Record known Node unit-test failures in [test-quarantine.json](scripts/test-quarantine.json) with the runner file path, exact test name, owner, and UTC expiry date (`expiresOn`, `YYYY-MM-DD`). The hosted unit reporter labels matching failures and keeps their failing result. A row expires at midnight UTC on its expiry date and fails the unit check.
 - Every test file belongs to a named runner. Keep runner ownership and the coverage inventory current. The [ownership guard](tests/hosted-ci.test.mjs) detects gaps and stale entries.
+- The [source endpoint guard](tests/source-endpoint-literals.test.mjs) runs in the required unit checks. Keep endpoints in configuration. When a source literal is required, record its exact value, path, and reason in the [allowlist](tests/source-endpoint-allowlist.json). The guard scans tracked source, with exemptions for configuration, generated files, tests, comments, reserved addresses and names, hostless URLs, and namespace identifiers.
 - [The integration scenario registry](scripts/postgres-scenario-registry.mjs) assigns each PostgreSQL scenario to one of four shards. Each shard uses a disposable database. CI requires one report per shard and fails on unknown, missing, or duplicate scenarios.
 - Use local services and mocks in tests. Use disposable data and test credentials.
 
@@ -123,5 +125,4 @@ Keep these performance targets independent of the merge result. Address misses t
 | §4 Run the full suite on main and merge groups | Main pushes skip PR checks and queue image builds because the merge queue already qualified the exact tree. | 2026-12-14 |
 | §6 Automatic production backups and quarterly restore tests | There is no production data yet. The [backup job](infra/helm/wasalx/templates/control-plane-backup.yaml) is disabled by default and the [restore rehearsal script](scripts/dr/rehearse-postgres-restore.mjs) is unwired. | 2026-12-14 |
 | §1 One formatter and one linter per language in CI | Ruby, Python, shell, SQL, and CSS lack CI linters. TypeScript and JavaScript use ESLint and still need a formatter. OpenTofu is the only language with a formatter check. | 2026-12-14 |
-| §1 URL and IP literal guard with a reasoned allowlist for source outside configuration, generated files, and tests. Loopback, unspecified, and reserved example or documentation hosts and addresses, hostless URLs, and standard namespace IDs are exempt. | The guard and allowlist have yet to be built. | 2026-12-14 |
 | §6 Staging rollback rehearsal for every release candidate | Staging is not in service. Once it is, deploy each RC, roll back to the previous release, verify health, and record the rehearsal in the deployment audit. | 2026-12-14 |

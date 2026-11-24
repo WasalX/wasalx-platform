@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
 import { collectFile, collectionFiles, inventory, isTestFile, shardFiles } from "../scripts/hosted-ci.mjs";
 import { unitAllowlist, unitFiles } from "../scripts/test-unit.mjs";
+import reportTimings, { validateQuarantine } from "../scripts/hosted-ci-timing-reporter.mjs";
 import { addonSkips, skipPattern } from "../scripts/hosted-ci-policy.mjs";
 import { generateBaseline } from "../scripts/generate-hosted-ci-baseline.mjs";
 import baseline from "../scripts/hosted-ci-baseline.mjs";
@@ -33,6 +34,24 @@ function runsFile(text, file, option) {
     return exe === "node" && args.includes("--test") ? paths.includes(file) : paths.find(arg => !arg.startsWith("-")) === file;
   });
 }
+
+test("test quarantine expires at midnight UTC and annotates failures only", async () => {
+  for (const { file } of validateQuarantine()) assert(unitFiles.includes(file), file + " is not a unit test file");
+
+  const file = "tests/hosted-ci.test.mjs";
+  const known = { file, name: "example failure", owner: "test maintainer", expiresOn: "2030-01-02" };
+  const entries = validateQuarantine([known], "2030-01-01");
+  assert.throws(() => validateQuarantine(entries, "2030-01-02"), /expired on 2030-01-02/u);
+  assert.throws(() => validateQuarantine([{ ...known, expiresOn: "2030-02-30" }], "2030-01-01"), /valid UTC expiry/u);
+  assert.throws(() => validateQuarantine([{ ...known, owner: "" }], "2030-01-01"), /requires a file, test name and owner/u);
+  const data = { file: join(process.cwd(), file), name: known.name };
+  const reports = await Array.fromAsync(reportTimings([
+    { type: "test:pass", data },
+    { type: "test:fail", data: { ...data, name: "other failure" } },
+    { type: "test:fail", data },
+  ], entries));
+  assert.deepEqual(reports, ["KNOWN TEST FAILURE " + JSON.stringify(known) + "\n"]);
+});
 
 test("runner ownership recognizes a bare sudo interpreter", () => {
   const file = "scripts/example.sh";

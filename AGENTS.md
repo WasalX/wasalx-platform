@@ -62,9 +62,20 @@ Live-provider qualification is a separate release milestone.
 - Update affected documentation in the same PR as the change.
 - Follow the [branch and merge rules](DELIVERY.md#branching-and-merging) and the [security policy](SECURITY.md).
 
-## Risk paths
+## Critical paths
 
-Only critical changes need an independent review: production configuration and deploys (`Dockerfile.*`, `compose*.yaml`, `infra/`, `release/`, `zammad-addon.json`); secrets; real people's or customer data, including migrations, deletion and retention, and sign-in or permission changes that alter who can see it; making anything public, including `tests/no-agent-instruction-files.test.mjs`; host, network or firewall changes; repo settings or rulesets; and release gates (`.github/`, CI scripts, `scripts/release/`). Everything else ships through its own PR once required CI is green, with no second review or sign-off.
+Only a critical change gets a review: one independent full-diff review at the exact head, with no repeat rounds. Tests check the fix for a finding. These are the classes and the WasalX paths they cover:
+
+- **Production** — production configuration, deploys, and production data: `Dockerfile.*`, `compose*.yaml`, `infra/`, `release/`, and `zammad-addon.json`.
+- **Secrets and credentials** — how secrets are stored, read, scoped, or rotated, including the secret sidecar and token helpers.
+- **Real people's or customer data** — [control API migrations](services/control-api/migrations/), deletion and retention, audit logs and history, backups and restore, sign-in and permissions, and the personal data an API response, export, or outbound message carries. The server is the exposure boundary, so a UI that only shows fields the API already returns is not critical.
+- **Making anything public** — including `tests/no-agent-instruction-files.test.mjs`.
+- **Hosts, networks, and firewalls** — including network and access-control configuration.
+- **Repo settings, branch protection, and release gates** — rulesets, required checks, `.github/`, CI scripts, `scripts/release/`, the privacy deny check, and deleting, skipping, or weakening a test.
+
+WasalX records no safety-critical domain rules.
+
+Everything else, such as features, fixes, docs, `DESIGN.md`, UI, added or changed tests, dependency changes, and refactors, gets no review. The thread that made the change opens its own PR and merges it once required CI is green.
 
 ## Data safety
 

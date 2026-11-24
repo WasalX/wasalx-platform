@@ -15,7 +15,7 @@ export type BotActionJob=BotActionJobBase&(
 );
 export type BotHandoffJob={id:string;tenantId:string;conversationId:string;handoffNodeId:string;zammadGroupId:string;zammadOwnerId?:string;priority:"1 low"|"2 normal"|"3 high";attempts:number;fencingToken:number;zammadTicketId:string;zammadBaseUrl:string;zammadSecretReference:string};
 export type ResolvedSecret={registrationPin?:string;apiKey?:string;accessToken?:string;token?:string;hmacKey?:string;routeToken?:string;value?:string};
-export type InboundEvent={id:string;tenantId:string;connectionId:string;provider:"waha"|"meta";providerEngine?:"GOWS"|"NOWEB"|"CLOUD_API";providerEventId:string;eventType:string;payload:Record<string,unknown>;attempts:number;receivedAt?:string};
+export type InboundEvent={id:string;tenantId:string;connectionId:string;provider:"waha"|"meta";providerEngine?:"GOWS"|"NOWEB"|"CLOUD_API";providerEventId:string;eventType:string;payload:Record<string,unknown>;attempts:number;receivedAt?:string;metaWebhookAppId?:string};
 export type GroupCommand={actionId:string;input:Record<string,string>;successReply:string;failureReply:string};
 export type InboundRule={id:string;name:string;matcherType:"exact_length"|"prefix_length"|"starts_with"|"contains"|"advanced";pattern:string;prefix:string|null;digitLength:number|null;priority:number;enabled:boolean;version:number;groupCommand?:GroupCommand;teamSenderPolicy?:"include"|"exclude"};
 export type GroupCommandAction=Omit<BotActionRequest,"id"|"requestInput">&{actionId:string;actionDefinitionId:string;revision:number};
