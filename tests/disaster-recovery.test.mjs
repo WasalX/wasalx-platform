@@ -409,12 +409,15 @@ test("the quarterly systemd timer activates the one-shot restore service", async
   for (const setting of [
     "User=wasalx-restore", "NoNewPrivileges=true", "ProtectSystem=strict", "PrivateTmp=true",
     "UMask=0077", "StateDirectoryMode=0700", "CacheDirectoryMode=0700", "UnsetEnvironment=DOCKER_CONTEXT",
-    "After=network-online.target docker.service",
+    "After=network-online.target docker.service", "TimeoutStartSec=4h",
   ]) {
     assert.ok(service.split(/\r?\n/u).includes(setting), setting);
   }
   const startCleanup = service.match(/^ExecStartPre=(.+)$/mu)?.[1];
   const stopCleanup = service.match(/^ExecStopPost=(.+)$/mu)?.[1];
+  const cacheSweep = /rm -rf -- "\$\{CACHE_DIRECTORY:\?\}"\/rehearsal-\*/u;
+  assert.match(startCleanup, cacheSweep);
+  assert.match(stopCleanup, cacheSweep);
   assert.match(startCleanup, /docker --host unix:\/\/\/run\/docker\.sock ps -aq --filter label=wasalx\.io\/purpose=dr-rehearsal/u);
   assert.match(startCleanup, /xargs -r docker --host unix:\/\/\/run\/docker\.sock rm --force --volumes/u);
   assert.equal(stopCleanup, startCleanup);
