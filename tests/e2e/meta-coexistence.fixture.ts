@@ -4,6 +4,7 @@ import type { MetaSignupAttemptView } from "../../lib/meta-signup-contract";
 import type { MetaCoexistenceSummary } from "../../lib/meta-coexistence-contract";
 import { englishTenantMessages } from "../../lib/i18n/messages/en/tenant";
 import { arabicTenantMessages } from "../../lib/i18n/messages/ar/tenant";
+import { installRequestDeadlineClock } from "./request-deadline-clock.fixture";
 
 const expectedCoexistenceFailures = new WeakMap<Page, { url: string; status: number }[]>();
 export function consumeExpectedCoexistenceDenial(page: Page, message: ConsoleMessage) {
@@ -17,7 +18,7 @@ export function consumeExpectedCoexistenceDenial(page: Page, message: ConsoleMes
 
 /** Mocked HTTP/SDK browser behavior only. No real Meta authorization or import proof. */
 export async function metaCoexistenceJourney(page: Page, locale: "en" | "ar", role: string, testInfo: TestInfo) {
-  testInfo.setTimeout(testInfo.timeout + 25_000); // Exercise the actual 15-second first-read deadline once.
+  const advancePastRequestDeadline = await installRequestDeadlineClock(page);
   const copy: Readonly<Record<string, string>> = locale === "ar" ? arabicTenantMessages : englishTenantMessages;
   const t = (key: string) => copy[key]!;
   // Pin the operator intent independently of the dictionary: reverting to a
@@ -308,7 +309,10 @@ export async function metaCoexistenceJourney(page: Page, locale: "en" | "ar", ro
   await testInfo.attach("coexistence-stopped", { body: await page.screenshot(), contentType: "image/png" });
   stallSummary = true;
   await page.reload(); await expect.poll(() => Boolean(pendingSummary.release)).toBe(true);
-  await expect(region().getByRole("alert")).toBeVisible({ timeout: 20_000 });
+  const deadlineAlert = region().getByRole("alert");
+  await expect(deadlineAlert).toHaveCount(0);
+  await advancePastRequestDeadline();
+  await expect(deadlineAlert).toBeVisible();
   pendingSummary.release?.(); delete pendingSummary.release;
   await region().getByRole("button", { name: t("tenant.metaCoexistence.refresh"), exact: true }).click();
   await expect(region().getByText(t("tenant.metaCoexistence.hold.STOPPED"), { exact: true })).toBeVisible();
