@@ -720,7 +720,8 @@ test("tenant dialogs share one keyboard-focus contract without weakening confirm
   assert.match(css, /\.group-configuration-backdrop \.group-drawer\{[^}]*width:min\(920px,100%\);height:min\(90dvh,960px\);max-height:90dvh/u);
   assert.match(css, /\.modal-backdrop::backdrop\{[^}]*background:var\(--overlay\);[^}]*backdrop-filter:blur\(6px\)/u);
   assert.match(tokens, /--wx-color-overlay: rgb\(0 0 0 \/ 72%\)/u);
-  assert.match(css, /\.theme-dark \.modal\{[^}]*border-color:color-mix\(in srgb,var\(--border-strong\) 78%,var\(--text\)\);[^}]*box-shadow:0 \.5rem 1\.5rem var\(--wx-color-shadow\),var\(--shadow\)/u);
+  assert.match(css, /\.theme-dark \.modal\{border-color:color-mix\(in srgb,var\(--border-strong\) 78%,var\(--text\)\)\}/u);
+  assert.match(css, /\.modal\{[^}]*box-shadow:var\(--shadow\)/u);
   assert.match(css, /@media\(forced-colors:active\)\{\.modal\{border-color:CanvasText;box-shadow:none\}/u);
   assert.match(app, /resolutionCode:"DELIVERY_RETRY_REQUESTED",confirmation:actionRetryConfirmation/u);
   assert.match(app, /setConfirmActionRetry\(false\);window\.requestAnimationFrame\(\(\)=>actionRetryTrigger\.current\?\.focus\(\)\)/u);
@@ -798,7 +799,7 @@ test("shared shell stays truthful, bounded, and operable on mobile", async () =>
   assert.match(css, /\.app-shell\[data-mobile-navigation-open="false"\] \.sidebar nav\{display:none\}/u);
   assert.match(css, /\.workspace-identity>b\{[^}]*-webkit-line-clamp:2;[^}]*overflow-wrap:anywhere;/u);
   assert.match(css, /\.operational-drawer-body>\*\{flex-shrink:0\}/u);
-  assert.match(css, /@media\(max-width:480px\)\{\.settings-nav:not\(\.settings-skeleton-nav\)\{display:grid;grid-template-columns:repeat\(2,minmax\(0,1fr\)\)/u);
+  assert.match(css, /@media\(max-width:480px\)\{[^@]*\.settings-nav:not\(\.settings-skeleton-nav\)\{display:grid;grid-template-columns:repeat\(2,minmax\(0,1fr\)\)/u);
   assert.match(css, /\.profile-logout\{display:grid;width:44px;height:44px/u);
   assert.match(css, /\.modal-backdrop\[open\]\{display:grid;place-items:safe center\}/u);
   assert.match(css, /\.group-drawer\{[^}]*width:min\(720px,100%\);height:100%;max-height:100%/u);
