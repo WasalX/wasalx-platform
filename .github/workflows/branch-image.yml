@@ -87,12 +87,7 @@ jobs:
           PUBLIC_CONTACT_EMAIL: ${{ matrix.image == 'portal' && vars.PUBLIC_CONTACT_EMAIL || '' }}
         run: python3 scripts/release/images-by-digest.py build --cache "$BUILD_CACHE" --image "$IMAGE" --output "records/$IMAGE.json"
       - if: steps.image.outputs.pending == 'false'
-        uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
-        with:
-          cosign-release: v3.0.6
-      - name: Verify the pinned cosign binary
-        if: steps.image.outputs.pending == 'false'
-        run: echo 'c956e5dfcac53d52bcf058360d579472f0c1d2d9b69f55209e256fe7783f4c74  '"$(command -v cosign)" | sha256sum --check --strict
+        uses: ./.github/actions/cosign
       - name: Publish, sign, attest and inspect the published digest
         if: steps.image.outputs.pending == 'false'
         run: python3 scripts/release/images-by-digest.py publish --output "records/$IMAGE.json"

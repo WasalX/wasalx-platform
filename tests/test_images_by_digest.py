@@ -642,7 +642,15 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
         self.assertNotIn("url:", text)
         allowed = {"actions/checkout", "actions/setup-node", "actions/upload-artifact", "actions/download-artifact",
                    "docker/setup-buildx-action", "docker/login-action", "sigstore/cosign-installer"}
-        for action in re.findall(r"uses: (\S+)", text):
+        actions = re.findall(r"uses: (\S+)", text)
+        cosign_action = "./.github/actions/cosign"
+        self.assertEqual(actions.count(cosign_action), 1)
+        actions.remove(cosign_action)
+        install = (ROOT / cosign_action / "action.yml").read_text()
+        nested = re.findall(r"uses: (\S+)", install)
+        self.assertEqual(len(nested), 1)
+        self.assertTrue(nested[0].startswith("sigstore/cosign-installer@"))
+        for action in actions + nested:
             name, sha = action.split("@")
             self.assertIn(name, allowed)
             self.assertRegex(sha, r"^[a-f0-9]{40}$")

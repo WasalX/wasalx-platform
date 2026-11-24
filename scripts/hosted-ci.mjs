@@ -61,9 +61,14 @@ async function main() {
   const files = mode === "collection" ? collectionFiles(tracked) : inventory(tracked);
   assert(files.every(file => file.startsWith("tests/") && !file.includes("..")));
   if (mode === "unit") {
-    const selected = shardFiles(unitFiles, Number(shard), Number(total));
-    assert(selected.length > 0, "Empty unit shard");
-    console.log(`Unit shard ${shard}/${total}: ${selected.length} of ${unitFiles.length} files`);
+    const { files: candidates, reason } = process.env.GITHUB_EVENT_NAME === "pull_request"
+      ? (await import("./affected-unit-tests.mjs")).selectUnitFiles(unitFiles)
+      : { files: unitFiles, reason: "full suite for this event" };
+    assert(candidates.length > 0, "Empty unit selection");
+    const selected = shardFiles(candidates, Number(shard), Number(total));
+    const summary = `Unit shard ${shard}/${total}: ${selected.length} files (${candidates.length} of ${unitFiles.length} selected, ${reason})`;
+    console.log(summary);
+    if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary + "\n");
     const skipped = selected.map(file => ({ file, entries: addonSkips(file) })).filter(batch => batch.entries.length);
     const ordinary = selected.filter(file => !skipped.some(batch => batch.file === file));
     const batches = [{ files: ordinary, entries: [] }, ...skipped.map(batch => ({ files: [batch.file], entries: batch.entries }))];
