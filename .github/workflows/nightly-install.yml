@@ -155,8 +155,13 @@ jobs:
           PR_HEAD: ${{ github.event.pull_request.head.sha }}
           TRUSTED_ROOT: ${{ steps.trust.outputs.root }}
         run: |
+          trap 'printf "command=%s exit=%s reason=exact PR pull tooling step failed at line %s\n" "$BASH_COMMAND" "$?" "$LINENO" >&2' ERR
           work="$RUNNER_TEMP/wasalx-nightly"
-          test "$(git rev-parse HEAD^2)" = "$PR_HEAD"
+          merge_head=$(git rev-parse HEAD^2)
+          if [[ "$merge_head" != "$PR_HEAD" ]]; then
+            printf 'command=git rev-parse HEAD^2 exit=1 reason=merge parent does not match the PR head\n' >&2
+            exit 1
+          fi
           git worktree add --detach "$work/pr-head" "$PR_HEAD"
           cosign=$(command -v cosign)
           cd "$work/pr-head"

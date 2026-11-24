@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { verifyProductDigests } from "../scripts/dev-install/pull-verify.mjs";
 
@@ -49,4 +51,15 @@ test("a successfully signed attestation for another tree cannot qualify", async 
   const otherTree = "e".repeat(40);
   await assert.rejects(verifyProductDigests(inventory, "trust.json", async () => envelope(otherTree)), error =>
     error.code === "ERR_ASSERTION" && error.actual[0].digest.gitTree === otherTree && error.expected[0].digest.gitTree === tree);
+});
+
+test("the verifier CLI reports inventory failure without leaking its arguments", () => {
+  const verifier = fileURLToPath(new URL("../scripts/dev-install/pull-verify.mjs", import.meta.url));
+  const result = spawnSync(process.execPath, [verifier, "private-fixture-manifest"], {
+    encoding: "utf8", timeout: 10_000, windowsHide: true,
+  });
+  assert.equal(result.status, 1);
+  assert.equal(result.stdout, "");
+  assert.match(result.stderr, /^command=node scripts\/dev-install\/pull-verify\.mjs exit=1 reason=cannot load or validate the hosted image inventory\s*$/u);
+  assert.ok(!result.stderr.includes("private-fixture-manifest"));
 });

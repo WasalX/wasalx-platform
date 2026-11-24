@@ -745,7 +745,14 @@ if __name__ == "__main__":
     elif args.command == "verify-publication":
         verify_publication(args.manifest)
     elif args.command == "stage-hosted-bundles":
-        stage_hosted_bundles(args.manifest)
+        try:
+            stage_hosted_bundles(args.manifest)
+        except HTTPError as error:
+            sys.exit(f"hosted bundle staging reason: registry returned HTTP {error.code}")
+        except (urllib.error.URLError, TimeoutError):
+            sys.exit("hosted bundle staging reason: registry connection failed or timed out")
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            sys.exit(f"hosted bundle staging reason: invalid or unreadable OCI metadata ({type(error).__name__})")
     elif args.command == "pending":
         pending(args.image, args.output)
     else:

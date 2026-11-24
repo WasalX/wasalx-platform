@@ -17,7 +17,7 @@ import tempfile
 import time
 import unittest
 from unittest.mock import patch
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 
 
@@ -249,6 +249,16 @@ class PullTest(unittest.TestCase):
             verify.assert_not_called()
         self.assertEqual(self.records(), [])
 
+    def test_live_failure_reports_a_redacted_reason(self):
+        result = subprocess.run(
+            [sys.executable, "-I", "-B", __file__, "--live", "--candidate", "private-fixture-value",
+             "--manifest", "unused", "--cosign", "unused", "--trust", "unused"],
+            cwd=HERE, text=True, capture_output=True, timeout=15)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("command=python3 -I -B scripts/dev-install/test_pull_agent.py --live exit=1 "
+                      "reason=live tooling is not the exact PR commit", result.stderr)
+        self.assertNotIn("private-fixture-value", result.stderr)
+
     def test_repointed_tag_keeps_existing_receipt(self):
         self.outbox.add(self.make_offer())
         first = self.records()[0].read_bytes()
@@ -426,37 +436,74 @@ class PullTest(unittest.TestCase):
             render.render_pull({**identity, "mode": "unattended"}, self.work / "bad")
 
 
+LIVE_COMMAND = "python3 -I -B scripts/dev-install/test_pull_agent.py --live"
+
+
+class LiveParser(argparse.ArgumentParser):
+    def error(self, message):
+        self.exit(2, f"command={LIVE_COMMAND} exit=2 reason=invalid or missing CLI arguments\n")
+
+
 def live():
-    parser = argparse.ArgumentParser(description="Exercise exact PR tooling against a public main publication.")
+    parser = LiveParser(description="Exercise exact PR tooling against a public main publication.")
     parser.add_argument("--live", action="store_true")
     parser.add_argument("--candidate", required=True)
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--cosign", required=True)
     parser.add_argument("--trust", type=Path, required=True)
     args = parser.parse_args()
-    source = subprocess.check_output(["git", "rev-parse", "HEAD", "HEAD^{tree}"], text=True).splitlines()
-    if source[0] != args.candidate:
-        raise ValueError("live tooling is not the exact PR commit")
-    agent.TOOLS = HERE
-    api = agent.GitHub()
-    candidate = api.json(f"/commits/{agent.object_sha(args.candidate)}")
-    if [candidate["sha"], candidate["commit"]["tree"]["sha"]] != source:
-        raise ValueError("anonymous API did not bind the exact PR tree")
-    manifest = json.loads(args.manifest.read_bytes())
-    commit = agent.object_sha(manifest["commit"])
-    tree = agent.main_tree(api, commit)
-    config = {"cosign": args.cosign, "trusted_root": args.trust,
-              "trusted_root_sha256": sha256(args.trust.read_bytes()).hexdigest()}
-    with tempfile.TemporaryDirectory() as directory:
-        work = Path(directory) / agent.ASSET
-        work.write_bytes(args.manifest.read_bytes())
-        refs = agent.verify(work, commit, tree, config)
-    compose = agent.compose_refs(api, commit, refs)
-    print(f"PR_TOOLING={args.candidate} SIGNED_MAIN_PUBLICATION={commit} PRODUCT={len(refs)} COMPOSE={len(compose)} ANONYMOUS_API_GHCR_SIGSTORE=PASS")
+    command, reason = "git rev-parse HEAD HEAD^{tree}", "cannot read the checked-out PR commit and tree"
+    exit_code = 1
+    try:
+        source = subprocess.check_output(command.split(), text=True, stderr=subprocess.DEVNULL, timeout=10).splitlines()
+        command, reason = LIVE_COMMAND, "live tooling is not the exact PR commit"
+        if len(source) != 2 or source[0] != args.candidate:
+            raise ValueError
+        agent.TOOLS = HERE
+        api = agent.GitHub()
+        reason = "anonymous API did not bind the exact PR tree"
+        candidate = api.json(f"/commits/{agent.object_sha(args.candidate)}")
+        if [candidate["sha"], candidate["commit"]["tree"]["sha"]] != source:
+            raise ValueError
+        reason = "cannot read or validate the main publication manifest"
+        manifest_bytes = args.manifest.read_bytes()
+        commit = agent.object_sha(json.loads(manifest_bytes)["commit"])
+        reason = "anonymous API did not bind the publication to main"
+        tree = agent.main_tree(api, commit)
+        reason = "cannot prepare the pinned Sigstore root or private manifest"
+        config = {"cosign": args.cosign, "trusted_root": args.trust,
+                  "trusted_root_sha256": sha256(args.trust.read_bytes()).hexdigest()}
+        with tempfile.TemporaryDirectory() as directory:
+            work = Path(directory) / agent.ASSET
+            work.write_bytes(manifest_bytes)
+            command, reason = "node scripts/dev-install/pull-verify.mjs", "cannot verify the main publication signatures"
+            # The verifier writes only redacted diagnostics to stderr and JSON refs to stdout.
+            refs = agent.verify(work, commit, tree, config, stderr=None)
+        command, reason = LIVE_COMMAND, "cannot validate the publication's Compose image references"
+        compose = agent.compose_refs(api, commit, refs)
+        print(f"PR_TOOLING={args.candidate} SIGNED_MAIN_PUBLICATION={commit} PRODUCT={len(refs)} COMPOSE={len(compose)} ANONYMOUS_API_GHCR_SIGSTORE=PASS")
+        return 0
+    except subprocess.CalledProcessError as error:
+        exit_code = error.returncode if error.returncode > 0 else 128 - error.returncode
+    except subprocess.TimeoutExpired:
+        exit_code = 124
+        reason += " (command deadline expired)"
+    except HTTPError as error:
+        reason += f" (HTTP {error.code})"
+    except agent.RateLimit:
+        reason += " (anonymous GitHub API rate limit)"
+    except (URLError, TimeoutError):
+        reason += " (network request failed or timed out)"
+    except OSError as error:
+        reason += f" (OS error {error.errno})"
+    except (agent.Pending, agent.TrustedRootMismatch, ValueError, TypeError, KeyError):
+        pass
+    print(f"command={command} exit={exit_code} reason={reason}", file=sys.stderr)
+    return exit_code
 
 
 if __name__ == "__main__":
     if "--live" in sys.argv:
-        live()
+        sys.exit(live())
     else:
         unittest.main()

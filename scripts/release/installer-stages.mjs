@@ -410,8 +410,7 @@ export async function executeStage(action, context) {
     for (const reference of dependencies) {
       assert.match(reference ?? "", /@sha256:[0-9a-f]{64}$/u, "dependency image must be pinned");
       if (!await inspectImage(reference) && pullMissing) {
-        const exit = await execute("docker", ["pull", "--quiet", reference], environment, true);
-        assert.equal(exit, 0, `dependency image pull failed: ${reference}`);
+        await execute("docker", ["pull", "--quiet", reference], environment);
       }
       assert.ok(await inspectImage(reference), `dependency image missing; run build before replacement: ${reference}`);
     }
@@ -423,8 +422,7 @@ export async function executeStage(action, context) {
     const inventory = await readHostedInventory(context);
     for (const { id, reference } of plan) {
       const source = inventory.images[id].pullReference;
-      assert.equal(await execute("docker", ["pull", "--platform", "linux/amd64", "--quiet", source], environment, true), 0,
-        `${id} digest pull failed`);
+      await execute("docker", ["pull", "--platform", "linux/amd64", "--quiet", source], environment);
       await execute("docker", ["image", "tag", source, reference], environment);
     }
     await verifyDependencies(true);
@@ -695,6 +693,10 @@ export function run(command, arguments_, environment, inherit = false, input) {
   const result = spawnSync(command, arguments_, { cwd: repository, env: environment, encoding: "utf8", windowsHide: true });
   if (result.status !== 0) {
     const tail = commandStderrTail(result.stderr, environment);
+    if (command === "docker" && arguments_[0] === "pull") {
+      const ref = arguments_.at(-1);
+      assert.equal(result.status, 0, `docker pull ${ref} exit=${result.status ?? 1}: ${tail || "no Docker diagnostic"}`);
+    }
     assert.equal(result.status, 0, tail ? `${command} failed: ${tail}` : `${command} failed`);
   }
   return result.stdout.trim();
