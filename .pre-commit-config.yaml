@@ -1,0 +1,50 @@
+repos:
+  - repo: local
+    hooks:
+      - id: prettier
+        name: Prettier
+        entry: pnpm run format:check
+        language: system
+        files: '\.(?:[cm]?[jt]sx?|css)$'
+        exclude: '^(?:next-env\.d\.ts|scripts/hosted-ci-baseline\.mjs)$'
+      - id: stylelint
+        name: Stylelint
+        entry: pnpm exec stylelint
+        language: system
+        types: [css]
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: c60c980e561ed3e73101667fe8365c609d19a438 # v0.15.9
+    hooks:
+      - id: ruff-check
+      - id: ruff-format
+        args: [--check]
+  - repo: https://github.com/rubocop/rubocop
+    rev: 5711dcb9850c5adb3df9e5142fa9a1ae4e987c3f # v1.82.1
+    hooks:
+      - id: rubocop
+        name: RuboCop lint and layout
+        args: [--force-exclusion, --only, 'Lint,Layout,Security']
+      - id: rubocop
+        alias: ruby-format
+        name: Format Ruby
+        args: [--force-exclusion, --autocorrect, --only, Layout]
+        stages: [manual]
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: 745eface02aef23e168a8afb6b5737818efbea95 # v0.11.0.1
+    hooks:
+      - id: shellcheck
+  - repo: https://github.com/scop/pre-commit-shfmt
+    rev: 2a30809d16bc7a60d9b97353c797f42b510d3368 # v3.12.0-2
+    hooks:
+      - id: shfmt
+        args: [--diff, --indent, '2']
+  - repo: https://github.com/sqlfluff/sqlfluff
+    rev: ca2e228d873e15bca82cd588f1964f0ec0aa9762 # 4.0.4
+    hooks:
+      - id: sqlfluff-lint
+        entry: sqlfluff lint --disable-progress-bar --dialect postgres --templater raw
+      - id: sqlfluff-fix
+        alias: sql-format
+        name: Format PostgreSQL
+        entry: sqlfluff format --disable-progress-bar --dialect postgres --templater raw
+        stages: [manual]

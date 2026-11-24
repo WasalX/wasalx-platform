@@ -24,7 +24,13 @@ WasalX Delivery owns this document, the merge queue, CI health and speed, releas
 - The [pnpm cache action](.github/actions/ci-pnpm/action.yml) saves pnpm dependency and service build caches on main pushes only. PostgreSQL integration and portal integration always force clean service builds.
 - Run CI on free GitHub-hosted runners. Cancel older CI runs only for the same PR. Keep workflow permissions read-only at the top level, grant writes per job, and pin actions by full commit SHA. Prohibit `pull_request_target`. Fork PRs receive no secrets.
 - Set job time limits from the measured p95 plus 25 percent, rounded up to a whole minute. Review limits monthly. A higher limit needs new measurements in a separate PR. See the [CI timing sample](.github/ci-timings.json) and [current coverage](#deviations).
-- For every workflow-changing PR, verify the SHA-256 of the pinned actionlint 1.7.12 binary before running it. Require zero new findings compared with the base branch. Older 1.7.x versions misread YAML anchors.
+- The lint job verifies the pinned actionlint archive and checks changes to workflows and local actions against the CI base. It reports base, head, and new findings counts and fails on new findings.
+
+### Source checks
+
+The lint job keeps the full ESLint check and runs the [source hooks](.pre-commit-config.yaml) on added and modified files. Prettier checks JavaScript, TypeScript, and CSS. Stylelint lints CSS, Ruff formats and lints Python, RuboCop checks Ruby layout and lint rules, ShellCheck and shfmt check shell scripts, and SQLFluff checks PostgreSQL syntax, style, and layout. OpenTofu formatting and validation run in the infrastructure job.
+
+Run `pre-commit run --files <paths>` for the same source hooks locally. Use `ruff format <paths>` for Python, `shfmt -w -i 2 <paths>` for shell, or `pre-commit run ruby-format --hook-stage manual --files <paths>` for Ruby. Use `pre-commit run sql-format --hook-stage manual --files <paths>` on new SQL only. Applied migrations are immutable.
 
 ## Test policy
 
@@ -122,6 +128,5 @@ Keep these performance targets independent of the merge result. Address misses t
 | §2 Attest artifacts with `actions/attest-build-provenance` and verify with `gh attestation verify` | Images are signed with Cosign and carry BuildKit provenance. The installer verifies them. | 2026-12-14 |
 | §4 Run the full suite on main and merge groups | Main pushes skip PR checks and queue image builds because the merge queue already qualified the exact tree. | 2026-12-14 |
 | §6 Automatic production backups and quarterly restore tests | There is no production data yet. The [backup job](infra/helm/wasalx/templates/control-plane-backup.yaml) is disabled by default and the [restore rehearsal script](scripts/dr/rehearse-postgres-restore.mjs) is unwired. | 2026-12-14 |
-| §1 One formatter and one linter per language in CI | Ruby, Python, shell, SQL, and CSS lack CI linters. TypeScript and JavaScript use ESLint and still need a formatter. OpenTofu is the only language with a formatter check. | 2026-12-14 |
 | §1 URL and IP literal guard with a reasoned allowlist for source outside configuration, generated files, and tests. Loopback, unspecified, and reserved example or documentation hosts and addresses, hostless URLs, and standard namespace IDs are exempt. | The guard and allowlist have yet to be built. | 2026-12-14 |
 | §6 Staging rollback rehearsal for every release candidate | Staging is not in service. Once it is, deploy each RC, roll back to the previous release, verify health, and record the rehearsal in the deployment audit. | 2026-12-14 |

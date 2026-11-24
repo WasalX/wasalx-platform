@@ -123,7 +123,42 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-depth: ${{ matrix.mode != 'lint' && '1' || github.event_name == 'pull_request' && '2' || '0' }}
           persist-credentials: false
+      - name: Check workflow changes with actionlint
+        if: matrix.mode == 'lint'
+        env: &source-style-env
+          STYLE_BASE: ${{ github.event_name == 'pull_request' && 'HEAD^1' || github.event.merge_group.base_sha || github.event.before }}
+        shell: bash
+        run: |
+          if git diff --quiet "$STYLE_BASE" HEAD -- .github; then
+            exit 0
+          fi
+          scratch=$(mktemp -d)
+          trap 'rm -rf -- "$scratch"' EXIT
+          archive="$scratch/actionlint.tar.gz"
+          curl -fsSL https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz -o "$archive"
+          printf '8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  %s\n' "$archive" | sha256sum -c -
+          tar -xzf "$archive" -C "$scratch" actionlint
+          mkdir "$scratch/base"
+          git archive "$STYLE_BASE" .github | tar -x -C "$scratch/base"
+          git init --quiet "$scratch/base"
+          lint_workflows() (
+            cd "$1" || exit
+            status=0
+            "$scratch/actionlint" -format '{{json .}}' > "$scratch/findings.json" || status=$?
+            if ((status)); then
+              [[ $status == 1 ]] || exit "$status"
+              jq -ce 'select(type == "array" and length > 0)[] | [.filepath, .kind, .message]' "$scratch/findings.json"
+            fi
+          )
+          lint_workflows "$scratch/base" | LC_ALL=C sort > "$scratch/base-findings"
+          lint_workflows "$PWD" | LC_ALL=C sort > "$scratch/head-findings"
+          LC_ALL=C comm -13 "$scratch/base-findings" "$scratch/head-findings" | tee "$scratch/new-findings"
+          printf 'actionlint base=%s head=%s new=%s\n' \
+            "$(wc -l < "$scratch/base-findings")" "$(wc -l < "$scratch/head-findings")" \
+            "$(wc -l < "$scratch/new-findings")"
+          test ! -s "$scratch/new-findings"
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24.13.1'
@@ -181,6 +216,12 @@ jobs:
       - name: Lint
         if: matrix.mode == 'lint'
         run: pnpm run lint --cache --cache-strategy content --cache-location .git/hosted-eslint-cache
+      - name: Check changed source style
+        if: matrix.mode == 'lint'
+        env: *source-style-env
+        run: &source-style-run |
+          pipx run --spec pre-commit==4.6.2 pre-commit run \
+            --from-ref "$STYLE_BASE" --to-ref HEAD --show-diff-on-failure
       - name: Typecheck
         if: matrix.mode == 'typecheck'
         run: pnpm exec tsc --noEmit
@@ -207,6 +248,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -230,6 +272,9 @@ jobs:
         with:
           path: .git/hosted-eslint-cache
           key: ${{ steps.eslint-cache.outputs.cache-primary-key }}
+      - name: Check changed source style
+        env: *source-style-env
+        run: *source-style-run
 
   integration:
     needs: changes
