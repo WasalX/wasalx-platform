@@ -280,6 +280,12 @@ test("nightly install is report-only, read-only and fails open on PR diff errors
   assert.match(rehearsal, /phase native-preflight [^]*phase probe-scan 5m sudo -H env "PATH=\$PATH" node scripts\/dev-install\/probe\.mjs [^]*--held-services ''[^]*\.census == "PASS" and \.services == 37 and \.rerendered_hashes == \.services[^]*phase configured-reinstall/u);
 });
 
+test("nightly installer refuses an invalid runner with a command, status and reason", () => {
+  const result = runWorkflowScript("bash scripts/release/installer-nightly.sh", { GITHUB_ACTIONS: "false" }, repository);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /command=bash scripts\/release\/installer-nightly\.sh exit=1 reason=requires a GitHub-hosted Actions runner/u);
+});
+
 test("PR installer skips only when the publication migration tree differs", async t => {
   const { jobs } = parse(await read(".github/workflows/nightly-install.yml"));
   const steps = jobs["nightly-install"].steps;
@@ -547,9 +553,13 @@ test("CI gates integration and infrastructure and runs portal integration files 
   assert.deepEqual(integration.permissions, { contents: "read" });
   assert.match(integration.services.postgres.image, /^postgres:[^@]+@sha256:[a-f0-9]{64}$/u);
   const devPreflightFile = "tests/installer-dev-recreatability.test.mjs";
-  const devPreflight = jobs.checks.steps.find(step => runsFile(step.run ?? "", devPreflightFile));
-  assert.equal(devPreflight?.if, "github.event_name == 'pull_request' && matrix.mode == 'unit' && matrix.shard == 1");
-  assert(portal.steps.some(step => !step.if && runsFile(step.run ?? "", devPreflightFile)));
+  const devPreflightSteps = jobs.checks.steps.filter(step => runsFile(step.run ?? "", devPreflightFile));
+  assert.equal(devPreflightSteps.length, 1);
+  assert.equal(devPreflightSteps[0].if, "matrix.mode == 'unit' && matrix.shard == 1");
+  assert(!unitFiles.includes(devPreflightFile));
+  assert(!portal.steps.some(step => runsFile(step.run ?? "", devPreflightFile)));
+  const shardStep = jobs.checks.steps.find(step => runsFile(step.run ?? "", "scripts/hosted-ci.mjs", "unit"));
+  assert(jobs.checks.steps.indexOf(devPreflightSteps[0]) < jobs.checks.steps.indexOf(shardStep));
   const dryrunFile = "scripts/dev-install/test_dryrun.py";
   assert(portal.steps.some(step => step.if === "github.event_name != 'pull_request'" && runsFile(step.run ?? "", dryrunFile, "--container")));
   assert(dryrun.steps.some(step => !step.if && runsFile(step.run ?? "", dryrunFile, "--container")));

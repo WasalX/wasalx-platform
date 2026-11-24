@@ -17,9 +17,9 @@ colors:
   accent-strong: "#5141c8"
   accent-solid: "#6557d8"
   accent-solid-hover: "#5141c8"
-  success: "#167d53"
-  warning: "#a45e09"
-  danger: "#c64343"
+  success: "#14744d"
+  warning: "#965608"
+  danger: "#b73737"
   danger-solid: "#7b2a2a"
   on-solid: "#ffffff"
   provider-whatsapp-groups: "#16855a" # token --wx-color-provider-waha
@@ -131,7 +131,7 @@ One neutral zinc ramp, one violet accent, three status colors and two provider m
 - **Text / Muted / Subtle**: light `#18181b / #696970 / #6f6f76`; dark `#f3f3f5 / #92929d / #85858f`.
 
 ### Status and provider
-- **Success / Warning / Danger**: light `#167d53 / #a45e09 / #c64343`; dark `#45c58a / #f3ad4e / #f06b6b`. Status color is always paired with a word or an icon, never color alone. **Danger solid** (`--wx-color-danger-solid`, light `#7b2a2a`, dark `#954242`) is the fill behind white text on a destructive button.
+- **Success / Warning / Danger**: light `#14744d / #965608 / #b73737`; dark `#45c58a / #f3ad4e / #f06b6b`. Each status badge keeps 4.5:1 text contrast on its 6% tint over every surface. Status color is always paired with a word or an icon, never color alone. **Danger solid** (`--wx-color-danger-solid`, light `#7b2a2a`, dark `#954242`) is the fill behind white text on a destructive button.
 - **Provider marks**: WhatsApp groups green (`--wx-color-provider-waha`: `#16855a` light, `#22a06b` dark) and Meta blue (`--wx-color-provider-meta`, `#1769e0`). Use them only to identify a channel; the public pages' WhatsApp icon uses the WhatsApp groups green.
 
 ### Named Rules
@@ -157,8 +157,8 @@ One neutral zinc ramp, one violet accent, three status colors and two provider m
 
 ## Layout
 
-- **Shell:** a fixed start-side sidebar (`--wx-sidebar-width` 15rem) plus the content area (`--wx-content-max` 90rem). The workspace toolbar is 57 px (`globals.css`); `--wx-topbar-height` (3.5rem) is used by the platform console.
-- **At 760 px and below** (the shell breakpoint): the sidebar becomes a top bar with a menu toggle, the brand and system health are hidden, and the app shell is a block. Individual screens refine at other widths (for example 520 px and 480 px); new screens use 760 px unless their layout needs another.
+- **Shell:** a fixed start-side sidebar (`--wx-sidebar-width` 15rem) plus the content area (`--wx-content-max` 90rem). The workspace toolbar is at least 57 px and grows with its text, so it never overflows onto the sidebar (`globals.css`); `--wx-topbar-height` (3.5rem) is used by the platform console.
+- **At 760 px and below** (the shell breakpoint): the sidebar becomes a top bar with one grid (the workspace switcher on row 1, the menu toggle and profile on row 2, the navigation below), the brand and system health are hidden, and the app shell is a block. Individual screens refine at other widths (for example 520 px and 480 px); new screens use 760 px unless their layout needs another.
 - **Spacing:** `--wx-space-1..16` (4 px base: 4, 8, 12, 16, 24, 32, 48, 64). New code uses only these.
 - **Direction:** logical properties only (`inline-start/end`, `padding-inline`, `text-align: start`). Physical `left/right` is a defect. A known gap: `primitives.css` `.wx-data-panel th, td` use `text-align: left`; fix this before the primitive is used in the product.
 - **Tables:** 37 px headers, 57 px rows; wide tables sit in an `overflow-x: auto` wrapper and never scroll the whole page.

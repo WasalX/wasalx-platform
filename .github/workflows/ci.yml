@@ -252,6 +252,9 @@ jobs:
         with:
           node-version: '24.13.1'
           package-manager-cache: false
+      - name: Test DEV Compose preflight
+        if: matrix.mode == 'unit' && matrix.shard == 1
+        run: node --test tests/installer-dev-recreatability.test.mjs
       - name: Check image publication contracts
         if: matrix.mode == 'lint'
         run: |
@@ -311,10 +314,6 @@ jobs:
       - name: Collect tests
         if: matrix.mode == 'collection'
         run: node scripts/hosted-ci.mjs collection
-      - name: Test DEV Compose preflight on pull requests
-        # The integration job runs this test on merge groups and main.
-        if: github.event_name == 'pull_request' && matrix.mode == 'unit' && matrix.shard == 1
-        run: node --test tests/installer-dev-recreatability.test.mjs
       - name: Run unit shard
         if: matrix.mode == 'unit'
         env:
@@ -450,7 +449,7 @@ jobs:
       - name: Test native installer preimage capture
         run: >-
           node --experimental-strip-types --import ./tests/helpers/operator-input-fixtures.mjs --test --test-concurrency=1
-          tests/installer-preimage.test.mjs tests/installer-dev-recreatability.test.mjs
+          tests/installer-preimage.test.mjs
       - *integration-build
       - name: Build the portal
         run: pnpm run build

@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { repositoryDigestMatches } from "../installer-evidence.mjs";
 import cosignPin from "./cosign-pin.json" with { type: "json" };
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
@@ -10,6 +11,30 @@ const source = "https://github.com/WasalX/wasalx-platform";
 const hostedPublisher = source + "/.github/workflows/branch-image.yml@refs/heads/main";
 export const hostedIssuer = "https://token.actions.githubusercontent.com";
 const digest = /^sha256:[0-9a-f]{64}$/u;
+
+export function assertLocalRegistry(registry, environment = process.env) {
+  const endpoint = /^([a-z0-9-]+(?:\.[a-z0-9-]+)*):([1-9][0-9]{0,4})$/u.exec(registry ?? "");
+  assert.ok(endpoint, "local registry requires a host and port");
+  const [, host, port] = endpoint;
+  assert.ok(Number(port) <= 65535, "invalid local registry port");
+  const allowed = (environment.WASALX_LOCAL_REGISTRY_ALLOWLIST ?? "").split(",").map(value => value.trim());
+  assert.ok(host === "localhost" || host === "127.0.0.1" || allowed.includes(registry),
+    "local registry endpoint must be loopback or listed in WASALX_LOCAL_REGISTRY_ALLOWLIST");
+}
+
+export function localRegistryReference(registry, reference) {
+  assertLocalRegistry(registry);
+  const parts = (reference ?? "").split("@");
+  assert.ok(parts.length === 2 && parts[0] && digest.test(parts[1]), "local registry requires a digest-pinned image");
+  return `${registry}/staged/${parts[1].slice(7)}@${parts[1]}`;
+}
+
+export async function verifyStagedImage(execute, environment, reference) {
+  const [details] = JSON.parse(await execute("docker", ["image", "inspect", reference], environment));
+  assert.ok(details?.RepoDigests?.some(value => repositoryDigestMatches(reference, value)),
+    "loaded local registry digest mismatch");
+  return details;
+}
 
 function uniqueJson(bytes) {
   const value = JSON.parse(bytes);
@@ -76,13 +101,16 @@ export async function verifyHostedImages(context, { verifyOnly = false } = {}) {
   const version = JSON.parse(await execute("cosign", ["version", "--json"], context.environment));
   assert.equal(version.gitVersion, cosignPin.version, "hosted admission requires the pinned Cosign version");
   const rootBytes = await readFile(context.hostedTrustedRoot), trustedRootSha256 = sha256(rootBytes);
+  if (context.hostedTrustedRootSha256) {
+    assert.equal(trustedRootSha256, context.hostedTrustedRootSha256, "Sigstore trust root checksum mismatch");
+  }
   const temporary = await mkdtemp(join(tmpdir(), "wasalx-hosted-verification-"));
   try {
     const root = join(temporary, "trusted-root.json");
     await writeFile(root, rootBytes, { mode: 0o600, flag: "wx" });
     const common = ["--offline", "--trusted-root", root,
       "--certificate-identity", inventory.publisher, "--certificate-oidc-issuer", hostedIssuer];
-    const images = [];
+    const images = [], references = [];
     let verified = 0;
     for (const image of context.plan) {
       const row = inventory.images[image.id];
@@ -111,11 +139,16 @@ export async function verifyHostedImages(context, { verifyOnly = false } = {}) {
           "--bundle", path, "--type", type, "--digest", row.digest.slice(7), "--digestAlg", "sha256"], context.environment);
         seals[name] = sha256(bytes);
       }
+      references.push(row.pullReference);
       verified += 1;
       if (verifyOnly) continue;
       const inspect = async () => JSON.parse(await execute("docker", ["image", "inspect", image.reference], context.environment))[0];
       const before = await inspect();
       assert.ok([row.digest, row.configDigest].includes(before?.Id), "loaded hosted image identity mismatch");
+      if (context.localRegistry) {
+        const staged = await verifyStagedImage(execute, context.environment, localRegistryReference(context.localRegistry, row.pullReference));
+        assert.equal(before.Id, staged.Id, "hosted alias does not identify its staged digest");
+      }
       const loaded = JSON.parse(await execute("python3", [resolve(context.repository, "scripts/release/images-by-digest.py"),
         "loaded-config", "--image", image.reference, "--config-digest", row.configDigest], context.environment));
       assert.equal(loaded.configDigest, row.configDigest, "loaded hosted config mismatch");
@@ -134,6 +167,6 @@ export async function verifyHostedImages(context, { verifyOnly = false } = {}) {
     assert.equal(verified, context.catalog.images.length, "complete hosted candidate plan required");
     assert.equal(new Set(context.plan.map(({ id }) => id)).size, verified, "duplicate hosted candidate plan");
     assert.equal(sha256(await readFile(context.hostedTrustedRoot)), trustedRootSha256, "hosted trust root changed");
-    return { images, trustedRootSha256, publisher: inventory.publisher };
+    return { images, references, trustedRootSha256, publisher: inventory.publisher };
   } finally { await rm(temporary, { recursive: true, force: true }); }
 }
