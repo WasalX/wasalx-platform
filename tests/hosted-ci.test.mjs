@@ -533,6 +533,33 @@ ${copy.run}`], {
   }
 });
 
+test("workflow lint fails on any actionlint finding or download verification failure", async t => {
+  const { jobs } = parse(await read(".github/workflows/ci.yml"));
+  const job = jobs["workflow-lint"];
+  const step = job.steps.find(step => step.run);
+  assert.equal(job.if, undefined);
+  assert.equal(step.if, undefined);
+  assert.equal(step["continue-on-error"], undefined);
+
+  const directory = await mkdtemp(join(tmpdir(), "ci-workflow-lint-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  for (const [download, lint, expected] of [[0, 0, 0], [0, 1, 1], [2, 0, 2]]) {
+    const result = runWorkflowScript(`
+mktemp() { pwd; }
+bash() {
+  [[ "$1" == scripts/release/fetch-verified-asset.sh && "$2" == https://* && "$4" =~ ^[a-f0-9]{64}$ ]] || exit 99
+  return "$DOWNLOAD_STATUS"
+}
+tar() {
+  printf '#!/usr/bin/env bash\\nexit %s\\n' "$LINT_STATUS" > "$4/actionlint"
+  chmod +x "$4/actionlint"
+}
+${step.run}`, { ...step.env, DOWNLOAD_STATUS: String(download), LINT_STATUS: String(lint) }, directory);
+    assert.ifError(result.error);
+    assert.equal(result.status, expected, result.stdout + result.stderr);
+  }
+});
+
 test("CI gates integration and infrastructure and runs portal integration files serially", async () => {
   const { on, jobs } = parse(await read(".github/workflows/ci.yml"));
   const { integration, "integration-coverage": coverage, "portal-integration": portal,
