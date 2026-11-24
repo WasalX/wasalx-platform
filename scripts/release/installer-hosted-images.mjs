@@ -11,10 +11,18 @@ const hostedPublisher = source + "/.github/workflows/branch-image.yml@refs/heads
 export const hostedIssuer = "https://token.actions.githubusercontent.com";
 const digest = /^sha256:[0-9a-f]{64}$/u;
 
+export function assertLocalRegistry(registry, environment = process.env) {
+  const endpoint = /^([a-z0-9-]+(?:\.[a-z0-9-]+)*):([1-9][0-9]{0,4})$/u.exec(registry ?? "");
+  assert.ok(endpoint, "local registry requires a host and port");
+  const [, host, port] = endpoint;
+  assert.ok(Number(port) <= 65535, "invalid local registry port");
+  const allowed = (environment.WASALX_LOCAL_REGISTRY_ALLOWLIST ?? "").split(",").map(value => value.trim());
+  assert.ok(host === "localhost" || host === "127.0.0.1" || allowed.includes(registry),
+    "local registry endpoint must be loopback or listed in WASALX_LOCAL_REGISTRY_ALLOWLIST");
+}
+
 export function localRegistryReference(registry, reference) {
-  assert.match(registry ?? "", /^[a-z0-9-]+(?:\.[a-z0-9-]+)*:[1-9][0-9]{0,4}$/u,
-    "local registry requires a host and port");
-  assert.ok(Number(registry.split(":")[1]) <= 65535, "invalid local registry port");
+  assertLocalRegistry(registry);
   const parts = (reference ?? "").split("@");
   assert.ok(parts.length === 2 && parts[0] && digest.test(parts[1]), "local registry requires a digest-pinned image");
   return `${registry}/staged/${parts[1].slice(7)}@${parts[1]}`;

@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { hostedIssuer, localRegistryReference, verifyHostedImages } from "../scripts/release/installer-hosted-images.mjs";
+import { assertLocalRegistry, hostedIssuer, localRegistryReference, verifyHostedImages } from "../scripts/release/installer-hosted-images.mjs";
 import { artifactPath, preimagePath, preserveReplacement, readBoundArtifacts, sha256 } from "../scripts/release/installer-artifacts.mjs";
 import { createCandidatePlan, executeStage } from "../scripts/release/installer-stages.mjs";
 import { localRegistryOverlay } from "../scripts/release/installer-stack.mjs";
@@ -19,6 +19,15 @@ const mainPublisher = `${source}/.github/workflows/branch-image.yml@refs/heads/m
 const localRegistry = "127.0.0.1:5007";
 const dependency = `quay.io/example/dependency:1.0@sha256:${"d".repeat(64)}`;
 const stagedDependency = `${localRegistry}/staged/${"d".repeat(64)}@sha256:${"d".repeat(64)}`;
+
+test("local registry only accepts loopback and explicitly allowed endpoints", () => {
+  assertLocalRegistry(localRegistry, {});
+  const endpoint = "registry.example.invalid:5000";
+  const environment = { WASALX_LOCAL_REGISTRY_ALLOWLIST: `other.example.invalid:5000, ${endpoint}` };
+  assertLocalRegistry(endpoint, environment);
+  assert.throws(() => assertLocalRegistry(endpoint, {}), /must be loopback or listed/u);
+  assert.throws(() => assertLocalRegistry("registry.example.invalid:5001", environment), /must be loopback or listed/u);
+});
 
 test("local registry rewrites only active dependencies and binds the persisted overlay", async t => {
   const { context } = await fixture(t);
@@ -71,6 +80,38 @@ test("local registry preload pulls only the staged digests and admission rejects
   await assert.rejects(verifyHostedImages(context), /loaded local registry digest mismatch/u);
   details[reference] = { ...original, Id: stagedDependency.split("@")[1] };
   await assert.rejects(verifyHostedImages(context), /alias does not identify its staged digest/u);
+});
+
+test("fresh held smoke keeps the registry and simulator flags, and replace refuses a changed staged image ID", async t => {
+  const { context, inventory, details, calls } = await fixture(t);
+  context.localRegistry = localRegistry;
+  for (const { id, reference } of context.plan) {
+    const staged = localRegistryReference(localRegistry, inventory.images[id].pullReference);
+    details[staged] = { Id: details[reference].Id, RepoDigests: [staged] };
+  }
+  await executeStage("admit-hosted", context);
+  const command = context.command;
+  const smokes = [];
+  context.command = (name, args, ...rest) => {
+    if (name === process.execPath) { smokes.push(args); return 0; }
+    return command(name, args, ...rest);
+  };
+  const held = { ...context, devFreshHeld: true, devSimulator: true };
+  assert.equal(await executeStage("smoke", held), 0);
+  assert.equal(smokes.length, 1);
+  const registryFlag = smokes[0].indexOf("--local-registry");
+  assert.ok(registryFlag > 0);
+  assert.equal(smokes[0][registryFlag + 1], localRegistry);
+  assert.ok(smokes[0].includes("--dev-fresh-held") && smokes[0].includes("--dev-simulator"));
+
+  const { id, reference } = context.plan.at(-1);
+  const staged = localRegistryReference(localRegistry, inventory.images[id].pullReference);
+  details[staged].Id = inventory.images[id].configDigest;
+  assert.notEqual(details[staged].Id, details[reference].Id);
+  calls.length = 0;
+  await assert.rejects(executeStage("replace", { ...held, drained: true }), /staged hosted image changed/u);
+  assert.ok(calls.every(({ name, args }) => name === "docker" && (args[0] === "info" || args[0] === "image" && args[1] === "inspect")));
+  await assert.rejects(readFile(join(context.directory, `replacement-started-${context.project}.json`)), { code: "ENOENT" });
 });
 
 async function fixture(t) {
@@ -262,6 +303,28 @@ test("hosted installer CLI refuses an unknown install profile before host checks
   assert.equal(result.error, undefined);
   assert.equal(result.status, 1);
   assert.equal(result.stderr, "remote full qualification failed\nremote full qualification reason: Error\n");
+});
+
+test("local registry CLI rejects unsafe stages before inspecting the host", () => {
+  const script = fileURLToPath(new URL("../scripts/release/installer-stages.mjs", import.meta.url));
+  const path = fileURLToPath(new URL("./missing-installer-env", import.meta.url));
+  const env = { ...process.env, DEPLOY_ENVIRONMENT: "dev", WASALX_ENVIRONMENT: "dev",
+    WASALX_INSTALL_EXPECTED_HOSTNAME: "", WASALX_LOCAL_REGISTRY_ALLOWLIST: "" };
+  const hosted = ["--hosted-images", path, "--hosted-images-sha256", "a".repeat(64), "--hosted-trusted-root", path];
+  const local = ["--local-registry", localRegistry];
+  for (const [action, flags, reason] of [
+    ["replace", ["--dev-fresh-held", "--dev-simulator", ...local], /requires a hosted install stage or preflight/u],
+    ["verify-hosted", [...hosted, ...local], /requires a hosted install stage or preflight/u],
+    ["preload-hosted", hosted, /preload requires hosted images and the rehearsal or local registry/u],
+    ["preflight", ["--local-registry", "registry.example.invalid:5000"], /must be loopback or listed/u],
+  ]) {
+    const result = spawnSync(process.execPath, ["--", script, action, "--env-file", path,
+      "--project-name", "wasalx-dev-fixture", ...flags],
+    { env, encoding: "utf8", timeout: 10_000, windowsHide: true });
+    assert.equal(result.error, undefined);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, reason);
+  }
 });
 
 test("verify-only checks the complete catalog without Docker, preimages or an admission receipt", async t => {

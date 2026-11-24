@@ -162,10 +162,18 @@ path is keyed by digest so identical manifests need only one staged copy. Keep
 any index and its required platform manifests in the registry.
 
 Restrict guest egress to the staging registry. Configure Docker to trust that
-registry. Use `--local-registry <registry-host>:<port>` through preflight, preload,
-admission, replacement and smoke, and retain the generated registry Compose
-overlay beside the environment file for preimage and rollback checks. Use an
-environment file unique to the candidate when its Compose inputs change.
+registry. For any endpoint other than `localhost:<port>` or `127.0.0.1:<port>`,
+include the exact `host:port` in the installer process's
+`WASALX_LOCAL_REGISTRY_ALLOWLIST` (comma-separated). Use
+`--local-registry <registry-host>:<port>` through preflight, preload, admission,
+replacement and smoke. Retain the generated registry Compose overlay beside the
+environment file for preimage and rollback checks. Use an environment file unique
+to the candidate when its Compose inputs change.
+
+For a [fresh held DEV project](../../scripts/dev-install/README.md#fresh-held-guest-projects),
+add `--dev-fresh-held` on replace and smoke. If using the simulator, also pass
+`--dev-simulator` from preflight through smoke so each stage uses the same
+Compose model.
 
 Run `preflight --capture-preimage` with the registry option before preload. Run
 `preload-hosted` with the three hosted flags and the registry option after

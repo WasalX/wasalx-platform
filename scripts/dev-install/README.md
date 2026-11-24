@@ -29,6 +29,22 @@ Use `--repository` to select the candidate checkout and repeat `--compose-file` 
 `--held-services` overrides the DEV hold set with a comma-separated list. Nightly passes an empty list.
 Keep the JSON report private. The nightly logs only the counts and census result or a sanitized failure.
 
+## Fresh held guest projects
+
+Use a new `wasalx-dev-*` project with no existing containers, volumes, or networks.
+After native preflight and candidate image preparation, run installer `replace`
+with `--drained --dev-fresh-held`, then `smoke` with `--dev-fresh-held`.
+The installer creates the DEV hold set and one-shot prerequisites used only by
+held services without starting them. A failed replacement stays fenced for review.
+
+For a synthetic guest, pass `--dev-simulator` through preflight, image preparation,
+replacement, and smoke. It uses the nightly Compose adjustments and puts the WAHA
+simulator on the internal connectors network. Use synthetic credentials and private
+mail endpoints. The [simulation env generator](../release/generate-simulation-env.py)
+supplies the WAHA fixture settings. Set unused host ports in the private env file
+before preflight. Keep the smoke receipt `dev-fresh-held-stack-<project>.json` with the guest
+evidence.
+
 ## Signed host packet
 
 Render the host lease budgets directly from raw host receipts. The renderer takes
@@ -55,8 +71,20 @@ with 25% headroom on the sum.
 
 Record the independently checked SHA-256 of each raw receipt in the host identity's
 `LEASE_RECEIPT_SHA256S` array, in the order passed below. The renderer checks the
-exact receipt bytes against that array before reading their timings. The sealed
-host environment records the same hashes and budget sources.
+exact receipt bytes against that array before reading their timings. Each new raw
+receipt records an application-specific host identifier, TOP filesystem device and
+inode, and the UTC capture instant in epoch nanoseconds.
+
+Set the optional `LEASE_RECEIPT_POLICY` object in the private host identity to
+enable measured budgets. From the verified packet, run
+`python3 -I -B host-maintenance.py timing-origin "$TOP"` on the intended host.
+Use its `host_sha256` string, `disk_device` and `disk_inode` integers, and set a positive
+`max_age_seconds`. Collect those expected values from the intended host and disk
+independently of the timing receipts. Without a policy, or if any requested
+receipt is unbound, belongs to another host or disk, is from the future, or is
+older than the configured maximum, the renderer uses the documented fallback
+leases. The sealed host environment records the policy, input hashes and budget
+sources.
 
 ```sh
 python3 -I -B scripts/dev-install/render.py --host-identity "$HOST_IDENTITY" \
@@ -135,10 +163,21 @@ staging windows and disk admission.
 The agent publishes one numbered `<20-digit-seq>.json` file per verified tag in
 `handover-outbox` under the unit's `StateDirectory`. The
 `ot3.wasalx.d1-handover/v1` receipt identifies the tag, exact commit and tree, release
-asset digest, and successful nightly run and attempt. The sorted image references
-contain the 21 verified product digests and the digest-pinned third-party Compose
-references at that commit. Each row records its origin and its manifest media type
-when available from an anonymous registry HEAD.
+asset digest, and successful nightly run and attempt. Receipts with
+`source: b2-verified` require a non-null `release_asset_digest` of the form
+`sha256:<64 lowercase hex digits>`. Only operator hand-overs may omit the digest
+value by setting it to null.
+
+Image refs are sorted and unique. They contain the 21 verified product digests and
+the third-party Compose references at that commit. Each uses
+`name@sha256:<64 lowercase hex digits>`. The agent drops Compose tags and Docker Hub
+host and `library/` prefixes. Other registry prefixes are retained. Each row
+records its origin and its manifest media type when available from an anonymous
+registry HEAD.
+
+An outbox containing older receipts that violate this format fails startup. Before
+clearing it, archive the whole outbox and coordinate a new sequence with the
+consumer. A fresh outbox starts at sequence 1.
 
 The first receipt starts at sequence 1 with a null previous hash. Each subsequent
 receipt hashes the entire prior canonical JSON object, including its signature.

@@ -31,6 +31,23 @@ class DeliveryProcessor extends ProductionDeliveryProcessor {
 class InboundProcessor extends ProductionInboundProcessor {
   constructor(repository,...dependencies){super({quotedCommandCandidate:async()=>null,messageIsWithinAdmissionWindow:async()=>true,hasRunnableGroupBinding:async()=>false,renewWahaWorkerAssignment:async(_event,context)=>context,...repository},...dependencies)}
 }
+test("inbound Meta workers use the admitted app ID and retain the fallback for older events", async () => {
+  const apps = [];
+  const events = [
+    { eventType: "meta.account.lifecycle.block", metaWebhookAppId: "10002" },
+    { eventType: "meta.routing.passive", metaWebhookAppId: "10003" },
+    { eventType: "meta.coexistence.echo" },
+  ];
+  const recordApp = async (_event, _lease, appId) => apps.push(appId);
+  const processor = new ProductionInboundProcessor({
+    claim: async () => events,
+    applyMetaLifecycle: recordApp,
+    applyMetaRouting: recordApp,
+    projectCoexistence: recordApp,
+  }, {}, undefined, undefined, undefined, "10001");
+  await processor.drainTenant("synthetic");
+  assert.deepEqual(apps, ["10002", "10003", "10001"]);
+});
 const wahaAssignment={providerBaseUrl:"http://waha-gows.internal:3000/",wahaWorkerId:"30000000-0000-4000-8000-000000000001",wahaAssignmentFencingToken:7,wahaAssignmentLeaseExpiresAt:"2026-08-09T23:59:59.000Z"};
 test("tenant drain jobs require a signed, scoped, matching tenant context",async()=>{const now=Math.floor(Date.now()/1000);const token=await signServiceJwt({iss:"wasalx-control",aud:"wasalx-connector-worker",sub:"scheduler",tenant_id:"tenant-a",instance_id:"scheduler-1",scope:"delivery:drain",iat:now,exp:now+120,jti:crypto.randomUUID()},secret);assert.equal((await verifyDrainJob({tenantId:"tenant-a",token},secret)).tenantId,"tenant-a");await assert.rejects(()=>verifyDrainJob({tenantId:"tenant-b",token},secret),ServiceAuthenticationError);const inboxToken=await signServiceJwt({iss:"wasalx-control",aud:"wasalx-connector-worker",sub:"scheduler",tenant_id:"tenant-a",instance_id:"scheduler-1",scope:"inbox:drain",iat:now,exp:now+120,jti:crypto.randomUUID()},secret);assert.equal((await verifyDrainJob({tenantId:"tenant-a",token:inboxToken},secret,"inbox:drain")).tenantId,"tenant-a");await assert.rejects(()=>verifyDrainJob({tenantId:"tenant-a",token:inboxToken},secret),ServiceAuthenticationError)});
 
