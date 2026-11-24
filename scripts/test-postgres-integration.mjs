@@ -2112,6 +2112,36 @@ try{
   assert.deepEqual(drainedInvitationTenants.rows,[]);
   await assert.rejects(()=>meteringIngest.query("SELECT count(*) FROM usage_meter_events"),error=>error.code==="42501");
   await assert.rejects(()=>platformOperations.query("SELECT count(*) FROM platform_operations_audit_events"),error=>error.code==="42501");
+  await fixtureAdmin.query("BEGIN");
+  try {
+    await fixtureAdmin.query(`
+      SET LOCAL TIME ZONE 'America/Los_Angeles';
+      DO $test$
+      DECLARE
+        fixed_clock constant text := 'TIMESTAMPTZ ''2090-09-01 00:15:00+00''';
+        definition text := pg_get_functiondef('app.operator_platform_operations_overview(text,text)'::regprocedure);
+      BEGIN
+        -- Freeze both spellings of the transaction clock in the installed function.
+        EXECUTE replace(replace(definition, 'now()', fixed_clock),
+          'current_date', '(' || fixed_clock || ')::date');
+      END;
+      $test$;
+      INSERT INTO public.usage_daily_rollups
+        (tenant_id, usage_day, meter_key, currency, estimated_cost_micros)
+      VALUES
+        ('10000000-0000-4000-8000-000000000001', DATE '2090-08-31', 'INBOUND_MESSAGES', 'USD', 7),
+        ('10000000-0000-4000-8000-000000000001', DATE '2090-09-01', 'INBOUND_MESSAGES', 'USD', 11);
+      SET LOCAL ROLE wasalx_platform_operations_client;
+    `);
+    const overview=await fixtureAdmin.query(
+      "SELECT app.operator_platform_operations_overview('metering-test','overview-utc-month')->'month_cost_summary' AS month_cost_summary",
+    );
+    assert.deepEqual(overview.rows[0].month_cost_summary,[
+      {currency:"USD",estimated_cost_micros:"11",unpriced_quantity:"0.000000"},
+    ],"The overview should count only September UTC usage");
+  } finally {
+    await fixtureAdmin.query("ROLLBACK");
+  }
   const capturedMetering=await meteringIngest.query("SELECT app.capture_next_usage_metering_period() AS result");
   assert.equal(typeof capturedMetering.rows[0].result,"object");
   assert.equal(typeof capturedMetering.rows[0].result.caught_up,"boolean");
