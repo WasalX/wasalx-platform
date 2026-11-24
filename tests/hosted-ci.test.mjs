@@ -282,7 +282,62 @@ test("nightly install is report-only, read-only and fails open on PR diff errors
   assert(job.steps.some(step => step.if?.startsWith("always()")));
   assert(!parse(await read(".github/workflows/ci.yml")).jobs["ci-gate"].needs.includes("nightly-install"));
   const rehearsal = await read("scripts/release/installer-nightly.sh");
-  assert.match(rehearsal, /phase native-preflight [^]*phase probe-scan 5m sudo -H env "PATH=\$PATH" node scripts\/dev-install\/probe\.mjs [^]*--held-services ''[^]*\.census == "PASS" and \.services == 37 and \.rerendered_hashes == \.services[^]*phase configured-reinstall/u);
+  const probe = await read("scripts/dev-install/probe.mjs");
+  assert.match(rehearsal, /phase native-preflight [^]*phase probe-scan 5m sudo -H env "PATH=\$PATH" node scripts\/dev-install\/probe\.mjs [^]*--held-services ''[^]*\.services == \.expected_services[^]*\.rerendered_hashes == \.expected_services[^]*phase configured-reinstall/u);
+  assert.match(probe, /const active = activeServiceNames\(model, composeProfiles\);[^]*expected_services: active\.length/u);
+  for (const source of [probe, rehearsal, await read(path)]) {
+    assert.doesNotMatch(source, /\b37\b/u);
+  }
+});
+
+test("nightly census confirmation accepts matching counts from the rehearsal", async t => {
+  const { jobs } = parse(await read(".github/workflows/nightly-install.yml"));
+  const confirmation = jobs["nightly-install"].steps.find(step => step.name === "Confirm census PASS");
+  const directory = await mkdtemp(join(tmpdir(), "nightly-census-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const diagnostics = join(directory, "wasalx-nightly", "diagnostics");
+  await mkdir(diagnostics, { recursive: true });
+  const log = join(diagnostics, "phases.log");
+  const [commit, tree] = execFileSync("git", ["rev-parse", "HEAD", "HEAD^{tree}"], {
+    cwd: repository, encoding: "utf8", windowsHide: true,
+  }).trim().split(/\s+/u);
+  for (const [services, hashes, status] of [[12, 12, 0], [38, 38, 0], [38, 37, 1], [0, 0, 1]]) {
+    await writeFile(log, `installer=${commit} tree=${tree} images=${commit}\nprobe-scan services=${services} rerendered_hashes=${hashes} census=PASS\n`);
+    const result = runWorkflowScript(confirmation.run, { COMMIT: commit, RUNNER_TEMP: directory }, repository);
+    assert.equal(result.status, status, result.error?.message ?? result.stderr);
+  }
+});
+
+test("nightly registry probe reports blocked only for a TCP rejection", async () => {
+  const rehearsal = await read("scripts/release/installer-nightly.sh");
+  assert.match(rehearsal, /phase registry-egress 30s bash -euo pipefail -c 'block_registry_egress; verify_registry_egress'/u);
+  const verify = rehearsal.match(/^verify_registry_egress\(\) \{\r?\n[^]*?^\}/mu)?.[0];
+  assert.ok(verify);
+  const results = [
+    [1, "dial tcp 192.0.2.1:443: connect: connection refused", 0, ""],
+    [0, "", 1, "public pull succeeded after the block"],
+    [1, "manifest unknown", 1, "public pull failed without a TCP rejection (exit=1)"],
+    [124, "", 1, "public pull failed without a TCP rejection (exit=124)"],
+  ];
+  for (const [status, output, expected, reason] of results) {
+    const result = runWorkflowScript(`${verify}
+      timeout() {
+        [[ "$*" == '15s docker pull fixture@sha256:test' ]] || return 125
+        printf '%s\\n' "$PULL_OUTPUT" >&2
+        return "$PULL_STATUS"
+      }
+      verify_registry_egress
+    `, { registry_image: "fixture@sha256:test", PULL_STATUS: String(status), PULL_OUTPUT: output }, repository);
+    assert.equal(result.status, expected, result.error?.message ?? result.stderr);
+    assert.equal(result.stdout.trim(), expected === 0 ? "public-registry-egress=blocked" : "");
+    assert.equal(result.stderr.trim(), reason ? `registry-egress reason: ${reason}` : "");
+  }
+});
+
+test("nightly installer refuses an invalid runner with a command, status and reason", () => {
+  const result = runWorkflowScript("bash scripts/release/installer-nightly.sh", { GITHUB_ACTIONS: "false" }, repository);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /command=bash scripts\/release\/installer-nightly\.sh exit=1 reason=requires a GitHub-hosted Actions runner/u);
 });
 
 test("PR installer skips only when the publication migration tree differs", async t => {
@@ -532,6 +587,33 @@ ${copy.run}`], {
   }
 });
 
+test("workflow lint fails on any actionlint finding or download verification failure", async t => {
+  const { jobs } = parse(await read(".github/workflows/ci.yml"));
+  const job = jobs["workflow-lint"];
+  const step = job.steps.find(step => step.run);
+  assert.equal(job.if, undefined);
+  assert.equal(step.if, undefined);
+  assert.equal(step["continue-on-error"], undefined);
+
+  const directory = await mkdtemp(join(tmpdir(), "ci-workflow-lint-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  for (const [download, lint, expected] of [[0, 0, 0], [0, 1, 1], [2, 0, 2]]) {
+    const result = runWorkflowScript(`
+mktemp() { pwd; }
+bash() {
+  [[ "$1" == scripts/release/fetch-verified-asset.sh && "$2" == https://* && "$4" =~ ^[a-f0-9]{64}$ ]] || exit 99
+  return "$DOWNLOAD_STATUS"
+}
+tar() {
+  printf '#!/usr/bin/env bash\\nexit %s\\n' "$LINT_STATUS" > "$4/actionlint"
+  chmod +x "$4/actionlint"
+}
+${step.run}`, { ...step.env, DOWNLOAD_STATUS: String(download), LINT_STATUS: String(lint) }, directory);
+    assert.ifError(result.error);
+    assert.equal(result.status, expected, result.stdout + result.stderr);
+  }
+});
+
 test("CI gates integration and infrastructure and runs portal integration files serially", async () => {
   const { on, jobs } = parse(await read(".github/workflows/ci.yml"));
   const { integration, "integration-coverage": coverage, "portal-integration": portal,
@@ -576,6 +658,10 @@ test("CI gates integration and infrastructure and runs portal integration files 
   assert(!on.pull_request.types.includes("edited"));
   const metadataWorkflow = parse(await read(".github/workflows/privacy.yml"));
   assert.deepEqual(metadataWorkflow.on.pull_request.types, ["edited"]);
+  assert.deepEqual(metadataWorkflow.concurrency, {
+    group: "privacy-${{ github.run_id }}",
+    "cancel-in-progress": false,
+  });
   assert.equal(jobs.privacy.uses, "./.github/workflows/privacy.yml");
   assert.equal(gateStep.env.PRIVACY, "${{ needs.privacy.result }}");
   assert.equal(gateStep.env.WORKFLOW_LINT, "${{ needs.workflow-lint.result }}");
@@ -587,6 +673,9 @@ test("CI gates integration and infrastructure and runs portal integration files 
   assert.equal(gateStep.env.INTEGRATION_COVERAGE, "${{ needs.integration-coverage.result }}");
   assert.equal(gateStep.env.DEV_INSTALL_NEEDED, "${{ needs.changes.outputs.dev-install }}");
   assert.equal(gateStep.env.DEV_INSTALL, "${{ needs.dev-install-dryrun.result }}");
+  assert(gate.needs.includes("installer-portal"));
+  assert.equal(gateStep.env.INSTALLER_PORTAL_NEEDED, "${{ needs.changes.outputs.installer-portal }}");
+  assert.equal(gateStep.env.INSTALLER_PORTAL, "${{ needs.installer-portal.result }}");
   for (const job of [jobs.changes, jobs.checks]) {
     assert.equal(job.if, "github.event_name == 'pull_request' || github.event_name == 'merge_group'");
   }
@@ -666,19 +755,22 @@ test("CI gate requires each event's jobs and rejects unplanned skips, failures, 
     INTEGRATION_NEEDED: "true", INTEGRATION: "success", PORTAL_INTEGRATION: "success",
     INTEGRATION_COVERAGE: "success", INFRA_NEEDED: "true", INFRA: "success",
     DEV_INSTALL_NEEDED: "true", DEV_INSTALL: "success", STORYBOOK_NEEDED: "true", STORYBOOK: "success",
+    INSTALLER_PORTAL_NEEDED: "true", INSTALLER_PORTAL: "success",
     APPLICATION_NEEDED: "true", APPLICATION_E2E: "success",
   };
   const unselected = {
     ...pr, INTEGRATION_NEEDED: "false", INTEGRATION: "skipped", PORTAL_INTEGRATION: "skipped",
     INTEGRATION_COVERAGE: "skipped", INFRA_NEEDED: "false", INFRA: "skipped",
     DEV_INSTALL_NEEDED: "false", DEV_INSTALL: "skipped", STORYBOOK_NEEDED: "false", STORYBOOK: "skipped",
+    INSTALLER_PORTAL_NEEDED: "false", INSTALLER_PORTAL: "skipped",
     APPLICATION_NEEDED: "false", APPLICATION_E2E: "skipped",
   };
   const queue = {
     ...pr, EVENT: "merge_group", REVIEW: "skipped", IMAGES: "success",
     INTEGRATION_NEEDED: "", INFRA_NEEDED: "", DEV_INSTALL_NEEDED: "", DEV_INSTALL: "skipped", STORYBOOK_NEEDED: "", APPLICATION_NEEDED: "",
   };
-  const push = { ...queue, EVENT: "push", CHANGES: "skipped", CHECKS: "skipped", FULL_UNIT: "success", IMAGES: "skipped" };
+  const push = { ...queue, EVENT: "push", CHANGES: "skipped", CHECKS: "skipped", FULL_UNIT: "success", IMAGES: "skipped",
+    INSTALLER_PORTAL_NEEDED: "", INSTALLER_PORTAL: "skipped" };
   const dispatch = { ...push, EVENT: "workflow_dispatch", INFRA: "skipped", PRIVACY: "skipped" };
 
   for (const [lane, result, override, expected] of [
@@ -700,9 +792,13 @@ test("CI gate requires each event's jobs and rejects unplanned skips, failures, 
     ["main push with a failed privacy scan", push, { PRIVACY: "failure" }, 1],
     ["PR with new workflow lint findings", pr, { WORKFLOW_LINT: "failure" }, 1],
     ["PR with workflow lint skipped", pr, { WORKFLOW_LINT: "skipped" }, 1],
+    ["PR with installer portal build failing", pr, { INSTALLER_PORTAL: "failure" }, 1],
+    ["PR with installer portal build skipped despite selection", pr, { INSTALLER_PORTAL: "skipped" }, 1],
+    ["PR with no installer portal selection evidence", unselected, { INSTALLER_PORTAL_NEEDED: "" }, 1],
     ["merge queue", queue, {}, 0],
     ["merge queue with Storybook skipped", queue, { STORYBOOK: "skipped" }, 1],
     ["merge queue with failed images", queue, { IMAGES: "failure" }, 1],
+    ["merge queue missing the installer portal build", queue, { INSTALLER_PORTAL_NEEDED: "false", INSTALLER_PORTAL: "skipped" }, 1],
     ["main push", push, {}, 0],
     ["main push with Storybook skipped", push, { STORYBOOK: "skipped" }, 1],
     ["main push with skipped units", push, { FULL_UNIT: "skipped" }, 1],
@@ -885,6 +981,7 @@ test("PR image results are advisory while the merge queue requires the full imag
       EVENT: "merge_group", CHANGES: "success", PRIVACY: "success", WORKFLOW_LINT: "success", STORYBOOK: "success", APPLICATION_E2E: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: "skipped",
       IMAGES: imageResult, INTEGRATION: "success", PORTAL_INTEGRATION: "success",
       INTEGRATION_COVERAGE: "success", DEV_INSTALL: "skipped", INFRA: "success",
+      INSTALLER_PORTAL_NEEDED: "true", INSTALLER_PORTAL: "success",
     });
     assert.equal(result.status, imageResult === "success" ? 0 : 1, `merge_group/${imageResult}: ${result.stderr}`);
   }
@@ -893,6 +990,7 @@ test("PR image results are advisory while the merge queue requires the full imag
     EVENT: "pull_request", CHANGES: "success", PRIVACY: "success", WORKFLOW_LINT: "success", STORYBOOK: "success", APPLICATION_E2E: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: "success",
     IMAGES: "skipped", INTEGRATION_NEEDED: "false", INTEGRATION: "skipped",
     PORTAL_INTEGRATION: "skipped", INTEGRATION_COVERAGE: "skipped", DEV_INSTALL_NEEDED: "false", DEV_INSTALL: "skipped",
+    INSTALLER_PORTAL_NEEDED: "false", INSTALLER_PORTAL: "skipped",
     INFRA_NEEDED: "false", INFRA: "skipped", GITHUB_STEP_SUMMARY: summary,
   });
   assert.equal(result.status, 0, result.stderr);
@@ -965,6 +1063,7 @@ ${detector.run}`, { GITHUB_OUTPUT: outputFile.replaceAll("\\", "/"), DIFF_PATHS:
       INTEGRATION: pr ? "skipped" : "success", PORTAL_INTEGRATION: pr ? "skipped" : "success",
       INTEGRATION_COVERAGE: pr ? "skipped" : "success",
       DEV_INSTALL_NEEDED: "false", DEV_INSTALL: "skipped",
+      INSTALLER_PORTAL_NEEDED: pr ? "false" : "true", INSTALLER_PORTAL: pr ? "skipped" : "success",
       INFRA_NEEDED: needed, INFRA: jobResult, GITHUB_STEP_SUMMARY: summary,
     });
     assert.equal(result.status, status, `${event}/${needed}/${jobResult}: ${result.error?.message ?? result.stderr}`);
@@ -978,6 +1077,7 @@ ${detector.run}`, { GITHUB_OUTPUT: outputFile.replaceAll("\\", "/"), DIFF_PATHS:
       IMAGES: "skipped", INTEGRATION_NEEDED: "false",
       INTEGRATION: "skipped", PORTAL_INTEGRATION: "skipped", INTEGRATION_COVERAGE: "skipped",
       DEV_INSTALL_NEEDED: needed, DEV_INSTALL: jobResult, INFRA_NEEDED: "false", INFRA: "skipped",
+      INSTALLER_PORTAL_NEEDED: "false", INSTALLER_PORTAL: "skipped",
       GITHUB_STEP_SUMMARY: summary,
     });
     assert.equal(result.status, status, `dev-install/${needed}/${jobResult}: ${result.error?.message ?? result.stderr}`);
@@ -995,6 +1095,7 @@ ${detector.run}`, { GITHUB_OUTPUT: outputFile.replaceAll("\\", "/"), DIFF_PATHS:
     const result = runWorkflowScript(gateStep.run, {
       EVENT: event, CHANGES: "success", PRIVACY: "success", WORKFLOW_LINT: "success", STORYBOOK: "success", APPLICATION_E2E: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: pr ? "success" : "skipped",
       IMAGES: pr ? "skipped" : "success", DEV_INSTALL_NEEDED: "false", DEV_INSTALL: "skipped",
+      INSTALLER_PORTAL_NEEDED: pr ? "false" : "true", INSTALLER_PORTAL: pr ? "skipped" : "success",
       INFRA_NEEDED: "true", INFRA: "success", INTEGRATION_NEEDED: needed, GITHUB_STEP_SUMMARY: summary,
       INTEGRATION: postgres, PORTAL_INTEGRATION: portal, INTEGRATION_COVERAGE: coverage,
     });

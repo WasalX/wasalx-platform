@@ -62,7 +62,7 @@ async function enabled(locator:Locator){return await locator.count()>0&&await lo
 async function keyboardClick(page:Page,locator:Locator){await locator.focus();await page.keyboard.press('Enter');}
 
 test('operator cost drafts, accepted activation and every bounded reassessment page remain reachable',async({page},info)=>{
- test.skip(!ready,'Requires root-supplied authenticated platform session and reused control-plane server');test.skip(info.project.name==='tablet-820');
+ test.skip(!ready,'Requires root-supplied authenticated platform session and reused control-plane server');
  const h=await setup(page);const reassess=h.management.getByRole('group',{name:t('cost.manage.reassess'),exact:true});
  h.setWrite(async(route,write)=>{
   if(write.path===`${root()}/tariffs`){expect(write.body).toEqual({definition:tariff(),supersedesId:null});h.tariffs.push({id:tariffId,state:'DRAFT',definition:tariff(),definition_sha256:'2'.repeat(64),supersedes_id:null,created_at:from,accepted_policies:[{id:policyA,createdAt:from},{id:policyB,createdAt:to}]});}
@@ -113,7 +113,7 @@ test('operator cost drafts, accepted activation and every bounded reassessment p
 });
 
 test('statement file replacements invalidate all four imported actions and stale read completions',async({page},info)=>{
- test.skip(!ready,'Requires root-supplied authenticated platform session and reused control-plane server');test.skip(info.project.name==='tablet-820');test.setTimeout(90_000);
+ test.skip(!ready,'Requires root-supplied authenticated platform session and reused control-plane server');test.setTimeout(90_000);
  await page.addInitScript(()=>{const original=File.prototype.text;const controls={release:undefined as undefined|(()=>void),finished:false};Object.assign(window,{costFileRead:controls});File.prototype.text=function(){if(this.name!=='delayed.json')return original.call(this);return new Promise(resolve=>{controls.finished=false;controls.release=()=>{void original.call(this).then(value=>{resolve(value);controls.finished=true;});};});};});
  const h=await setup(page);await h.statement.getByLabel(t('cost.statement.version'),{exact:true}).selectOption(statementId);
  await expect(h.statement.getByRole('button',{name:t('cost.statement.recordReview'),exact:true})).toBeDisabled();
@@ -145,8 +145,8 @@ test('statement file replacements invalidate all four imported actions and stale
  expect(h.writes).toHaveLength(0);expect(h.errors).toEqual([]);await info.attach(`cost-imports-${locale}-${info.project.name}`,{body:await page.screenshot(),contentType:'image/png'});
 });
 
-for(const kind of ['tariff','statement'] as const)test(`operator ${kind} uncertainty retains the original parent path body and key across scope changes`,async({page},info)=>{
- test.skip(!ready,'Requires root-supplied authenticated platform session and reused control-plane server');test.skip(info.project.name==='tablet-820');
+for(const kind of ['tariff','statement'] as const)test(`operator ${kind} uncertainty retains the original parent path body and key across scope changes`,async({page})=>{
+ test.skip(!ready,'Requires root-supplied authenticated platform session and reused control-plane server');
  const h=await setup(page);let original:Write|undefined;
  h.setWrite(async(route,write)=>{if(!original){original=structuredClone(write);h.expected.push({url:route.request().url(),status:502});return route.fulfill({status:502,json:{error:'Platform response is unavailable; reconcile the original operation'}});}expect(write).toEqual(original);await route.fulfill({json:{duplicate:true,id:kind==='tariff'?tariffId:statementId}});});
  if(kind==='tariff'){await h.management.getByLabel(t('cost.manage.rateFile'),{exact:true}).setInputFiles(file(tariff()));await h.management.getByRole('button',{name:t('cost.manage.saveDraft'),exact:true}).click();}
@@ -158,8 +158,8 @@ for(const kind of ['tariff','statement'] as const)test(`operator ${kind} uncerta
  expect(original?.path).toBe(`${root()}/${kind==='tariff'?'tariffs':'statements'}`);expect(original?.body).toEqual(kind==='tariff'?{definition:tariff(),supersedesId:null}:description());expect(h.expected).toEqual([]);expect(h.errors).toEqual([]);
 });
 
-test('operator tariff and selector replacement reads never submit stale imported input',async({page},info)=>{
- test.skip(!ready,'Requires root-supplied authenticated platform session and reused control-plane server');test.skip(info.project.name==='tablet-820');test.setTimeout(90_000);
+test('operator tariff and selector replacement reads never submit stale imported input',async({page})=>{
+ test.skip(!ready,'Requires root-supplied authenticated platform session and reused control-plane server');test.setTimeout(90_000);
  await page.addInitScript(()=>{const original=File.prototype.text;const controls={release:undefined as undefined|(()=>void),finished:false};Object.assign(window,{costImportRead:controls});
   File.prototype.text=function(){if(this.name!=='delayed.json')return original.call(this);return new Promise(resolve=>{controls.finished=false;controls.release=()=>{void original.call(this).then(value=>{resolve(value);controls.finished=true;});};});};});
  const h=await setup(page),reassess=h.management.getByRole('group',{name:t('cost.manage.reassess'),exact:true});

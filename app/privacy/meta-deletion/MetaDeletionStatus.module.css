@@ -1,11 +1,11 @@
-.page { min-height:100dvh; display:grid; place-items:center; padding:clamp(1rem,4vw,3rem); background:var(--bg); color:var(--text); }
-.card { inline-size:min(100%,42rem); border:1px solid var(--border); border-radius:var(--wx-radius-panel); padding:clamp(1.25rem,4vw,2.5rem); background:var(--surface); }
-.card header { display:flex; align-items:center; justify-content:space-between; gap:1rem; }
-.card h1 { font-size:2rem; line-height:1.2; }
+.page { min-height:100dvh; display:grid; place-items:center; padding:clamp(var(--wx-space-4),4vw,var(--wx-space-12)); background:var(--bg); color:var(--text); }
+.card { inline-size:min(100%,42rem); border:1px solid var(--border); border-radius:var(--wx-radius-panel); padding:clamp(var(--wx-space-4),4vw,var(--wx-space-8)); background:var(--surface); }
+.card header { display:flex; align-items:center; justify-content:space-between; gap:var(--wx-space-4); }
+.card h1 { font-size:var(--wx-font-size-7); line-height:1.2; }
 .card p { line-height:1.7; }
-.card form { display:grid; gap:1rem; margin-block:1.5rem; }
-.card label { display:grid; gap:.5rem; }
-.card form :is(input,button) { inline-size:100%; min-inline-size:0; min-block-size:2.75rem; padding:.75rem; border:1px solid var(--border); border-radius:var(--wx-radius-control); background:var(--surface); color:inherit; }
+.card form { display:grid; gap:var(--wx-space-4); margin-block:var(--wx-space-6); }
+.card label { display:grid; gap:var(--wx-space-2); }
+.card form :is(input,button) { inline-size:100%; min-inline-size:0; min-block-size:2.75rem; padding:var(--wx-space-3); border:1px solid var(--border); border-radius:var(--wx-radius-control); background:var(--surface); color:inherit; }
 .card form button { cursor:pointer; font-weight:600; }
 .card form button:disabled { opacity:.6; cursor:wait; }
 .card form button:hover:not(:disabled) { background:var(--surface-2); }

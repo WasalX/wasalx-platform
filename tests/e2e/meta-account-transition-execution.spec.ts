@@ -102,7 +102,6 @@ async function fixture(page:Page){
 }
 
 test('Account change uses four deliberate actions and recovers the exact saved operation without replay',async({page},testInfo)=>{
-  test.skip(testInfo.project.name==='tablet-820');
   const f=await fixture(page);
   await page.goto(`/app?view=connections&connection=${connection}`);await expect(page.locator('[data-application-ready="true"]')).toBeVisible();
   await expect(section(page).getByRole('heading',{name:copy('execution.title'),exact:true})).toBeVisible();
@@ -152,8 +151,8 @@ test('Account change uses four deliberate actions and recovers the exact saved o
   expect(f.pageErrors).toEqual([]);expect(f.consoleErrors).toEqual([]);expect(f.expectedErrors).toEqual([]);
 });
 
-test('Account change holds malformed or uncorrelated results and clears inaccessible data without repeating effects',async({page},testInfo)=>{
-  test.skip(testInfo.project.name==='tablet-820'||!['tenant_owner','tenant_admin'].includes(role()));
+test('Account change holds malformed or uncorrelated results and clears inaccessible data without repeating effects',async({page})=>{
+  test.skip(!['tenant_owner','tenant_admin'].includes(role()));
   const f=await fixture(page);
   await page.goto(`/app?view=connections&connection=${connection}`);await expect(button(page,'initiate')).toBeEnabled();
   // Storage denial must stop dispatch before a provider action is reserved.
@@ -175,7 +174,7 @@ test('Account change holds malformed or uncorrelated results and clears inaccess
 });
 
 test('Managed account change requires acceptance of the exact target terms before confirmation',async({page},testInfo)=>{
-  test.skip(testInfo.project.name==='tablet-820'||!['tenant_owner','tenant_admin'].includes(role()));
+  test.skip(!['tenant_owner','tenant_admin'].includes(role()));
   const f=await fixture(page),documentText='Terms for the reviewed target account.\nشروط الحساب المستهدف. <approval is text>';
   f.set({...f.get(),requestedMode:'WASALX_MANAGED',execution:{...f.get().execution!,requestedMode:'WASALX_MANAGED',terms:null}});
   await page.goto(`/app?view=connections&connection=${connection}`);
@@ -203,8 +202,8 @@ test('Managed account change requires acceptance of the exact target terms befor
   expect(f.pageErrors).toEqual([]);expect(f.consoleErrors).toEqual([]);expect(f.expectedErrors).toEqual([]);
 });
 
-test('An unadmitted request is resolved with its original key without repeating a provider action',async({page},testInfo)=>{
-  test.skip(testInfo.project.name==='tablet-820'||!['tenant_owner','tenant_admin'].includes(role()));
+test('An unadmitted request is resolved with its original key without repeating a provider action',async({page})=>{
+  test.skip(!['tenant_owner','tenant_admin'].includes(role()));
   const f=await fixture(page);f.setHandler(async route=>{await f.lost(route);});
   await page.goto(`/app?view=connections&connection=${connection}`);await expect(button(page,'initiate')).toBeEnabled();
   page.once('dialog',dialog=>dialog.accept());await button(page,'initiate').click();await expect(section(page).getByText(copy('execution.heldRequest'),{exact:true})).toBeVisible();
@@ -246,7 +245,6 @@ test('Account change read deadlines and scope changes cannot restore stale actio
 
 
 test('Reserved account change cancellation follows current execution authority without provider work',async({page},testInfo)=>{
-  test.skip(testInfo.project.name==='tablet-820');
   const f=await fixture(page);
   f.set({...f.get(),revision:6,canRefresh:false,canCancel:false,execution:{...execution(),revision:6,state:'RESERVED',
     actions:{initiate:false,complete:false,observe:false,reconcile:false,cancel:true},history:[],pendingAction:null}});
@@ -273,7 +271,6 @@ test('Reserved account change cancellation follows current execution authority w
 });
 
 test('Reconciled account history allows a new preview only with current preparation and settled intent',async({page},testInfo)=>{
-  test.skip(testInfo.project.name==='tablet-820');
   const f=await fixture(page),history:MetaTransitionExecutionView['history']=[
     {stage:'INITIATE',outcome:'SUCCEEDED',attemptedAt:new Date(Date.now()-120_000).toISOString()},
     {stage:'COMPLETE',outcome:'SUCCEEDED',attemptedAt:new Date(Date.now()-60_000).toISOString()}];
@@ -365,12 +362,17 @@ async function readbackFixture(page:Page,f:Awaited<ReturnType<typeof fixture>>){
 test('Account recovery renews exact source read access without replaying or approving migration',async({page},testInfo)=>{
  // Multiple reloads and recovery phases need a bounded scenario budget on shared CI runners.
  test.setTimeout(90_000);
-  test.skip(testInfo.project.name==='tablet-820');
+  await page.clock.install();
   const f=await fixture(page),r=await readbackFixture(page,f);
   const messages=(locale()==='ar'?arabicTenantMessages:englishTenantMessages) as Record<string,string>;
   const text=(key:string)=>messages[`tenant.metaSignup.${key}`]!;
   const setup=()=>page.locator('section[aria-labelledby="meta-signup-heading"]');
   const sb=(key:string)=>setup().getByRole('button',{name:text(key),exact:true});
+  const advanceRecoveryPoll=async()=>{
+    await expect(setup().getByText(text('checking'),{exact:true})).toBeVisible();
+    // The uncertain signup attempt polls after three seconds and reads on the next frame.
+    await page.clock.runFor(3_100);
+  };
   const open=async()=>{await section(page).getByRole('button',{name:copy('execution.renewal.open'),exact:true}).click();await expect(setup().getByRole('heading',{name:text('readback.title'),exact:true})).toBeVisible();};
   const visit=async()=>{await page.goto(`/app?view=connections&connection=${connection}`);await expect(section(page).getByRole('heading',{name:copy('execution.title'),exact:true})).toBeVisible();};
   f.set({...f.get(),canRefresh:false,canCancel:false,execution:{...f.get().execution!,state:'HELD',actions:{initiate:false,complete:false,observe:false,reconcile:false,cancel:false},
@@ -390,6 +392,7 @@ test('Account recovery renews exact source read access without replaying or appr
   await sb('readback.prepare').click();await page.reload();await open();
   await expect(setup().getByText(text('resumeAuthorization'),{exact:true})).toBeVisible();await expect(sb('connect')).toHaveCount(0);
   await sb('cancel').click();await sb('readback.prepare').click();await sb('connect').click();r.loseExchange();await r.callback('readback-code-once');
+  await advanceRecoveryPoll();
   await expect(setup().getByRole('radio').first()).toBeEnabled();expect(r.calls.filter(call=>call.path.endsWith('/exchange'))).toHaveLength(1);
   await page.reload();await open();await expect(setup().getByRole('radio').first()).toBeEnabled();expect(r.calls.filter(call=>call.path.endsWith('/exchange'))).toHaveLength(1);
   await expect(setup().locator('input[type="password"]')).toHaveCount(0);await expect(setup().getByRole('radio').nth(1)).toBeDisabled();
@@ -399,6 +402,7 @@ test('Account recovery renews exact source read access without replaying or appr
   f.set({...f.get(),execution:{...f.get().execution!,renewals:[{...f.get().execution!.renewals[0],canPrepare:true}]}});await f.refresh();
   await setup().getByRole('radio').first().check();r.loseSelect();await sb('readback.select').click();
   await expect.poll(()=>r.calls.filter(call=>call.path.endsWith('/select')).length).toBe(1);
+  await advanceRecoveryPoll();
   await expect(sb('readback.select')).toBeEnabled();await page.reload();await open();
   expect(r.calls.filter(call=>call.path.endsWith('/select'))).toHaveLength(1);await setup().getByRole('radio').first().check();
   await sb('readback.select').click();await expect(setup().getByText(text('readback.status.COMPLETED'),{exact:true})).toBeVisible();

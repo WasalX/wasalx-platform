@@ -19,7 +19,7 @@ const plan = id(2), other = id(8), root = () => `/api/platform-console/operation
 function review(): MetaTransitionOperatorReview { return { id: plan, tenantId: tenant, name: "Transition account", revision: 3, requestedMode: "CUSTOMER", sourceCurrency: "USD", targetCurrency: "SAR", phase: "RESERVED", evidenceMode: "SIMULATED", reviewSha256: "a".repeat(64), connectionNames: ["اتصال المبيعات (Sales)"], connectionCount: 1, providerStatus: null, checkpoints: [], proof: { sourceScope: "CURRENT", targetAccess: "NONE", payment: "VERIFIED", renewedObserver: "ABSENT", prerequisiteApproval: "MISSING", targetReview: "MISSING" }, actions: { PREREQUISITES: true, TARGET: false, COMPLETION: false }, reasons: [], arrangements: [], originalGrant: null, pendingCommand: null }; }
 type Write = { path: string; key: string; scope: string; action: MetaTransitionOperatorAction; body: MetaTransitionOperatorRequest };
 function terminal(write: Write, disposition: "APPLIED" | "NO_EFFECT" = "APPLIED"): MetaTransitionOperatorResult { return { tenantId: tenant, planId: write.path.split("/account-transitions/")[1]!.split("/")[0]!, requestKey: write.key, action: write.action, request: structuredClone(write.body), state: disposition, commandReceiptId: id(10), approvalReceiptId: disposition === "APPLIED" ? id(11) : null, duplicate: false }; }
-function admitted(info: TestInfo) { test.skip(!ready, "Requires root-supplied authenticated platform session and reused control-plane server"); test.skip(info.project.name === "tablet-820", "Finite EN/AR desktop1440 and mobile390 coverage"); }
+function admitted() { test.skip(!ready, "Requires root-supplied authenticated platform session and reused control-plane server"); }
 async function setup(page: Page) {
   const errors: string[] = [], expected: Array<{ url: string; status: number }> = [], writes: Write[] = [], reads: string[] = [];
   page.on("pageerror", error => errors.push(error.message));
@@ -62,7 +62,7 @@ async function record(page: Page) { const dialog = page.getByRole("dialog"); awa
 async function screenshot(page: Page, info: TestInfo, label: string) { expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true); await info.attach(`transition-${label}-${locale}-${info.project.name}`, { body: await page.screenshot(), contentType: "image/png" }); }
 
 test("operator records three explicit local reviews and independently selected managed target terms", async ({ page }, info) => {
-  admitted(info); const x = await setup(page), h = x.h;
+  admitted(); const x = await setup(page), h = x.h;
   await prepare(page, "PREREQUISITES"); expect(h.writes).toHaveLength(0); await record(page); await expect(x.dialog().getByText(text("result.APPLIED"), { exact: true })).toBeVisible();
   await expect(x.dialog().getByLabel(text("reviewKind"), { exact: true }).locator('option[value="PREREQUISITES"]')).toHaveCount(0);
   expect(h.writes[0]!.body).toEqual({ expectedRevision: 3, expectedReviewSha256: "a".repeat(64), evidenceSha256: "b".repeat(64), confirmed: true, sourcePayment: "CARD" });
@@ -87,7 +87,7 @@ test("operator records three explicit local reviews and independently selected m
 });
 
 test("operator lost-response recovery keeps exact intent through reload, mismatched proof and deliberate resolution", async ({ page }, info) => {
-  admitted(info); const x = await setup(page), h = x.h;
+  admitted(); const x = await setup(page), h = x.h;
   h.write = async (route, write) => { h.current.revision++; h.current.reviewSha256 = "f".repeat(64); h.current.pendingCommand = { ...terminal(write), requestKey: id(99) }; h.expected.push({ url: route.request().url(), status: 502 }); await route.fulfill({ status: 502, json: { error: "PRIVATE_TRANSPORT_DETAIL" } }); };
   await prepare(page, "PREREQUISITES"); await record(page); await expect(x.dialog().getByText(text("held"), { exact: true })).toBeVisible(); expect(h.writes).toHaveLength(1); const original = structuredClone(h.writes[0]!);
   await expect(page.getByText("PRIVATE_TRANSPORT_DETAIL")).toHaveCount(0); await page.reload(); await x.open(false); await expect(x.dialog().getByText(text("held"), { exact: true })).toBeVisible();
@@ -105,7 +105,7 @@ test("operator lost-response recovery keeps exact intent through reload, mismatc
 });
 
 test("operator authority loss removes loaded evidence and storage failure prevents approval dispatch", async ({ page }, info) => {
-  admitted(info); const x = await setup(page), h = x.h;
+  admitted(); const x = await setup(page), h = x.h;
   await prepare(page, "PREREQUISITES");
   await page.evaluate(() => { const original = Storage.prototype.setItem; Storage.prototype.setItem = function(key, value) { if (key.startsWith("wasalx.meta.transition-review:")) throw new DOMException("Blocked", "QuotaExceededError"); return original.call(this, key, value); }; });
   await record(page); await expect(x.dialog().getByText(text("storage"), { exact: true })).toBeVisible(); expect(h.writes).toHaveLength(0);
@@ -115,8 +115,8 @@ test("operator authority loss removes loaded evidence and storage failure preven
   expect(h.writes).toHaveLength(0); await screenshot(page, info, "authority-loss"); expect(h.expected).toEqual([]); expect(h.errors).toEqual([]);
 });
 
-test("operator late review reads cannot cross a plan boundary; exact GET proof settles without replay", async ({ page }, info) => {
-  admitted(info); const x = await setup(page), h = x.h;
+test("operator late review reads cannot cross a plan boundary; exact GET proof settles without replay", async ({ page }) => {
+  admitted(); const x = await setup(page), h = x.h;
   let release = () => {}; h.gate.wait = new Promise<void>(resolve => { release = resolve; }); h.gate.entered = false;
   await x.dialog().getByRole("button", { name: text("refresh"), exact: true }).click(); await expect.poll(() => h.gate.entered).toBe(true);
   await x.dialog().getByLabel(text("plan"), { exact: true }).selectOption(other); await expect(x.dialog().getByRole("heading", { name: "Other plan", exact: true })).toBeVisible();
@@ -128,7 +128,7 @@ test("operator late review reads cannot cross a plan boundary; exact GET proof s
 });
 
 test("pending plan-list reads exclude approval writes and removed reviews retain exact recoverable intent", async ({ page }, info) => {
-  admitted(info); const x = await setup(page), h = x.h;
+  admitted(); const x = await setup(page), h = x.h;
   const refreshPlans = () => x.dialog().getByRole("button", { name: text("refreshList"), exact: true });
   const close = () => x.dialog().getByRole("button", { name: t("platform.actions.closeDialog"), exact: true });
   const choosePlan = () => x.dialog().getByLabel(text("plan"), { exact: true });

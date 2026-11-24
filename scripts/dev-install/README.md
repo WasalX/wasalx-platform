@@ -27,7 +27,9 @@ The read-only running-stack scan is `node scripts/dev-install/probe.mjs --projec
 Run it as root from the candidate checkout, with the deployed Compose inputs in a separate tree.
 Use `--repository` to select the candidate checkout and repeat `--compose-file` to add overlays.
 `--held-services` overrides the DEV hold set with a comma-separated list. Nightly passes an empty list.
-Keep the JSON report private. The nightly logs only the counts and census result or a sanitized failure.
+The scan derives its expected service count from the active services in the rendered Compose model
+and checks the exact service inventory before and after scanning. Keep the JSON report private.
+The nightly logs only the counts and census result or a sanitized failure.
 
 ## Fresh held guest projects
 
@@ -190,7 +192,13 @@ file. Keep the receipt files in sequence.
 
 The nightly PR leg binds the exact PR head and its tree through the anonymous GitHub
 API and independently verifies real GHCR/Sigstore bytes for the recorded main
-publication. The release path requires the RC asset and a successful census on the
+publication. The verifier uses the pinned trust root and validates the staged
+manifest, signature and provenance offline. The report agent stages those public
+GHCR bytes once per candidate. Registry credentials stay with the registry on
+redirects to another origin. Staging and offline verification have deadlines
+inside the agent watchdog, so the failing command and its redacted reason appear
+in the service journal. Nightly stages the bytes once for both the live pull
+check and the rehearsal. The release path requires the RC asset and a successful census on the
 latest nightly push run for that tag and commit. The census step checks the installer
 commit, tree and published image commit against the rehearsal log.
 

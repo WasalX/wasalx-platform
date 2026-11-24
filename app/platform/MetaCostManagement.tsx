@@ -4,7 +4,9 @@ import { parseMetaCostSelectorEvidence, parseMetaCostTariff, type MetaCostTariff
 import { formatDateTime, formatNumber } from "../../lib/i18n/format";
 import { platformRequest } from "../../lib/platform-client";
 import { useI18n } from "../I18nProvider";
-import { MetaCostUsage, type CostUsage } from "../MetaCostUsage";
+import { MetaCostDisclosure } from "../MetaCostDisclosure";
+import type { CostUsage } from "../MetaCostUsage";
+import { ScrollRegion } from "../tenant-ui";
 import styles from "../MetaCostUsage.module.css";
 import {MetaCostStatementManagement} from "./MetaCostStatementManagement";
 
@@ -33,7 +35,7 @@ export function PlatformMetaCosts({tenantId,csrfToken}:OperatorScope){
   return <>
     {feedback?<p role={feedback==="cost.manage.saved"?"status":"alert"}>{t(feedback)}</p>:null}
     {uncertain?<button type="button" disabled={busy} onClick={()=>{if(intent.current)void mutate(intent.current.path,intent.current.body);}}>{t("cost.manage.reconcile")}</button>:null}
-    <MetaCostUsage canExport platform={scope} refreshKey={revision} management={(snapshot,account,window)=>account==="unattributed"?null:
+    <MetaCostDisclosure canExport platform={scope} refreshKey={revision} management={(snapshot,account,window)=>account==="unattributed"?null:
       <div key={account}><Management scope={scope} snapshot={snapshot} accountId={account} mutate={mutate} busy={busy} uncertain={uncertain}/><MetaCostStatementManagement scope={scope} accountId={account} window={window} revision={revision} mutate={mutate} busy={busy} uncertain={uncertain}/></div>}/>
   </>;
 }
@@ -85,10 +87,7 @@ function Management({scope,snapshot,accountId,mutate,busy,uncertain}:{scope:Oper
       {definition?<>
         <p>{t(`cost.purpose.${definition.purpose}`)} · {t(`cost.mode.${definition.evidenceMode}`)} · <bdi>{definition.currency}</bdi> · {t(`cost.rounding.${definition.rounding}`)}</p>
         <p>{formatDateTime(definition.effectiveFrom,locale,{dateStyle:"medium",timeStyle:"short"})} – {formatDateTime(definition.effectiveTo,locale,{dateStyle:"medium",timeStyle:"short"})} · <bdi>{definition.timezone}</bdi></p>
-        <div className={styles.tableWrap} role="region" aria-label={t("cost.manage.preview")}
-    // Keyboard users need to focus an otherwise non-interactive overflow area.
-    // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex
-    tabIndex={0}><table><caption>{t("cost.manage.preview")}</caption><thead><tr><th>{t("cost.manage.category")}</th><th>{t("cost.manage.marketTier")}</th><th>{t("cost.manage.price")}</th></tr></thead><tbody>{definition.rates.map((rate,index)=><tr key={index}><td>{t(`cost.category.${rate.category}`)}<small>{t(`cost.schedule.${rate.schedule}`)} · {t(`cost.pricingType.${rate.pricingType}`)}</small></td><td><bdi>{rate.market} / {rate.tier}</bdi></td><td><bdi dir="ltr">{definition.currency} {rate.unitPrice}</bdi></td></tr>)}</tbody></table></div>
+        <ScrollRegion className={styles.tableWrap} aria-label={t("cost.manage.preview")}><table><caption>{t("cost.manage.preview")}</caption><thead><tr><th>{t("cost.manage.category")}</th><th>{t("cost.manage.marketTier")}</th><th>{t("cost.manage.price")}</th></tr></thead><tbody>{definition.rates.map((rate,index)=><tr key={index}><td>{t(`cost.category.${rate.category}`)}<small>{t(`cost.schedule.${rate.schedule}`)} · {t(`cost.pricingType.${rate.pricingType}`)}</small></td><td><bdi>{rate.market} / {rate.tier}</bdi></td><td><bdi dir="ltr">{definition.currency} {rate.unitPrice}</bdi></td></tr>)}</tbody></table></ScrollRegion>
         <label>{t("cost.manage.replaces")}<select value={supersedes} onChange={event=>setSupersedes(event.target.value)}><option value="">{t("cost.manage.newPeriod")}</option>{active.filter(item=>item.definition.purpose===definition.purpose&&item.definition.evidenceMode===definition.evidenceMode).map((item,index)=><option key={item.id} value={item.id}>{t("cost.manage.version",{count:formatNumber(index+1,locale)})} · {formatDateTime(item.created_at,locale,{dateStyle:"medium"})}</option>)}</select></label>
         <details><summary>{t("cost.manage.source")}</summary><p className={styles.digest}><bdi dir="ltr">{definition.sourceSha256}</bdi></p></details>
         <button type="button" onClick={()=>void submit(`${root}/tariffs`,{definition,supersedesId:supersedes||null})}>{t("cost.manage.saveDraft")}</button>

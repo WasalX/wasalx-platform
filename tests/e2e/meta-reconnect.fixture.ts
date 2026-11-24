@@ -55,6 +55,7 @@ export async function metaReconnectJourney(page: Page, locale: "en" | "ar", role
     const callbacks = (window as unknown as { metaReconnectCallbacks: ((response: unknown) => void)[] }).metaReconnectCallbacks;
     callbacks.at(-1)!(value ? { authResponse: { code: value } } : {});
   }, code);
+  await page.clock.install();
   page.on("pageerror", error => problems.push(error.message));
   await page.route("https://connect.facebook.net/en_US/sdk.js", route => route.fulfill({ contentType: "text/javascript",
     body: "window.metaReconnectCallbacks=[];window.metaReconnectSdkLaunches=[];window.FB={init(){},login(callback,options){window.metaReconnectCallbacks.push(callback);window.metaReconnectSdkLaunches.push(options);}};" }));
@@ -126,11 +127,10 @@ export async function metaReconnectJourney(page: Page, locale: "en" | "ar", role
     }
     return route.fallback();
   });
-  const open = async (id = alpha) => {
-    await page.goto(`/app?view=connections&connection=${id}`);
-    await expect(page.locator('[data-application-ready="true"]')).toBeVisible();
+  const openEditor = async () => {
     const button = page.getByRole("button", { name: t("tenant.metaSignup.reconnect.open"), exact: true });
     if (!["tenant_owner", "tenant_admin"].includes(role)) {
+      await expect(page.getByRole("heading", { name: "Access Alpha", exact: true })).toBeVisible();
       await expect(button).toHaveCount(0);
       await expect(page.getByRole("button", { name: t("tenant.connection.metaCredential.replace"), exact: true })).toHaveCount(0);
       return null;
@@ -138,6 +138,22 @@ export async function metaReconnectJourney(page: Page, locale: "en" | "ar", role
     await expect(page.getByRole("button", { name: t("tenant.connection.metaCredential.replace"), exact: true })).toBeDisabled();
     await button.focus(); await page.keyboard.press("Enter");
     return page.locator('section[aria-labelledby="meta-signup-heading"]');
+  };
+  const open = async () => {
+    await page.goto(`/app?view=connections&connection=${alpha}`, { waitUntil: "commit" });
+    await expect(page.locator('[data-application-ready="true"]')).toBeVisible();
+    return openEditor();
+  };
+  const navigate = (connection: string | null) => page.evaluate(id => {
+    history.pushState({}, "", id ? `/app?view=connections&connection=${id}` : "/app?view=connections");
+    dispatchEvent(new PopStateEvent("popstate"));
+  }, connection);
+  const reopen = async () => {
+    // These fixture states need a fresh drawer. The explicit reload cases still open a new document.
+    await navigate(null);
+    await expect(page.getByRole("dialog", { name: t("tenant.connection.detailsLabel"), exact: true })).toHaveCount(0);
+    await navigate(alpha);
+    return openEditor();
   };
   let section = await open();
   async function capture(name: string, actionKey: string) {
@@ -181,7 +197,7 @@ export async function metaReconnectJourney(page: Page, locale: "en" | "ar", role
   await expect(page.getByRole("button", { name: t("tenant.metaSignup.reconnect.open"), exact: true })).toBeFocused();
 
   // Existing Business App renewal uses auth-only SDK and never asks for new import consent.
-  targetMode = "COEXISTENCE"; setView(alpha, null); section = await open();
+  targetMode = "COEXISTENCE"; setView(alpha, null); section = await reopen();
   await section!.getByRole("button", { name: t("tenant.metaSignup.reconnect.prepare"), exact: true }).click();
   await section!.getByRole("button", { name: t("tenant.metaSignup.connect"), exact: true }).click();
   const launch = await page.evaluate(() => (window as unknown as { metaReconnectSdkLaunches: Record<string, unknown>[] }).metaReconnectSdkLaunches.at(-1)!);
@@ -200,7 +216,7 @@ export async function metaReconnectJourney(page: Page, locale: "en" | "ar", role
     operationType = "ROTATE_META_CREDENTIAL"; operationState = "STAGED";
     const staged = { ...selection(initial()), revision: 5, connectionId: alpha,
       operationId: "66000000-0000-4000-8000-000000000081", reasonCode: "META_SIGNUP_CREDENTIAL_UNAVAILABLE" as const };
-    setView(alpha, staged); section = await open();
+    setView(alpha, staged); section = await reopen();
     await expect(section!.getByRole("button", { name: t("tenant.metaSignup.discover"), exact: true })).toHaveCount(0);
     await expect(section!.locator('input[type="password"]')).toHaveCount(0);
     if (action === "select") {
@@ -223,7 +239,7 @@ export async function metaReconnectJourney(page: Page, locale: "en" | "ar", role
   const staleStage = { ...selection(initial()), connectionId: alpha, operationId: "66000000-0000-4000-8000-000000000082",
     status: "ACTION_REQUIRED" as const, nextAction: "REVIEW_OUTCOME" as const, reasonCode: "META_SIGNUP_RECONNECT_TARGET_CHANGED" as const };
   staleStage.choices = staleStage.choices.map(choice => ({ ...choice, selectable: false }));
-  setView(alpha, staleStage); section = await open();
+  setView(alpha, staleStage); section = await reopen();
   await expect(section!.getByRole("radio", { name: /12025550143/u })).toBeDisabled();
   await section!.getByRole("button", { name: t("tenant.metaSignup.cancel"), exact: true }).click();
   await expect(section!.getByText(t("tenant.metaSignup.status.CANCELLED"), { exact: true })).toBeVisible();
@@ -247,10 +263,10 @@ export async function metaReconnectJourney(page: Page, locale: "en" | "ar", role
   expect(writes.filter(write => write.path.endsWith("/exchange"))).toHaveLength(exchanges);
 
   // Navigation to a different connection invalidates the earlier popup callback.
-  setView(alpha, null); section = await open();
+  setView(alpha, null); section = await reopen();
   await section!.getByRole("button", { name: t("tenant.metaSignup.reconnect.prepare"), exact: true }).click();
   await section!.getByRole("button", { name: t("tenant.metaSignup.connect"), exact: true }).click();
-  await page.evaluate(id => { history.pushState({}, "", `/app?view=connections&connection=${id}`); dispatchEvent(new PopStateEvent("popstate")); }, beta);
+  await navigate(beta);
   await expect(section!).toHaveCount(0); await callback("late-after-navigation");
   expect(writes.filter(write => write.path.endsWith("/exchange"))).toHaveLength(exchanges);
   await page.getByRole("button", { name: t("tenant.metaSignup.reconnect.open"), exact: true }).click();
@@ -258,14 +274,14 @@ export async function metaReconnectJourney(page: Page, locale: "en" | "ar", role
 
   // Even an actor-readable view from another target/purpose is never accepted by this surface.
   for (const wrong of [initial(beta), { ...initial(), purpose: "NEW_NUMBER" as const, target: undefined }]) {
-    setView(alpha, wrong); section = await open();
+    setView(alpha, wrong); section = await reopen();
     await expect(section!.getByText(t("tenant.metaSignup.scopeChanged"), { exact: true })).toBeVisible();
     await expect(section!.getByRole("button", { name: t("tenant.metaSignup.reconnect.prepare"), exact: true })).toHaveCount(0);
     await expect(section!.getByRole("radio")).toHaveCount(0);
   }
   // Unknown outcomes never resubmit authorization or rotation; status remains the only recovery action.
   setView(alpha, { ...initial(), status: "OUTCOME_UNKNOWN", nextAction: "REVIEW_OUTCOME", canCancel: false,
-    reasonCode: "META_SIGNUP_EXCHANGE_UNKNOWN" }); section = await open();
+    reasonCode: "META_SIGNUP_EXCHANGE_UNKNOWN" }); section = await reopen();
   await expect(section!.getByText(t("tenant.metaSignup.status.OUTCOME_UNKNOWN"), { exact: true })).toBeVisible();
   await expect(section!.getByRole("button", { name: t("tenant.metaSignup.connect"), exact: true })).toHaveCount(0);
   await expect(section!.getByRole("button", { name: t("tenant.metaSignup.reconnect.select"), exact: true })).toHaveCount(0);
@@ -273,14 +289,14 @@ export async function metaReconnectJourney(page: Page, locale: "en" | "ar", role
 
   // Server holds are displayed honestly; a capability outage cannot create a new setup.
   setView(alpha, { ...initial(), status: "ACTION_REQUIRED", nextAction: "REVIEW_OUTCOME", canCancel: false,
-    reasonCode: "META_SIGNUP_RECONNECT_TARGET_CHANGED" }); section = await open();
+    reasonCode: "META_SIGNUP_RECONNECT_TARGET_CHANGED" }); section = await reopen();
   await expect(section!.getByText(t("tenant.metaSignup.reason.META_SIGNUP_RECONNECT_TARGET_CHANGED"), { exact: true })).toBeVisible();
   const changedMode = selection(initial());
   changedMode.choices[0].mode = "UNKNOWN"; changedMode.choices[0].numberState = "UNKNOWN";
-  setView(alpha, changedMode); section = await open();
+  setView(alpha, changedMode); section = await reopen();
   await expect(section!.getByRole("radio", { name: /12025550143/u })).toBeDisabled();
   await expect(section!.locator('input[type="password"]')).toHaveCount(0);
-  unavailable = true; setView(alpha, null); section = await open();
+  unavailable = true; setView(alpha, null); section = await reopen();
   await expect(section!.getByRole("button", { name: t("tenant.metaSignup.reconnect.prepare"), exact: true })).toHaveCount(0);
   const bounds = await section!.boundingBox(); expect(bounds!.width).toBeLessThanOrEqual(page.viewportSize()!.width);
   const axe = await new AxeBuilder({ page }).include('section[aria-labelledby="meta-signup-heading"]').analyze();
@@ -292,7 +308,7 @@ export async function metaReconnectJourney(page: Page, locale: "en" | "ar", role
     lifecycle = "PAUSED";
     setView(alpha, status === "AWAITING_AUTHORIZATION" ? null : { ...initial(), status, nextAction: "REVIEW_OUTCOME",
       canCancel: false, reasonCode: "META_SIGNUP_EXCHANGE_UNKNOWN" });
-    section = await open();
+    section = await reopen();
     if (status === "AWAITING_AUTHORIZATION") {
       await section!.getByRole("button", { name: t("tenant.metaSignup.reconnect.prepare"), exact: true }).click();
       await section!.getByRole("button", { name: t("tenant.metaSignup.connect"), exact: true }).click();
@@ -300,6 +316,7 @@ export async function metaReconnectJourney(page: Page, locale: "en" | "ar", role
     const durableAttempt = views.get(alpha), beforeRetirement = writes.length;
     lifecycle = "REVOKED";
     await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await page.clock.runFor(32);
     const history = page.locator(`section[aria-labelledby="saved-access-${alpha}"]`);
     await expect(section!).toHaveCount(0);
     await expect(history.getByText(t("tenant.metaActivation.completed"), { exact: true })).toBeVisible();
@@ -318,9 +335,10 @@ export async function metaReconnectJourney(page: Page, locale: "en" | "ar", role
     await expect(page.getByRole("dialog", { name: t("tenant.connection.detailsLabel"), exact: true })).toHaveCount(0);
   }
   lifecycle = "WORKING";
-  await page.goto(`/app?view=connections&connection=${alpha}`);
-  await expect(page.getByRole("button", { name: t("tenant.metaSignup.reconnect.open"), exact: true })).toHaveCount(0);
+  await page.goto(`/app?view=connections&connection=${alpha}`, { waitUntil: "commit" });
+  await expect(page.locator('[data-application-ready="true"]')).toBeVisible();
   await expect(page.getByRole("button", { name: t("tenant.connection.metaCredential.replace"), exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: t("tenant.metaSignup.reconnect.open"), exact: true })).toHaveCount(0);
   expect(reads.filter(path => path.endsWith("/attempts?targetConnectionId=" + alpha)).length).toBeGreaterThan(0);
   expect(reads.some(path => path.endsWith("/signup/attempts"))).toBe(false);
   const storage = await page.evaluate(() => JSON.stringify({ ...localStorage, ...sessionStorage }));

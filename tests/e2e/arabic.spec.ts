@@ -16,72 +16,63 @@ import { accountObservationJourney, consumeExpectedObservationFailure, workspace
 import { consumeExpectedDirectSetupDenial, metaDirectConsentJourney } from "./meta-direct-consent.fixture";
 import { consumeExpectedSignupDenial, metaSignupJourney } from "./meta-signup.fixture";
 import { ticketEventWorkflowJourney } from "./ticket-event-workflows.fixture";
-import AxeBuilder from "@axe-core/playwright";
+import { expectAxeClean } from "../helpers/axe";
 import { expect, test, type Page } from "@playwright/test";
 import { arabicMessages } from "../../lib/i18n/messages/ar/index.ts";
 
 const role = process.env.WASALX_E2E_ROLE ?? "tenant_owner";
-test("Audit uses localized workspace actions and truthful actors with permitted CSV export", async ({ page }, testInfo) => {
-  test.skip(testInfo.project.name === "tablet-820");
+test("Audit uses localized workspace actions and truthful actors with permitted CSV export", { tag: "@tablet" }, async ({ page }, testInfo) => {
   await auditWorkspaceJourney(page, "ar", role, testInfo);
 });
-test("retryable human handoff has a fenced operator retry without resume or close", async ({ page }, testInfo) => {
-  test.skip(testInfo.project.name === "tablet-820");
+test("retryable human handoff has a fenced operator retry without resume or close", async ({ page }) => {
   await handoffRetryJourney(page, "ar", role);
 });
 
 test("Arabic native routing sync keeps explicit queue policies separate from native readback", async ({ page }, testInfo) => {
   test.setTimeout(90_000);
-  test.skip(testInfo.project.name === "tablet-820");
   await nativeRoutingSyncJourney(page, testInfo, "ar", role);
 });
 test("Arabic fixed handoff agent selection preserves explicit and omitted immutable draft behavior", async ({ page }, testInfo) => {
-  test.skip(role !== "tenant_owner" || testInfo.project.name === "tablet-820");
+  test.skip(role !== "tenant_owner");
   test.setTimeout(90_000);
   await fixedHandoffOwnerJourney(page, testInfo, "ar");
 });
 (role !== "agent" ? test : test.skip)("Arabic linked account observations warn without changing Source membership", async ({ page }, testInfo) => {
-  test.skip(testInfo.project.name === "tablet-820");
   test.setTimeout(90_000);
   await accountObservationJourney(page, testInfo, "ar");
 });
 
 test("Meta saved access enables receiving only after current checks", async ({page},testInfo)=>{
- test.setTimeout(90_000);test.skip(testInfo.project.name==="tablet-820");
+ test.setTimeout(90_000);
  await metaSavedActivationJourney(page,"ar",role,testInfo);
 });
 
 test("Meta number release preserves reservation review and exact uncertain recovery",async({page},testInfo)=>{
- test.setTimeout(120_000);test.skip(testInfo.project.name==='tablet-820');
+ test.setTimeout(120_000);
  await metaNumberReleaseJourney(page,'ar',role,testInfo);
 });
 
 test("Meta existing-number access stays paused and recovers without registration or replay", async ({ page }, testInfo) => {
-  test.skip(testInfo.project.name === "tablet-820");
   await metaAddAccessJourney(page, "ar", role, testInfo);
 });
 
 test("Arabic Meta external routing preserves exact lost-response recovery and separate bot state", async ({ page }, testInfo) => {
   test.setTimeout(120_000);
-  test.skip(testInfo.project.name === "tablet-820");
   await metaRoutingJourney(page, "ar", role, testInfo);
 });
 
 test("Meta Business app consent and inert imports preserve unknown and stopped states", async ({ page }, testInfo) => {
-  test.skip(testInfo.project.name === "tablet-820");
   await metaCoexistenceJourney(page, "ar", role, testInfo);
 });
 
 test("Meta legacy move retains original requests, one-use access and paused completion", async ({ page }, testInfo) => {
   test.setTimeout(180_000);
-  test.skip(testInfo.project.name === "tablet-820");
   test.skip(!["tenant_owner", "tenant_admin"].includes(role));
   await metaLegacyMigrationJourney(page, "ar", role, testInfo);
 });
 
 test("Meta template preparation retains original requests and never grants number transfer", async ({ page }, testInfo) => {
   test.setTimeout(150_000);
-  test.skip(testInfo.project.name === "tablet-820");
   test.skip(!["tenant_owner", "tenant_admin"].includes(role));
   await metaTemplatePreparationJourney(page, "ar", role, testInfo);
 });
@@ -90,7 +81,6 @@ test("Meta template preparation retains original requests and never grants numbe
 
 test("Meta reconnect renews exact paused access without activating the connection", async ({ page }, testInfo) => {
   test.setTimeout(120_000);
-  test.skip(testInfo.project.name === "tablet-820");
   await metaReconnectJourney(page, "ar", role, testInfo);
 });
 
@@ -98,20 +88,16 @@ test("Meta reconnect renews exact paused access without activating the connectio
 
 test("Arabic Meta signup keeps callback, selection and recovery bound to the active attempt", async ({ page }, testInfo) => {
   test.setTimeout(90_000);
-  test.skip(testInfo.project.name === "tablet-820");
   await metaSignupJourney(page, "ar", role, testInfo);
 });
 
 (role !== "agent" ? test : test.skip)("workspace membership linking preserves explicit review and access boundaries", async ({ page }, testInfo) => {
-  test.skip(testInfo.project.name === "tablet-820");
   await workspaceAccessJourney(page, testInfo, "ar", role === "tenant_owner");
 });
 (role === "tenant_owner" ? test : test.skip)("support scope preserves department assignment", async ({ page }, testInfo) => {
-  test.skip(testInfo.project.name === "tablet-820");
   await supportScopeJourney(page, testInfo, "ar");
 });
 test("Arabic Meta direct setup and later Groups consent remain independent", async ({ page }, testInfo) => {
-  test.skip(testInfo.project.name === "tablet-820");
   await metaDirectConsentJourney(page, "ar", role, testInfo);
 });
 const viewsByRole: Record<string, string[]> = {
@@ -161,30 +147,23 @@ async function open(page: Page, view: string) {
   await expect(page).toHaveTitle(`${title} · WasalX`);
 }
 
-async function expectAccessible(page: Page) {
-  const result = await new AxeBuilder({ page })
-    .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"])
-    .analyze();
-  expect(result.violations.map(({ id }) => id)).toEqual([]);
-}
-
 test("all authorized tenant routes render public Arabic copy and RTL", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "desktop owns the exhaustive Arabic route pass");
   test.setTimeout(90_000);
   for (const view of viewsByRole[role]) await open(page, view);
   await expect(page.getByRole("navigation", { name: arabicMessages["tenant.navigation.primary"] })).toBeVisible();
   await expect(page.locator(".workspace-switcher")).not.toContainText(/Managed|Standard/u);
-  await expectAccessible(page);
+  await expectAxeClean(page);
 });
 
-test("Arabic mobile and tablet layouts remain bounded with tenant context visible", async ({ page }, testInfo) => {
+test("Arabic mobile and tablet layouts remain bounded with tenant context visible", { tag: "@tablet" }, async ({ page }, testInfo) => {
   test.skip(testInfo.project.name === "desktop", "responsive projects own this pass");
   await open(page, role === "agent" ? "deliveries" : "settings");
   await expect(page.locator(".workspace-switcher")).toBeVisible();
   await expect(page.locator(".environment")).toBeVisible();
   const width = await page.evaluate(() => ({ viewport: innerWidth, document: document.documentElement.scrollWidth }));
   expect(width.document).toBeLessThanOrEqual(width.viewport);
-  await expectAccessible(page);
+  await expectAxeClean(page);
 });
 
 test("Arabic data-service connections keep recovery and read-only states clear", async ({ page }, testInfo) => {
@@ -214,7 +193,7 @@ test("Arabic data-service connections keep recovery and read-only states clear",
     const overflow = await page.locator(".data-connections").evaluate((element) => element.scrollWidth - element.clientWidth);
     expect(overflow, "Arabic data services must remain bounded at narrow 200% zoom").toBeLessThanOrEqual(1);
   }
-  await expectAccessible(page);
+  await expectAxeClean(page);
 });
 
 test("Arabic modal focus, cancellation, and bidi values stay isolated", async ({ page }, testInfo) => {
@@ -239,9 +218,9 @@ test("Arabic modal focus, cancellation, and bidi values stay isolated", async ({
   await expect(page.locator("bdi").first()).toBeVisible();
 });
 
-test("generic configuration dialogs remain centered in RTL on desktop and mobile", async ({ page }, testInfo) => {
+test("generic configuration dialogs remain centered in RTL on desktop and mobile", async ({ page }) => {
   test.skip(
-    !["tenant_owner", "tenant_admin"].includes(role) || testInfo.project.name === "tablet-820",
+    !["tenant_owner", "tenant_admin"].includes(role),
     "writable desktop and mobile projects own modal geometry",
   );
   await open(page, "connections");
@@ -306,6 +285,6 @@ test("tall configuration dialog actions remain visible at short height and 200% 
   await keepOpenPolicyJourney(page, testInfo, "ar");
 });
 test("ar deletion receipt status stays truthful and out of URL queries", async ({ page }, testInfo) => {
-  test.skip(role !== "tenant_owner" || testInfo.project.name === "tablet-820");
+  test.skip(role !== "tenant_owner");
   await metaDeletionStatusJourney(page, "ar", testInfo);
 });

@@ -190,7 +190,6 @@ export function Audit({ rows, showDiagnostics, canExport }: { rows: RecordRow[];
         <label className="filter-select"><span className="sr-only">{t("tenant.audit.scope.label")}</span><select disabled={scopeLoading} value={includeRoutine ? "include" : "exclude"} onChange={(event)=>void changeRoutineScope(event.target.value==="include")}><option value="exclude">{t("tenant.audit.scope.relevant")}</option><option value="include">{t("tenant.audit.scope.all")}</option></select></label>
         <span className="tag" role="status" aria-live="polite">{t(filteredEntries.length === 1 ? "tenant.audit.filteredCount.one" : "tenant.audit.filteredCount", { count: formatNumber(filteredEntries.length, locale) })}</span>
       </Toolbar>
-      {/* eslint-disable-next-line jsx-a11y/no-redundant-roles -- list-style:none can hide list semantics in Safari/VoiceOver. */}
       <ol className="timeline" role="list">
         {filteredEntries.map((row) => {
           const { action, actor, detail, target } = presentation(row);
