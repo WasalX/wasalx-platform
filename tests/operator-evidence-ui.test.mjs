@@ -2,6 +2,9 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
+import { getBoundaryMessages } from "../lib/i18n/messages/boundary.ts";
+import { arabicMessages, englishMessages } from "../lib/i18n/messages/index.ts";
+
 const read = (path) => readFile(new URL(`../${path}`, import.meta.url), "utf8");
 
 test("workflow schema inspection is read-only and restricted to flow administrators", async () => {
@@ -38,4 +41,19 @@ test("audit filtering searches only the role-safe presentation already shown on 
   assert.match(source, /<Toolbar query=\{query\} setQuery=\{setQuery\} placeholder=\{t\("tenant\.audit\.search"\)\}>/u);
   assert.match(source, /filteredEntries\.map\(\(row\) =>/u);
   assert.match(source, /!filteredEntries\.length \? <Empty title=\{t\(entries\.length \? "tenant\.audit\.noMatchesTitle" : "tenant\.audit\.emptyTitle"\)/u);
+});
+
+test("platform console copy names a provider only on its figures and never an internal component", async () => {
+  const internal = { en: /control API|control plane could|database identit|least-privilege|fenced/iu, ar: /واجهة برمجة تطبيقات التحكم|تحميل مستوى التحكم|هويات قاعدة البيانات|مسيّج/u };
+  for (const [locale, messages] of [["en", englishMessages], ["ar", arabicMessages]]) {
+    for (const [key, value] of [...Object.entries(messages), ...Object.entries(getBoundaryMessages(locale))]) {
+      if (!key.startsWith("platform.")) continue;
+      assert.doesNotMatch(value, internal[locale], key);
+      // Staff screens may name a provider only where it labels that provider's capacity or usage (DESIGN.md).
+      if (value.includes("WAHA")) assert.match(key, /^platform\.(?:workers\.(?:title|empty)|states\.waha_)/u, key);
+    }
+  }
+  assert.equal(arabicMessages["platform.error.signInAgain"], arabicMessages["tenant.session.signIn"]);
+  assert.notEqual(englishMessages["platform.error.eyebrow"], englishMessages["platform.error.eyebrow"].toUpperCase());
+  assert.match(await read("app/platform/PlatformBoundary.module.css"), /\.eyebrow \{[^}]*text-transform: uppercase;/u);
 });
