@@ -47,6 +47,21 @@ export async function verifyBuildContext(candidateSha, root = repository) {
   return archive.stdout;
 }
 
+export async function buildCandidateImage(image, {
+  candidateSha, candidateTree, buildContext, buildContextSha256, environment, command = run,
+}) {
+  const exit = await command("docker", ["build",
+    "--build-arg", `COMMIT_SHA=${candidateSha}`,
+    "--build-arg", `WASALX_CANDIDATE_SHA=${candidateSha}`,
+    "--build-arg", `WASALX_CANDIDATE_TREE=${candidateTree}`,
+    "--label", `org.opencontainers.image.revision=${candidateSha}`,
+    "--label", `io.wasalx.source.tree=${candidateTree}`,
+    "--label", `io.wasalx.build.dockerfile=${image.dockerfile}`,
+    "--label", `io.wasalx.build.context-sha256=${buildContextSha256}`,
+    "--file", image.dockerfile, "--tag", image.reference, "-"], environment, true, buildContext);
+  assert.equal(exit, 0, `${image.id} build failed`);
+}
+
 export async function assertRepositoryBindMountsReadable(context) {
   const root = resolve(context.repository);
   const within = (path) => { const part = relative(root, path); return !part || (!part.startsWith("..") && !isAbsolute(part)); };
@@ -464,16 +479,7 @@ export async function executeStage(action, context) {
         if (matchesCandidate(await inspectImage(image.reference), candidateSha, candidateTree, image.dockerfile, context.buildContextSha256)) {
           image.state = "REUSED";
         } else {
-          const exit = await execute("docker", ["build",
-            "--build-arg", `COMMIT_SHA=${candidateSha}`,
-            "--build-arg", `WASALX_CANDIDATE_SHA=${candidateSha}`,
-            "--build-arg", `WASALX_CANDIDATE_TREE=${candidateTree}`,
-            "--label", `org.opencontainers.image.revision=${candidateSha}`,
-            "--label", `io.wasalx.source.tree=${candidateTree}`,
-            "--label", `io.wasalx.build.dockerfile=${image.dockerfile}`,
-            "--label", `io.wasalx.build.context-sha256=${context.buildContextSha256}`,
-            "--file", image.dockerfile, "--tag", image.reference, "-"], environment, true, context.buildContext);
-          assert.equal(exit, 0, `${image.id} build failed`);
+          await buildCandidateImage(image, context);
           image.state = "BUILT";
         }
         const details = await inspectImage(image.reference);

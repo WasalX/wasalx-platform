@@ -11,6 +11,11 @@ on:
       - main
       - 'gh-readonly-queue/**'
 
+concurrency:
+  # Never cancel or supersede: each run screens only its own event's text and commits.
+  group: privacy-${{ github.run_id }}
+  cancel-in-progress: false
+
 permissions:
   contents: read
 

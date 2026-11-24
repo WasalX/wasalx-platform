@@ -30,6 +30,7 @@ jobs:
     outputs:
       images: ${{ steps.matrix.outputs.images }}
       matrix: ${{ steps.matrix.outputs.matrix }}
+      installer-portal: ${{ steps.matrix.outputs.installer-portal }}
       infra: ${{ steps.infra.outputs.needed }}
       dev-install: ${{ steps.dev-install.outputs.needed }}
       integration: ${{ steps.integration.outputs.needed }}
@@ -94,8 +95,14 @@ jobs:
           fi
           matrix=$(python3 scripts/release/images-by-digest.py matrix "${args[@]}")
           images=$(jq '.include | length > 0' <<< "$matrix")
+          installer_portal=$(jq 'any(.include[]; .image == "portal")' <<< "$matrix")
+          if [[ "$EVENT" == pull_request ]] && ! git diff --quiet --no-ext-diff --no-renames HEAD^1 HEAD -- \
+            scripts/release/installer-stages.mjs scripts/release/installer-artifacts.mjs release/installer-images.json; then
+            installer_portal=true
+          fi
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
           echo "images=$images" >> "$GITHUB_OUTPUT"
+          echo "installer-portal=$installer_portal" >> "$GITHUB_OUTPUT"
 
   workflow-lint:
     runs-on: ubuntu-24.04
@@ -543,6 +550,38 @@ jobs:
             *) echo "::warning::Advisory PR image builds: $IMAGES"; exit 1 ;;
           esac
 
+  installer-portal:
+    name: Build portal with the installer
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.installer-portal == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22.23.4
+          package-manager-cache: false
+      - name: Build from the verified Git archive
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFile } from "node:fs/promises";
+          import { sha256 } from "./scripts/release/installer-artifacts.mjs";
+          import { buildCandidateImage, createCandidatePlan, run, verifyBuildContext } from "./scripts/release/installer-stages.mjs";
+          const environment = process.env;
+          const candidateSha = run("git", ["rev-parse", "HEAD"], environment);
+          const candidateTree = run("git", ["rev-parse", "HEAD^{tree}"], environment);
+          const buildContext = await verifyBuildContext(candidateSha);
+          const catalog = JSON.parse(await readFile("release/installer-images.json", "utf8"));
+          const portal = createCandidatePlan(catalog, {}).find(({ id }) => id === "portal");
+          if (!portal) throw new Error("The installer catalog must include the portal");
+          await buildCandidateImage(portal, {
+            candidateSha, candidateTree, buildContext, buildContextSha256: sha256(buildContext), environment,
+          });
+          NODE
+
   publish:
     needs: lint-on-push
     if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'WasalX/wasalx-platform' }}
@@ -557,7 +596,7 @@ jobs:
 
   ci-gate:
     if: always()
-    needs: [changes, workflow-lint, storybook, privacy, dependency-review, checks, full-unit, images, integration, portal-integration, integration-coverage, infra-validate, dev-install-dryrun]
+    needs: [changes, workflow-lint, storybook, privacy, dependency-review, checks, full-unit, images, installer-portal, integration, portal-integration, integration-coverage, infra-validate, dev-install-dryrun]
     runs-on: ubuntu-slim
     timeout-minutes: 2
     permissions: {}
@@ -574,6 +613,8 @@ jobs:
           FULL_UNIT: ${{ needs.full-unit.result }}
           REVIEW: ${{ needs.dependency-review.result }}
           IMAGES: ${{ needs.images.result }}
+          INSTALLER_PORTAL_NEEDED: ${{ needs.changes.outputs.installer-portal }}
+          INSTALLER_PORTAL: ${{ needs.installer-portal.result }}
           INTEGRATION_NEEDED: ${{ needs.changes.outputs.integration }}
           INTEGRATION: ${{ needs.integration.result }}
           PORTAL_INTEGRATION: ${{ needs.portal-integration.result }}
@@ -593,7 +634,7 @@ jobs:
             *) echo 'Privacy scan did not pass.'; exit 1 ;;
           esac
           if [[ "$EVENT" == push || "$EVENT" == workflow_dispatch ]]; then
-            test "$CHANGES:$CHECKS:$REVIEW:$IMAGES:$DEV_INSTALL" = skipped:skipped:skipped:skipped:skipped || exit 1
+            test "$CHANGES:$CHECKS:$REVIEW:$IMAGES:$DEV_INSTALL:$INSTALLER_PORTAL" = skipped:skipped:skipped:skipped:skipped:skipped || exit 1
             test "$FULL_UNIT" = success || exit 1
             test "$INTEGRATION:$PORTAL_INTEGRATION:$INTEGRATION_COVERAGE" = success:success:success || exit 1
             case "$EVENT:$INFRA" in push:success|workflow_dispatch:skipped) ;; *) exit 1 ;; esac
@@ -601,6 +642,10 @@ jobs:
             exit 0
           fi
           test "$CHANGES:$CHECKS:$FULL_UNIT" = success:success:skipped || exit 1
+          case "$EVENT:$INSTALLER_PORTAL_NEEDED:$INSTALLER_PORTAL" in
+            pull_request:false:skipped|pull_request:true:success|merge_group:true:success) ;;
+            *) echo 'Installer portal build did not pass.'; exit 1 ;;
+          esac
           case "$EVENT:$REVIEW:$IMAGES" in
             pull_request:success:skipped)
               echo 'See PR image results (advisory) for image build outcomes.' >> "$GITHUB_STEP_SUMMARY"

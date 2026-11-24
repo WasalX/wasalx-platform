@@ -92,7 +92,7 @@ export async function metaSignupJourney(page: Page, locale: "en" | "ar", role: s
     return route.fulfill({ json: current });
   });
   const open = async () => {
-    await page.goto("/app?view=connections");
+    await page.goto("/app?view=connections", { waitUntil: "commit" });
     await expect(page.locator('[data-application-ready="true"]')).toBeVisible();
     const connect = page.getByRole("button", { name: t("tenant.connections.connect"), exact: true });
     if (!["tenant_owner", "tenant_admin"].includes(role)) { await expect(connect).toHaveCount(0); return null; }

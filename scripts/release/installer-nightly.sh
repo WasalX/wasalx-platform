@@ -109,6 +109,7 @@ phase() {
   fi
   if (( status != 0 )); then
     reason=$(sed -nE '/^probe-scan error=(Error|AssertionError|SyntaxError|TypeError|RangeError) message=[[:print:]]{1,480}$/p;
+      /^registry-egress reason: [[:print:]]+$/p;
       /^remote full (stage [a-z-]+|qualification) reason: [[:print:]]+$/p;
       /^flock: cannot open lock file \/tmp\/wasalx-compose-stage\.lock: [[:print:]]+$/p;
       /^hosted bundle staging reason: [[:print:]]+$/p' "$work/$name.raw" | tail -n 1)
@@ -126,7 +127,7 @@ if [[ "${1:-}" == stage-bundles ]]; then
 fi
 
 start_registry() {
-  local read_only=$1 pull=$2 mount="type=bind,src=$work/registry,dst=/var/lib/registry"
+  local read_only=$1 mount="type=bind,src=$work/registry,dst=/var/lib/registry"
   if [[ "$read_only" == true ]]; then mount+=,readonly; fi
   cat > "$work/registry-config.json" <<EOF
 {
@@ -139,7 +140,7 @@ start_registry() {
   "http": {"addr": "$registry"}
 }
 EOF
-  docker run --detach --rm --pull "$pull" --name "$registry_container" --network host \
+  docker run --detach --rm --pull never --name "$registry_container" --network host \
     --env OTEL_TRACES_EXPORTER=none --mount "$mount" \
     --mount "type=bind,src=$work/registry-config.json,dst=/etc/distribution/config.yml,readonly" "$registry_image"
   curl --fail --silent --show-error --retry 5 --retry-connrefused --max-time 3 "http://$registry/v2/"
@@ -149,7 +150,9 @@ stage_registry() {
   local source destination expected manifest platform
   local copy=(skopeo copy --preserve-digests --dest-tls-verify=false)
   mkdir -p "$work/registry"
-  start_registry false missing
+  # Establish that the exact public probe reference is reachable before the block.
+  docker pull "$registry_image"
+  start_registry false
   {
     jq -er '.images[] | .pullReference' "$work/images-manifest.json"
     "${compose[@]}" config --images
@@ -179,7 +182,7 @@ stage_registry() {
     [[ "$(cat "$work/copied.digest")" == "$expected" ]]
   done < "$work/registry-images"
   docker stop "$registry_container"
-  start_registry true never
+  start_registry true
   # An upload to the read-only registry must be refused.
   test "$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
     --request POST "http://$registry/v2/staged/readonly-check/blobs/uploads/" --max-time 3)" = 405
@@ -206,6 +209,20 @@ block_registry_egress() {
       sudo "$tool" -C FORWARD -o "$iface" -j REJECT
     done < <(awk '{ for (i=1; i<NF; i++) if ($i=="dev") print $(i+1) }' <<< "$route" | sort -u)
   done
+}
+
+verify_registry_egress() {
+  local output status=0
+  output=$(timeout 15s docker pull "$registry_image" 2>&1) || status=$?
+  if (( status == 0 )); then
+    echo 'registry-egress reason: public pull succeeded after the block' >&2
+    return 1
+  fi
+  if (( status != 1 )) || ! grep -Eq 'dial tcp .*: connect: (connection refused|network is unreachable|no route to host)' <<< "$output"; then
+    echo "registry-egress reason: public pull failed without a TCP rejection (exit=$status)" >&2
+    return 1
+  fi
+  echo 'public-registry-egress=blocked'
 }
 
 resources() {
@@ -264,12 +281,13 @@ hosted=(--hosted-images "$work/images-manifest.json" --hosted-images-sha256 "$ma
   --hosted-trusted-root "$TRUSTED_ROOT")
 installer=(node scripts/release/installer-stages.mjs)
 phase fresh-preflight 2m "${installer[@]}" preflight "${stage[@]}" --capture-preimage
-# Staging is the last upstream access. Only the loopback registry serves the installer.
-export -f start_registry stage_registry block_registry_egress
+# Only the loopback registry serves the installer after staging.
+export -f start_registry stage_registry block_registry_egress verify_registry_egress
 export registry registry_container registry_image work
 # A subprocess cannot inherit Bash arrays, so pass the original Compose inputs explicitly.
 phase registry-stage 12m bash -euo pipefail -c 'compose=("$@"); stage_registry' bash "${compose[@]}"
-phase registry-egress 30s bash -euo pipefail -c block_registry_egress
+phase registry-egress 30s bash -euo pipefail -c 'block_registry_egress; verify_registry_egress'
+grep -Fx 'public-registry-egress=blocked' "$work/registry-egress.raw" | tee -a "$diagnostics/phases.log"
 phase preload 10m "${installer[@]}" preload-hosted "${stage[@]}" "${hosted[@]}"
 resources preloaded
 phase admission 5m "${installer[@]}" admit-hosted "${stage[@]}" "${hosted[@]}"
@@ -281,7 +299,7 @@ smoke() {
 
 phase fresh-install 10m "${installer[@]}" replace "${stage[@]}" "${hosted[@]}" --drained
 smoke fresh-smoke
-printf 'local-registry product=%s services=%s digests=PASS public-registry-egress=blocked\n' \
+printf 'local-registry product=%s services=%s digests=PASS\n' \
   "$(jq -er '.images | length' "$work/images-manifest.json")" "$(jq -er '.services | length' "$work/fresh-smoke.json")" \
   | tee -a "$diagnostics/phases.log"
 node scripts/release/installer-nightly-grafana.mjs "${compose[@]:1}"
@@ -312,9 +330,11 @@ preflight="$work/preflight"
   phase probe-scan 5m sudo -H env "PATH=$PATH" node scripts/dev-install/probe.mjs \
     --env-file "$full_env" --project-name "$project" --compose-file scripts/release/installer-nightly.compose.yaml \
     --compose-file "$registry_overlay" --held-services ''
-  jq -e '.census == "PASS" and .services == 37 and .rerendered_hashes == .services
-    and (.compose_hashes | length) == .services and (.fields | length) == 0' "$work/probe-scan.raw" > /dev/null
-  printf 'probe-scan services=37 rerendered_hashes=37 census=PASS\n' | tee -a "$diagnostics/phases.log"
+  jq -er 'select(.census == "PASS" and .expected_services > 0 and .services == .expected_services
+    and .rerendered_hashes == .expected_services and (.compose_hashes | length) == .expected_services
+    and (.fields | length) == 0)
+    | "probe-scan services=\(.services) rerendered_hashes=\(.rerendered_hashes) census=PASS"' "$work/probe-scan.raw" \
+    | tee -a "$diagnostics/phases.log"
 )
 
 printf '\nWASALX_FULL_GRAFANA_ADMIN_USER=nightly-recreated\n' >> "$full_env"
