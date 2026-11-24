@@ -37,7 +37,7 @@ export async function wahaAuthorizationRoute(
       return noStoreJson(
         {
           error:
-            "WhatsApp authorization requires the persistent control-plane backend.",
+            "WhatsApp authorization requires the managed service.",
         },
         501,
       );
