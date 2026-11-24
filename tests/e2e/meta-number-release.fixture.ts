@@ -47,7 +47,7 @@ export async function metaNumberReleaseJourney(page:Page,locale:'en'|'ar',role:s
     return route.continue();
   });
   await installMetaRoutingReadFixture(page);
-  const open=async()=>{await page.goto(`/app?view=connections&connection=${id}`);await expect(page.locator('[data-application-ready="true"]')).toBeVisible();return page.locator(`section[aria-labelledby="number-release-${id}"]`);};
+  const open=async()=>{await page.goto(`/app?view=connections&connection=${id}`,{waitUntil:"commit"});await expect(page.locator('[data-application-ready="true"]')).toBeVisible();return page.locator(`section[aria-labelledby="number-release-${id}"]`);};
   let section=await open();const act=()=>section.getByRole('button',{name:t('action'),exact:true}),refresh=()=>section.getByRole('button',{name:t('refresh'),exact:true});
   const dialog=()=>page.getByRole('dialog',{name:t('confirmTitle'),exact:true}),confirm=()=>dialog().getByRole('button',{name:t('action'),exact:true});
   const retiredAccess=async()=>{
