@@ -78,6 +78,7 @@ test("ordered bot projection recovers an orphan media article without duplicate 
     assertMetaDeliveryContextCurrent:async job=>{assert.deepEqual(job.metaCredentialContext,base.metaCredentialContext);},
     assertMetaBillingSendCurrent:async(job,lease)=>{assert(jobs.some(value=>value.id===job.id));assert.equal(typeof lease,"string");},
     metaInheritedTemplateContext:async(job,lease)=>{assert(jobs.some(value=>value.id===job.id));assert.equal(typeof lease,"string");return null;},
+    whatsAppMarketingOptedOut:async job=>{assert.equal(job.id,"template");return false;},
     admitMetaMessageRequest:async(job,lease,requestSha,_runtime,phoneId,templateProof)=>{assert.equal(typeof lease,"string");assert.match(requestSha,/^[a-f0-9]{64}$/u);assert.equal(phoneId,base.sessionId);assert.equal(templateProof,null);admissions.push(job.id);},
     linkBotArticle:async(job,_lease,id)=>{if(job.id==="media"&&loseLink){loseLink=false;throw new Error("interrupted durable link")}linked.set(job.id,id)},
     linkProviderMedia:async()=>{},complete:async job=>done.add(job.id),fail:async(job,_lease,retryable,detail)=>{assert.equal(job.id,"media",detail);assert.equal(retryable,true);assert.match(detail,/Bot media article state could not be persisted/)},outcomeUnknown:async()=>assert.fail("no uncertain provider outcome")};
