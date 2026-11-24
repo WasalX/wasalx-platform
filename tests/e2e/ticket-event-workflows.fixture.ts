@@ -199,6 +199,20 @@ export async function ticketEventWorkflowJourney(page: Page, testInfo: TestInfo,
   await expect(reactionTarget(draft)).toHaveValue("REFERENCE_MESSAGES");
   await draft.getByRole("button", { name: messages["automation.common.cancel"], exact: true }).click();
   await expect(draft).toHaveCount(0);
+
+  const savedVersions = panel.locator(".bot-version-list");
+  const preview = detail.getByRole("region", { name: t("preview.title"), exact: true });
+  const provider = preview.getByRole("combobox", { name: t("preview.provider"), exact: true });
+  await savedVersions.getByRole("button").filter({ has: page.getByText("Ticket reference workflow", { exact: true }) }).click();
+  await expect(detail.getByRole("heading", { name: "Ticket reference workflow", exact: true })).toBeVisible();
+  await provider.selectOption("META");
+  await preview.getByRole("button", { name: t("preview.run"), exact: true }).click();
+  await expect(preview.getByRole("status")).toBeVisible();
+  await savedVersions.getByRole("button").filter({ has: page.getByText("Ticket reference workflow updated", { exact: true }) }).click();
+  await expect(detail.getByRole("heading", { name: "Ticket reference workflow updated", exact: true })).toBeVisible();
+  await expect(provider).toHaveValue("WAHA");
+  await expect(preview.getByRole("status")).toHaveCount(0);
+
   expect(writes.slice(beforeClosureWrites).map(write => write.path)).toEqual(["/api/bot-flows"]);
   const geometry = await page.evaluate(() => ({ width: innerWidth, scroll: document.documentElement.scrollWidth, dir: document.documentElement.dir }));
   expect(geometry.scroll).toBeLessThanOrEqual(geometry.width + 1);
