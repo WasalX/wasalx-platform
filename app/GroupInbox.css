@@ -12,7 +12,7 @@
 .wx-group-header { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: var(--wx-space-3); padding: var(--wx-space-6); border-block-end: 1px solid var(--wx-color-border); }
 .wx-group-header h2 { font-size: var(--wx-font-size-5); margin: 0; overflow-wrap: anywhere; }
 .wx-group-history { block-size: clamp(18rem, 48dvh, 40rem); overflow-y: auto; overscroll-behavior: contain; padding: var(--wx-space-6); }
-.wx-group-messages { display: grid; gap: var(--wx-space-5); }
+.wx-group-messages { display: grid; gap: var(--wx-space-4); }
 .wx-group-messages > li { padding-block: var(--wx-space-4); border-block-end: 1px solid var(--wx-color-border); }
 .wx-group-messages > li[data-source-target="true"] { background: var(--wx-color-surface-selected); outline: 2px solid var(--wx-color-accent); outline-offset: 2px; }
 .wx-group-messages > li > header { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--wx-space-2); }

@@ -136,7 +136,7 @@ One neutral zinc ramp, one violet accent, three status colors and two provider m
 
 ### Named Rules
 **The One Accent Rule.** Violet is the only hue used for interaction. Any other color means status or provider.
-**The Token-Only Rule.** New code uses `var(--wx-color-*)` (or the legacy `--bg/--surface/--text/...` aliases). No hex, `rgb()` or named color outside `tokens.css`; tints are `color-mix()` of a token. `tests/design-system-governance.test.mjs` enforces this for `primitives.css`, `globals.css` and `marketing.css`.
+**The Token-Only Rule.** New code uses `var(--wx-color-*)` (or the legacy `--bg/--surface/--text/...` aliases). No hex, `rgb()` or named color outside `tokens.css`; tints are `color-mix()` of a token. `tests/design-system-governance.test.mjs` enforces this for every `app/**/*.css` file except `tokens.css`.
 **The AA Rule.** Text and solid-action pairs meet 4.5:1 in both themes; the governance test checks it.
 
 ## Typography
@@ -153,26 +153,26 @@ One neutral zinc ramp, one violet accent, three status colors and two provider m
 - **Display** (750, `--wx-font-size-display` 60 px, -0.04em): the public-page hero only, fluid from 32 px.
 - **Mono** (12 px): only for values an operator may copy (codes, references). Never for raw ids or internal names.
 
-**The Scale Rule.** Use only the size tokens (the 7 steps, plus display for the public hero). A public heading may be fluid: `clamp(<token>, <token> + <n>vw, <token>)`. The governance test rejects any raw `px`/`rem` in a font size in `globals.css` and `marketing.css`, also inside `clamp()`.
+**The Scale Rule.** Use only the size tokens (the 7 steps, plus display for the public hero). A public heading may be fluid: `clamp(<token>, <token> + <n>vw, <token>)`. The governance test rejects any raw `px`/`rem` in a font size in any app stylesheet, also inside `clamp()`.
 
 ## Layout
 
 - **Shell:** a fixed start-side sidebar (`--wx-sidebar-width` 15rem) plus the content area (`--wx-content-max` 90rem). The workspace toolbar is at least 57 px and grows with its text, so it never overflows onto the sidebar (`globals.css`); `--wx-topbar-height` (3.5rem) is used by the platform console.
 - **At 760 px and below** (the shell breakpoint): the sidebar becomes a top bar with one grid (the workspace switcher on row 1, the menu toggle and profile on row 2, the navigation below), the brand and system health are hidden, and the app shell is a block. Individual screens refine at other widths (for example 520 px and 480 px); new screens use 760 px unless their layout needs another.
-- **Spacing:** `--wx-space-1..16` (4 px base: 4, 8, 12, 16, 24, 32, 48, 64). New code uses only these.
+- **Spacing:** `--wx-space-1..16` (4 px base: 4, 8, 12, 16, 24, 32, 48, 64). **The Spacing Rule.** `padding`, `margin`, `gap` and `inset` and their longhands use only a defined `var(--wx-space-*)` step, `0` or a 1 px hairline (`calc()`, `max()` and `clamp()` of these, `%`, `vw`, `env()` and `auto` are fine). A negative offset is `calc(-1 * var(--wx-space-*))`. There are no in-between steps: snap to the nearest one, and on a tie take the smaller unless that drops a 44 px or 24 px target. Width, height and `min-*` target sizes are not spacing. The governance test enforces this for every app stylesheet.
 - **Direction:** logical properties only (`inline-start/end`, `padding-inline`, `text-align: start`). Physical `left/right` is a defect. A known gap: `primitives.css` `.wx-data-panel th, td` use `text-align: left`; fix this before the primitive is used in the product.
 - **Tables:** 37 px headers, 57 px rows; wide tables sit in an `overflow-x: auto` wrapper and never scroll the whole page.
 
 ## Elevation & Depth
 
-Flat with tonal layering: page → surface → raised → selected, separated by 1 px borders. Only these two shadows give elevation; the governance test enforces this for `globals.css` and `marketing.css`. Rings without blur (`0 0 0 <width> <token color>`) are allowed for focus, status halos and 1 px edges:
+Flat with tonal layering: page → surface → raised → selected, separated by 1 px borders. Only these two shadows give elevation; the governance test enforces this for every app stylesheet. Rings without blur (`0 0 0 <width> <token color>`) are allowed for focus, status halos and 1 px edges:
 - **Control** (`0 1px 1px var(--wx-color-control-shadow)`): the resting button.
 - **Dialog** (`0 1.5rem 5rem var(--wx-color-shadow)`): dialogs and drawers over `--wx-color-overlay`, and the public pages' inbox showcase window.
 In forced-colors mode, dialogs drop the shadow and use `CanvasText` borders.
 
 ## Shapes
 
-Three radii: control 6 px, panel 8 px, dialog 12 px (also the pill radius of status badges). Borders are 1 px; `border-strong` is for controls. Radii in `globals.css` and `marketing.css` use only these tokens (plus `0` and `50%` for circles). No thick one-side accent borders or inset side bars (detector `side-tab`); a selected row uses a full 1 px accent ring. The governance test checks both.
+Three radii: control 6 px, panel 8 px, dialog 12 px (also the pill radius of status badges). Borders are 1 px; `border-strong` is for controls. Radii in every app stylesheet use only these tokens (plus `0`, `inherit` and `50%` for circles). No thick one-side accent borders or inset side bars (detector `side-tab`); a selected row uses a full 1 px accent ring. The governance test checks both.
 
 ## Components
 
