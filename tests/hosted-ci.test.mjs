@@ -652,6 +652,10 @@ test("CI gates integration and infrastructure and runs portal integration files 
   assert(!on.pull_request.types.includes("edited"));
   const metadataWorkflow = parse(await read(".github/workflows/privacy.yml"));
   assert.deepEqual(metadataWorkflow.on.pull_request.types, ["edited"]);
+  assert.deepEqual(metadataWorkflow.concurrency, {
+    group: "privacy-${{ github.run_id }}",
+    "cancel-in-progress": false,
+  });
   assert.equal(jobs.privacy.uses, "./.github/workflows/privacy.yml");
   assert.equal(gateStep.env.PRIVACY, "${{ needs.privacy.result }}");
   assert.equal(gateStep.env.WORKFLOW_LINT, "${{ needs.workflow-lint.result }}");
