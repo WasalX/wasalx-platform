@@ -6,7 +6,7 @@ import { formatNumber, formatRelativeTime } from "../lib/i18n/format.ts";
 import { operatorFailureMessage, operatorLocalFailure, createLatestRequestFence } from "../lib/operator-ui.ts";
 import { useVisibleRefresh } from "./use-visible-refresh";
 import { isAbortError } from "../lib/bot-conversations";
-import { type RecordRow, RelativeTime, type TenantTranslator, connectionMethod, apiError, isOpaqueIdentifier, Status, Empty, WorkspaceLoading, WideTable, Toolbar } from "./tenant-ui";
+import { type RecordRow, RelativeTime, type TenantTranslator, connectionMethod, apiError, isOpaqueIdentifier, Status, Empty, SectionLoading, WideTable, Toolbar } from "./tenant-ui";
 
 const NativeRoutingSync = lazy(async () => ({ default: (await import("./NativeRoutingSync")).NativeRoutingSync }));
 const GROUP_DISPLAY_PAGE_SIZE=50;
@@ -857,7 +857,7 @@ function GroupConfigurationDrawer({
           <button ref={closeButton} type="button" onClick={requestClose} aria-label={t("tenant.group.configuration.closeLabel")}>×</button>
         </div>
 
-        <Suspense fallback={<WorkspaceLoading />}><NativeRoutingSync canWrite={canConfigure} mutationHeaders={mutationHeaders} refreshKey={JSON.stringify(savedForm)} /></Suspense>
+        <Suspense fallback={<SectionLoading />}><NativeRoutingSync canWrite={canConfigure} mutationHeaders={mutationHeaders} refreshKey={JSON.stringify(savedForm)} /></Suspense>
 
         {loading ? (
           <div className="group-drawer-loading" role="status" aria-live="polite">

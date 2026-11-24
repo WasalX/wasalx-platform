@@ -133,6 +133,7 @@ test("semantic text and solid-action pairs meet WCAG AA contrast", async () => {
       ["--wx-color-danger", "--wx-color-surface"],
       ["--wx-color-accent-solid", "--wx-color-on-solid"],
       ["--wx-color-accent-solid-hover", "--wx-color-on-solid"],
+      ["--wx-color-danger-solid", "--wx-color-on-solid"],
     ];
     for (const [background, foreground] of pairs) {
       assert.ok(contrast(values[background], values[foreground]) >= 4.5, `${theme} ${background}/${foreground} must meet 4.5:1`);
@@ -148,6 +149,25 @@ test("new primitives consume tokens instead of feature-local color and spacing l
     const value = declaration[1].trim();
     assert.ok(value === "0" || value.includes("var(--wx-space-"), `spacing declaration must use a token: ${declaration[0]}`);
   }
+});
+
+test("portal styles use color, type, radius and elevation tokens", async () => {
+  const globals = await read("app/globals.css");
+  const drift = (pattern) => [...globals.matchAll(pattern)].map((match) => match[0]);
+  assert.deepEqual(drift(/#[\da-f]{3,8}\b|(?:rgb|hsl)a?\(|[:,(]\s*(?:white|black)\b(?!-)/giu), [], "colors must come from tokens.css");
+  assert.deepEqual(drift(/font-size\s*:\s*[\d.]+(?:px|r?em)|font\s*:\s*(?:\d{3}\s+)?[\d.]+(?:px|r?em)/giu), [], "font sizes must use --wx-font-size-*");
+  assert.deepEqual(drift(/radius\s*:(?!\s*(?:0\b|50%|revert\b|var\(--wx-radius-))[^;}]+/giu), [], "radii must use --wx-radius-*");
+  // Elevation is the control or dialog shadow; everything else is a flat, blur-free ring.
+  const shadows = drift(/box-shadow\s*:\s*[^;}]+/giu).map((declaration) => declaration.replace(/^box-shadow\s*:\s*/u, ""));
+  assert.deepEqual(shadows.filter((value) => !/^(?:none|var\(--shadow\)|0 1px 1px var\(--wx-color-control-shadow\)|(?:inset )?0 0 0 [^\s,]+ (?:var\([^()]*\)|color-mix\([^()]*(?:\([^()]*\)[^()]*)*\)))$/u.test(value)), [], "off-token shadow");
+  assert.doesNotMatch(globals, /@media([^{]+)\{(?:[^{}]*\{[^{}]*\})*[^{}]*\}\s*@media\1\{/u, "adjacent blocks for one breakpoint must be merged");
+  const sideTabs = [];
+  for (const path of await readdir(new URL("app/", root), { recursive: true })) {
+    if (!path.endsWith(".css")) continue;
+    const css = await read(`app/${path.replaceAll("\\", "/")}`);
+    for (const [match] of css.matchAll(/border-(?:inline-start|inline-end|left|right)(?:-width)?\s*:\s*(?:[2-9]|\d{2,})|box-shadow\s*:\s*inset\s+(?!0\s)[^;}]+/gu)) sideTabs.push(`${path}: ${match}`);
+  }
+  assert.deepEqual(sideTabs, [], "no thick one-side accent borders");
 });
 
 test("form controls keep a visible keyboard focus ring, also in forced colors", async () => {

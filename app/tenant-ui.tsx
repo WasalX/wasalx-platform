@@ -177,6 +177,17 @@ export function WorkspaceLoading() {
   );
 }
 
+// Lazy slots inside panels, drawers and dialogs: compact and labelled for the section, not the workspace.
+export function SectionLoading() {
+  const { t } = useI18n();
+  return (
+    <div className="review-loading compact" role="status" aria-live="polite" aria-busy="true">
+      <span aria-hidden="true" />
+      <b>{t("tenant.loading.section")}</b>
+    </div>
+  );
+}
+
 export function WideTable({ children }: { children: React.ReactNode }) {
   const { t } = useI18n();
   return (

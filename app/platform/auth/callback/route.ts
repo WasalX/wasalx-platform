@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { recordStructuredLog, safeRequestId } from "@wasalx/observability";
 import {
   completePlatformOidcLogin,
   validPlatformOidcTransaction,
@@ -26,15 +27,13 @@ export async function GET(request: Request) {
   const cookies = parsePlatformCookies(request.headers.get("cookie") ?? "");
   const transactionValue = validOidcState(state) ? cookies.get(platformTransactionCookieName(state)) : undefined;
   if (providerError || !code || !validOidcState(state) || !transactionValue) {
-    console.warn(
-      JSON.stringify({
-        event: "platform_oidc_callback_rejected",
-        providerError: Boolean(providerError),
-        codePresent: Boolean(code),
-        statePresent: Boolean(state),
-        transactionCookiePresent: Boolean(transactionValue),
-      }),
-    );
+    recordStructuredLog("warn", "platform_oidc_callback_rejected", {
+      request_id: safeRequestId(),
+      providerError: Boolean(providerError),
+      codePresent: Boolean(code),
+      statePresent: Boolean(state),
+      transactionPresent: Boolean(transactionValue),
+    });
     return failure("invalid_callback",validOidcState(state)?state:undefined);
   }
   try {

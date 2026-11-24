@@ -9,7 +9,7 @@ import { operatorFailureMessage, operatorLocalFailure } from "../lib/operator-ui
 import { useVisibleRefresh } from "./use-visible-refresh";
 import { isAbortError } from "../lib/bot-conversations";
 import { connectionAuthorizationState, connectionInboundIsReady, connectionTransportIsReady } from "../lib/connection-readiness.ts";
-import { type ConnectionDetailRow, isDuplicateIdentityRejection, RelativeTime, exactTime, type TenantTranslator, connectionMethod, apiError, requiresPrivilegedReauthentication, privilegedStepUpHref, Status, Empty, WorkspaceLoading, useDialogCloseGuard, DirtyCloseConfirmation } from "./tenant-ui";
+import { type ConnectionDetailRow, isDuplicateIdentityRejection, RelativeTime, exactTime, type TenantTranslator, connectionMethod, apiError, requiresPrivilegedReauthentication, privilegedStepUpHref, Status, Empty, SectionLoading, useDialogCloseGuard, DirtyCloseConfirmation } from "./tenant-ui";
 
 const MetaSignup = lazy(async () => ({ default: (await import("./MetaSignup")).MetaSignup }));
 const MetaNumberRelease = lazy(async () => ({ default: (await import("./MetaNumberRelease")).MetaNumberRelease }));
@@ -1010,7 +1010,7 @@ export function ConnectionDetail({
               </div>
             </section>
 
-            {detail.provider === "META" && state === "REVOKED" && canConfigure && !sessionExpired ? <Suspense fallback={<WorkspaceLoading />}><MetaNumberRelease
+            {detail.provider === "META" && state === "REVOKED" && canConfigure && !sessionExpired ? <Suspense fallback={<SectionLoading />}><MetaNumberRelease
               tenantId={tenantId} actorId={actorId} connectionId={id} connectionName={String(detail.name ?? "")} mutationHeaders={mutationHeaders} busyChanged={setMetaNumberReleasePending}
             /></Suspense> : null}
 
@@ -1414,7 +1414,7 @@ export function ConnectionDetail({
             ) : null}
 
             {detail.provider === "META" ? (
-              <Suspense fallback={<WorkspaceLoading />}>
+              <Suspense fallback={<SectionLoading />}>
                 {!sessionExpired ? <MetaTemplatePreparation connectionId={id} tenantId={tenantId} actorId={actorId} canWrite={canConfigure} mutationHeaders={mutationHeaders} /> : null}
                 {!sessionExpired ? <MetaLegacyMigration connectionId={id} tenantId={tenantId} actorId={actorId} canWrite={canConfigure} mutationHeaders={mutationHeaders} /> : null}
                 {canConfigure && state !== "REVOKED" ? <div className="connection-detail-section">
@@ -1422,7 +1422,7 @@ export function ConnectionDetail({
                     <h3 id="meta-reconnect-title">{t("tenant.metaSignup.reconnect.title")}</h3>
                     <p>{t("tenant.metaSignup.reconnect.body")}</p>
                   </div></div>}
-                  {metaReconnectOpen && !sessionExpired ? <Suspense fallback={<WorkspaceLoading />}><MetaSignup
+                  {metaReconnectOpen && !sessionExpired ? <Suspense fallback={<SectionLoading />}><MetaSignup
                     key={id} name={t("tenant.metaSignup.reconnect.title")} target={{ connectionId: id, name: String(detail.name ?? ""), canPrepare: state === "PAUSED" && !operationPending, canContinue: state === "PAUSED" }}
                     isTargetConnectionRevoked={() => metaReconnectTargetRevoked.current}
                     mutationHeaders={mutationHeaders} busyChanged={setMetaReconnectPending}
@@ -2306,7 +2306,7 @@ export function ConnectionModal({
               <span>{t(`tenant.metaSignup.addAccess.purpose.${value}`)}</span>
             </label>)}
           </fieldset>
-          <Suspense fallback={<WorkspaceLoading />}><MetaSignup name={name} purpose={metaPurpose} mutationHeaders={mutationHeaders} busyChanged={setCreating}
+          <Suspense fallback={<SectionLoading />}><MetaSignup name={name} purpose={metaPurpose} mutationHeaders={mutationHeaders} busyChanged={setCreating}
             created={(id) => { closeGuard.resetDirty(); void dashboardChanged(); created(id); }}
             back={() => setStep(1)} manual={() => setMetaManual(true)} /></Suspense>
           </>

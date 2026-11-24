@@ -3,6 +3,7 @@ import { readMetaTemplateInventory } from './meta-template-read.js';
 import { metaTemplateCopyBody, type MetaTemplateCopyRequest } from './meta-template-copy.js';
 import { MetaAccountTransitionCalls } from './meta-account-transition-execute.js';
 import { createHash } from "node:crypto";
+import { recordStructuredLog, safeRequestId } from "@wasalx/observability";
 import { metaAccountFundingProof } from "../../core/src/meta-account-policy.js";
 import {readMetaTransitionInventory} from './meta-account-transition-read.js';
 import type {
@@ -1018,8 +1019,11 @@ export function assertMetaTestOutboundAllowed(input: SendMessage, scope = parseW
 
 function assertMetaTestRequestAllowed(body: unknown, scope: WahaTestRecipientAllowlist) {
   if (metaTestSendAllowed(scope, body)) return;
-  console.warn("Meta test recipient scope refused outbound request");
-  throw new ProviderError("The recipient is outside the configured test scope.", false, "META_TEST_RECIPIENT_NOT_ALLOWED", undefined, true);
+  const errorCode = "META_TEST_RECIPIENT_NOT_ALLOWED";
+  recordStructuredLog("warn", "meta.test_recipient_scope_refused", {
+    request_id: safeRequestId(), component: "meta-connector", error_code: errorCode,
+  });
+  throw new ProviderError("The recipient is outside the configured test scope.", false, errorCode, undefined, true);
 }
 
 function metaChoiceMessage(text:string,options:Array<{id:string;label:string}>,buttonLabel="Choose"){

@@ -20,6 +20,7 @@ colors:
   success: "#167d53"
   warning: "#a45e09"
   danger: "#c64343"
+  danger-solid: "#7b2a2a"
   on-solid: "#ffffff"
   provider-whatsapp-groups: "#16855a" # token --wx-color-provider-waha
   provider-meta: "#1769e0"
@@ -124,12 +125,12 @@ One neutral zinc ramp, one violet accent, three status colors and two provider m
 - **Text / Muted / Subtle**: light `#18181b / #696970 / #6f6f76`; dark `#f3f3f5 / #92929d / #85858f`.
 
 ### Status and provider
-- **Success / Warning / Danger**: light `#167d53 / #a45e09 / #c64343`; dark `#45c58a / #f3ad4e / #f06b6b`. Status color is always paired with a word or an icon, never color alone.
+- **Success / Warning / Danger**: light `#167d53 / #a45e09 / #c64343`; dark `#45c58a / #f3ad4e / #f06b6b`. Status color is always paired with a word or an icon, never color alone. **Danger solid** (`--wx-color-danger-solid`, light `#7b2a2a`, dark `#954242`) is the fill behind white text on a destructive button.
 - **Provider marks**: WhatsApp groups green (`--wx-color-provider-waha`: `#16855a` light, `#22a06b` dark) and Meta blue (`--wx-color-provider-meta`, `#1769e0`). Use them only to identify a channel.
 
 ### Named Rules
 **The One Accent Rule.** Violet is the only hue used for interaction. Any other color means status or provider.
-**The Token-Only Rule.** New code uses `var(--wx-color-*)` (or the legacy `--bg/--surface/--text/...` aliases). No hex or `rgb()` outside `tokens.css`. `tests/design-system-governance.test.mjs` enforces this for primitives, and #184 tracks the cleanup of `globals.css`.
+**The Token-Only Rule.** New code uses `var(--wx-color-*)` (or the legacy `--bg/--surface/--text/...` aliases). No hex, `rgb()` or named color outside `tokens.css`; tints are `color-mix()` of a token. `tests/design-system-governance.test.mjs` enforces this for `primitives.css` and `globals.css`.
 **The AA Rule.** Text and solid-action pairs meet 4.5:1 in both themes; the governance test checks it.
 
 ## Typography
@@ -145,7 +146,7 @@ One neutral zinc ramp, one violet accent, three status colors and two provider m
 - **Label / table** (550, 12 px): table headers, badges, field labels, buttons.
 - **Mono** (12 px): only for values an operator may copy (codes, references). Never for raw ids or internal names.
 
-**The Scale Rule.** Use only the 7 size tokens. A raw `px` font size is drift (#184).
+**The Scale Rule.** Use only the 7 size tokens; the governance test rejects a raw `px`/`rem` font size in `globals.css`.
 
 ## Layout
 
@@ -157,14 +158,14 @@ One neutral zinc ramp, one violet accent, three status colors and two provider m
 
 ## Elevation & Depth
 
-Flat with tonal layering: page → surface → raised → selected, separated by 1 px borders. New code uses only these two shadows; `globals.css` still has others (status glows, a layered dark-theme dialog shadow, the toast), tracked in #184:
+Flat with tonal layering: page → surface → raised → selected, separated by 1 px borders. Only these two shadows give elevation; the governance test enforces this for `globals.css`. Rings without blur (`0 0 0 <width> <token color>`) are allowed for focus, status halos and 1 px edges:
 - **Control** (`0 1px 1px var(--wx-color-control-shadow)`): the resting button.
 - **Dialog** (`0 1.5rem 5rem var(--wx-color-shadow)`): dialogs and drawers only, over `--wx-color-overlay`.
 In forced-colors mode, dialogs drop the shadow and use `CanvasText` borders.
 
 ## Shapes
 
-Three radii: control 6 px, panel 8 px, dialog 12 px (also the pill radius of status badges). Borders are 1 px; `border-strong` is for controls. No thick one-side accent borders (detector `side-tab`, #184).
+Three radii: control 6 px, panel 8 px, dialog 12 px (also the pill radius of status badges). Borders are 1 px; `border-strong` is for controls. Radii in `globals.css` use only these tokens (plus `0` and `50%` for circles). No thick one-side accent borders or inset side bars (detector `side-tab`); a selected row uses a full 1 px accent ring. The governance test checks both.
 
 ## Components
 
@@ -172,7 +173,7 @@ The target set is the primitives in `app/design-system/primitives.tsx` and `prim
 
 - **Button** (`Button` / `.wx-button`): 36 px high, 12 px/550, control radius. Variants: `secondary` (the default, raised), `primary` (solid violet), `danger` (danger text plus a tinted border). It has a loading spinner, `disabled` at 0.56 opacity, and focus as a 2 px violet `outline` with a 2 px offset. **Drift:** legacy `.button` is 34 px high, and legacy `.button.primary` is inverted text-on-background (near-black in light, white in dark), not violet. Follow the primitive.
 - **Status badge** (`StatusBadge` / `.wx-status`): pill, dot plus label, tones neutral/success/warning/danger.
-- **Operational state** (`OperationalState`): one panel for loading (skeleton), empty, partial, fatal and recovery states, with a title, one plain sentence and at most one action. Every data view must have all of these states.
+- **Operational state** (`OperationalState`): one panel for loading (skeleton), empty, partial, fatal and recovery states, with a title, one plain sentence and at most one action. Every data view must have all of these states. While a lazy part of a panel, drawer or dialog loads, it shows the compact `SectionLoading` state ("Loading this section…"); `WorkspaceLoading` is only for whole views.
 - **Data panel** (`DataPanel`): bordered panel with a header row and a table; sparse or dense density.
 - **Dialog** (`ModalDialog.tsx`): at most 520 px, dialog radius, dialog shadow, scroll inside, focus trapped, Escape closes.
 - **Toast**: bottom, inline-end, inverted colors, at most 520 px.

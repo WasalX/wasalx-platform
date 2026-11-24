@@ -27,7 +27,7 @@ import { can, isTenantRole, type TenantRole } from "../lib/tenant-permissions.ts
 import { connectionDisplayState, connectionIsReady } from "../lib/connection-readiness.ts";
 import { TENANT_VIEW_TITLES } from "../lib/tenant-view-titles.ts";
 import { rememberBoundaryTheme, useBoundaryPreferences } from "./boundary-preferences.ts";
-import { type RecordRow, type ConnectionDetailRow, isDuplicateIdentityRejection, RelativeTime, duration, exactTime, type TenantTranslator, connectionMethod, apiError, isOpaqueIdentifier, requiresPrivilegedReauthentication, privilegedStepUpHref, statusPresentation, Status, Empty, WorkspaceLoading, WideTable, useDialogCloseGuard, DirtyCloseConfirmation, Toolbar } from "./tenant-ui";
+import { type RecordRow, type ConnectionDetailRow, isDuplicateIdentityRejection, RelativeTime, duration, exactTime, type TenantTranslator, connectionMethod, apiError, isOpaqueIdentifier, requiresPrivilegedReauthentication, privilegedStepUpHref, statusPresentation, Status, Empty, WorkspaceLoading, SectionLoading, WideTable, useDialogCloseGuard, DirtyCloseConfirmation, Toolbar } from "./tenant-ui";
 
 const InboxWorkspace = lazy(async () => ({ default: (await import("./InboxWorkspace")).InboxWorkspace }));
 const SupportTeams = lazy(async () => ({ default: (await import("./SupportTeams")).SupportTeams }));
@@ -1133,7 +1133,7 @@ function TenantWasalXApp({
                 canConfigure={canConfigure}
                 mutationHeaders={mutationHeaders}
               />
-              {!isPrivateDemo&&can(role,"billing:read")?<Suspense fallback={<WorkspaceLoading />}><MetaCostUsage key={String(initialData.tenant.id)} canExport={can(role,"billing:export")}/></Suspense>:null}</>
+              {!isPrivateDemo&&can(role,"billing:read")?<Suspense fallback={<SectionLoading />}><MetaCostUsage key={String(initialData.tenant.id)} canExport={can(role,"billing:export")}/></Suspense>:null}</>
             )}
             {view === "groups" && (
               <Suspense fallback={<WorkspaceLoading />}>
@@ -1263,7 +1263,7 @@ function TenantWasalXApp({
                 canManage={canManageTeam}
                 mutationHeaders={mutationHeaders}
               />
-              {canManageTeam ? <Suspense fallback={<WorkspaceLoading />}>
+              {canManageTeam ? <Suspense fallback={<SectionLoading />}>
                 <SupportTeams key={inboxScope} execute={executeWorkspace} scope={inboxRecoveryScope} owner={role === "tenant_owner"} />
               </Suspense> : null}
               </>
@@ -1286,7 +1286,7 @@ function TenantWasalXApp({
                 mutationHeaders={mutationHeaders}
               />
               </Suspense>
-              {canWriteSettings ? <Suspense fallback={<WorkspaceLoading />}>
+              {canWriteSettings ? <Suspense fallback={<SectionLoading />}>
                 <MailboxAdministration key={inboxScope} execute={executeWorkspace} scope={inboxRecoveryScope} />
               </Suspense> : null}
               </>
@@ -1602,7 +1602,7 @@ function Connections({
           />
         )}
       </section>
-      <Suspense fallback={<WorkspaceLoading />}>
+      <Suspense fallback={<SectionLoading />}>
         <ConnectedDataServices canWrite={canConfigure} mutationHeaders={mutationHeaders} />
       </Suspense>
     </div>
@@ -2997,7 +2997,7 @@ function TeamAccess({ role, currentUserId, canManage, mutationHeaders }: { role:
   const active = data.members.filter((member) => member.state === "ACTIVE").length;
   const pending = data.invitations.filter((invitation) => invitation.state === "PENDING").length;
   return <div className="team-layout">
-    <Suspense fallback={<WorkspaceLoading />}><WorkspaceAccess members={data.members} owner={role==="tenant_owner"} mutationHeaders={mutationHeaders} nativeObservations={nativeAccountRead.observations} nativeObservationUnavailable={nativeAccountRead.unavailable} beginNativeObservationRead={beginNativeObservationRead} completeNativeObservationRead={completeNativeObservationRead}/></Suspense>
+    <Suspense fallback={<SectionLoading />}><WorkspaceAccess members={data.members} owner={role==="tenant_owner"} mutationHeaders={mutationHeaders} nativeObservations={nativeAccountRead.observations} nativeObservationUnavailable={nativeAccountRead.unavailable} beginNativeObservationRead={beginNativeObservationRead} completeNativeObservationRead={completeNativeObservationRead}/></Suspense>
     <section className="team-summary" aria-label={t("tenant.team.summary.label")}><div><small>{t("tenant.team.summary.active")}</small><strong>{formatNumber(active, locale)}</strong><span>{t("tenant.team.summary.identities", { count: formatNumber(data.members.length, locale) })}</span></div><div><small>{t("tenant.team.summary.pending")}</small><strong className={data.capabilities.can_invite ? undefined : "team-role-value"}>{data.capabilities.can_invite ? formatNumber(pending, locale) : t("tenant.team.readOnly")}</strong><span>{t(data.capabilities.can_invite ? pending ? "tenant.team.summary.awaiting" : "tenant.team.summary.none" : "tenant.team.invitations.restrictedTitle")}</span></div><div><small>{t("tenant.team.summary.yourRole")}</small><strong className="team-role-value">{t(`tenant.role.${role}`)}</strong><span>{t(canManage ? "tenant.team.summary.management" : "tenant.team.summary.readOnly")}</span></div></section>
     {error ? <div className="settings-feedback error team-feedback" role="alert"><span>!</span><p>{error}</p><button className="button small" onClick={() => void load()}>{t("tenant.team.actions.reload")}</button></div> : null}
     {notice ? <div className="settings-feedback success team-feedback" role="status"><span>✓</span><p>{notice}</p></div> : null}

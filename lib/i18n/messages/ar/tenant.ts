@@ -665,6 +665,7 @@ export const arabicTenantMessages = {
   "tenant.accessibility.scrollTable": "جدول بيانات قابل للتمرير",
   "tenant.accessibility.scrollTableCue": "مرّر أفقيًا لرؤية بقية الأعمدة",
   "tenant.loading.workspace": "جارٍ تحميل مساحة العمل…",
+  "tenant.loading.section": "جارٍ تحميل هذا القسم…",
   "tenant.boundary.error.heading": "مساحة العمل غير متاحة مؤقتًا",
   "tenant.accessDenied.heading": "الوصول إلى مساحة العمل غير متاح",
   "tenant.accessDenied.description": "لا يمكن لحسابك الوصول إلى مساحة العمل هذه. ربما أُوقفت العضوية أو أُزيلت. تواصل مع مسؤول مساحة العمل، أو سجّل الدخول بحساب لديه صلاحية الوصول.",
