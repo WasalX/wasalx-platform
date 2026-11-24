@@ -793,6 +793,13 @@ test("PR image results are advisory while the merge queue requires the full imag
   assert.equal(images.strategy["max-parallel"], 21);
   assert.deepEqual(prImages.strategy, { ...images.strategy, "max-parallel": 8 });
   assert.equal(prImages.steps, images.steps);
+  const imageBuilder = images.steps.find(step => step.uses?.startsWith("docker/setup-buildx-action@"));
+  const publisherBuilder = branch.publish.steps.find(step => step.uses?.startsWith("docker/setup-buildx-action@"));
+  assert.equal(imageBuilder.uses, publisherBuilder.uses);
+  assert.equal(imageBuilder.with.version, publisherBuilder.with.version);
+  assert.equal(imageBuilder.with["cache-binary"], true);
+  assert.equal(publisherBuilder.with["cache-binary"], true);
+  assert.equal(imageBuilder.with.cleanup, false);
   assert.equal(images["continue-on-error"], undefined);
   assert.equal(prImages["continue-on-error"], undefined);
   assert.equal(report.if, "always() && github.event_name == 'pull_request'");

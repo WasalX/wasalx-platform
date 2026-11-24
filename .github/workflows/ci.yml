@@ -527,7 +527,9 @@ jobs:
         with:
           version: v0.30.1
           driver-opts: image=moby/buildkit:v0.26.3
-          cache-binary: false
+          cache-binary: true
+          # The runner is verified as disposable before this builder is created.
+          cleanup: false
       - name: Build and inspect without publication
         if: ${{ !matrix.pending }}
         env:
