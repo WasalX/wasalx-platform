@@ -141,7 +141,7 @@ test("rejected platform OIDC callbacks log only presence flags and correlation",
   const { timestamp, request_id, ...entry } = JSON.parse(warnings[0]);
   assert.deepEqual(entry, {
     level: "warn", event: "platform_oidc_callback_rejected", providerError: true,
-    codePresent: true, statePresent: true, transactionCookiePresent: false,
+    codePresent: true, statePresent: true, transactionPresent: false,
   });
   assert.match(timestamp, /^\d{4}-\d{2}-\d{2}T/u);
   assert.match(request_id, /^[a-f0-9-]{36}$/u);

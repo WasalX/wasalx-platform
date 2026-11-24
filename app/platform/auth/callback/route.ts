@@ -32,7 +32,7 @@ export async function GET(request: Request) {
       providerError: Boolean(providerError),
       codePresent: Boolean(code),
       statePresent: Boolean(state),
-      transactionCookiePresent: Boolean(transactionValue),
+      transactionPresent: Boolean(transactionValue),
     });
     return failure("invalid_callback",validOidcState(state)?state:undefined);
   }
