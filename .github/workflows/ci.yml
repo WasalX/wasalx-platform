@@ -33,3 +33,52 @@ jobs:
             cmp "$scratch/full_without_engine.json" "$scratch/full_direct_plugin.json"
           fi
           cmp "$scratch/full_live_engine.json" "$scratch/full_without_engine.json"
+      - name: Measure the effect of an unresponsive Docker Engine
+        run: |
+          python3 -B - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import socketserver
+          import subprocess
+          import tempfile
+          import threading
+          import time
+
+          project = json.loads(Path("tests/fixtures/dev-live-compose/container-facts.scrubbed.json").read_text())["project"]
+          command = ["docker", "compose", "--env-file", ".env.example", "--file", "compose.yaml", "--file", "compose.full.yaml",
+                     "--profile", "full", "--profile", "runtime-workers", "--project-name", project,
+                     "config", "--no-interpolate", "--no-env-resolution", "--format", "json"]
+          stop = threading.Event()
+          requests = []
+
+          class UnresponsiveEngine(socketserver.StreamRequestHandler):
+              def handle(self):
+                  requests.append(self.rfile.readline().decode("ascii").strip().split(" ", 2)[:2])
+                  stop.wait()
+
+          def render(label, host):
+              env = {**os.environ, "DOCKER_CONTEXT": "", "DOCKER_HOST": host, "DOCKER_TLS_VERIFY": "",
+                     "COMPOSE_PROFILES": "", "PORTAL_FIXTURE_ROLE": ""}
+              started = time.monotonic()
+              result = subprocess.run(command, env=env, check=True, stdout=subprocess.PIPE, timeout=10)
+              print(f"{label} wall={time.monotonic() - started:.3f}s bytes={len(result.stdout)}", flush=True)
+              return result.stdout
+
+          with tempfile.TemporaryDirectory() as scratch:
+              socket = Path(scratch) / "docker.sock"
+              disconnected = "tcp://127.0.0.1:0"
+              with socketserver.ThreadingUnixStreamServer(str(socket), UnresponsiveEngine) as server:
+                  server.daemon_threads = True
+                  worker = threading.Thread(target=server.serve_forever, daemon=True)
+                  worker.start()
+                  try:
+                      old = render("unresponsive_engine", f"unix://{socket}")
+                      print(f"engine requests={requests}", flush=True)
+                      new = render("disconnected_engine", disconnected)
+                      assert old == new, "render changed"
+                  finally:
+                      stop.set()
+                      server.shutdown()
+              worker.join()
+          PY
