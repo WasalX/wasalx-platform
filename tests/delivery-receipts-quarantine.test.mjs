@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { createHmac } from "node:crypto";
 import { englishTenantMessages } from "../lib/i18n/messages/en/tenant.ts";
 import { MetaGroupsAdapter } from "../services/connector-worker/dist/packages/connectors/src/meta.js";
 import { WahaAdapter } from "../services/connector-worker/dist/packages/connectors/src/waha.js";
@@ -86,6 +87,48 @@ test("Meta ingress persists independently replay-fenced statuses from one change
   }finally{if(priorReference===undefined)delete process.env.META_APP_SECRET_REFERENCE;else process.env.META_APP_SECRET_REFERENCE=priorReference;if(priorApp===undefined)delete process.env.META_APP_ID;else process.env.META_APP_ID=priorApp}
   assert.equal(accepted.length,2);assert.equal(accepted[0].eventType,"message.status");assert.equal(accepted[0].payload.entry[0].changes[0].value.statuses.length,1);assert.notEqual(accepted[0].providerEventId,accepted[1].providerEventId);assert.deepEqual(wakes,["tenant-a"]);
   for(const item of accepted){assert.equal(item.metaRoutingEvidence.category,"OWN_MESSAGE_STATUS");assert.equal(item.metaRoutingEvidence.peer,undefined);assert.equal(item.metaRoutingEvidence.payloadSha256,item.payloadSha256);}
+});
+
+test("signed Meta marketing preferences are replay-stable and strip profile and parent identifiers",async(t)=>{
+  const now=Date.UTC(2026,10,24,10), timestamp=now/1000;
+  t.mock.method(Date,"now",()=>now);
+  const secret="synthetic-marketing-webhook-secret";
+  const envKeys=["META_APP_SECRET_REFERENCE","META_APP_ID","WASALX_TEST_RECIPIENT_ALLOWLIST"];
+  const previous=envKeys.map(name=>process.env[name]);
+  t.after(()=>envKeys.forEach((name,index)=>{
+    if(previous[index]===undefined)delete process.env[name];else process.env[name]=previous[index];
+  }));
+  [process.env.META_APP_SECRET_REFERENCE,process.env.META_APP_ID,process.env.WASALX_TEST_RECIPIENT_ALLOWLIST]=["secret://meta/app","123450987","*"];
+  const route={tenant_id:"tenant-a",connection_id:"connection-a",provider:"META",hmac_secret_reference:"secret://route"};
+  const accepted=[];
+  const controller=new WebhookIngressController({
+    resolveMetaWebhookRoute:async phone=>{assert.equal(phone,"123456789");return route;},
+    acceptWebhookEvent:async(actualRoute,input)=>{
+      assert.equal(actualRoute,route);
+      const duplicate=accepted.some(item=>item.providerEventId===input.providerEventId);
+      accepted.push(input);
+      return{id:"event-a",duplicate};
+    },
+  },{resolveHmac:async()=>secret},{wakeInbound:async()=>{}});
+  const send=(preference,signatureOverride)=>{
+    const body={object:"whatsapp_business_account",entry:[{id:"987654321",changes:[{field:"user_preferences",value:{
+      messaging_product:"whatsapp",metadata:{phone_number_id:"123456789"},
+      contacts:[{profile:{name:"Synthetic customer"}}],user_preferences:[preference],
+    }}]}]};
+    const raw=JSON.stringify(body), signature=signatureOverride??createHmac("sha256",secret).update(raw).digest("hex");
+    return controller.meta({rawBody:new TextEncoder().encode(raw),headers:{"x-hub-signature-256":"sha256="+signature}},body);
+  };
+  const stop={category:"marketing_messages",value:"stop",timestamp,wa_id:"12025550123",user_id:"US.synthetic",parent_user_id:"US.ENT.synthetic"};
+  assert.equal((await send(stop)).count,1);
+  assert.equal((await send({...stop,detail:"Synthetic profile evidence"})).duplicates,1);
+  assert.deepEqual(accepted[0].marketingPreference,{phone:"12025550123",bsuid:"US.synthetic",accountId:"987654321",
+    optedOut:true,observedAt:new Date(now).toISOString()});
+  assert.deepEqual(accepted[0].payload,{redacted:true,payload_sha256:accepted[0].payloadSha256});
+  assert.equal((await send({...stop,value:"resume",wa_id:undefined})).count,1);
+  assert.equal(accepted[2].marketingPreference.optedOut,false);
+  await assert.rejects(()=>send({...stop,wa_id:undefined,user_id:undefined}),/marketing preference is invalid/);
+  await assert.rejects(()=>send(stop,"0".repeat(64)),/Invalid webhook signature/);
+  assert.equal(accepted.length,3);
 });
 
 test("Meta pricing observations preserve strict classifications, canonical revisions and bounded source context",async()=>{

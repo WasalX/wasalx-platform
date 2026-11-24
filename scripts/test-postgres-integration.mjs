@@ -465,7 +465,25 @@ try{
     await migrate(protectedPrefix);
     const routingUpgrade=await seedMetaRoutingLegacyUpgrade(admin);
     metaIdentityRoutingHistory=await seedMetaDirectLegacyRoutingHistory(admin);
+    const marketingMigration="0204_whatsapp_marketing_preferences.sql";
+    for(const file of migrationFiles.filter(file=>file>="0171_meta_external_routing.sql"&&file<marketingMigration)){
+      await writeFile(resolve(protectedPrefix,file),await readFile(new URL(file,controlMigrationsUrl)));
+    }
+    await migrate(protectedPrefix);
+    const legacyContacts=()=>admin.query("SELECT id,tenant_id,connection_id,external_participant_id FROM participant_identities ORDER BY id").then(result=>result.rows);
+    const previousContacts=await legacyContacts();
+    assert.ok(previousContacts.length>0,"Upgrade holds existing contact data");
+    await admin.query("BEGIN");
+    try{
+      await admin.query(await readFile(new URL(marketingMigration,controlMigrationsUrl),"utf8"));
+      assert.deepEqual(await legacyContacts(),previousContacts);
+      assert.equal((await admin.query("SELECT count(*)::int n FROM whatsapp_marketing_preferences")).rows[0].n,0);
+    }finally{
+      await admin.query("ROLLBACK");
+    }
+    assert.equal((await admin.query("SELECT to_regclass('public.whatsapp_marketing_preferences') AS relation")).rows[0].relation,null);
     await migrate(controlMigrationsPath);
+    assert.deepEqual(await legacyContacts(),previousContacts);
     // These identities reuse the existing tenant/connection/session parent key.
     const sessionForeignKeys=(await admin.query(`SELECT relation.relname AS relation,c.convalidated AS validated,
       ARRAY(SELECT a.attname::text FROM unnest(c.conkey) WITH ORDINALITY k(attnum,n)

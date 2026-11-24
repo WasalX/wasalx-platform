@@ -1095,6 +1095,83 @@ function lifecycleState({revision=1,blocked=true,recovery=false}={}){
     reasonStates:[{reason:"ACCOUNT_OFFBOARDED",negative,...(recovery?{recovery:recovered}:{}),...(!blocked?{clearedThrough:recovered}:{}),blocked}]};
 }
 
+function withUnrestrictedMarketingFixture(t){
+  const prior=process.env.WASALX_TEST_RECIPIENT_ALLOWLIST;
+  process.env.WASALX_TEST_RECIPIENT_ALLOWLIST="*";
+  t.after(()=>{if(prior===undefined)delete process.env.WASALX_TEST_RECIPIENT_ALLOWLIST;else process.env.WASALX_TEST_RECIPIENT_ALLOWLIST=prior;});
+}
+
+test("marketing opt-outs block unverified templates before POST and preserve service replies",async(t)=>{
+  t.after(routingFixtureEnvironment("123450987"));
+  withUnrestrictedMarketingFixture(t);
+  const token="synthetic-meta-token-for-proof";
+  for(const [category,optedOut,expectedPosts] of [["MARKETING",true,0],["UTILITY",true,1],["UNKNOWN",true,0],
+    ["UTILITY",false,1],[null,true,1]]){
+    const delivery=metaDelivery(metadataProof(token));
+    if(category)delivery.template={name:"synthetic_notice",languageCode:"en_US",bodyParameters:[]};
+    let posts=0,reads=0,failures=[];
+    const repository={
+      claimBotActions:async()=>[],claimDeliveries:async()=>[delivery],beginSend:async()=>true,
+      assertMetaDeliveryContextCurrent:async()=>{},metaInheritedTemplateContext:async()=>null,
+      whatsAppMarketingOptedOut:async()=>optedOut,admitMetaMessageRequest:async(_job,_lease,_hash,_runtime,_phone,_proof,nonMarketing)=>{
+        assert.equal(nonMarketing,Boolean(optedOut&&category==="UTILITY"));
+        if(delivery.template&&optedOut&&!nonMarketing)throw new ProviderError("Marketing is stopped",false,"WHATSAPP_MARKETING_OPTED_OUT");
+      },
+      fail:async(...args)=>failures.push(args[6]),complete:async()=>{},claimStatuses:async()=>[],
+      outcomeUnknown:async()=>assert.fail("No ambiguous dispatch expected"),
+    };
+    const fetch=t.mock.method(globalThis,"fetch",async(input)=>{
+      if(String(input).includes("/message_templates")){
+        reads++;
+        return Response.json({data:[{id:"23456",name:"synthetic_notice",language:"en_US",category,status:"APPROVED",components:[]}]});
+      }
+      posts++;
+      return Response.json({messages:[{id:"wamid.synthetic"}]});
+    });
+    try{
+      await new DeliveryProcessor(repository,{resolve:async()=>({accessToken:token})},{metaGraphVersion:"v24.0",metaAppId:"123450987"}).drainTenant(delivery.tenantId);
+    }finally{fetch.mock.restore()}
+    assert.equal(reads,category&&optedOut?1:0);
+    assert.equal(posts,expectedPosts);
+    assert.deepEqual(failures,expectedPosts?[]:["WHATSAPP_MARKETING_OPTED_OUT"]);
+  }
+});
+
+test("the final outbox admission refuses stopped template recipients before stamping the provider request",async()=>{
+  const queries=[];
+  const job={...metaDelivery(),template:{name:"synthetic_notice",languageCode:"en_US",bodyParameters:[]}};
+  const client={release(){},async query(sql,parameters){
+    queries.push({sql,parameters});
+    const rows=sql.includes(" AS acquired")?[{acquired:true}]
+      :sql.includes(" AS active")?[{active:true}]
+      :sql.includes("FROM delivery_outbox delivery JOIN delivery_attempts")?[{id:"attempt",meta_billing_snapshot:null}]
+      :sql.includes("FROM whatsapp_marketing_preferences")?[{opted_out:true}]:[];
+    return{rowCount:sql.startsWith("UPDATE delivery_outbox")?1:rows.length,rows};
+  }};
+  const repository=new OutboxRepository({connect:async()=>client});
+  repository.metaDeliveryContextCurrent=async()=>true;
+  repository.metaBillingCurrent=async()=>{};
+  await assert.rejects(()=>repository.admitMetaMessageRequest(job,"lease","a".repeat(64)),{code:"WHATSAPP_MARKETING_OPTED_OUT",outcomeKnown:true});
+  assert.ok(!queries.some(({sql})=>sql.startsWith("UPDATE delivery_attempts")));
+  await repository.fail(job,"lease",false,"Marketing is stopped",undefined,false,"WHATSAPP_MARKETING_OPTED_OUT");
+  assert.deepEqual(queries.find(({sql})=>sql.includes("'whatsapp.marketing_delivery_refused'")).parameters,[job.tenantId,job.connectionId,job.id]);
+});
+
+test("a concrete Meta 131050 rejection reaches the durable failure path as a terminal opt-out",async(t)=>{
+  t.after(routingFixtureEnvironment("123450987"));
+  withUnrestrictedMarketingFixture(t);
+  const token="synthetic-meta-token-for-proof";
+  const delivery={...metaDelivery(metadataProof(token)),template:{name:"synthetic_notice",languageCode:"en_US",bodyParameters:[]}};
+  const failures=[];
+  const repository={claimBotActions:async()=>[],claimDeliveries:async()=>[delivery],beginSend:async()=>true,
+    assertMetaDeliveryContextCurrent:async()=>{},metaInheritedTemplateContext:async()=>null,whatsAppMarketingOptedOut:async()=>false,
+    fail:async(...args)=>failures.push([args[2],args[6]]),complete:async()=>assert.fail("No successful send"),claimStatuses:async()=>[],
+    outcomeUnknown:async()=>assert.fail("A 131050 rejection is definitive")};
+  t.mock.method(globalThis,"fetch",async()=>Response.json({error:{code:131050,message:"Synthetic private provider detail"}},{status:400}));
+  await new DeliveryProcessor(repository,{resolve:async()=>({accessToken:token})},{metaGraphVersion:"v24.0",metaAppId:"123450987"}).drainTenant(delivery.tenantId);
+  assert.deepEqual(failures,[[false,"META_MARKETING_OPTED_OUT"]]);
+});
+
 test("Meta delivery request fences pending, changed, blocked and malformed lifecycle without dispatch",async(t)=>{
   t.after(routingFixtureEnvironment("123450987"));
   for(const kind of ["clear","pending","revision","blocked","null"]){

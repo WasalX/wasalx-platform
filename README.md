@@ -15,3 +15,11 @@ Use the same handoff value in both services. The worker applies these limits
 when scheduling additional retries, and the control API uses the handoff limit
 when an operator brings forward an already scheduled retry. Invalid values fail
 startup with the variable name in the error.
+
+## WhatsApp marketing preferences
+
+Subscribe the Meta app to the [`user_preferences` webhook](https://developers.facebook.com/documentation/business-messaging/whatsapp/webhooks/reference/user_preferences).
+WasalX records signed Stop and Resume events and Meta delivery error `131050`.
+After a Stop, template delivery requires a verified non-marketing category.
+Service replies continue through the normal delivery rules. The audit log records
+preference changes and refused sends by ID.

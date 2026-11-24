@@ -7,6 +7,7 @@ import {parseMetaDirectIdentity,assertMetaDirectEffectCurrent} from '../packages
 import {resolveMetaDirectMessage} from '../services/connector-worker/dist/services/connector-worker/src/meta-direct-identity.js';
 import {bindMetaPrimaryRouting} from '../services/connector-worker/dist/services/connector-worker/src/meta-routing.js';
 import {OutboxRepository} from '../services/connector-worker/dist/services/connector-worker/src/repository.js';
+import {recordWhatsAppMarketingRejection,whatsappMarketingOptedOut} from '../services/connector-worker/dist/services/connector-worker/src/whatsapp-marketing-preferences.js';
 import {reserveDirectNativeReply,admitDirectReplyIntent} from '../services/control-api/dist/direct-native-operations.js';
 import {queueOutboundParts} from '../services/control-api/dist/zammad-internal.controller.js';
 import {MetaThreadControlService} from '../services/control-api/dist/meta-thread-control.service.js';
@@ -188,6 +189,47 @@ export async function verifyMetaPrimaryDelivery({admin,db,pool,controller,reques
  if(failures.length)throw new AggregateError(failures,'Primary delivery failure union');
 
  const last=contexts.at(-1);
+ const route=await db.resolveMetaWebhookRoute(phoneNumberId);
+ assert.equal(route?.tenant_id,tenantId);
+ const phone=last.message.from;
+ const preference=(optedOut,seconds,accountId=wabaId)=>{
+  const marketingPreference={phone,bsuid:null,accountId,optedOut,observedAt:new Date(Date.UTC(2026,10,24,10,0,seconds)).toISOString()};
+  const payloadSha256=createHash('sha256').update(JSON.stringify(marketingPreference)).digest('hex');
+  return{eventType:'user_preferences',providerEventId:'preference:v1:'+payloadSha256,marketingPreference,
+   payload:{redacted:true,payload_sha256:payloadSha256},payloadSha256,routeKey:phoneNumberId,providerSessionKey:phoneNumberId,providerEngine:'CLOUD_API'};
+ };
+ const optedOut=c=>whatsappMarketingOptedOut(c,tenantId,connectionId,last.job.metaDirectRecipientSnapshot);
+ assert.equal(await worker(optedOut),false);
+ await assert.rejects(()=>db.acceptWebhookEvent(route,preference(true,0,'999999')),/Webhook route was not found/);
+ const stop=await db.acceptWebhookEvent(route,preference(true,1));
+ assert.equal(stop.duplicate,false);
+ assert.deepEqual(await db.acceptWebhookEvent(route,preference(true,1)),{id:stop.id,duplicate:true});
+ assert.equal(await worker(optedOut),true,'The signed phone preference is resolved for the verified direct recipient');
+ assert.equal(await db.withTenant(foreignTenant,optedOut),false);
+ await assert.rejects(()=>db.withTenant(foreignTenant,c=>c.query(
+  "UPDATE whatsapp_marketing_preferences SET tenant_id=$1 WHERE tenant_id=$2",[foreignTenant,tenantId])),{code:'42501'});
+ await assert.rejects(()=>db.withTenant(foreignTenant,c=>c.query(
+  "INSERT INTO whatsapp_marketing_preferences (tenant_id,subject_kind,subject,opted_out,observed_at) VALUES ($1,'PHONE',$2,true,$3)",
+  [tenantId,phone,'2026-11-24T10:00:00Z'])),{code:'42501'});
+ await db.acceptWebhookEvent(route,preference(false,1));
+ assert.equal(await worker(optedOut),true,'Stop wins an ambiguous same-second update');
+ const resume=await db.acceptWebhookEvent(route,preference(false,3));
+ assert.equal((await db.acceptWebhookEvent(route,preference(false,3))).duplicate,true);
+ await db.acceptWebhookEvent(route,preference(true,2));
+ assert.equal(await worker(optedOut),false,'An older Stop cannot roll back a confirmed Resume');
+ await worker(c=>recordWhatsAppMarketingRejection(c,tenantId,connectionId,last.job.metaDirectRecipientSnapshot,'2026-11-24T10:00:04.000Z',last.job.id));
+ assert.equal(await worker(optedOut),true);
+ await db.withTenant(tenantId,async c=>{
+  const accepted=(await c.query('SELECT status,payload FROM event_inbox WHERE id=$1',[stop.id])).rows[0];
+  assert.deepEqual(accepted,{status:'PROCESSED',payload:preference(true,1).payload});
+  const audit=(await c.query("SELECT target_id,new_value,request_id FROM audit_events WHERE request_id=ANY($1::text[]) AND action='whatsapp.marketing_preference_changed'",
+   [[stop.id,resume.id,last.job.id]])).rows;
+  assert.equal(audit.filter(row=>row.request_id===stop.id&&row.new_value.opted_out&&row.new_value.reason==='PREFERENCE_WEBHOOK').length,1);
+  assert.equal(audit.filter(row=>row.request_id===resume.id&&!row.new_value.opted_out).length,1);
+  assert.ok(audit.some(row=>row.request_id===last.job.id&&row.new_value.reason==='PROVIDER_131050'));
+  assert.ok(audit.every(row=>/^[a-f0-9-]{36}$/u.test(row.target_id)));
+  assert.ok(!JSON.stringify(audit).includes(phone),'Audit uses IDs and enumerated reasons only');
+ });
  const eligible=c=>c.query('SELECT app.meta_primary_delivery_eligible($1,$2,$3,$4,$5,$6) AS eligible',[connectionId,sessionId,phoneNumberId,wabaId,appId,runtime]).then(r=>r.rows[0].eligible);
  assert.equal(await worker(eligible),true);
  await rotate();

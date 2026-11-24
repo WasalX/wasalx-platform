@@ -960,9 +960,10 @@ export class MetaGroupsAdapter implements MessagingProviderAdapter {
         const code = metaErrorCode(response.status, parsed);
         const retryable = retryableStatus || code === "META_RATE_LIMITED" || code === "META_SERVER_ERROR";
         const providerError = objectValue(objectValue(parsed)?.error);
-        const concreteRejection = typeof providerError?.code === "number" && Number.isSafeInteger(providerError.code)
-          && providerError.code >= 0 && typeof providerError.message === "string"
-          && boundedString(providerError.message, 4096) !== undefined && !hasControlCharacters(providerError.message);
+        const concreteRejection = code === "META_MARKETING_OPTED_OUT"
+          || (typeof providerError?.code === "number" && Number.isSafeInteger(providerError.code)
+            && providerError.code >= 0 && typeof providerError.message === "string"
+            && boundedString(providerError.message, 4096) !== undefined && !hasControlCharacters(providerError.message));
         const rejectedOutcomeKnown = semantics !== "mutation" || (concreteRejection && !retryable);
         throw new ProviderError(
           safeMetaError(response.status, code, retryable, parsed),
@@ -1393,7 +1394,8 @@ function metaErrorCode(status: number, value: unknown) {
   if (graphCode === 131005) return "META_PERMISSION_REQUIRED";
   if (graphCode === 131062) return "META_UNSUPPORTED_MESSAGE";
   if (graphCode === 131009) return "META_INVALID_REQUEST";
-  if (graphCode === 131026 || graphCode === 131050 || graphCode === 131051 || graphCode === 131052 || graphCode === 131053) return "META_DELIVERY_REJECTED";
+  if (graphCode === 131050) return "META_MARKETING_OPTED_OUT";
+  if (graphCode === 131026 || graphCode === 131051 || graphCode === 131052 || graphCode === 131053) return "META_DELIVERY_REJECTED";
   if (status === 429 || graphCode === 4 || graphCode === 17 || graphCode === 32 || graphCode === 613 || graphCode === 130429 || graphCode === 131056) {
     return "META_RATE_LIMITED";
   }
@@ -1412,6 +1414,7 @@ function safeMetaError(status: number, code: string, retryable: boolean, value: 
   let message: string;
   if (code === "META_TEST_RECIPIENT_NOT_ALLOWED") message = "Meta rejected this recipient for the test number.";
   else if (code === "META_AUTHENTICATION_FAILED") message = "Meta credentials are invalid or expired.";
+  else if (code === "META_MARKETING_OPTED_OUT") message = "The contact has stopped WhatsApp marketing messages.";
   else if (code === "META_CUSTOMER_WINDOW_CLOSED") message = "The customer-service window is closed; send an approved template instead.";
   else if (code === "META_PERMISSION_REQUIRED") message = "This Meta number is not permitted to perform the requested action.";
   else if (code === "META_GROUPS_UNAVAILABLE") message = "The requested Meta action is unavailable for this number.";
