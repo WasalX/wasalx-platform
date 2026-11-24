@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import dnsPromises from "node:dns/promises";
 import https from "node:https";
+import timers from "node:timers/promises";
 import {syncBuiltinESMExports} from "node:module";
 import {MetaDirectEffectNotAttempted} from "../services/connector-worker/dist/packages/core/src/meta-direct-identity.js";
 import {executeBotAction,safeHttpsRequest} from "../services/connector-worker/dist/services/connector-worker/src/bot-action.js";
@@ -32,6 +33,72 @@ class InboundProcessor extends ProductionInboundProcessor {
   constructor(repository,...dependencies){super({quotedCommandCandidate:async()=>null,messageIsWithinAdmissionWindow:async()=>true,hasRunnableGroupBinding:async()=>false,renewWahaWorkerAssignment:async(_event,context)=>context,...repository},...dependencies)}
 }
 const wahaAssignment={providerBaseUrl:"http://waha-gows.internal:3000/",wahaWorkerId:"30000000-0000-4000-8000-000000000001",wahaAssignmentFencingToken:7,wahaAssignmentLeaseExpiresAt:"2026-08-09T23:59:59.000Z"};
+
+test("agent reply completes during a read timeout, with bounded signal backoff and inbound deduplication", async t => {
+  const chatId = "12025550120@c.us";
+  const inbound = { id: "inbound-link", messageId: `false_${chatId}_3EB0965B123D06E0B70741` };
+  const delivery = { id: "reply-1", tenantId: "tenant-a", connectionId: "c1", groupId: chatId,
+    botConversationId: "conversation-1", recipientType: "DIRECT", directOrigin: "HUMAN", ticketId: "42", articleId: "9",
+    text: "Synthetic reply", contentType: "text/plain", idempotencyKey: "reply-1", attempts: 1,
+    provider: "waha", ...wahaAssignment, sessionId: "s1", connectionSecretReference: "secret://connection" };
+  const completed = Promise.withResolvers(), firstRead = Promise.withResolvers();
+  const wakeups = [Promise.withResolvers(), Promise.withResolvers()];
+  const backoffs = [];
+  const timeouts = [];
+  let reads = 0, typing = 0, replies = 0, claimed = false;
+  t.mock.method(Math, "random", () => 0.5);
+  t.mock.method(timers, "setTimeout", delay => {
+    const release = Promise.withResolvers();
+    wakeups[backoffs.length].resolve(release.resolve);
+    backoffs.push(delay);
+    return release.promise;
+  });
+  t.mock.method(AbortSignal, "timeout", delay => {
+    const controller = new AbortController();
+    timeouts.push({ delay, controller });
+    return controller.signal;
+  });
+  t.mock.method(globalThis, "fetch", async (url, init) => {
+    if (url.pathname === "/api/sendText") return Response.json({ id: `sent-${++replies}` });
+    if (url.pathname === "/api/startTyping") {
+      typing++;
+      return new Response(null, { status: 501 });
+    }
+    assert.equal(url.pathname, "/api/sendSeen");
+    if (++reads === 1) return new Promise((_, reject) => {
+      init.signal.addEventListener("abort", () => reject(init.signal.reason), { once: true });
+      firstRead.resolve(timeouts.find(item => item.delay === 2_000).controller);
+    });
+    return new Response(null, { status: 429 });
+  });
+  const repository = {
+    claimBotActions: async () => [], claimDeliveries: async () => [delivery], beginSend: async () => true,
+    admitAgentReplySignal: async (_job, _lease, sourceId) => {
+      if (sourceId) return sourceId === inbound.id ? inbound : undefined;
+      if (claimed) return;
+      claimed = true;
+      return inbound;
+    },
+    complete: async () => completed.resolve(), claimStatuses: async () => [],
+    fail: async () => assert.fail("Signal must never fail delivery"),
+    outcomeUnknown: async () => assert.fail("Signal must never change delivery outcome"),
+  };
+  const processor = new DeliveryProcessor(repository, { resolve: async () => ({ apiKey: "synthetic" }) }, { metaGraphVersion: "v24.0" });
+  const drain = processor.drainTenant(delivery.tenantId);
+  const abortRead = await firstRead.promise;
+  await completed.promise;
+  assert.equal(replies, 1);
+  abortRead.abort();
+  (await wakeups[0].promise)();
+  (await wakeups[1].promise)();
+  await drain;
+  assert.deepEqual(backoffs, [1_000, 2_000]);
+  assert.equal(timeouts.length, 4);
+  assert(timeouts.every(item => item.delay === 2_000));
+  assert.deepEqual([reads, typing], [3, 1]);
+  await processor.drainTenant(delivery.tenantId);
+  assert.deepEqual([replies, reads, typing], [2, 3, 1]);
+});
 test("tenant drain jobs require a signed, scoped, matching tenant context",async()=>{const now=Math.floor(Date.now()/1000);const token=await signServiceJwt({iss:"wasalx-control",aud:"wasalx-connector-worker",sub:"scheduler",tenant_id:"tenant-a",instance_id:"scheduler-1",scope:"delivery:drain",iat:now,exp:now+120,jti:crypto.randomUUID()},secret);assert.equal((await verifyDrainJob({tenantId:"tenant-a",token},secret)).tenantId,"tenant-a");await assert.rejects(()=>verifyDrainJob({tenantId:"tenant-b",token},secret),ServiceAuthenticationError);const inboxToken=await signServiceJwt({iss:"wasalx-control",aud:"wasalx-connector-worker",sub:"scheduler",tenant_id:"tenant-a",instance_id:"scheduler-1",scope:"inbox:drain",iat:now,exp:now+120,jti:crypto.randomUUID()},secret);assert.equal((await verifyDrainJob({tenantId:"tenant-a",token:inboxToken},secret,"inbox:drain")).tenantId,"tenant-a");await assert.rejects(()=>verifyDrainJob({tenantId:"tenant-a",token:inboxToken},secret),ServiceAuthenticationError)});
 
 test("delivery completion and Zammad status are independent durable stages",async()=>{const delivery={id:"d1",tenantId:"tenant-a",connectionId:"c1",groupBindingId:"b1",groupId:"g1",ticketId:"42",articleId:"9",text:"Resolved",contentType:"text/plain",idempotencyKey:"idem-1",attempts:1,provider:"waha",...wahaAssignment,sessionId:"s1",connectionSecretReference:"secret://connection",zammadBaseUrl:"https://zammad.example",zammadSecretReference:"secret://zammad"};const status={id:"s1",deliveryId:"d1",tenantId:"tenant-a",ticketId:"42",state:"SENT",externalMessageId:"wamid.1",attempts:1,zammadBaseUrl:"https://zammad.example",zammadSecretReference:"secret://zammad"};const calls=[];const repository={claimBotActions:async()=>[],claimDeliveries:async()=>[delivery],beginSend:async()=>{calls.push("delivery-begin")},complete:async()=>{calls.push("delivery-complete")},fail:async()=>{},outcomeUnknown:async()=>{},claimStatuses:async()=>[status],completeStatus:async()=>{calls.push("status-complete")},retryStatus:async()=>{},failStatus:async()=>{}};const originalFetch=globalThis.fetch;globalThis.fetch=async(input)=>{const url=String(input);if(url.includes("sendText"))return new Response(JSON.stringify({id:"wamid.1"}),{status:200});if(url.includes("/api/v1/tickets/42"))return new Response(JSON.stringify({id:42}),{status:200});throw new Error(`unexpected ${url}`)};try{const processor=new DeliveryProcessor(repository,{resolve:async reference=>reference.endsWith("connection")?{apiKey:"key"}:{token:"token"}},{wahaBaseUrl:"https://waha.example",metaGraphVersion:"v24.0"});assert.deepEqual(await processor.drainTenant("tenant-a"),{actions:0,deliveries:1,statuses:1});assert.deepEqual(calls,["delivery-begin","delivery-complete","status-complete"])}finally{globalThis.fetch=originalFetch}});

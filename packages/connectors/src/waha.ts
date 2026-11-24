@@ -2,6 +2,7 @@ import { renderNumberedChoices } from "../../core/src/outbound-text.js";
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import { recordStructuredLog, safeRequestId } from "@wasalx/observability";
+import type { AgentReplySignal, AgentReplySignalInput } from "./types.js";
 import type { DirectProviderMessage, MessagingProviderAdapter, ProviderGroup, ProviderMessage, ProviderMessageMutation, ProviderReceipt, SendMessage } from "./types.js";
 import { ProviderError } from "./types.js";
 import { parseWahaTestRecipientAllowlist, wahaMessageRecipient, wahaTestRecipientAllowed, type WahaTestRecipientAllowlist } from "../../core/src/waha-test-recipient-scope.js";
@@ -105,7 +106,7 @@ export class WahaAdapter implements MessagingProviderAdapter {
         ...init,
         headers: { "x-api-key": this.config.apiKey, "content-type": "application/json", ...init.headers },
         redirect: "error",
-        signal: controller.signal,
+        signal: init.signal ? AbortSignal.any([init.signal, controller.signal]) : controller.signal,
       });
       if (!response.ok) {
         if(recognizeError){const body=await readBoundedResponse(response,true);const recognized=recognizeError(response.status,body);if(recognized)throw recognized}
@@ -625,6 +626,29 @@ export class WahaAdapter implements MessagingProviderAdapter {
         groupReceipt: true,
       },
     }];
+  }
+
+  agentReplySignals(input: AgentReplySignalInput): AgentReplySignal[] {
+    const { connectionId, groupId: chatId, inboundMessageId } = input;
+    if (!directChatId(chatId) || !FULL_MESSAGE_ID.test(inboundMessageId) || !inboundMessageId.startsWith("false_") ||
+        wahaMessageRecipient(inboundMessageId) !== wahaMessageRecipient(`false_${chatId}_scope`)) {
+      throw new ProviderError("WAHA inbound message does not match the reply chat", false, "WAHA_INVALID_REQUEST");
+    }
+    assertWahaTestOutboundAllowed({ groupId: chatId, replyToMessageId: inboundMessageId }, this.testRecipients);
+    const session = this.session(connectionId);
+    const post = async (path: string, body: object, signal: AbortSignal) => {
+      try {
+        await this.request(path, { method: "POST", body: JSON.stringify(body), signal });
+        return "sent" as const;
+      } catch (error) {
+        if (error instanceof ProviderError && (error.status === 405 || error.status === 501)) return "unsupported" as const;
+        throw error;
+      }
+    };
+    return [
+      { kind: "read", send: signal => post("/api/sendSeen", { session, chatId, messageIds: [inboundMessageId] }, signal) },
+      { kind: "typing", send: signal => post("/api/startTyping", { session, chatId }, signal) },
+    ];
   }
 
   async send(input: SendMessage) {

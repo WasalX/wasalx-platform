@@ -1,5 +1,14 @@
 # WasalX platform
 
+## Direct ticket replies
+
+When delivery starts for an agent's WhatsApp reply, the connector independently
+requests a read receipt and a typing indicator for the latest inbound message
+linked to that ticket when the reply was queued. Each inbound message is
+claimed once. Unsupported capabilities and exhausted signal retries are
+recorded separately from reply delivery. Meta combines both signals in one
+request, while WAHA uses two requests and targets the specific inbound ID.
+
 ## Bot delivery retry limits
 
 Set these optional variables in the service environment. For the Compose stack,

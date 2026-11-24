@@ -22,3 +22,23 @@ test('actual WAHA adapter sends group and direct text through the simulator HTTP
   assert.equal(receipt.receivedSends,2);
  }finally{await new Promise(resolve=>server.close(resolve));}
 });
+
+test('WAHA read and typing reuse the simulated direct provider session',async()=>{
+ const apiKey='synthetic-adapter-test-key',chatId='12025550120@c.us';
+ const server=createWahaSimulation({apiKey,session:'adapter-test',groupId:'123@g.us',phone:'12025550102',
+  version:'2026.7.2',directChatIds:[chatId],now:()=>1_760_000_000_000});
+ await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+ try{
+  const baseUrl='http://127.0.0.1:'+server.address().port;
+  const adapter=new WahaAdapter({baseUrl,apiKey,sessionFor:()=> 'adapter-test'});
+  const inboundMessageId=`false_${chatId}_3EB0965B123D06E0B70741`;
+  const calls=adapter.agentReplySignals({connectionId:'synthetic-connection',groupId:chatId,inboundMessageId});
+  assert.deepEqual(await Promise.all(calls.map(call=>call.send(new AbortController().signal))),['sent','sent']);
+  for(const body of [{session:'adapter-test',chatId},{session:'adapter-test',chatId,messageIds:['false_12025550121@c.us_OTHER']}]){
+   const response=await fetch(baseUrl+'/api/sendSeen',{method:'POST',headers:{'x-api-key':apiKey},body:JSON.stringify(body)});
+   assert.equal(response.status,400);
+  }
+  const receipts=await(await fetch(baseUrl+'/__simulation/receipts',{headers:{'x-api-key':apiKey}})).json();
+  assert.equal(receipts.receivedSends,0);
+ }finally{await new Promise(resolve=>server.close(resolve));}
+});
