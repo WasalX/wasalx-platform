@@ -662,6 +662,7 @@ export const englishTenantMessages = {
   "tenant.accessibility.scrollTable": "Scrollable data table",
   "tenant.accessibility.scrollTableCue": "Scroll sideways to see more columns",
   "tenant.loading.workspace": "Loading workspace…",
+  "tenant.loading.section": "Loading this section…",
   "tenant.boundary.error.heading": "Workspace temporarily unavailable",
   "tenant.accessDenied.heading": "Workspace access unavailable",
   "tenant.accessDenied.description": "Your account cannot access this workspace. Membership may have been suspended or removed. Contact a workspace administrator, or sign in with an account that has access.",
