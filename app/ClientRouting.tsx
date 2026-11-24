@@ -725,10 +725,12 @@ export function ClientRouting({
               catalog={catalog}
               mutationHeaders={mutationHeaders}
             />
-            <details className="routing-raw">
-              <summary>{t("routing.detail.raw")}</summary>
-              <pre>{JSON.stringify(definition, null, 2)}</pre>
-            </details>
+            {canWrite ? (
+              <details className="routing-raw">
+                <summary>{t("routing.detail.raw")}</summary>
+                <pre>{JSON.stringify(definition, null, 2)}</pre>
+              </details>
+            ) : null}
           </section>
         ) : error ? null : (
           <section className="panel">
