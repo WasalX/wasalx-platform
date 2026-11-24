@@ -44,6 +44,7 @@ import {
 } from "../packages/core/src/bot-flow";
 import { operatorFailureMessage, operatorLocalFailure, createLatestRequestFence, operatorResponseFailure, type CodedOperatorError } from "../lib/operator-ui";
 import { useI18n } from "./I18nProvider";
+import { MarketingIcon } from "./MarketingIcon";
 import { InlineConfirmation, ModalDialog } from "./ModalDialog";
 import { useVisibleRefresh } from "./use-visible-refresh";
 import { TicketEventWorkflows, isTicketEventFlowRow } from "./TicketEventWorkflows";
@@ -1474,7 +1475,7 @@ function WorkflowComparison({
     {comparison.settings.length || changedNodes.length ? <ol className="bot-node-list">
       {comparison.settings.map((setting, index) => <li key={setting.field}>
         <span>{formatNumber(index + 1, locale)}</span>
-        <div><b>{t(`bot.comparison.setting.${setting.field}`)}</b><p><bdi>{comparisonSettingValue(setting.field, setting.before, beforeDefinition, locale, t)}</bdi> <span className="reading-arrow" aria-hidden="true">→</span> <bdi>{comparisonSettingValue(setting.field, setting.after, afterDefinition, locale, t)}</bdi></p></div>
+        <div><b>{t(`bot.comparison.setting.${setting.field}`)}</b><p><bdi>{comparisonSettingValue(setting.field, setting.before, beforeDefinition, locale, t)}</bdi> <span className="reading-arrow" aria-hidden="true"><MarketingIcon name="arrow" /></span> <bdi>{comparisonSettingValue(setting.field, setting.after, afterDefinition, locale, t)}</bdi></p></div>
       </li>)}
       {changedNodes.map((change, index) => {
         const node = change.after ?? change.before!;
@@ -1484,7 +1485,7 @@ function WorkflowComparison({
           <span>{formatNumber(comparison.settings.length + index + 1, locale)}</span>
           <div>
             <b>{t(`bot.comparison.${change.kind}`)} · {nodeTitle(node.type, t)}</b>
-            <p>{change.kind === "added" ? <bdi>{after}</bdi> : change.kind === "removed" ? <bdi>{before}</bdi> : <><bdi>{before}</bdi> <span className="reading-arrow" aria-hidden="true">→</span> <bdi>{after}</bdi></>}</p>
+            <p>{change.kind === "added" ? <bdi>{after}</bdi> : change.kind === "removed" ? <bdi>{before}</bdi> : <><bdi>{before}</bdi> <span className="reading-arrow" aria-hidden="true"><MarketingIcon name="arrow" /></span> <bdi>{after}</bdi></>}</p>
           </div>
         </li>;
       })}
@@ -1931,7 +1932,7 @@ function Conversations({
           : eventPage.items.length ? <ol className="bot-node-list">
               {[...eventPage.items].reverse().map((event, index) => <li key={event.id}>
                 <span>{formatNumber(index + 1, locale)}</span>
-                <div><b>{workflowEventLabel(event.kind, t)}</b><p>{workflowStepLabel(event.from, executionDefinition, "start", locale, t)} <span className="reading-arrow" aria-hidden="true">→</span> {workflowStepLabel(event.to, executionDefinition, "end", locale, t)} · {formatTime(event.at, locale, t)}</p></div>
+                <div><b>{workflowEventLabel(event.kind, t)}</b><p>{workflowStepLabel(event.from, executionDefinition, "start", locale, t)} <span className="reading-arrow" aria-hidden="true"><MarketingIcon name="arrow" /></span> {workflowStepLabel(event.to, executionDefinition, "end", locale, t)} · {formatTime(event.at, locale, t)}</p></div>
               </li>)}
             </ol>
           : <EmptyState title={t("bot.conversations.noTimeline")} body={t("bot.conversations.noTimelineHelp")} />}
