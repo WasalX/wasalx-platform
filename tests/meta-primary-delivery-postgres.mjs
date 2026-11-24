@@ -226,10 +226,10 @@ export async function verifyMetaPrimaryDelivery({admin,db,pool,controller,reques
   return withFixtureTenant(admin,tenantId,async()=>{
    const inserted=await admin.query(`INSERT INTO delivery_outbox
     (id,tenant_id,connection_id,bot_conversation_id,external_chat_id,zammad_ticket_id,
-      message_body,content_type,idempotency_key,state,direct_origin,attempts,lease_id,lease_expires_at,external_message_id)
+      message_body,content_type,idempotency_key,state,direct_origin,attempts,lease_id,lease_expires_at,external_message_id,meta_routing_source_event_id)
     SELECT $1::uuid,tenant_id,connection_id,bot_conversation_id,external_chat_id,zammad_ticket_id,
       'Synthetic template','text/plain',$1::text,$2,direct_origin,1,$3::uuid,
-      CASE WHEN $3::uuid IS NOT NULL THEN now()+interval '10 minutes' END,$4
+      CASE WHEN $3::uuid IS NOT NULL THEN now()+interval '10 minutes' END,$4,meta_routing_source_event_id
     FROM delivery_outbox WHERE tenant_id=$5 AND id=$6`,[deliveryId,state,lease,externalId,tenantId,context.job.id]);
    assert.equal(inserted.rowCount,1);
    await admin.query("INSERT INTO delivery_attempts(tenant_id,delivery_id,attempt_number,state,started_at) VALUES($1,$2,1,$3,$4)",
