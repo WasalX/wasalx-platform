@@ -13,7 +13,9 @@ import { type ConnectionDetailRow, isDuplicateIdentityRejection, RelativeTime, e
 
 const MetaSignup = lazy(async () => ({ default: (await import("./MetaSignup")).MetaSignup }));
 const MetaNumberRelease = lazy(async () => ({ default: (await import("./MetaNumberRelease")).MetaNumberRelease }));
-const MetaTemplatePreparation = lazy(async () => ({ default: (await import("./MetaTemplatePreparation")).MetaTemplatePreparation }));
+// Once the Meta section code is cached its slot no longer suspends, so the number-release slot must announce instead (#325).
+let metaSectionLoaded = false;
+const MetaTemplatePreparation = lazy(async () => { const { MetaTemplatePreparation: loaded } = await import("./MetaTemplatePreparation"); metaSectionLoaded = true; return { default: loaded }; });
 const MetaLegacyMigration = lazy(async () => ({ default: (await import("./MetaLegacyMigration")).MetaLegacyMigration }));
 const MetaCoexistence = lazy(async () => ({ default: (await import("./MetaCoexistence")).MetaCoexistence }));
 const MetaBillingDiagnostics = lazy(async () => ({ default: (await import("./MetaBillingDiagnostics")).MetaBillingDiagnostics }));
@@ -1010,7 +1012,7 @@ export function ConnectionDetail({
               </div>
             </section>
 
-            {detail.provider === "META" && state === "REVOKED" && canConfigure && !sessionExpired ? <Suspense fallback={<SectionLoading quiet />}><MetaNumberRelease
+            {detail.provider === "META" && state === "REVOKED" && canConfigure && !sessionExpired ? <Suspense fallback={<SectionLoading quiet={!metaSectionLoaded} />}><MetaNumberRelease
               tenantId={tenantId} actorId={actorId} connectionId={id} connectionName={String(detail.name ?? "")} mutationHeaders={mutationHeaders} busyChanged={setMetaNumberReleasePending}
             /></Suspense> : null}
 
