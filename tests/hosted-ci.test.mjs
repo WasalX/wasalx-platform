@@ -10,7 +10,7 @@ import { parse } from "yaml";
 import { collectFile, collectionFiles, inventory, isTestFile, shardFiles } from "../scripts/hosted-ci.mjs";
 import { selectUnitFiles } from "../scripts/affected-unit-tests.mjs";
 import { unitAllowlist, unitFiles } from "../scripts/test-unit.mjs";
-import reportTimings, { validateQuarantine } from "../scripts/hosted-ci-timing-reporter.mjs";
+import { reportTimingsWithQuarantine, validateQuarantine } from "../scripts/hosted-ci-timing-reporter.mjs";
 import { addonSkips, skipPattern } from "../scripts/hosted-ci-policy.mjs";
 import { generateBaseline } from "../scripts/generate-hosted-ci-baseline.mjs";
 import baseline from "../scripts/hosted-ci-baseline.mjs";
@@ -18,6 +18,7 @@ import { parsePostgresShardArgs, postgresScenarioGroups, verifyPostgresReports }
 
 const repository = fileURLToPath(new URL("../", import.meta.url));
 const read = file => readFile(join(repository, file), "utf8");
+const cosignAction = "./.github/actions/cosign";
 const commands = text => text.split(/\n|&&|;/u).map(line => line.trim()).filter(line => line && !line.startsWith("#"));
 const words = text => Array.from(text.matchAll(/"([^"]*)"|'([^']*)'|([^\s"'()]+)/gu),
   ([, doubleQuoted, singleQuoted, bare]) => doubleQuoted ?? singleQuoted ?? bare);
@@ -46,12 +47,27 @@ test("test quarantine expires at midnight UTC and annotates failures only", asyn
   assert.throws(() => validateQuarantine([{ ...known, expiresOn: "2030-02-30" }], "2030-01-01"), /valid UTC expiry/u);
   assert.throws(() => validateQuarantine([{ ...known, owner: "" }], "2030-01-01"), /requires a file, test name and owner/u);
   const data = { file: join(process.cwd(), file), name: known.name };
-  const reports = await Array.fromAsync(reportTimings([
+  const reports = await Array.fromAsync(reportTimingsWithQuarantine([
     { type: "test:pass", data },
     { type: "test:fail", data: { ...data, name: "other failure" } },
     { type: "test:fail", data },
   ], entries));
   assert.deepEqual(reports, ["KNOWN TEST FAILURE " + JSON.stringify(known) + "\n"]);
+});
+
+test("hosted CLI reporters preserve an unquarantined test failure", () => {
+  const env = { ...process.env };
+  delete env.NODE_TEST_CONTEXT;
+  const { error, status, stdout, stderr } = spawnSync(process.execPath, [
+    "--test", "--test-reporter=spec", "--test-reporter=./scripts/hosted-ci-timing-reporter.mjs",
+    "--test-reporter-destination=stdout", "--test-reporter-destination=stdout",
+    "tests/fixtures/hosted-ci-reporter-failure.mjs",
+  ], { cwd: repository, env, encoding: "utf8", timeout: 10_000, windowsHide: true });
+  if (error) throw error;
+  assert.doesNotMatch(stderr, /entries\.find is not a function/u);
+  assert.equal(status, 1, stderr);
+  assert.match(stdout, /Error: intentional reporter fixture failure/u);
+  assert.match(stdout, /^UNIT_TIMING /mu);
 });
 
 test("runner ownership recognizes a bare sudo interpreter", () => {
@@ -236,7 +252,10 @@ test("nightly install is report-only, read-only and fails open on PR diff errors
   assert.deepEqual(job.permissions, { contents: "read", actions: "read" });
   assert.equal(job["runs-on"], "ubuntu-24.04");
   const actions = job.steps.filter(step => step.uses);
-  assert(actions.every(step => /@[0-9a-f]{40}$/u.test(step.uses)));
+  const { runs } = parse(await read(cosignAction + "/action.yml"));
+  const remoteActions = actions.flatMap(step => step.uses === cosignAction
+    ? runs.steps.filter(nested => nested.uses) : [step]);
+  assert(remoteActions.every(step => /@[0-9a-f]{40}$/u.test(step.uses)));
   assert.equal(actions.find(step => step.uses.startsWith("actions/checkout@")).with["persist-credentials"], false);
   assert(!JSON.stringify(job).includes("secrets."));
   const changeSelection = job.steps.find(step => step.id === "changes");
@@ -551,7 +570,7 @@ test("CI gate requires each event's jobs and rejects unplanned skips, failures, 
   assert.match(await readFile(summary, "utf8"), /Event push ran both full unit shards/u);
 });
 
-test("CI seeds pnpm caches on main and builds cleanly in the merge queue", async () => {
+test("CI seeds pnpm caches on main and builds cleanly in the merge queue", async t => {
   const { jobs } = parse(await read(".github/workflows/ci.yml"));
   const actionPath = "./.github/actions/ci-pnpm";
   const action = parse(await read(".github/actions/ci-pnpm/action.yml"));
@@ -563,6 +582,31 @@ test("CI seeds pnpm caches on main and builds cleanly in the merge queue", async
   const store = action.runs.steps.find(step => step.id === "store");
   assert(action.runs.steps.indexOf(modules) < action.runs.steps.indexOf(store));
   assert(store?.if.includes("steps.modules.outputs.cache-hit != 'true'"));
+  assert.equal(modules.with.key, "${{ steps.pnpm.outputs.dependency-key }}");
+  assert(!Object.hasOwn(modules.with, "restore-keys"), "Workspace modules require an exact dependency key");
+
+  const keyStep = action.runs.steps.find(step => step.id === "pnpm");
+  assert.deepEqual(keyStep.env, {
+    MODULES_HASH: "${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', '**/package.json', 'patches/**', '.npmrc') }}",
+    RUNNER_PLATFORM: "${{ runner.os }}-${{ runner.arch }}",
+  });
+  const directory = await mkdtemp(join(tmpdir(), "wasalx-cache-key-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const keyScript = 'corepack() { :; }\npnpm() { echo store; }\nnode() { echo "$NODE_VERSION"; }\n' + keyStep.run;
+  for (const [index, platform, version, hash] of [
+    [1, "Linux-X64", "v24.13.1", "hash1"],
+    [2, "Linux-ARM64", "v24.13.1", "hash1"],
+    [3, "Linux-X64", "v24.13.2", "hash1"],
+    [4, "Linux-X64", "v24.13.1", "hash2"],
+  ]) {
+    const output = join(directory, String(index)).replaceAll("\\", "/");
+    const result = runWorkflowScript(keyScript, {
+      GITHUB_OUTPUT: output, MODULES_HASH: hash, RUNNER_PLATFORM: platform, NODE_VERSION: version,
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal((await readFile(output, "utf8")).trim(), "store=store\n" +
+      `dependency-key=pnpm-modules-v1-${platform}-${version}-${hash}`);
+  }
 
   const mainOnly = "github.event_name == 'push' && github.ref == 'refs/heads/main'";
   const saveSteps = action.runs.steps.filter(step => step.uses?.startsWith("actions/cache/save@"));
@@ -582,13 +626,25 @@ test("CI seeds pnpm caches on main and builds cleanly in the merge queue", async
   assert(restore?.if.includes("inputs.force-build != 'true'"));
   assert(restore.if.includes("github.event_name == 'merge_group'"));
   assert(restore.if.includes("github.event_name == 'pull_request'"));
-  assert.match(restore.with["restore-keys"], /github\.event_name == 'pull_request'/u);
+  assert.equal(restore.with.key, "${{ steps.build-key.outputs.key }}");
+  assert.equal(restore.with["restore-keys"], "${{ github.event_name == 'pull_request' && steps.build-key.outputs.prefix || '' }}");
+  assert.equal(action.runs.steps.find(step => step.id === "build-key").env.BUILD_CONFIG,
+    "${{ hashFiles('tsconfig.json', 'services/*/tsconfig*.json', 'packages/*/tsconfig*.json', 'scripts/build-services.mjs', '.gitattributes') }}");
+  assert.equal(action.runs.steps.find(step => step.name === "Report service build cache hit").if,
+    "always() && inputs.task == 'build'");
 
   const commands = name => 'pnpm() { printf "%s\\n" "$*"; }\n' + action.runs.steps.find(step => step.name === name).run;
-  for (const [hit, flags] of [["true", "--offline"], ["", "--fetch-retries=2"]]) {
-    const result = runWorkflowScript(commands("Install workspace dependencies"), { MODULES_HIT: hit });
+  const install = 'rm() { echo "cleanup $*"; }\n' + commands("Install workspace dependencies");
+  for (const [hit, lines] of [
+    ["true", ["install --frozen-lockfile --offline"]],
+    ["false", ["cleanup -rf -- node_modules services/*/node_modules packages/*/node_modules",
+      "install --frozen-lockfile --fetch-retries=2"]],
+    ["", ["cleanup -rf -- node_modules services/*/node_modules packages/*/node_modules",
+      "install --frozen-lockfile --fetch-retries=2"]],
+  ]) {
+    const result = runWorkflowScript("set -f\n" + install, { MODULES_HIT: hit });
     assert.equal(result.status, 0, result.stderr);
-    assert.equal(result.stdout.trim(), `install --frozen-lockfile ${flags}`);
+    assert.deepEqual(result.stdout.trim().split(/\r?\n/u), lines);
   }
   for (const [force, exact, matched, suffix] of [
     ["true", "", "", " --force"],
@@ -602,6 +658,39 @@ test("CI seeds pnpm caches on main and builds cleanly in the merge queue", async
     assert.equal(result.status, 0, result.stderr);
     assert.equal(result.stdout.trim(), `run build:services${suffix}`);
   }
+});
+
+test("signing, promotion and nightly workflows use the same Cosign pin", async () => {
+  const pinPath = "scripts/release/cosign-pin.json";
+  const pin = JSON.parse(await read(pinPath));
+  assert.match(pin.version, /^v\d+\.\d+\.\d+$/u);
+  assert.match(pin.linuxAmd64Sha256, /^[0-9a-f]{64}$/u);
+
+  const installJobs = {
+    "branch-image": ["publish"],
+    release: ["stg", "prod"],
+    "nightly-install": ["nightly-install"],
+    "zammad-compatibility": [],
+  };
+  for (const [workflow, expectedJobs] of Object.entries(installJobs)) {
+    const { jobs } = parse(await read(`.github/workflows/${workflow}.yml`));
+    for (const [job, { steps = [] }] of Object.entries(jobs)) {
+      const installs = steps.filter(step => step.uses === cosignAction || step.uses?.startsWith("sigstore/cosign-installer@"));
+      assert.deepEqual(installs.map(step => step.uses), expectedJobs.includes(job) ? [cosignAction] : [], `${workflow}/${job}`);
+    }
+  }
+
+  const { runs } = parse(await read(`${cosignAction}/action.yml`));
+  const [version, install, verify] = runs.steps;
+  assert.match(version.run, /jq -er '.version' scripts\/release\/cosign-pin\.json/u);
+  assert.equal(install.with["cosign-release"], "${{ steps.pin.outputs.version }}");
+  assert.match(install.uses, /^sigstore\/cosign-installer@[0-9a-f]{40}$/u);
+  for (const script of [verify.run, await read("scripts/release/promote-tag.sh")]) {
+    assert.match(script, /jq -er '.linuxAmd64Sha256' scripts\/release\/cosign-pin\.json/u);
+    assert.match(script, /sha256sum --check --strict/u);
+  }
+  assert.match(await read("scripts/dev-install/pull-verify.mjs"),
+    /assert\.equal\(hash\.digest\("hex"\), cosignPin\.linuxAmd64Sha256/u);
 });
 
 test("PR image results are advisory while the merge queue requires the full image matrix", async t => {

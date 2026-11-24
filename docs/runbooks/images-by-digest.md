@@ -65,8 +65,9 @@ prove any of them. Preserve the previous verified manifest/config pair for rollb
 
 ## Signature and provenance
 
-Cosign is pinned to v3.0.6 and its Linux AMD64 SHA256 in the workflow. The
-installer requires this exact certificate identity for hosted admission.
+The signing workflows, release promotion and DEV pull verifier use the same
+[Cosign version and Linux amd64 SHA-256](../../scripts/release/cosign-pin.json).
+The installer requires this exact certificate identity for hosted admission.
 
 `https://github.com/WasalX/wasalx-platform/.github/workflows/branch-image.yml@refs/heads/main`
 
@@ -88,9 +89,10 @@ preimage and rollback tags. Admission requires that existing preimage; capturing
 it after overwriting mutable image references loses the original tag custody.
 The external preload/transfer procedure remains separately controlled.
 
-On the trusted networked host, use cosign v3.1.4 to verify each exact inventory
-`pullReference` with the identity and issuer above. Beside `images-manifest.json`,
-retain one directory per image ID with the raw registry `manifest.json` and the
+On the trusted networked host, check the pinned Cosign binary's SHA-256 before
+using it to verify each exact inventory `pullReference` with the identity and
+issuer above. Beside `images-manifest.json`, retain one directory per image ID with
+the raw registry `manifest.json` and the
 publisher's OCI-referrer Sigstore v0.3 bundle blobs as `signature.sigstore.json`
 and `provenance.sigstore.json`. Their predicate types are respectively
 `https://sigstore.dev/cosign/sign/v1` and `https://slsa.dev/provenance/v0.2`.
