@@ -10,7 +10,7 @@ original_post = Wasalx::Client.method(:post)
 original_get = Wasalx::Client.method(:get)
 portal_source = { 'issuer' => 'https://identity.example.test', 'audience' => 'wasalx-api' }
 members = {}
-denied = false
+membership_denied = false
 privileged_window = 15
 privileged_recheck_hook = nil
 admissions = []
@@ -41,7 +41,7 @@ begin
     case path
     when '/internal/v1/zammad/membership/check'
       row = WasalxMembership.find_by(portal_user_id: input[:user_id])
-      allowed = !denied && row && row.reload.member_state == 'ACTIVE' &&
+      allowed = !membership_denied && row && row.reload.member_state == 'ACTIVE' &&
         row.revision == input[:revision] && row.user_id.to_s == input[:native_user_id].to_s
       privileged_recheck_hook&.call(input)
       { 'allowed' => !!allowed, 'portal_source' => portal_source, 'privileged_reauth_minutes' => privileged_window, 'authentication_policy' => row && {
@@ -197,7 +197,7 @@ begin
     [http.response.status, parsed]
   end
   version = -> { ticket.reload.updated_at.utc.iso8601(6) }
-  note = ->(id = SecureRandom.uuid, text = 'Internal diagnostic') { {
+  new_note_draft = ->(id = SecureRandom.uuid, text = 'Internal diagnostic') { {
     'ticket_id' => ticket.id.to_s, 'operation_id' => id, 'expected_updated_at' => version.call,
     'body' => text, 'internal' => true } }
 
@@ -207,7 +207,7 @@ begin
     page['items'].none? { |row| row['id'] == hidden.id.to_s }, 'Native ticket list visibility differs')
   assert.call(call.call('SHOW', { ticket_id: hidden.id.to_s }).first == 403, 'Foreign team ticket was readable')
   assert.call(call.call('SHOW', { ticket_id: ticket.id.to_s }, members['reader']).last['can_update'] == false, 'Read-only native grant gained writes')
-  assert.call(call.call('REPLY', note.call, members['reader']).first == 403, 'Read-only native actor created article')
+  assert.call(call.call('REPLY', new_note_draft.call, members['reader']).first == 403, 'Read-only native actor created article')
   assert.call(call.call('SHOW', { ticket_id: plain.id.to_s }).last['can_reply'] == false, 'Unsupported channel became email')
   end
 
@@ -247,12 +247,12 @@ begin
     source_mapping_error = Wasalx::Client::PermanentRequestFailed.new('Synthetic control denial', http_status: 403)
     assert.call(call.call('ARTICLES', { ticket_id: ticket.id.to_s }).first != 200, 'Control source denial was swallowed as an outage')
     source_mapping_error = Wasalx::Client::TemporaryRequestFailed.new('Synthetic mapping-only outage')
-    source_before_return = -> { denied = true }
+    source_before_return = -> { membership_denied = true }
     status, rejected_page = call.call('ARTICLES', { ticket_id: ticket.id.to_s })
     assert.call(status != 200 && !JSON.generate(rejected_page).include?(original_article.body),
       'Mapping outage bypassed current membership proof or exposed denied article content')
   ensure
-    denied = false; source_mapping_error = nil; source_mapping_truncated = false; source_before_return = nil
+    membership_denied = false; source_mapping_error = nil; source_mapping_truncated = false; source_before_return = nil
   end
   file = original_article.attachments.first
   assert.call(rows['items'].find { |row| row['id'] == original_article.id.to_s }['attachments'].first['size'] == 29,
@@ -285,7 +285,7 @@ begin
   end
 
   check.call('native-receipt-replay-conflict-and-terminal-cancellation') do
-  operation = note.call
+  operation = new_note_draft.call
   before = Ticket::Article.where(ticket_id: ticket.id).count
   status, result = call.call('REPLY', operation)
   assert.call(status == 200 && result['state'] == 'APPLIED', "Native internal note failed (#{status})")
@@ -293,7 +293,7 @@ begin
   assert.call(call.call('REPLY', operation).last == result && Ticket::Article.where(ticket_id: ticket.id).count == before + 1, 'Reply replay duplicated article')
   assert.call(call.call('REPLY', operation.merge('body' => 'Changed replay')).first == 409, 'Changed payload reused receipt')
   assert.call(call.call('RECEIPT', { ticket_id: ticket.id.to_s, operation_id: operation['operation_id'] }).last == result, 'Lost response did not reconcile')
-  late = note.call
+  late = new_note_draft.call
   assert.call(call.call('RECEIPT', { ticket_id: ticket.id.to_s, operation_id: late['operation_id'], action: 'LOOKUP' }).last['state'] == 'UNKNOWN', 'Passive lookup claimed no effect')
   cancelled = call.call('RECEIPT', { ticket_id: ticket.id.to_s, operation_id: late['operation_id'].upcase, action: 'CANCEL_IF_UNADMITTED' }).last
   assert.call(cancelled['state'] == 'NOT_APPLIED' && cancelled['terminal'] == true, 'Explicit cancellation lacks terminal outcome')
@@ -301,7 +301,7 @@ begin
   end
 
   check.call('native-public-article-callback-and-single-delivery-admission') do
-  public_input = note.call.merge('internal' => false, 'body' => 'Public diagnostic')
+  public_input = new_note_draft.call.merge('internal' => false, 'body' => 'Public diagnostic')
   before_jobs = Delayed::Job.pluck(:id)
   status, result = call.call('REPLY', public_input)
   assert.call(status == 200, "Native public reply failed (#{status})")
@@ -316,7 +316,7 @@ begin
   end
 
   check.call('postgres-concurrent-replay-and-stale-version-fence') do
-  concurrent_input = note.call
+  concurrent_input = new_note_draft.call
   results = 2.times.map { Thread.new { ActiveRecord::Base.connection_pool.with_connection { call.call('REPLY', concurrent_input) } } }.map(&:value)
   assert.call(results.all? { |row| row.first == 200 } && results.map(&:last).uniq.length == 1, 'Concurrent equal-key requests diverged')
   assert.call(WasalxTicketOperation.where(operation_id: concurrent_input['operation_id']).count == 1, 'Concurrent requests duplicated receipt')
@@ -879,24 +879,24 @@ begin
       # Historical explicit control link may name an existing note on an unbound native ticket.
       explicit = add_case.call
       target = make_ticket.call(group, 'explicit-old-link', false)
-      note = UserInfo.with_user_id(actor.id) do
+      historical_article = UserInfo.with_user_id(actor.id) do
         Transaction.execute do
           Ticket::Article.create!(ticket: target, sender: customer_sender, type: note_type, internal: false,
             content_type: 'text/plain', body: 'Synthetic historical group note', created_by_id: actor.id, updated_by_id: actor.id)
         end
       end
-      links[explicit[:message_id]] << { 'ticket_id' => target.id.to_s, 'article_id' => note.id.to_s }
+      links[explicit[:message_id]] << { 'ticket_id' => target.id.to_s, 'article_id' => historical_article.id.to_s }
       explicit[:ticket_number] = target.number.to_s
-      denied = false
+      read_only_denied = false
       begin
         Wasalx::GroupWorkspace.new(actor: members['reader'].user.reload).link_ticket(**explicit.slice(:group_id, :message_id, :request_token, :ticket_number))
       rescue Exceptions::Forbidden
-        denied = true
+        read_only_denied = true
       end
-      assert.call(denied && target.reload.wasalx_connection_id.blank? && !WasalxTicketOperation.exists?(operation_id: explicit[:request_token]), 'Read-only historical LINK mutated binding or receipt')
+      assert.call(read_only_denied && target.reload.wasalx_connection_id.blank? && !WasalxTicketOperation.exists?(operation_id: explicit[:request_token]), 'Read-only historical LINK mutated binding or receipt')
       before = [Ticket::Article.count, remote_calls.length]
       result = submit.call('GROUP_LINK', explicit)
-      assert.call(result[:article_id] == note.id.to_s && target.reload.wasalx_connection_id == connection_uuid &&
+      assert.call(result[:article_id] == historical_article.id.to_s && target.reload.wasalx_connection_id == connection_uuid &&
         before == [Ticket::Article.count, remote_calls.length], 'Historical LINK failed to bind exact existing article without extra effects')
 
       # Different source locks may still race on one customer login. Real uniqueness and
@@ -965,9 +965,13 @@ begin
       http.host!('localhost')
       http.post(Wasalx::PortalDelegation::UPLOAD_PATH, params: content,
         headers: { 'Authorization' => "Token token=#{runtime.token}", 'Content-Type' => 'application/octet-stream',
-          'Content-Length' => content.bytesize.to_s, 'X-Wasalx-Upload-Envelope' => Base64.urlsafe_encode64(body, padding: false),
+          'Accept' => 'application/json', 'Content-Length' => content.bytesize.to_s,
+          'X-Wasalx-Upload-Envelope' => Base64.urlsafe_encode64(body, padding: false),
           'X-Wasalx-Timestamp' => timestamp, 'X-Wasalx-Signature' => signature })
-      [http.response.status, JSON.parse(http.response.body)]
+      response = http.response
+      json = response.media_type == 'application/json'
+      assert.call(json, 'Successful staging response must be JSON') if response.status == 200
+      [response.status, json ? JSON.parse(response.body) : nil]
     end
     input = { ticket_id: ticket.id.to_s, upload_cache_id: staged_cache }
     status, result = raw_upload.call(input)
@@ -1036,9 +1040,10 @@ begin
       assert.call(previews.length == 1 && previews.last[:body] == input[:body] && previews.last[:ticket_id] == ticket.id, 'Preview altered draft/native ticket identity')
       assert.call(!result.to_json.include?('private-provider-target') && result['draft_sha256'].match?(/\A[a-f0-9]{64}\z/), 'Preview leaked provider target or lacks snapshot hash')
       assert.call(snapshot == [Ticket.count, Ticket::Article.count, Store.count, WasalxTicketOperation.count, Delayed::Job.count], 'Read-only preview wrote native effects')
-      status, note = call.call('PREVIEW', input.merge(internal: true))
-      assert.call(status == 200 && note['channel'] == 'internal_note' && note['text'] == input[:body] && note['recipient'].nil? && previews.length == 1, 'Internal-note preview dispatched or named external recipient')
-      assert.call(note['draft_sha256'] != result['draft_sha256'], 'Preview hash ignored internal/public mode')
+      status, internal_preview = call.call('PREVIEW', input.merge(internal: true))
+      assert.call(status == 200 && internal_preview['channel'] == 'internal_note' && internal_preview['text'] == input[:body] &&
+        internal_preview['recipient'].nil? && previews.length == 1, 'Internal-note preview dispatched or named external recipient')
+      assert.call(internal_preview['draft_sha256'] != result['draft_sha256'], 'Preview hash ignored internal/public mode')
       assert.call(call.call('PREVIEW', input.merge(expected_updated_at: 'stale')).first == 409, 'Preview accepted stale ticket snapshot')
       assert.call(call.call('PREVIEW', input, members['reader']).first == 403, 'Read-only native ticket grant previewed a write')
       status, absent = call.call('PREVIEW', input.merge(form_id: SecureRandom.uuid, attachment_ids: ['999999999']))
@@ -1084,7 +1089,7 @@ begin
         'Wasalx-Portal-Target' => { 'kind' => 'GROUP', 'id' => SecureRandom.uuid } }, created_by_id: members['agent'].user_id)
     stable.update_column(:created_at, Time.now - 7200)
     before = Ticket::Article.where(ticket_id: ticket.id).count
-    input = note.call.merge('form_id' => expired_cache, 'attachment_ids' => [expired.id.to_s])
+    input = new_note_draft.call.merge('form_id' => expired_cache, 'attachment_ids' => [expired.id.to_s])
     assert.call(call.call('REPLY',input).first == 400 && Ticket::Article.where(ticket_id: ticket.id).count == before,
       'Expired portal cache created a native article')
     schedule = Scheduler.find_by!(method: 'UploadCacheCleanupJob.perform_now')
@@ -1143,16 +1148,30 @@ begin
     input = { operation_id: SecureRandom.uuid, title: "Raced first contact #{SecureRandom.hex(4)}", group_id: group.id.to_s,
       customer: { email: email, name: 'Concurrent Customer' }, state_id: Ticket::State.find_by!(name: 'open').id.to_s,
       body: 'Native uniqueness recovery', internal: true }
-    entered = Queue.new
+    checkpoints = Queue.new
     release = Queue.new
     worker = nil
-    hook = -> { if Thread.current == worker && self.email == email then entered << true; release.pop end }
+    hook = lambda do
+      if Thread.current == worker && self.email == email
+        checkpoints << :before_insert
+        release.pop
+      end
+    end
     User.set_callback(:create, :before, hook)
     begin
       ready = Queue.new
-      worker = Thread.new { ready.pop; ActiveRecord::Base.connection_pool.with_connection { call.call('CREATE_TICKET', input) } }
+      worker = Thread.new do
+        ready.pop
+        ActiveRecord::Base.connection_pool.with_connection { call.call('CREATE_TICKET', input) }
+      ensure
+        checkpoints << :worker_finished
+      end
+      worker.report_on_exception = false
       ready << true
-      Timeout.timeout(20) { entered.pop }
+      if Timeout.timeout(20) { checkpoints.pop } == :worker_finished
+        status, = worker.value
+        raise "Native uniqueness worker returned HTTP #{status} before reaching the insert callback"
+      end
       # A native ingestion path can win without using the portal email advisory lock.
       external = UserInfo.with_user_id(members['agent'].user_id) do
         User.create!(login: email, email: email, firstname: 'Native Ingestion', active: true, role_ids: Role.signup_role_ids)
@@ -1256,11 +1275,11 @@ begin
       assert.call(status == 403 && result['code'] != 'REAUTHENTICATION_REQUIRED', 'invalid MFA/session was mislabeled as privileged expiry')
     end
     begin
-      denied = true
+      membership_denied = true
       status, result = call.call('TEAM_CREATE', operation, owner, 'assurance' => stale)
       assert.call(status == 403 && result['code'] != 'REAUTHENTICATION_REQUIRED', 'revoked membership was mislabeled as privileged expiry')
     ensure
-      denied = false
+      membership_denied = false
     end
     begin
       privileged_window = '15'
@@ -1275,10 +1294,10 @@ begin
 
   check.call('current-membership-and-assurance-denials') do
     begin
-      denied = true
+      membership_denied = true
       assert.call(call.call('SHOW', { ticket_id: ticket.id.to_s }).first == 403, 'Revoked membership exposed conversation')
     ensure
-      denied = false
+      membership_denied = false
     end
   bad_assurance = { 'auth_time' => Time.now.to_i - 100_000, 'amr' => ['mfa'], 'acr' => nil }
   assert.call(call.call('SHOW', { ticket_id: ticket.id.to_s }, members['agent'], 'assurance' => bad_assurance).first == 403, 'Expired assurance admitted')
