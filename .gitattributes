@@ -19,7 +19,6 @@ tests/fixtures/dev-live-compose/* -text
 /infra/terraform/.terraform.lock.hcl linguist-generated
 /next-env.d.ts linguist-generated
 /pnpm-lock.yaml linguist-generated
-/scripts/hosted-ci-baseline.mjs linguist-generated
 /scripts/typescript-comparison/package-lock.json linguist-generated
 /services/workspace-configurator/pnpm-lock.yaml linguist-generated
 /tests/fixtures/native-group/audio.ogg linguist-generated

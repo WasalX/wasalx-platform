@@ -6,7 +6,7 @@ import { matchesGlob, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { unitFiles, unitFileTimings } from "./test-unit.mjs";
-import { addonSkips, skipPattern } from "./hosted-ci-policy.mjs";
+import { validateUnitAddonInputs } from "./fetch-zammad-addon.mjs";
 
 const config = JSON.parse(readFileSync(new URL("./hosted-ci-config.json", import.meta.url)));
 const timings = JSON.parse(readFileSync(new URL("./hosted-ci-timings.json", import.meta.url)));
@@ -57,6 +57,7 @@ export async function collectFile(file, timeout = 45_000) {
 async function main() {
   const [mode, shard, total] = process.argv.slice(2);
   assert(["unit", "collection"].includes(mode), "Expected unit or collection");
+  if (mode === "unit") validateUnitAddonInputs();
   const tracked = execFileSync("git", ["ls-files", "-z", "tests"], { encoding: "utf8" }).split("\0").filter(Boolean);
   const files = mode === "collection" ? collectionFiles(tracked) : inventory(tracked);
   assert(files.every(file => file.startsWith("tests/") && !file.includes("..")));
@@ -69,23 +70,15 @@ async function main() {
     const summary = `Unit shard ${shard}/${total}: ${selected.length} files (${candidates.length} of ${unitFiles.length} selected, ${reason})`;
     console.log(summary);
     if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary + "\n");
-    const skipped = selected.map(file => ({ file, entries: addonSkips(file) })).filter(batch => batch.entries.length);
-    const ordinary = selected.filter(file => !skipped.some(batch => batch.file === file));
-    const batches = [{ files: ordinary, entries: [] }, ...skipped.map(batch => ({ files: [batch.file], entries: batch.entries }))];
+    if (!selected.length) return;
     const reporters = process.env.GITHUB_ACTIONS === "true" ? [
       "--test-reporter=spec", "--test-reporter=./scripts/hosted-ci-timing-reporter.mjs",
       "--test-reporter-destination=stdout", "--test-reporter-destination=stdout",
     ] : [];
-    for (const { files, entries } of batches) {
-      if (!files.length) continue;
-      const lines = entries.map(entry => `SKIP: ${entry.file} :: ${entry.name}: ${entry.reason} (missing ${entry.input}; entrypoint ${files[0]})`);
-      console.log(lines.join("\n"));
-      if (process.env.GITHUB_STEP_SUMMARY && lines.length) appendFileSync(process.env.GITHUB_STEP_SUMMARY, lines.join("  \n") + "\n");
-      const pattern = entries.length ? [`--test-skip-pattern=${skipPattern(entries)}`] : [];
-      const result = spawnSync(process.execPath, ["--experimental-strip-types", "--import", "./tests/helpers/operator-input-fixtures.mjs", "--test", "--test-concurrency=4", ...reporters, ...pattern, ...files], { stdio: "inherit", windowsHide: true });
-      if (result.error) throw result.error;
-      if (result.status !== 0) process.exitCode = result.status ?? 1;
-    }
+    const result = spawnSync(process.execPath, ["--experimental-strip-types", "--import", "./tests/helpers/operator-input-fixtures.mjs",
+      "--test", "--test-concurrency=4", ...reporters, ...selected], { stdio: "inherit", windowsHide: true });
+    if (result.error) throw result.error;
+    process.exitCode = result.status ?? 1;
     return;
   }
   // Import modules while skipping test bodies, matching the existing collection method.
