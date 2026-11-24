@@ -14,9 +14,22 @@ ALTER TABLE whatsapp_marketing_preferences ENABLE ROW LEVEL SECURITY;
 ALTER TABLE whatsapp_marketing_preferences FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON whatsapp_marketing_preferences
   USING (tenant_id=app.current_tenant_id()) WITH CHECK (tenant_id=app.current_tenant_id());
-GRANT SELECT, INSERT, UPDATE (opted_out, observed_at) ON whatsapp_marketing_preferences
-  TO wasalx_app, wasalx_connector_worker;
+GRANT SELECT ON whatsapp_marketing_preferences TO wasalx_app, wasalx_connector_worker;
 GRANT DELETE ON whatsapp_marketing_preferences TO wasalx_connector_worker;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='wasalx_marketing_preference_executor') THEN
+    CREATE ROLE wasalx_marketing_preference_executor NOLOGIN NOBYPASSRLS;
+  END IF;
+END $$;
+ALTER ROLE wasalx_marketing_preference_executor NOLOGIN NOBYPASSRLS;
+GRANT USAGE ON SCHEMA public,app TO wasalx_marketing_preference_executor;
+GRANT SELECT, INSERT, UPDATE (opted_out, observed_at) ON whatsapp_marketing_preferences
+  TO wasalx_marketing_preference_executor;
+GRANT SELECT (id, tenant_id) ON connections TO wasalx_marketing_preference_executor;
+GRANT INSERT ON audit_events TO wasalx_marketing_preference_executor;
+GRANT EXECUTE ON FUNCTION app.current_tenant_id(),app.meta_direct_identifier_valid(text,text)
+  TO wasalx_marketing_preference_executor;
 
 CREATE TRIGGER whatsapp_marketing_privacy_fence BEFORE INSERT OR UPDATE OR DELETE ON whatsapp_marketing_preferences
   FOR EACH STATEMENT EXECUTE FUNCTION app.lock_privacy_scoped_write();
@@ -35,7 +48,8 @@ GRANT EXECUTE ON FUNCTION app.whatsapp_marketing_subject_matches(text,text,text[
 CREATE FUNCTION app.record_whatsapp_marketing_preference(
   phone_value text, bsuid_value text, stop_value boolean,
   observed_value timestamptz, reason_value text, connection_value uuid, request_value uuid
-) RETURNS void LANGUAGE plpgsql SET search_path=pg_catalog,public,app AS $$
+) RETURNS void LANGUAGE plpgsql SECURITY DEFINER
+  SET search_path=pg_catalog,public,app,pg_temp SET row_security=on AS $$
 DECLARE tenant_value uuid := app.current_tenant_id();
 BEGIN
   IF tenant_value IS NULL OR NOT (phone_value IS NOT NULL OR bsuid_value IS NOT NULL)
@@ -73,6 +87,8 @@ BEGIN
   WHERE previous.opted_out IS DISTINCT FROM updated.opted_out;
 END;
 $$;
+ALTER FUNCTION app.record_whatsapp_marketing_preference(text,text,boolean,timestamptz,text,uuid,uuid)
+  OWNER TO wasalx_marketing_preference_executor;
 REVOKE ALL ON FUNCTION app.record_whatsapp_marketing_preference(text,text,boolean,timestamptz,text,uuid,uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.record_whatsapp_marketing_preference(text,text,boolean,timestamptz,text,uuid,uuid)
   TO wasalx_app, wasalx_connector_worker;

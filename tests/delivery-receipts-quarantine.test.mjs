@@ -114,7 +114,7 @@ test("signed Meta marketing preferences are replay-stable and strip profile and 
   const send=(preference,signatureOverride)=>{
     const body={object:"whatsapp_business_account",entry:[{id:"987654321",changes:[{field:"user_preferences",value:{
       messaging_product:"whatsapp",metadata:{phone_number_id:"123456789"},
-      contacts:[{profile:{name:"Synthetic customer"}}],user_preferences:[preference],
+      contacts:[{profile:{name:"Synthetic customer"}}],user_preferences:Array.isArray(preference)?preference:[preference],
     }}]}]};
     const raw=JSON.stringify(body), signature=signatureOverride??createHmac("sha256",secret).update(raw).digest("hex");
     return controller.meta({rawBody:new TextEncoder().encode(raw),headers:{"x-hub-signature-256":"sha256="+signature}},body);
@@ -130,6 +130,12 @@ test("signed Meta marketing preferences are replay-stable and strip profile and 
   await assert.rejects(()=>send({...stop,wa_id:undefined,user_id:undefined}),/marketing preference is invalid/);
   await assert.rejects(()=>send(stop,"0".repeat(64)),/Invalid webhook signature/);
   assert.equal(accepted.length,3);
+  const olderStop={...stop,timestamp:timestamp-8*86400};
+  assert.equal((await send([null,olderStop,{...olderStop,value:"resume"}])).count,1);
+  assert.equal(accepted[3].marketingPreference.optedOut,true);
+  assert.equal(accepted[3].marketingPreference.observedAt,new Date(olderStop.timestamp*1000).toISOString());
+  assert.equal(accepted[0].payloadSha256,createHmac("sha256",secret)
+    .update(JSON.stringify([route.tenant_id,route.connection_id,accepted[0].marketingPreference])).digest("hex"));
 });
 
 test("Meta pricing observations preserve strict classifications, canonical revisions and bounded source context",async()=>{

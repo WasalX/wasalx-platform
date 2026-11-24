@@ -7,8 +7,9 @@ work="$RUNNER_TEMP/wasalx-nightly"
 project=wasalx-nightly
 full_env="$work/full.env"
 diagnostics="$work/diagnostics"
-compose=(docker compose --env-file "$full_env" -f compose.yaml -f compose.full.yaml
-  -f scripts/release/installer-nightly.compose.yaml --profile full --profile runtime-workers --project-name "$project")
+candidate_compose=(docker compose --env-file "$full_env" -f compose.yaml -f compose.full.yaml
+  --profile full --profile runtime-workers --project-name "$project")
+compose=("${candidate_compose[@]}" -f scripts/release/installer-nightly.compose.yaml)
 mkdir -p "$diagnostics"
 
 inventory() {
@@ -89,6 +90,15 @@ phase root-lock 30s sudo flock --nonblock "$lock_path" true
 
 phase fixture 30s python3 scripts/release/generate-simulation-env.py "$PWD" "$full_env" \
   scripts/contracts/waha-simulation-server.mjs --installer-rehearsal
+if ! git diff --quiet "$MAIN_SHA" "$commit" -- Dockerfile.foundation-keycloak compose.full.yaml \
+    scripts/release/patch-keycloak-jackson.py infra/docker/full/keycloak/; then
+  # The signed main image set stays intact. Bootstrap the PR-built image with the ordinary Compose command.
+  phase candidate-keycloak-build 8m "${candidate_compose[@]}" build keycloak
+  phase candidate-keycloak-bootstrap 5m "${candidate_compose[@]}" up --no-build \
+    --abort-on-container-exit --exit-code-from keycloak-bootstrap keycloak-bootstrap
+  phase candidate-keycloak-teardown 3m "${candidate_compose[@]}" down --volumes
+  test -z "$(inventory)"
+fi
 phase bundles 5m python3 -B scripts/release/images-by-digest.py stage-hosted-bundles --manifest "$work/images-manifest.json"
 stage=(--env-file "$full_env" --project-name "$project" --rehearsal-main "$MAIN_SHA")
 manifest_hash=$(sha256sum "$work/images-manifest.json" | cut -d ' ' -f 1)

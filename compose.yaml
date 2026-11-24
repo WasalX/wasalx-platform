@@ -263,6 +263,7 @@ services:
       INVITATION_EMAIL_PROVIDER_SECRET_REFERENCE: ${INVITATION_EMAIL_PROVIDER_SECRET_REFERENCE:-secret://platform/invitation-email-provider}
       INVITATION_EMAIL_FROM: ${INVITATION_EMAIL_FROM:-support@wasalx.invalid}
       INVITATION_EMAIL_TEMPLATE_ID: ${INVITATION_EMAIL_TEMPLATE_ID:-wasalx-invitation-v1}
+      WASALX_TEST_EMAIL_RECIPIENT_ALLOWLIST: ${WASALX_TEST_EMAIL_RECIPIENT_ALLOWLIST:-[]}
       PORTAL_PUBLIC_ORIGIN: ${PORTAL_PUBLIC_ORIGIN:-http://localhost:3000}
     depends_on:
       migrate: { condition: service_completed_successfully }

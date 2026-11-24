@@ -18,6 +18,7 @@ async function marketingSubject(client: PoolClient, tenantId: string, connection
 }
 
 export async function whatsappMarketingOptedOut(client: PoolClient, tenantId: string, connectionId: string, snapshot: unknown) {
+  if (snapshot == null) return true;
   const { phone, bsuid } = await marketingSubject(client, tenantId, connectionId, snapshot);
   const result = await client.query<{ opted_out: boolean }>(
     "SELECT opted_out FROM whatsapp_marketing_preferences WHERE tenant_id=$1"
@@ -30,6 +31,7 @@ export async function whatsappMarketingOptedOut(client: PoolClient, tenantId: st
 
 export async function recordWhatsAppMarketingRejection(client: PoolClient, tenantId: string, connectionId: string,
   snapshot: unknown, observedAt: Date | string, requestId: string) {
+  if (snapshot == null) return;
   const { phone, bsuid } = await marketingSubject(client, tenantId, connectionId, snapshot);
   await client.query("SELECT app.record_whatsapp_marketing_preference($1,$2,true,$3,'PROVIDER_131050',$4,$5)",
     [phone, bsuid, observedAt, connectionId, requestId]);

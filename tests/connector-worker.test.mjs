@@ -26,7 +26,7 @@ const secret="worker-test-secret-at-least-32-bytes";
 // Existing synthetic unenrolled delivery fixtures have no account authority.
 // New account-policy tests use the actual repository and explicit guard failures.
 class DeliveryProcessor extends ProductionDeliveryProcessor {
-  constructor(repository,...dependencies){super({assertMetaBillingSendCurrent:async()=>{},admitMetaMessageRequest:async()=>{},...repository},...dependencies)}
+  constructor(repository,...dependencies){super({assertMetaBillingSendCurrent:async()=>{},admitMetaMessageRequest:async()=>{},whatsAppMarketingOptedOut:async()=>false,...repository},...dependencies)}
 }
 class InboundProcessor extends ProductionInboundProcessor {
   constructor(repository,...dependencies){super({quotedCommandCandidate:async()=>null,messageIsWithinAdmissionWindow:async()=>true,hasRunnableGroupBinding:async()=>false,renewWahaWorkerAssignment:async(_event,context)=>context,...repository},...dependencies)}

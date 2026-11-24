@@ -1,4 +1,4 @@
-import { timingSafeEqual } from "node:crypto";
+import { createHmac, timingSafeEqual } from "node:crypto";
 import { BadRequestException, Body, Controller, Get, Header, HttpCode, NotFoundException, Param, Post, Query, Req, ServiceUnavailableException, SetMetadata, UnauthorizedException } from "@nestjs/common";
 import { PUBLIC_ROUTE } from "./auth.guard.js";
 import { DatabaseService, type MetaLifecycleEventType, type MetaLifecycleRoute, type MetaRoutingRoute, type WebhookRoute } from "./database.service.js";
@@ -217,14 +217,14 @@ export class WebhookIngressController{
           if(body.object!=="whatsapp_business_account"||typeof accountId!=="string"||!/^[0-9]{1,32}$/u.test(accountId)
             ||!externalKey||!/^[0-9]{1,32}$/u.test(externalKey))throw new BadRequestException("Meta preference asset is invalid");
           let preferences:ReturnType<typeof parseMetaMarketingPreferences>;
-          try{preferences=parseMetaMarketingPreferences(change.value,Date.now())}
+          try{preferences=parseMetaMarketingPreferences(change.value,Date.now(),()=>recordWebhook("meta","rejected","invalid_marketing_preference"))}
           catch{throw new BadRequestException("Meta marketing preference is invalid")}
           const route=await this.database.resolveMetaWebhookRoute(externalKey);
           if(!route){unroutedCount++;continue}
           for(const preference of preferences){
             if(!wahaTestRecipientAllowed(this.testRecipients,preference.phone)){recordWebhook("meta","rejected","test_recipient_scope");continue}
             const marketingPreference={...preference,accountId};
-            const payloadSha256=await sha256Hex(JSON.stringify(marketingPreference));
+            const payloadSha256=createHmac("sha256",secret).update(JSON.stringify([route.tenant_id,route.connection_id,marketingPreference])).digest("hex");
             const target=preference.optedOut?guardedNegatives:plans;
             target.push({route,lifecycle:false,input:{providerEventId:`preference:v1:${payloadSha256}`,eventType:"user_preferences",
               payload:{redacted:true,payload_sha256:payloadSha256},payloadSha256,routeKey:externalKey,providerSessionKey:externalKey,

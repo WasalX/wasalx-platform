@@ -1,5 +1,7 @@
 # WasalX platform
 
+See [Meta upstream message cost estimates](docs/runbooks/meta-cost-reference-tariff.md) for the provider rate catalog and tariff upload.
+
 ## Bot delivery retry limits
 
 Set these optional variables in the service environment. For the Compose stack,
@@ -21,5 +23,6 @@ startup with the variable name in the error.
 Subscribe the Meta app to the [`user_preferences` webhook](https://developers.facebook.com/documentation/business-messaging/whatsapp/webhooks/reference/user_preferences).
 WasalX records signed Stop and Resume events and Meta delivery error `131050`.
 After a Stop, template delivery requires a verified non-marketing category.
+Without a recorded Stop, marketing templates continue under the usual delivery rules.
 Service replies continue through the normal delivery rules. The audit log records
 preference changes and refused sends by ID.

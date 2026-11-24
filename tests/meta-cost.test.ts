@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
+import { buildMetaCostReferenceTariff } from "../scripts/meta-cost-reference-tariff.mjs";
+import { metaPricingObservation } from "../packages/core/src/meta-pricing-observation.ts";
 import {
   metaCostDecimal, parseMetaCostSelectorEvidence, parseMetaCostTariff,
 } from "../packages/core/src/meta-cost.ts";
@@ -58,4 +61,72 @@ test("selector evidence is explicit, bounded in time and cannot derive market fr
     { sourceSha256: null }, { market: "" }, { product: "MARKETING_MESSAGES_API" }]) {
     assert.throws(() => parseMetaCostSelectorEvidence({ ...selector(), ...change }));
   }
+});
+
+test("October Meta pricing receipts distinguish the free service tier from paid deliveries", () => {
+  const regular = { billable: true, pricing_model: "PMP", category: "service", type: "regular" };
+  const free = { ...regular, billable: false, type: "free_customer_service", subtype: "free_tier" };
+  const observe = (pricing: object) => metaPricingObservation({ pricing });
+  const freeObservation = observe(free);
+  assert.equal(freeObservation.state, "VALID");
+  assert.equal(freeObservation.type, "free_customer_service");
+  assert.equal(freeObservation.billable, false);
+  assert.equal(observe(regular).billable, true);
+  assert.equal(observe({ ...regular, category: "utility" }).billable, true);
+
+  for (const invalid of [
+    { ...free, subtype: "unknown" },
+    { ...free, category: "utility" },
+    { ...free, pricing_model: "CBP" },
+    { ...regular, subtype: "free_tier" },
+    { ...free, other: "unexpected" },
+  ]) assert.equal(observe(invalid).state, "UNAVAILABLE");
+});
+
+const referenceCatalog = () => JSON.parse(readFileSync(
+  new URL("../packages/core/config/meta-cost-2026-10-01.json", import.meta.url), "utf8",
+));
+const referenceScope = {
+  tenantId: tariff().tenantId, accountId: tariff().accountId, evidenceMode: "LIVE",
+  currency: "SAR", minorUnits: 2, timezone: "Asia/Riyadh", rounding: "PERIOD",
+  effectiveFrom: "2026-09-30T21:00:00.000Z", effectiveTo: "2026-10-31T21:00:00.000Z",
+  markets: ["SAUDI_ARABIA"],
+};
+
+test("October Meta tariff uses the published service and utility rates by currency and tier", () => {
+  const catalog = referenceCatalog();
+  assert.equal(catalog.effectiveDate, "2026-10-01");
+  assert.equal(catalog.monthlyFreeServiceMessagesPerNumber, 1_000);
+  assert.equal(Object.keys(catalog.cards).length, 16);
+  for (const card of Object.values(catalog.cards) as Array<{ markets: object }>) {
+    assert.equal(Object.keys(card.markets).length, 47);
+  }
+
+  const sar = buildMetaCostReferenceTariff(catalog, referenceScope);
+  const usd = buildMetaCostReferenceTariff(catalog, { ...referenceScope, currency: "USD" });
+  const rate = (definition: ReturnType<typeof parseMetaCostTariff>, category: string, tier: string) =>
+    definition.rates.find(row => row.category === category && row.tier === tier);
+  assert.equal(rate(sar, "service", "LIST")?.unitPrice, "0.0401");
+  assert.equal(rate(sar, "utility", "LIST")?.unitPrice, "0.0401");
+  assert.equal(rate(sar, "utility", "TIER_1")?.unitPrice, "0.0381");
+  assert.equal(rate(usd, "service", "LIST")?.unitPrice, "0.0107");
+  assert.equal(rate(usd, "utility", "TIER_1")?.unitPrice, "0.0102");
+  assert.ok(sar.rates.every((row: { pricingType: string }) => row.pricingType === "regular"));
+  assert.deepEqual(parseMetaCostTariff(sar), sar);
+  assert.match(sar.sourceSha256, /^[0-9a-f]{64}$/u);
+});
+
+test("reference tariff rejects missing rates and dates outside the account-local pricing period", () => {
+  const catalog = referenceCatalog();
+  assert.throws(() => buildMetaCostReferenceTariff(catalog, { ...referenceScope, currency: "JPY" }), /Unverified.*JPY/u);
+  assert.throws(() => buildMetaCostReferenceTariff(catalog, { ...referenceScope, markets: ["UNKNOWN"] }), /Unverified.*SAR\/UNKNOWN/u);
+  assert.throws(() => buildMetaCostReferenceTariff(catalog, {
+    ...referenceScope, effectiveFrom: "2026-09-30T20:59:59.999Z",
+  }), /outside the Meta pricing period/u);
+  assert.throws(() => buildMetaCostReferenceTariff(catalog, {
+    ...referenceScope, effectiveTo: "2026-12-31T21:00:00.001Z",
+  }), /outside the Meta pricing period/u);
+
+  catalog.cards.USD.markets.SAUDI_ARABIA.service = "0";
+  assert.throws(() => buildMetaCostReferenceTariff(catalog, referenceScope), /Invalid Meta pricing row USD\/SAUDI_ARABIA/u);
 });
