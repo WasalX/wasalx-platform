@@ -173,6 +173,19 @@ test("portal and public styles use color, type, radius and elevation tokens", as
   assert.deepEqual(sideTabs, [], "no thick one-side accent borders");
 });
 
+test("working surfaces are flat: gradients stay on the brand mark, chart grid and skeletons", async () => {
+  const allowed = new Set([".brand-mark", ".operatorMark", ".chart-grid", ".group-skeleton", ".review-loading span", ".skeleton span", ".wx-skeleton-stack span"]);
+  const gradients = [];
+  for (const path of await readdir(new URL("app/", root), { recursive: true })) {
+    if (!path.endsWith(".css")) continue;
+    const css = (await read(`app/${path.replaceAll("\\", "/")}`)).replace(/\/\*[\s\S]*?\*\//gu, "");
+    for (const [, selector, body] of css.matchAll(/([^{}]*)\{([^{}]*)\}/gu)) {
+      if (/(?:linear|radial|conic)-gradient\(/u.test(body) && !allowed.has(selector.trim())) gradients.push(`${path}: ${selector.trim()}`);
+    }
+  }
+  assert.deepEqual(gradients, [], "use flat token surfaces on working surfaces");
+});
+
 test("form controls keep a visible keyboard focus ring, also in forced colors", async () => {
   const primitives = await read("app/design-system/primitives.css");
   assert.match(primitives, /:where\(button, input, select, textarea\):focus-visible\s*\{\s*outline:\s*2px solid var\(--wx-color-accent\)/u);
