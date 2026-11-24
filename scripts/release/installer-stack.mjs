@@ -2,11 +2,12 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { arch, hostname, platform } from "node:os";
 import { isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { repositoryDigestMatches, writeRepositoryJson } from "../installer-evidence.mjs";
+import { localRegistryReference } from "./installer-hosted-images.mjs";
 
 const root = resolve(fileURLToPath(new URL("../../", import.meta.url)));
 const shaPattern = /^[0-9a-f]{40}$/u;
@@ -149,6 +150,22 @@ export function devWebhookPreflightOverlay({ project, devSkipPublicWebhookPrefli
     .some(value => /^(stg|staging|prod|production)$/iu.test(value?.trim() ?? ""));
   assert.ok(full && devProject && !rehearsalMain && !stgOrProd, devWebhookPreflightOnly);
   return ["scripts/release/installer-dev-skip-webhook.compose.yaml"];
+}
+
+export async function localRegistryOverlay({ registry, project, envFile, profiles, render }) {
+  assert.ok(!envFile.includes(","), "local registry env file path cannot contain a comma");
+  const model = render();
+  const services = Object.fromEntries(activeServiceNames(model, profiles).filter(name => !model.services[name].build)
+    .map(name => [name, { image: localRegistryReference(registry, model.services[name].image) }]));
+  assert.ok(Object.keys(services).length, "local registry requires pinned Compose dependencies");
+  const path = `${envFile}.${project}.registry.compose.json`;
+  const contents = `${JSON.stringify({ services })}\n`;
+  try { await writeFile(path, contents, { flag: "wx", mode: 0o600 }); }
+  catch (error) {
+    if (error.code !== "EEXIST") throw error;
+    assert.equal(await readFile(path, "utf8"), contents, "local registry overlay differs from the current Compose model");
+  }
+  return path;
 }
 
 export function rehearsalImageSource(project, commit, runGit) {
@@ -483,6 +500,7 @@ function argumentsFrom(values) {
   let full = false;
   let devPreimagesFile; let devPreimagesSha256;
   let rehearsalMain;
+  let localRegistry;
   let devSkipPublicWebhookPreflight = false;
   for (let index = 0; index < rest.length;) {
     const option = rest[index];
@@ -519,6 +537,9 @@ function argumentsFrom(values) {
     } else if (option === "--env-file") {
       assert.equal(envFile, undefined, "--env-file can be provided only once");
       envFile = value;
+    } else if (option === "--local-registry") {
+      assert.equal(localRegistry, undefined);
+      localRegistry = value;
     } else if (option === "--rehearsal-main") {
       assert.equal(rehearsalMain, undefined);
       rehearsalMain = value;
@@ -528,7 +549,7 @@ function argumentsFrom(values) {
     index += 2;
   }
   return { project, candidateImages, composeFiles, profiles, output, envFile, full, devPreimagesFile,
-    devPreimagesSha256, rehearsalMain, devSkipPublicWebhookPreflight };
+    devPreimagesSha256, rehearsalMain, localRegistry, devSkipPublicWebhookPreflight };
 }
 
 export async function verifyStack({ repositoryRoot: verificationRoot = root } = {}) {
@@ -588,6 +609,13 @@ export async function verifyStack({ repositoryRoot: verificationRoot = root } = 
     ...profiles.flatMap((profileName) => ["--profile", profileName]),
     "--project-name", project,
   ];
+  if (parsed.localRegistry) {
+    assert.ok(fullMode, "local registry requires the full stack");
+    const path = await localRegistryOverlay({ registry: parsed.localRegistry, project, envFile: parsed.envFile, profiles,
+      render: () => JSON.parse(run("docker", [...composeArguments, "config", "--no-interpolate", "--no-env-resolution", "--format", "json"])) });
+    composeFiles.push(path);
+    composeArguments.push("--file", path);
+  }
   run("docker", [...composeArguments, "config", "--quiet"]);
   const renderedCompose = run("docker", [
     ...composeArguments, "config", "--no-interpolate", "--no-env-resolution", "--format", "json",

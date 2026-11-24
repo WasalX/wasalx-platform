@@ -3,12 +3,29 @@ import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { repositoryDigestMatches } from "../installer-evidence.mjs";
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
 const source = "https://github.com/WasalX/wasalx-platform";
 const hostedPublisher = source + "/.github/workflows/branch-image.yml@refs/heads/main";
 export const hostedIssuer = "https://token.actions.githubusercontent.com";
 const digest = /^sha256:[0-9a-f]{64}$/u;
+
+export function localRegistryReference(registry, reference) {
+  assert.match(registry ?? "", /^[a-z0-9-]+(?:\.[a-z0-9-]+)*:[1-9][0-9]{0,4}$/u,
+    "local registry requires a host and port");
+  assert.ok(Number(registry.split(":")[1]) <= 65535, "invalid local registry port");
+  const parts = (reference ?? "").split("@");
+  assert.ok(parts.length === 2 && parts[0] && digest.test(parts[1]), "local registry requires a digest-pinned image");
+  return `${registry}/staged/${parts[1].slice(7)}@${parts[1]}`;
+}
+
+export async function verifyStagedImage(execute, environment, reference) {
+  const [details] = JSON.parse(await execute("docker", ["image", "inspect", reference], environment));
+  assert.ok(details?.RepoDigests?.some(value => repositoryDigestMatches(reference, value)),
+    "loaded local registry digest mismatch");
+  return details;
+}
 
 function uniqueJson(bytes) {
   const value = JSON.parse(bytes);
@@ -115,6 +132,10 @@ export async function verifyHostedImages(context, { verifyOnly = false } = {}) {
       const inspect = async () => JSON.parse(await execute("docker", ["image", "inspect", image.reference], context.environment))[0];
       const before = await inspect();
       assert.ok([row.digest, row.configDigest].includes(before?.Id), "loaded hosted image identity mismatch");
+      if (context.localRegistry) {
+        const staged = await verifyStagedImage(execute, context.environment, localRegistryReference(context.localRegistry, row.pullReference));
+        assert.equal(before.Id, staged.Id, "hosted alias does not identify its staged digest");
+      }
       const loaded = JSON.parse(await execute("python3", [resolve(context.repository, "scripts/release/images-by-digest.py"),
         "loaded-config", "--image", image.reference, "--config-digest", row.configDigest], context.environment));
       assert.equal(loaded.configDigest, row.configDigest, "loaded hosted config mismatch");

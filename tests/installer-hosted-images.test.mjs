@@ -5,15 +5,73 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { hostedIssuer, verifyHostedImages } from "../scripts/release/installer-hosted-images.mjs";
+import { hostedIssuer, localRegistryReference, verifyHostedImages } from "../scripts/release/installer-hosted-images.mjs";
 import { artifactPath, preimagePath, preserveReplacement, readBoundArtifacts, sha256 } from "../scripts/release/installer-artifacts.mjs";
 import { createCandidatePlan, executeStage } from "../scripts/release/installer-stages.mjs";
+import { localRegistryOverlay } from "../scripts/release/installer-stack.mjs";
 
 const catalog = JSON.parse(await readFile(new URL("../release/installer-images.json", import.meta.url)));
 const candidateSha = "a".repeat(40), candidateTree = "b".repeat(40);
 const source = "https://github.com/WasalX/wasalx-platform";
 const devPublisher = `${source}/.github/workflows/branch-image.yml@refs/heads/dev`;
 const mainPublisher = `${source}/.github/workflows/branch-image.yml@refs/heads/main`;
+
+const localRegistry = "127.0.0.1:5007";
+const dependency = `quay.io/example/dependency:1.0@sha256:${"d".repeat(64)}`;
+const stagedDependency = `${localRegistry}/staged/${"d".repeat(64)}@sha256:${"d".repeat(64)}`;
+
+test("local registry rewrites only active dependencies and binds the persisted overlay", async t => {
+  const { context } = await fixture(t);
+  const { services } = context.model;
+  services.dependency = { image: dependency, profiles: ["full"] };
+  services.inactive = { image: "example/inactive:latest", profiles: ["inactive"] };
+  const inputs = { registry: localRegistry, envFile: join(context.repository, "fixture.env"), project: "fixture",
+    profiles: ["full"], render: () => context.model };
+  const path = await localRegistryOverlay(inputs);
+  assert.deepEqual(JSON.parse(await readFile(path, "utf8")), { services: { dependency: { image: stagedDependency } } });
+  assert.equal(await localRegistryOverlay(inputs), path);
+  await assert.rejects(localRegistryOverlay({ ...inputs, registry: "localhost:5008" }), /overlay differs/u);
+  await assert.rejects(localRegistryOverlay({ ...inputs, registry: "https://example.invalid:5007" }), /requires a host and port/u);
+  services.dependency.image = "example/dependency:latest";
+  await assert.rejects(localRegistryOverlay(inputs), /digest-pinned image/u);
+});
+
+test("local registry preload pulls only the staged digests and admission rejects an alias mismatch", async t => {
+  const { context, inventory, details } = await fixture(t);
+  context.localRegistry = localRegistry;
+  context.model.services.dependency = { image: dependency };
+  const staged = Object.values(inventory.images).map(row => localRegistryReference(localRegistry, row.pullReference));
+  const pulls = [];
+  const run = context.command;
+  context.command = async (command, args, ...rest) => {
+    if (command === "docker" && args[0] === "pull") {
+      const reference = args.at(-1);
+      assert.ok([...staged, stagedDependency].includes(reference));
+      assert.deepEqual(args.slice(args.indexOf("--platform"), args.indexOf("--platform") + 2), ["--platform", "linux/amd64"]);
+      pulls.push(reference);
+      details[reference] = { Id: reference.split("@")[1], RepoDigests: [reference] };
+      return 0;
+    }
+    if (command === "docker" && args[0] === "image" && args[1] === "tag") {
+      assert.equal(details[args[2]].Id, details[args[3]].Id);
+      return "";
+    }
+    return run(command, args, ...rest);
+  };
+  await assert.rejects(executeStage("preload-hosted", context), /every dependency to resolve to the staging registry/u);
+  assert.deepEqual(pulls, []);
+  context.model.services.dependency.image = stagedDependency;
+  await executeStage("preload-hosted", context);
+  assert.deepEqual(pulls, [...staged, stagedDependency]);
+  assert.equal((await verifyHostedImages(context)).images.length, context.plan.length);
+
+  const reference = staged[0];
+  const original = details[reference];
+  details[reference] = { ...original, RepoDigests: [] };
+  await assert.rejects(verifyHostedImages(context), /loaded local registry digest mismatch/u);
+  details[reference] = { ...original, Id: stagedDependency.split("@")[1] };
+  await assert.rejects(verifyHostedImages(context), /alias does not identify its staged digest/u);
+});
 
 async function fixture(t) {
   const root = await mkdtemp(join(tmpdir(), "hosted-admission-"));
