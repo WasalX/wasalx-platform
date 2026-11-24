@@ -141,6 +141,27 @@ test("semantic text and solid-action pairs meet WCAG AA contrast", async () => {
   }
 });
 
+test("every status badge's text meets 4.5:1 on its own tint over every surface in both themes", async () => {
+  const tokens = await read("app/design-system/tokens.css");
+  const globals = await read("app/globals.css");
+  const badges = [...globals.matchAll(/\.status-([\w-]+)\{color:var\(--([\w-]+)\);background:color-mix\(in srgb,var\(--\2\) (\d+)%,transparent\)\}/gu)];
+  assert.deepEqual(badges.map((match) => match[1]).sort(), ["danger", "success", "warning"], "every tinted .status-* variant follows the shared rule");
+  for (const theme of ["dark", "light"]) {
+    const block = tokens.match(new RegExp(`\\.theme-${theme} \\{([\\s\\S]*?)\\n\\}`, "u"))?.[1] ?? "";
+    const values = Object.fromEntries([...block.matchAll(/(--wx-color-[\w-]+):\s*(#[\da-f]{6});/giu)].map((match) => [match[1], match[2]]));
+    const alias = (name) => values[tokens.match(new RegExp(`--${name}: var\\((--wx-color-[\\w-]+)\\)`, "u"))?.[1]];
+    const channels = (hex) => hex.match(/[\da-f]{2}/giu).map((channel) => Number.parseInt(channel, 16));
+    for (const [, variant, color, percent] of badges) {
+      const text = channels(alias(color));
+      for (const surface of ["--wx-color-page", "--wx-color-surface", "--wx-color-surface-raised", "--wx-color-surface-selected"]) {
+        const tint = channels(values[surface]).map((channel, index) => Math.round(text[index] * percent / 100 + channel * (1 - percent / 100)));
+        const ratio = contrast(alias(color), tint.map((channel) => channel.toString(16).padStart(2, "0")).join(""));
+        assert.ok(ratio >= 4.5, `${theme} .status-${variant} on ${surface} is ${ratio.toFixed(2)}:1, needs 4.5:1`);
+      }
+    }
+  }
+});
+
 test("new primitives consume tokens instead of feature-local color and spacing literals", async () => {
   const primitives = await read("app/design-system/primitives.css");
   assert.doesNotMatch(primitives, /#[\da-f]{3,8}\b/iu);
