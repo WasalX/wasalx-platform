@@ -105,6 +105,8 @@ Open an issue and follow the [merge rules](#branching-and-merging) for the PR to
 
 Measure the latest 150 first-attempt PR runs from GitHub Actions timestamps. Split job time into waiting, setup before the first lint or test step, and execution. Track time to mergeable across all required checks, including code scanning. Record trends and misses on the private project board.
 
+For job timeout samples, use first-attempt green runs on main pushes, the main merge queue, and PRs. Record the longest successful leg per matrix and run, and use the highest p95 across applicable events.
+
 | Measure | Target and response |
 | --- | --- |
 | PR push to `ci-gate` completion | p50 under 1 minute, p95 under 2 minutes. Report misses and whether affected-image or integration work was selected. |
@@ -124,7 +126,7 @@ The `portal-integration` job enforces the `/app` JavaScript budget. Keep the oth
 | Rule | Reason | Review date |
 | --- | --- | --- |
 | §4 CI privacy check on every push and in the queue | Hosted CI uses generic public patterns. The full deny list and commit identity checks stay in the private pre-push check. | 2026-12-14 |
-| §4/§8 Measure job durations and cap timeouts from p95 | The [timing sample](.github/ci-timings.json) covers the jobs with timeouts in `ci.yml`. Those timeouts still exceed the measured limits. Sampling the other workflows and lowering timeouts are follow-ups. | 2026-12-14 |
+| §4/§8 Measure job durations and cap timeouts from p95 | The [timing sample](.github/ci-timings.json) covers the jobs with timeouts in `ci.yml`. Sampling the other workflows remains a follow-up. | 2026-12-14 |
 | §4 Local pre-commit and pre-push hooks | Agents run the checks in their push workflow. Repository hooks are pending. | 2026-12-14 |
 | §4 Runner pickup under 5 s | Measured hosted-runner pickup makes 60 s the working target. Tracked in [#181](https://github.com/WasalX/wasalx-platform/issues/181). | 2026-12-14 |
 | §4 PR feedback for `ci.yml` (p50 ≤ 1 min and p95 ≤ 2 min) | On 2026-11-24, the newest 62 successful PR runs measured p50 2.4 min and p95 5.2 min. The PR path still runs the full test and build matrix. | 2026-12-08 |

@@ -26,7 +26,7 @@ jobs:
   changes:
     if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 1
     outputs:
       images: ${{ steps.matrix.outputs.images }}
       matrix: ${{ steps.matrix.outputs.matrix }}
@@ -99,7 +99,7 @@ jobs:
 
   workflow-lint:
     runs-on: ubuntu-24.04
-    timeout-minutes: 3
+    timeout-minutes: 1
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -157,7 +157,7 @@ jobs:
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'pull_request' && needs.changes.outputs.storybook != 'false')) }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 6
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -177,7 +177,7 @@ jobs:
         id: audit
         run: >-
           node scripts/storybook-visual-regression.mjs --require-browser tests/visual/storybook-ci.spec.ts
-          --fully-parallel --workers=2
+          --fully-parallel --workers=4
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always() && steps.audit.outcome != 'skipped'
         with:
@@ -194,7 +194,7 @@ jobs:
   dependency-review:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 1
     steps:
       - uses: actions/dependency-review-action@bbc44d14a204704ccc493733616cd1e93a0321ec # v5.0.1
         with:
@@ -204,7 +204,7 @@ jobs:
     needs: changes
     if: ${{ !cancelled() && github.event_name == 'pull_request' && needs.changes.outputs.dev-install != 'false' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 1
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -216,7 +216,7 @@ jobs:
     if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
     name: ${{ matrix.name }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 9
     strategy:
       fail-fast: false
       max-parallel: 5
@@ -308,7 +308,7 @@ jobs:
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     name: Full ${{ matrix.name }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 3
     strategy:
       fail-fast: false
       matrix:
@@ -321,7 +321,7 @@ jobs:
     # Cache warm-up only; PRs and the queue gate lint, so a failure here must not make a published trunk commit unusable.
     continue-on-error: true
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 1
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -357,7 +357,7 @@ jobs:
       (github.event_name == 'pull_request' && (needs.changes.result != 'success' || needs.changes.outputs.integration != 'false'))) }}
     name: PostgreSQL ${{ matrix.shard }}/4
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 4
     permissions:
       contents: read
     strategy:
@@ -422,7 +422,7 @@ jobs:
     needs: changes
     if: *integration-needed
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 4
     steps:
       - *integration-checkout
       - name: dev-install-dryrun
@@ -464,7 +464,7 @@ jobs:
     needs: integration
     if: ${{ !cancelled() && needs.integration.result != 'skipped' }}
     runs-on: ubuntu-slim
-    timeout-minutes: 5
+    timeout-minutes: 2
     steps:
       - *integration-checkout
       - *integration-node
@@ -483,7 +483,7 @@ jobs:
       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
       (github.event_name == 'pull_request' && (needs.changes.result != 'success' || needs.changes.outputs.infra != 'false'))) }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 1
     permissions:
       contents: read
     steps:
@@ -505,7 +505,7 @@ jobs:
     if: ${{ !cancelled() && github.event_name == 'merge_group' && needs.changes.outputs.images == 'true' }}
     name: Build ${{ matrix.image }}${{ matrix.pending && ' (pending add-on source)' || '' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 5
     strategy:
       fail-fast: false
       max-parallel: 21
@@ -554,7 +554,7 @@ jobs:
     if: ${{ !cancelled() && github.event_name == 'pull_request' && needs.changes.outputs.images == 'true' }}
     name: Build ${{ matrix.image }}${{ matrix.pending && ' (pending add-on source)' || '' }} (advisory)
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 4
     strategy:
       fail-fast: false
       max-parallel: 8
@@ -566,7 +566,7 @@ jobs:
     if: always() && github.event_name == 'pull_request'
     needs: pr-images
     runs-on: ubuntu-slim
-    timeout-minutes: 2
+    timeout-minutes: 1
     permissions: {}
     steps:
       - name: Report PR image builds
@@ -595,7 +595,7 @@ jobs:
     if: always()
     needs: [changes, workflow-lint, storybook, privacy, dependency-review, checks, full-unit, images, integration, portal-integration, integration-coverage, infra-validate, dev-install-dryrun]
     runs-on: ubuntu-slim
-    timeout-minutes: 2
+    timeout-minutes: 1
     permissions: {}
     steps:
       - name: Require checks and the applicable image lane

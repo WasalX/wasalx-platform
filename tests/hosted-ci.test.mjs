@@ -213,6 +213,18 @@ test("tracked tests belong to a named CI runner or the test allowlist", async ()
   assert.deepEqual({ missing, stale, invalid }, { missing: [], stale: [], invalid: [] });
 });
 
+test("CI job timeouts are covered by the measured limits", async () => {
+  const { jobs } = parse(await read(".github/workflows/ci.yml"));
+  const timing = JSON.parse(await read(".github/ci-timings.json"));
+  const configured = Object.entries(jobs).filter(([, job]) => Object.hasOwn(job, "timeout-minutes"));
+  assert.deepEqual(configured.map(([id]) => id).sort(), Object.keys(timing.jobs).sort());
+  for (const [id, job] of configured) {
+    const { p95_minutes: p95 } = timing.jobs[id];
+    const timeout = job["timeout-minutes"];
+    assert(Number.isInteger(timeout) && timeout > 0 && timeout <= Math.ceil(p95 * 1.25), id);
+  }
+});
+
 test("Storybook selects UI changes and unknown diffs", async (t) => {
   const { jobs } = parse(await read(".github/workflows/ci.yml"));
   const selection = jobs.changes.steps.find(step => step.id === "storybook");
@@ -549,7 +561,6 @@ test("CI gates integration and infrastructure and runs portal integration files 
   assert.match(integration.services.postgres.options, /--tmpfs /u);
   assert(coverage.steps.some(step => runsFile(step.run ?? "", "scripts/postgres-scenario-registry.mjs")));
   assert(integration.steps.some(step => runsFile(step.run ?? "", "scripts/test-postgres-integration.mjs", "--shard")));
-  assert.equal(integration["timeout-minutes"], 25);
   assert.deepEqual(integration.permissions, { contents: "read" });
   assert.match(integration.services.postgres.image, /^postgres:[^@]+@sha256:[a-f0-9]{64}$/u);
   const devPreflightFile = "tests/installer-dev-recreatability.test.mjs";
