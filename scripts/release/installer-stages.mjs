@@ -8,13 +8,13 @@ import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { stripVTControlCharacters } from "node:util";
 import { activeServiceNames, assertDevInstallPreimages, devContainerPreimage, devColdResidents, devHeldServices, devHeldPrerequisites, devPreservedServices, devValueDigest, captureDevReviewAuth, assertDevReviewAuthRows, devReviewAuthEnvironment, devReviewAuthConfiguration, assertInstallHostname } from "./installer-stack.mjs";
-import { devFreshHeldFlag, devFreshHeldPlan, devGuestComposeFiles, devSimulatorFlag, devSkipPublicWebhookPreflightFlag, devWebhookPreflightOverlay, oneShotServiceNames, rehearsalComposeFile, rehearsalImageSource } from "./installer-stack.mjs";
+import { devFreshHeldFlag, devFreshHeldPlan, devGuestComposeFiles, devSimulatorFlag, devSkipPublicWebhookPreflightFlag, devWebhookPreflightOverlay, localRegistryOverlay, oneShotServiceNames, rehearsalComposeFile, rehearsalImageSource } from "./installer-stack.mjs";
 import { parseRailsJson } from "./simulation-rails-json.mjs";
 import { sha256, preserveReplacement, readBoundArtifacts, writeArtifactState,
   assertRetainedPreimage, composeProfiles, dockerfileOf, imageServices, inspectOwned, preparePrivateDirectory, preimagePath, fenceReplacementEffects, replacementTargetNames, rollbackReplacement } from "./installer-artifacts.mjs";
 import { produceRollbackSafety, readOptionalState, recordReplacementAfter } from "./installer-rollback-state.mjs";
 import { enterComposeStageLock as enterStageLock, composeStageLockConflict } from "./compose-stage-lock.mjs";
-import { hostedIssuer, readHostedInventory, verifyHostedImages } from "./installer-hosted-images.mjs";
+import { assertLocalRegistry, hostedIssuer, localRegistryReference, readHostedInventory, verifyHostedImages, verifyStagedImage } from "./installer-hosted-images.mjs";
 
 const repository = resolve(fileURLToPath(new URL("../../", import.meta.url)));
 const preflight = fileURLToPath(new URL("./preflight-full-env.mjs", import.meta.url));
@@ -406,23 +406,31 @@ export async function executeStage(action, context) {
   };
   const dependencies = [...new Set(active.filter((name) => !model.services[name].build)
     .map((name) => model.services[name].image))];
+  if (context.localRegistry) {
+    for (const reference of dependencies) {
+      assert.equal(reference, localRegistryReference(context.localRegistry, reference),
+        "local registry requires every dependency to resolve to the staging registry");
+    }
+  }
   const verifyDependencies = async (pullMissing = false) => {
     for (const reference of dependencies) {
       assert.match(reference ?? "", /@sha256:[0-9a-f]{64}$/u, "dependency image must be pinned");
-      if (!await inspectImage(reference) && pullMissing) {
-        const exit = await execute("docker", ["pull", "--quiet", reference], environment, true);
+      if (pullMissing && (context.localRegistry || !await inspectImage(reference))) {
+        const exit = await execute("docker", ["pull", "--quiet", ...(context.localRegistry ? ["--platform", "linux/amd64"] : []), reference], environment, true);
         assert.equal(exit, 0, `dependency image pull failed: ${reference}`);
       }
-      assert.ok(await inspectImage(reference), `dependency image missing; run build before replacement: ${reference}`);
+      if (context.localRegistry) await verifyStagedImage(execute, environment, reference);
+      else assert.ok(await inspectImage(reference), `dependency image missing; run build before replacement: ${reference}`);
     }
   };
   if (action === "preload-hosted") {
-    assert.ok(context.imageSource && context.hostedImages, "preload requires signed rehearsal inputs");
+    assert.ok(context.hostedImages && (context.imageSource || context.localRegistry), "preload requires signed images and an admitted source");
     await readFile(preimagePath(context));
     await verifyHostedImages(context, { verifyOnly: true });
     const inventory = await readHostedInventory(context);
     for (const { id, reference } of plan) {
-      const source = inventory.images[id].pullReference;
+      const published = inventory.images[id].pullReference;
+      const source = context.localRegistry ? localRegistryReference(context.localRegistry, published) : published;
       assert.equal(await execute("docker", ["pull", "--platform", "linux/amd64", "--quiet", source], environment, true), 0,
         `${id} digest pull failed`);
       await execute("docker", ["image", "tag", source, reference], environment);
@@ -509,8 +517,14 @@ export async function executeStage(action, context) {
   for (const [index, image] of plan.entries()) {
     const details = await inspectImage(image.reference);
     // The admitted ID pins the verified config directly or through its manifest.
-    if (admission) assert.equal(details?.Id, admission.images[index].imageId, "admitted hosted image changed");
-    else assert.ok(matchesCandidate(details, candidateSha, candidateTree, image.dockerfile, context.buildContextSha256), `${image.id} requires the build stage`);
+    if (admission) {
+      const admitted = admission.images[index];
+      assert.equal(details?.Id, admitted.imageId, "admitted hosted image changed");
+      if (context.localRegistry) {
+        const staged = await verifyStagedImage(execute, environment, localRegistryReference(context.localRegistry, admitted.sourceReference));
+        assert.equal(staged.Id, admitted.imageId, "staged hosted image changed");
+      }
+    } else assert.ok(matchesCandidate(details, candidateSha, candidateTree, image.dockerfile, context.buildContextSha256), `${image.id} requires the build stage`);
     imageIds.push(details.Id);
   }
   if (action === "release-held") {
@@ -622,6 +636,7 @@ export async function executeStage(action, context) {
     ...(context.devSkipPublicWebhookPreflight ? [devSkipPublicWebhookPreflightFlag] : []),
     ...(context.devFreshHeld ? [devFreshHeldFlag] : []),
     ...(context.devSimulator ? [devSimulatorFlag] : []),
+    ...(context.localRegistry ? ["--local-registry", context.localRegistry] : []),
     ...composeProfiles.flatMap((profile) => ["--profile", profile]),
     ...(context.devPreimagesFile ? ["--dev-preimages", context.devPreimagesFile, "--dev-preimages-sha256", context.devPreimagesSha256] : []),
     ...plan.flatMap(({ id, reference }) => ["--candidate-image", `${id}=${reference}`]),
@@ -733,6 +748,7 @@ async function main() {
   let rollbackSafetyFile; let rollbackSafetySha256;
   let hostedImages; let hostedImagesSha256; let hostedTrustedRoot;
   let rehearsalMain;
+  let localRegistry;
   let devSkipPublicWebhookPreflight = false;
   let devFreshHeld = false; let devSimulator = false;
   for (let i = 0; i < extra.length; i += 1) {
@@ -745,6 +761,10 @@ async function main() {
         if (flag === "--hosted-images") { assert.equal(hostedImages, undefined); hostedImages = value; }
         else { assert.equal(hostedTrustedRoot, undefined); hostedTrustedRoot = value; }
       }
+    } else if (extra[i] === "--local-registry") {
+      assert.equal(localRegistry, undefined);
+      localRegistry = extra[++i];
+      assertLocalRegistry(localRegistry);
     } else if (extra[i] === "--rehearsal-main") {
       assert.equal(rehearsalMain, undefined);
       rehearsalMain = extra[++i];
@@ -814,11 +834,14 @@ async function main() {
     throw new Error("invalid arguments");
   }
 
+  assert.ok(!localRegistry || action === "preflight" || (hostedImages && action !== "verify-hosted"),
+    "local registry requires a hosted install stage or preflight");
+  assert.ok(action !== "preload-hosted" || (hostedImages && (rehearsalMain || localRegistry)),
+    "preload requires hosted images and the rehearsal or local registry");
   assertInstallHostname();
   const imageSource = rehearsalMain ? rehearsalImageSource(project, rehearsalMain, args => run("git", args, process.env)) : undefined;
   assert.ok(!imageSource || (["preflight", "preload-hosted", "admit-hosted", "replace", "smoke"].includes(action)
     && !devPreimagesFile && !captureDevPreimagesFile && (action === "preflight" || hostedImages)), "invalid rehearsal stage");
-  assert.ok(action !== "preload-hosted" || imageSource, "preload is limited to the disposable rehearsal");
   let devRecord;
   if (devPreimagesFile) {
     const bytes = await readFile(devPreimagesFile);
@@ -885,6 +908,11 @@ async function main() {
     ...[...guestFiles, ...overlay].flatMap(file => ["--file", file]),
     ...composeProfiles.flatMap((profile) => ["--profile", profile]), "--project-name", project,
   ];
+  if (localRegistry) {
+    const path = await localRegistryOverlay({ registry: localRegistry, project, envFile, profiles: composeProfiles,
+      render: () => JSON.parse(run("docker", [...composeArguments, "config", "--no-interpolate", "--no-env-resolution", "--format", "json"], environment)) });
+    composeArguments.push("--file", path);
+  }
   run("docker", [...composeArguments, "config", "--quiet"], environment);
   const safeCompose = JSON.parse(run("docker", [
     ...composeArguments, "config", "--no-interpolate", "--no-env-resolution", "--format", "json",
@@ -900,7 +928,8 @@ async function main() {
     try {
       const exit = await executeStage(stage, { plan, candidateSha, candidateTree, environment, composeArguments,
         buildContext, buildContextSha256, catalog, catalogSha256: sha256(catalogBytes), rollbackSafetyFile, rollbackSafetySha256,
-        hostedImages, hostedImagesSha256, hostedTrustedRoot, imageSource, devSkipPublicWebhookPreflight, devFreshHeld, devSimulator,
+        hostedImages, hostedImagesSha256, hostedTrustedRoot, imageSource, localRegistry,
+        devSkipPublicWebhookPreflight, devFreshHeld, devSimulator,
         project, envFile, repository, capturePreimage: rest.includes("--capture-preimage"),
         privateDirectory: resolve(homedir(), `.local/state/wasalx-compose/${candidateSha}/${project}`),
         nativePackage: catalog.tenantProvisioning.package, model: safeCompose, directory: resolve(repository, `output/release-evidence/${candidateSha}`),
