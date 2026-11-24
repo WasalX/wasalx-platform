@@ -834,6 +834,8 @@ async function main() {
     const catalog = JSON.parse(await readFile(resolve(repository, "release/installer-images.json"), "utf8"));
     await executeStage(action, { candidateSha, candidateTree, catalog, plan: catalog.images,
       hostedImages, hostedImagesSha256, hostedTrustedRoot, environment: process.env });
+    // verify-hosted never takes the stage lock, so this is its only print; Compose stages print after the lock below.
+    if (devSkipPublicWebhookPreflight) process.stderr.write("public webhook preflight skipped by DEV option\n");
     process.stdout.write("hosted inputs verified; no images loaded or tagged\n");
     return 0;
   }

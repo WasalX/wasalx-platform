@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -214,6 +214,40 @@ test("verify-only checks the complete catalog without Docker, preimages or an ad
   assert.equal(f.calls.filter(({ name }) => name === "cosign").length, 1 + 2 * catalog.images.length);
   assert.ok(f.calls.every(({ name }) => name === "cosign"));
   await assert.rejects(readFile(artifactPath(f.context)), { code: "ENOENT" });
+});
+
+test("verify-hosted reports the DEV webhook preflight skip without running Docker", async t => {
+  const { context } = await fixture(t);
+  const script = fileURLToPath(new URL("../scripts/release/installer-stages.mjs", import.meta.url));
+  const preload = `
+    import assert from "node:assert/strict";
+    import childProcess from "node:child_process";
+    import { syncBuiltinESMExports } from "node:module";
+    const outputs = new Map(Object.entries(${JSON.stringify({
+      "git rev-parse HEAD": candidateSha,
+      "git rev-parse HEAD^{tree}": candidateTree,
+      "git status --porcelain=v1 --untracked-files=all": "",
+      "cosign version --json": JSON.stringify({ gitVersion: cosignPin.version }),
+    })}));
+    childProcess.spawnSync = (command, args) => {
+      if (command === "cosign" && args[0] === "verify-blob-attestation") return { status: 0, stdout: "" };
+      const output = outputs.get([command, ...args].join(" "));
+      assert.notEqual(output, undefined, "unexpected installer subprocess");
+      return { status: 0, stdout: output };
+    };
+    childProcess.spawn = () => assert.fail("unexpected installer subprocess");
+    syncBuiltinESMExports();
+  `;
+  const env = { ...process.env, WASALX_INSTALL_EXPECTED_HOSTNAME: hostname(), DEPLOY_ENVIRONMENT: "", WASALX_ENVIRONMENT: "" };
+  const result = spawnSync(process.execPath, ["--import", `data:text/javascript,${encodeURIComponent(preload)}`,
+    "--", script, "verify-hosted", "--env-file", join(context.repository, "install.env"), "--project-name", "wasalx-live",
+    "--hosted-images", context.hostedImages, "--hosted-images-sha256", context.hostedImagesSha256,
+    "--hosted-trusted-root", context.hostedTrustedRoot, "--dev-skip-public-webhook-preflight"],
+  { env, encoding: "utf8", timeout: 10_000, windowsHide: true });
+  assert.equal(result.error, undefined);
+  assert.equal(result.status, 0);
+  assert.equal(result.stdout, "hosted inputs verified; no images loaded or tagged\n");
+  assert.equal(result.stderr, "public webhook preflight skipped by DEV option\n");
 });
 
 test("failed verify-only gate never reaches a caller's load/tag operations", async t => {
