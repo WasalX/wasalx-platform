@@ -8,6 +8,7 @@ import {
 import { arabicTenantMessages } from "../lib/i18n/messages/ar/tenant.ts";
 import { englishTenantMessages } from "../lib/i18n/messages/en/tenant.ts";
 import { createTranslator } from "../lib/i18n/translate.ts";
+import { readTenantPortalSource } from "./helpers/tenant-portal-source.mjs";
 
 const exact = {
   id: "ten",
@@ -106,7 +107,7 @@ test("rule-test BFF is Edge-safe in preview and proxies the authenticated produc
 
 test("rule tester mirrors the selected group's production identifier limit", async () => {
   const [portal, english, arabic] = await Promise.all([
-    readFile(new URL("../app/WasalXApp.tsx", import.meta.url), "utf8"),
+    readTenantPortalSource(),
     readFile(new URL("../lib/i18n/messages/en/tenant.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/i18n/messages/ar/tenant.ts", import.meta.url), "utf8"),
   ]);
@@ -127,7 +128,7 @@ test("rule tester mirrors the selected group's production identifier limit", asy
 
 test("rule tester guides operators instead of submitting without active rules", async () => {
   const [portal, english, arabic] = await Promise.all([
-    readFile(new URL("../app/WasalXApp.tsx", import.meta.url), "utf8"),
+    readTenantPortalSource(),
     readFile(new URL("../lib/i18n/messages/en/tenant.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/i18n/messages/ar/tenant.ts", import.meta.url), "utf8"),
   ]);
@@ -140,7 +141,7 @@ test("rule tester guides operators instead of submitting without active rules", 
 });
 
 test("rule tester uses correct bilingual zero, one, and many result phrases", async () => {
-  const portal = await readFile(new URL("../app/WasalXApp.tsx", import.meta.url), "utf8");
+  const portal = readTenantPortalSource();
   const english = createTranslator(englishTenantMessages);
   const arabic = createTranslator(arabicTenantMessages);
 
