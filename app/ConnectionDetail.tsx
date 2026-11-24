@@ -1010,7 +1010,7 @@ export function ConnectionDetail({
               </div>
             </section>
 
-            {detail.provider === "META" && state === "REVOKED" && canConfigure && !sessionExpired ? <Suspense fallback={<SectionLoading />}><MetaNumberRelease
+            {detail.provider === "META" && state === "REVOKED" && canConfigure && !sessionExpired ? <Suspense fallback={<SectionLoading quiet />}><MetaNumberRelease
               tenantId={tenantId} actorId={actorId} connectionId={id} connectionName={String(detail.name ?? "")} mutationHeaders={mutationHeaders} busyChanged={setMetaNumberReleasePending}
             /></Suspense> : null}
 
@@ -1195,7 +1195,7 @@ export function ConnectionDetail({
                             type="tel"
                             inputMode="tel"
                             autoComplete="tel"
-                            placeholder="+9665XXXXXXXX"
+                            placeholder={t("tenant.connection.authorization.pairing.numberExample")}
                             value={pairingPhone}
                             onChange={(event) => {
                               setPairingPhone(event.target.value);

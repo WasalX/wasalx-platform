@@ -170,7 +170,7 @@ export function Empty({ title, body }: { title: string; body: string }) {
 export function WorkspaceLoading() {
   const { t } = useI18n();
   return (
-    <div className="review-loading workspace-loading" role="status" aria-live="polite" aria-busy="true">
+    <div className="review-loading workspace-loading" role="status">
       <span aria-hidden="true" />
       <b>{t("tenant.loading.workspace")}</b>
     </div>
@@ -178,10 +178,11 @@ export function WorkspaceLoading() {
 }
 
 // Lazy slots inside panels, drawers and dialogs: compact and labelled for the section, not the workspace.
-export function SectionLoading() {
+// quiet: a slot that always loads beside another slot shows the same text without a second announcement.
+export function SectionLoading({ quiet = false }: { quiet?: boolean }) {
   const { t } = useI18n();
   return (
-    <div className="review-loading compact" role="status" aria-live="polite" aria-busy="true">
+    <div className="review-loading compact" role={quiet ? undefined : "status"}>
       <span aria-hidden="true" />
       <b>{t("tenant.loading.section")}</b>
     </div>

@@ -161,11 +161,8 @@ test("tenant routes contain no unreviewed visible English literals", async () =>
     ts.ScriptKind.TSX,
   );
   const visibleAttributes = new Set(["alt", "aria-label", "placeholder", "title"]);
-  // These are product names, locale-independent examples, or exact operator
-  // confirmation tokens validated by the API. They must remain unchanged.
+  // These are product names or exact operator confirmation tokens validated by the API. They must remain unchanged.
   const reviewedBrandTerms = new Set([
-    "{{message.argument}}",
-    "+9665XXXXXXXX",
     "ABC",
     "N",
     "RETRY",
