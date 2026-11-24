@@ -272,9 +272,17 @@ test("operator resume fails closed while the bot assignment is paused",async()=>
   await assert.rejects(()=>service.commandConversation(principal,conversationId,"resume-paused","request-paused",{action:"RESUME_BOT",expectedFencingToken:4}),/Activate the bot assignment/);
 });
 
-test("operator retry schedules the same retryable handoff without resetting attempts or changing ownership",async()=>{
+for (const configured of [undefined, "3"]) test(`operator retry respects the ${configured ? "configured" : "default"} handoff limit without resetting attempts or changing ownership`,async t=>{
+  const original = process.env.BOT_HANDOFF_MAX_ATTEMPTS;
+  t.after(() => {
+    if (original === undefined) delete process.env.BOT_HANDOFF_MAX_ATTEMPTS;
+    else process.env.BOT_HANDOFF_MAX_ATTEMPTS = original;
+  });
+  if (configured === undefined) delete process.env.BOT_HANDOFF_MAX_ATTEMPTS;
+  else process.env.BOT_HANDOFF_MAX_ATTEMPTS = configured;
+  const maxAttempts = configured === undefined ? 8 : Number(configured);
   const conversationId="47000000-0000-4000-8000-000000000001",handoffId="48000000-0000-4000-8000-000000000001";
-  const job={state:"FAILED_RETRYABLE",attempts:7};let operation,fence=4,updates=0,events=0,wakes=0;
+  const job={state:"FAILED_RETRYABLE",attempts:maxAttempts-1};let operation,fence=4,updates=0,events=0,wakes=0;
   const client={query:async(sql,values=[])=>{
     const barrier=emptyDirectCommandBarrier(sql,values,conversationId);if(barrier)return barrier;
     if(sql.includes("pg_advisory_xact_lock"))return{rows:[]};
@@ -282,8 +290,8 @@ test("operator retry schedules the same retryable handoff without resetting atte
     if(sql.includes("version.definition->>'start'"))return{rows:[{state:"HANDOFF_PENDING",fencing_token:fence,current_node_id:"handoff",handoff_id:handoffId,handoff_state:job.state}]};
     if(sql.includes("UPDATE bot_handoff_jobs")){
       assert.match(sql,/state='QUEUED',available_at=now\(\)/u);
-      assert.match(sql,/tenant_id=\$1 AND id=\$2 AND state='FAILED_RETRYABLE' AND attempts<8[\s\S]*lease_id IS NULL AND lease_expires_at IS NULL/u);
-      assert.doesNotMatch(sql,/SET[\s\S]*attempts\s*=/u);assert.deepEqual(values,[tenantId,handoffId]);
+      assert.match(sql,/tenant_id=\$1 AND id=\$2 AND state='FAILED_RETRYABLE' AND attempts<\$3[\s\S]*lease_id IS NULL AND lease_expires_at IS NULL/u);
+      assert.doesNotMatch(sql,/SET[\s\S]*attempts\s*=/u);assert.deepEqual(values,[tenantId,handoffId,maxAttempts]);
       job.state="QUEUED";updates++;return{rows:[],rowCount:1};
     }
     if(sql.includes("UPDATE bot_conversations")){assert.doesNotMatch(sql,/SET state|human_ownership_epoch|human_pause_started_at/u);fence++;return{rows:[],rowCount:1};}
@@ -298,7 +306,7 @@ test("operator retry schedules the same retryable handoff without resetting atte
   const result=await service.commandConversation(principal,conversationId,"retry-handoff","request",input);
   assert.deepEqual(result,{conversationId,state:"HANDOFF_PENDING",currentNodeId:"handoff",fencingToken:5,command:"RETRY_HANDOFF",duplicate:false});
   assert.deepEqual(await service.commandConversation(principal,conversationId,"retry-handoff","replay",input),{...result,duplicate:true});
-  assert.equal(job.attempts,7);assert.equal(updates,1);assert.equal(events,1);assert.equal(wakes,2);
+  assert.equal(job.attempts,maxAttempts-1);assert.equal(updates,1);assert.equal(events,1);assert.equal(wakes,2);
 });
 
 test("handoff retry fails closed on a stale fence, changed job, or exhausted attempts",async()=>{
@@ -314,7 +322,7 @@ test("handoff retry fails closed on a stale fence, changed job, or exhausted att
       const barrier=emptyDirectCommandBarrier(sql,values,conversationId);if(barrier)return barrier;
       const operation=emptyActionOperation(sql);if(operation)return operation;
       if(sql.includes("version.definition->>'start'"))return{rows:[{state:scenario.state,fencing_token:scenario.fence,current_node_id:"handoff",handoff_id:handoffId,handoff_state:scenario.handoffState}]};
-      if(sql.includes("UPDATE bot_handoff_jobs")){assert.equal(scenario.changed,true);assert.match(sql,/attempts<8/u);return{rows:[],rowCount:0};}
+      if(sql.includes("UPDATE bot_handoff_jobs")){assert.equal(scenario.changed,true);assert.match(sql,/attempts<\$3/u);return{rows:[],rowCount:0};}
       throw new Error(`Unexpected mutation after a rejected handoff retry: ${sql}`);
     }};
     const service=new BotFlowsService({withTenant:async(_tenant,callback)=>callback(client)},{wake:async()=>assert.fail("Rejected retry must not wake workers")});

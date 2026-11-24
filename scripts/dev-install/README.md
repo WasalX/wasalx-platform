@@ -29,6 +29,22 @@ Use `--repository` to select the candidate checkout and repeat `--compose-file` 
 `--held-services` overrides the DEV hold set with a comma-separated list. Nightly passes an empty list.
 Keep the JSON report private. The nightly logs only the counts and census result or a sanitized failure.
 
+## Fresh held guest projects
+
+Use a new `wasalx-dev-*` project with no existing containers, volumes, or networks.
+After native preflight and candidate image preparation, run installer `replace`
+with `--drained --dev-fresh-held`, then `smoke` with `--dev-fresh-held`.
+The installer creates the DEV hold set and one-shot prerequisites used only by
+held services without starting them. A failed replacement stays fenced for review.
+
+For a synthetic guest, pass `--dev-simulator` through preflight, image preparation,
+replacement, and smoke. It uses the nightly Compose adjustments and puts the WAHA
+simulator on the internal connectors network. Use synthetic credentials and private
+mail endpoints. The [simulation env generator](../release/generate-simulation-env.py)
+supplies the WAHA fixture settings. Set unused host ports in the private env file
+before preflight. Keep the smoke receipt `dev-fresh-held-stack-<project>.json` with the guest
+evidence.
+
 ## Signed host packet
 
 Render the host lease budgets directly from raw host receipts. The renderer takes

@@ -6,8 +6,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { captureDevInstallPreimages, releaseDevHeld, executeStage } from "../scripts/release/installer-stages.mjs";
-import { devHeldServices, devHeldPrerequisites, devPreservedServices, devColdResidents, assertDevInstallPreimages } from "../scripts/release/installer-stack.mjs";
-import { sha256 } from "../scripts/release/installer-artifacts.mjs";
+import { devHeldServices, devHeldPrerequisites, devPreservedServices, devColdResidents, devValueDigest, assertDevInstallPreimages } from "../scripts/release/installer-stack.mjs";
+import { artifactPath, preimagePath, sha256 } from "../scripts/release/installer-artifacts.mjs";
 
 const sha = "a".repeat(40);
 const tree = "b".repeat(40);
@@ -160,6 +160,66 @@ test("replacement refuses valid DEV preimages older than 60 seconds", async t =>
   calls.length = 0;
   await assert.rejects(executeStage("replace", context), /DEV mutation requires fresh action-time preimages/u);
   assert.ok(calls.every(args => args[0] === "image" && args[1] === "inspect"));
+});
+
+test("fresh DEV replace creates holds without starting them and refuses a previously used project", async t => {
+  const root = await mkdtemp(join(tmpdir(), "wasalx-fresh-held-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const project = "wasalx-dev-fresh";
+  const composeArguments = ["compose", "--project-name", project];
+  const webhook = "public-webhook-preflight";
+  const service = { image: `synthetic@${imageId}` };
+  const model = { services: {
+    portal: service, [webhook]: service, ...Object.fromEntries(devHeldServices.map(name => [name, { ...service }])),
+  }, volumes: { data: { name: `${project}_data` } }, networks: { core: { name: `${project}_core` } } };
+  model.services["waha-gows"].depends_on = { [webhook]: { condition: "service_completed_successfully" } };
+  const host = { id: "fixture", name: "fixture", dataRoot: root };
+  const calls = [];
+  const context = { candidateSha: sha, candidateTree: tree, project, composeArguments, model,
+    buildContextSha256: "a".repeat(64), catalogSha256: "b".repeat(64), plan: [], drained: true, devFreshHeld: true,
+    directory: join(root, "source"), repository: join(root, "source"), privateDirectory: join(root, "private"),
+    command: (command, args) => {
+      assert.equal(command, "docker");
+      calls.push(args);
+      if (args[0] === "info") return JSON.stringify({ ID: host.id, Name: host.name, DockerRootDir: host.dataRoot });
+      if (args[0] === "ps" || args.includes("--quiet")) return args[0] === context.retained ? "retained" : "";
+      if (args[0] === "volume") return context.retained === "volume-name" ? `${project}_data` : "";
+      if (args[0] === "network") return context.retained === "network-name" ? `${project}_core` : "";
+      if (args[0] === "inspect") return JSON.stringify([{ Id: "1".repeat(64), Image: imageId,
+        Config: { Labels: { "com.docker.compose.project": project, "com.docker.compose.service": "portal" } },
+        State: { Running: true, ExitCode: 0 },
+      }]);
+      if (args[0] === "image") return JSON.stringify([{ Id: imageId }]);
+      if (args[0] === "compose") return 0;
+      assert.fail(`unexpected docker command: ${args.join(" ")}`);
+    },
+  };
+  await mkdir(context.directory); await mkdir(context.privateDirectory);
+  const transactionId = "fixture";
+  const snapshot = JSON.stringify({ schemaVersion: 1, kind: "compose-replacement-preimage", transactionId,
+    candidateSha: sha, candidateTree: tree, project, host, containers: [], buildTags: [],
+  });
+  await writeFile(preimagePath(context), snapshot);
+  await writeFile(artifactPath(context), JSON.stringify({
+    schemaVersion: 1, kind: "compose-candidate-artifacts", state: "PASS", candidateSha: sha, candidateTree: tree, project,
+    buildContextSha256: context.buildContextSha256, catalogSha256: context.catalogSha256,
+    buildContextAlgorithm: "sha256-git-archive-tar-v1", modelSha256: devValueDigest(model), plan: [], images: [],
+    preimage: { sha256: sha256(snapshot), transactionId },
+  }));
+  const up = () => calls.filter(args => args.includes("up"));
+  for (const resource of ["ps", "volume", "network", "volume-name", "network-name"]) {
+    context.retained = resource;
+    await assert.rejects(executeStage("replace", context), /preimage container inventory changed|fresh held project must have no/);
+    assert.deepEqual(up(), []);
+  }
+  context.retained = undefined;
+  await assert.rejects(executeStage("replace", { ...context, retryReviewed: true }), /fresh held replacement cannot retry/);
+  assert.deepEqual(up(), []);
+  assert.equal(await executeStage("replace", context), 0);
+  assert.deepEqual(up(), [
+    [...composeArguments, "up", "--no-build", "--pull", "never", "--wait", "portal"],
+    [...composeArguments, "up", "--no-build", "--pull", "never", "--no-start", "--no-deps", ...[...devHeldServices, webhook].sort()],
+  ]);
 });
 
 test("held installation records historical restarts without requiring active health", async t => {
