@@ -770,7 +770,7 @@ test("large tenant workspaces load only when their route is selected", async () 
   const viewModules = ["BotAutomation", "ClientRouting", "CaseLifecycle", "InboxWorkspace", "SupportTeams", "MailboxAdministration",
     "WorkspaceAccess", "NativeRoutingSync", "MetaCostUsage", "MetaSignup", "MetaNumberRelease", "MetaTemplatePreparation", "MetaLegacyMigration",
     "MetaCoexistence", "MetaBillingDiagnostics", "MetaCustomerPaymentPolicy", "MetaRouting", "MetaSavedAccessActivation",
-    "ConnectionDetail", "Groups", "TenantSettings"];
+    "ConnectionDetail", "Groups", "TenantSettings", "Rules", "Deliveries", "Audit", "TeamAccess"];
   for (const moduleName of viewModules) {
     assert.match(portal, new RegExp(`lazy\\(async \\(\\) => \\([\\s\\S]*import\\(\\"\\./${moduleName}\\"\\)`));
     // The shell and its shared helpers are first-load; a static import there pulls the view back in.
