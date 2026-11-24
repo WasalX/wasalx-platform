@@ -18,6 +18,7 @@ import { parsePostgresShardArgs, postgresScenarioGroups, verifyPostgresReports }
 
 const repository = fileURLToPath(new URL("../", import.meta.url));
 const read = file => readFile(join(repository, file), "utf8");
+const cosignAction = "./.github/actions/cosign";
 const commands = text => text.split(/\n|&&|;/u).map(line => line.trim()).filter(line => line && !line.startsWith("#"));
 const words = text => Array.from(text.matchAll(/"([^"]*)"|'([^']*)'|([^\s"'()]+)/gu),
   ([, doubleQuoted, singleQuoted, bare]) => doubleQuoted ?? singleQuoted ?? bare);
@@ -236,7 +237,10 @@ test("nightly install is report-only, read-only and fails open on PR diff errors
   assert.deepEqual(job.permissions, { contents: "read", actions: "read" });
   assert.equal(job["runs-on"], "ubuntu-24.04");
   const actions = job.steps.filter(step => step.uses);
-  assert(actions.every(step => /@[0-9a-f]{40}$/u.test(step.uses)));
+  const { runs } = parse(await read(cosignAction + "/action.yml"));
+  const remoteActions = actions.flatMap(step => step.uses === cosignAction
+    ? runs.steps.filter(nested => nested.uses) : [step]);
+  assert(remoteActions.every(step => /@[0-9a-f]{40}$/u.test(step.uses)));
   assert.equal(actions.find(step => step.uses.startsWith("actions/checkout@")).with["persist-credentials"], false);
   assert(!JSON.stringify(job).includes("secrets."));
   const changeSelection = job.steps.find(step => step.id === "changes");
@@ -630,6 +634,34 @@ test("CI seeds pnpm caches on main and builds cleanly in the merge queue", async
     assert.equal(result.status, 0, result.stderr);
     assert.equal(result.stdout.trim(), `run build:services${suffix}`);
   }
+});
+
+test("signing, promotion and nightly workflows use the same Cosign pin", async () => {
+  const pinPath = "scripts/release/cosign-pin.json";
+  const pin = JSON.parse(await read(pinPath));
+  assert.match(pin.version, /^v\d+\.\d+\.\d+$/u);
+  assert.match(pin.linuxAmd64Sha256, /^[0-9a-f]{64}$/u);
+
+  const installJobs = { "branch-image": ["publish"], release: ["stg", "prod"], "nightly-install": ["nightly-install"] };
+  for (const [workflow, expectedJobs] of Object.entries(installJobs)) {
+    const { jobs } = parse(await read(`.github/workflows/${workflow}.yml`));
+    for (const [job, { steps }] of Object.entries(jobs)) {
+      const installs = steps.filter(step => step.uses === cosignAction || step.uses?.startsWith("sigstore/cosign-installer@"));
+      assert.deepEqual(installs.map(step => step.uses), expectedJobs.includes(job) ? [cosignAction] : [], `${workflow}/${job}`);
+    }
+  }
+
+  const { runs } = parse(await read(`${cosignAction}/action.yml`));
+  const [version, install, verify] = runs.steps;
+  assert.match(version.run, /jq -er '.version' scripts\/release\/cosign-pin\.json/u);
+  assert.equal(install.with["cosign-release"], "${{ steps.pin.outputs.version }}");
+  assert.match(install.uses, /^sigstore\/cosign-installer@[0-9a-f]{40}$/u);
+  for (const script of [verify.run, await read("scripts/release/promote-tag.sh")]) {
+    assert.match(script, /jq -er '.linuxAmd64Sha256' scripts\/release\/cosign-pin\.json/u);
+    assert.match(script, /sha256sum --check --strict/u);
+  }
+  assert.match(await read("scripts/dev-install/pull-verify.mjs"),
+    /assert\.equal\(hash\.digest\("hex"\), cosignPin\.linuxAmd64Sha256/u);
 });
 
 test("PR image results are advisory while the merge queue requires the full image matrix", async t => {

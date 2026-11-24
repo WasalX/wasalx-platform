@@ -5,6 +5,7 @@ import { createReadStream } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
+import cosignPin from "../release/cosign-pin.json" with { type: "json" };
 import { assertHostedStatement, hostedIssuer, readHostedInventory } from "../release/installer-hosted-images.mjs";
 
 export async function verifyProductDigests(inventory, trust, execute) {
@@ -34,7 +35,7 @@ if (import.meta.main) {
   const inventory = await readHostedInventory({ hostedImages, candidateSha, candidateTree, catalog, hostedImagesSha256 });
   const hash = createHash("sha256");
   for await (const chunk of createReadStream(cosign)) hash.update(chunk);
-  assert.equal(hash.digest("hex"), "424e2c97d0b45fd7a6b608a87f090f35633f4c23ece5f092d48bba11aaf4bbfa");
+  assert.equal(hash.digest("hex"), cosignPin.linuxAmd64Sha256, "Cosign binary checksum mismatch");
   const trustBytes = await readFile(trustedRoot);
   assert.equal(createHash("sha256").update(trustBytes).digest("hex"), trustedRootSha256);
   const trust = join(dirname(hostedImages), "trusted-root.json");
