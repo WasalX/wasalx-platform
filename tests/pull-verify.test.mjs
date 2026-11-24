@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { pullCommandTimeout } from "../scripts/dev-install/pull-verify.mjs";
 import cosignPin from "../scripts/release/cosign-pin.json" with { type: "json" };
 import { hostedIssuer, verifyHostedImages } from "../scripts/release/installer-hosted-images.mjs";
 
@@ -94,6 +95,16 @@ test("the pull verifier rejects a changed trusted root before checking either bu
   await writeFile(context.hostedTrustedRoot, "another root");
   await assert.rejects(verifyHostedImages(context, { verifyOnly: true }), /Sigstore trust root checksum mismatch/u);
   assert.deepEqual(calls, [["version", "--json"]]);
+});
+
+test("pull verifier command deadlines leave time to report either stage's failure to the agent", () => {
+  const staging = pullCommandTimeout("staging", 0);
+  assert.equal(staging, 240_000);
+  assert.equal(pullCommandTimeout("cosign", staging), 30_000);
+  for (const stage of ["staging", "cosign"]) {
+    assert.equal(pullCommandTimeout(stage, 289_000), 1_000);
+    assert.throws(() => pullCommandTimeout(stage, 290_000), { code: 124 });
+  }
 });
 
 test("the verifier CLI reports inventory failure without leaking its arguments", () => {

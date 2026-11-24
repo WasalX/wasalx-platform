@@ -329,7 +329,7 @@ def command_env(work):
             "DOCKER_CONFIG": str(work / "docker"), "SSH_ASKPASS_REQUIRE": "never"}
 
 
-def verify(manifest, commit, tree, config, *, stderr=subprocess.DEVNULL, staged=False):
+def verify(manifest, commit, tree, config, *, staged=False):
     # The verifier also checks the exact root bytes it passes to Cosign.
     root_digest = content_digest(Path(config["trusted_root"]).read_bytes())
     if root_digest != f"sha256:{config['trusted_root_sha256']}":
@@ -338,8 +338,9 @@ def verify(manifest, commit, tree, config, *, stderr=subprocess.DEVNULL, staged=
              config["trusted_root"], config["trusted_root_sha256"]]
     if staged:
         tools.append("--staged")
+    # The verifier reports redacted diagnostics on stderr and writes only references to stdout.
     return json.loads(subprocess.check_output(
-        tools, stdin=subprocess.DEVNULL, stderr=stderr, env=command_env(manifest.parent), timeout=300))
+        tools, stdin=subprocess.DEVNULL, env=command_env(manifest.parent), timeout=300))
 
 
 def compose_refs(api, commit, product_refs):

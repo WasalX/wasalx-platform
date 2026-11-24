@@ -27,6 +27,16 @@ class RegistryRequestError(Exception):
         super().__init__(f"GET {path} repo={repository} phase={phase} {result} elapsed_ms={elapsed_ms}")
 
 
+class RegistryRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        redirected = super().redirect_request(req, fp, code, msg, headers, newurl)
+        source, target = urlsplit(req.full_url), urlsplit(redirected.full_url)
+        if (source.scheme != "https" or target.scheme != "https"
+                or source.netloc.lower().removesuffix(":443") != target.netloc.lower().removesuffix(":443")):
+            redirected.remove_header("Authorization")
+        return redirected
+
+
 def registry_bytes(opener, request, repository, timings):
     # Keep the initial public path. HTTP errors and redirected URLs can contain tokens.
     path = urlsplit(request.full_url).path
@@ -72,7 +82,7 @@ def stage_hosted_bundles(manifest_path, timings):
     for image, row in images.items():
         require(re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", image) and DIGEST.fullmatch(row["digest"])
                 and DIGEST.fullmatch(row["configDigest"]), "Invalid image name or digest")
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), RegistryRedirect())
     types = {"https://sigstore.dev/cosign/sign/v1": "signature", "https://slsa.dev/provenance/v0.2": "provenance"}
     for image, row in images.items():
         repository = "wasalx/" + image

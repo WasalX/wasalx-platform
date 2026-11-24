@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 import type { MetaRoutingAction, MetaRoutingConfigurationDto, MetaRoutingRole, MetaThreadActionDto, MetaThreadControlCommand, MetaThreadRoutingDto } from "../lib/meta-routing-contract";
 import { metaThreadActionMatches, metaThreadIntentSettled, parseMetaThreadIntent, type MetaThreadIntent } from "../lib/meta-thread-intent";
 import { formatList } from "../lib/i18n/format";
 import { localizedUiError } from "../lib/ui-error";
+import { createLatestRequestFence } from "../lib/operator-ui";
 import { InlineConfirmation, ModalDialog } from "./ModalDialog";
 import { useI18n } from "./I18nProvider";
 import { useVisibleRefresh } from "./use-visible-refresh";
@@ -33,50 +34,52 @@ function ConnectionRouting({ connectionId, canConfigure, mutationHeaders }: Conn
   const [data, setData] = useState<MetaRoutingConfigurationDto | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true), [saving, setSaving] = useState(false), [uncertain, setUncertain] = useState(false);
-  const alive = useRef(false), writing = useRef(false), generation = useRef(0);
+  const writing = useRef(false), loadFence = useRef(createLatestRequestFence());
   const intent = useRef<{ key: string; expectedVersion: number; expectedSessionId: string } | null>(null);
   async function read(signal?: AbortSignal) {
     if (writing.current) return;
-    const current = ++generation.current;
+    const version = loadFence.current.begin();
+    const isCurrent = () => !signal?.aborted && loadFence.current.isCurrent(version);
     try {
       const result = await request<MetaRoutingConfigurationDto>(url, mutationHeaders, undefined, undefined, signal);
-      if (!alive.current || signal?.aborted || current !== generation.current) return;
+      if (!isCurrent()) return;
       setData(result); setError(null);
       // A newly observed declaration prevents another submission. No request is replayed.
       if (result.declared && (!intent.current || result.configurationVersion > intent.current.expectedVersion)) setUncertain(false);
     } catch (failure) {
-      if (alive.current && !signal?.aborted && current === generation.current) {
+      if (isCurrent()) {
         // Keep the last known configuration through a transient background failure; drop it only when access is denied.
         const status = failure && typeof failure === "object" && "status" in failure ? Number(failure.status) : 0;
         if (!signal || status === 401 || status === 403) setData(null);
         setError(localizedUiError(locale, failure).message);
       }
-    } finally { if (alive.current && !signal?.aborted && current === generation.current) setLoading(false); }
+    } finally { if (isCurrent()) setLoading(false); }
   }
+  // The key owns connection and authentication context, so the first read runs once per lifetime.
+  const readOnMount = useEffectEvent(read);
   useEffect(() => {
-    alive.current = true; const controller = new AbortController(), counter = generation;
-    queueMicrotask(() => { if (!controller.signal.aborted) void read(controller.signal); });
-    return () => { alive.current = false; counter.current++; controller.abort(); };
-    // The key owns connection and authentication context.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    const controller = new AbortController(), fence = loadFence.current;
+    queueMicrotask(() => { if (!controller.signal.aborted) void readOnMount(controller.signal); });
+    return () => { fence.invalidate(); controller.abort(); };
   }, []);
   useVisibleRefresh(read, !saving);
   async function declare() {
     if (!data || data.declared || !canConfigure || writing.current || uncertain || loading) return;
-    writing.current = true; generation.current++; setSaving(true); setError(null);
+    writing.current = true; const version = loadFence.current.begin(), isCurrent = () => loadFence.current.isCurrent(version);
+    setSaving(true); setError(null);
     intent.current ??= { key: crypto.randomUUID(), expectedVersion: data.configurationVersion, expectedSessionId: data.sessionId };
     try {
       const { key, ...expected } = intent.current;
       const result = await request<MetaRoutingConfigurationDto>(url, mutationHeaders, { ...expected, fallback: "HOLD" }, key);
-      if (alive.current) { setData(result); setUncertain(false); }
-    } catch (failure) { if (alive.current) {
+      if (isCurrent()) { setData(result); setUncertain(false); }
+    } catch (failure) { if (isCurrent()) {
       setError(localizedUiError(locale, failure).message);
       const status = failure && typeof failure === "object" && "status" in failure ? Number(failure.status) : 0;
       // Only a lost response or server failure leaves the outcome unknown; a definite rejection releases the form with a fresh request.
       if (status >= 400 && status < 500 && status !== 408) intent.current = null; else setUncertain(true);
       if (status === 401 || status === 403) setData(null);
     } }
-    finally { if (alive.current) { writing.current = false; setSaving(false); } }
+    finally { if (isCurrent()) { writing.current = false; setSaving(false); } }
   }
   return <section className={`connection-detail-section ${styles.section}`} aria-labelledby="meta-routing-title" aria-busy={loading || saving}>
     <div className="connection-detail-section-head"><div><h3 id="meta-routing-title">{t("tenant.metaRouting.title")}</h3><p>{t("tenant.metaRouting.intro")}</p></div></div>
@@ -116,40 +119,40 @@ function ThreadSession({ conversationId, connectionId, workspaceId, label, mutat
   const [loading, setLoading] = useState(true), [saving, setSaving] = useState(false), [held, setHeld] = useState(false);
   const [storageUnavailable, setStorageUnavailable] = useState(false);
   const [action, setAction] = useState<MetaRoutingAction | null>(null), [target, setTarget] = useState<MetaRoutingRole | "">("");
-  const alive = useRef(false), writing = useRef(false), generation = useRef(0);
+  const writing = useRef(false), loadFence = useRef(createLatestRequestFence());
   const intent = useRef<MetaThreadIntent | null>(null);
   async function read(signal?: AbortSignal) {
     if (writing.current) return;
-    const version = ++generation.current;
+    const version = loadFence.current.begin();
+    const isCurrent = () => !signal?.aborted && loadFence.current.isCurrent(version);
     try {
       const result = await request<MetaThreadRoutingDto>(url, mutationHeaders, undefined, intent.current?.key, signal);
       if (result.connectionId !== connectionId) throw new Error("META_ROUTING_SCOPE_CHANGED");
-      if (alive.current && !signal?.aborted && version === generation.current) {
+      if (isCurrent()) {
         setData(result); setError(null); setAction(null);
         if (intent.current && metaThreadIntentSettled(intent.current, result.correlation)) {
           try { window.sessionStorage.removeItem(storageKey); intent.current = null; setHeld(false); }
           catch { setStorageUnavailable(true); }
         }
       }
-    } catch (failure) { if (alive.current && !signal?.aborted && version === generation.current) { setData(null); setError(localizedUiError(locale, failure).message); } }
-    finally { if (alive.current && !signal?.aborted && version === generation.current) setLoading(false); }
+    } catch (failure) { if (isCurrent()) { setData(null); setError(localizedUiError(locale, failure).message); } }
+    finally { if (isCurrent()) setLoading(false); }
   }
-  useEffect(() => {
-    alive.current = true; const controller = new AbortController(), counter = generation;
+  // The keyed dialog owns this workspace, conversation and authentication context, so recovery runs once per lifetime.
+  const restoreAndRead = useEffectEvent((signal: AbortSignal) => {
     // The hold contains only a local action key/body. Never credentials or provider identifiers.
-    Promise.resolve().then(() => {
-      if (controller.signal.aborted) return;
-      try {
-        const saved = window.sessionStorage.getItem(storageKey);
-        intent.current = saved === null ? null : parseMetaThreadIntent(saved);
-        setHeld(saved !== null); // Malformed recovery also stays held; never manufacture a fresh key.
-      }
-      catch { setStorageUnavailable(true); }
-      void read(controller.signal);
-    });
-    return () => { alive.current = false; counter.current++; controller.abort(); };
-    // The keyed dialog owns this workspace, conversation and authentication context.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    try {
+      const saved = window.sessionStorage.getItem(storageKey);
+      intent.current = saved === null ? null : parseMetaThreadIntent(saved);
+      setHeld(saved !== null); // Malformed recovery also stays held; never manufacture a fresh key.
+    }
+    catch { setStorageUnavailable(true); }
+    void read(signal);
+  });
+  useEffect(() => {
+    const controller = new AbortController(), fence = loadFence.current;
+    Promise.resolve().then(() => { if (!controller.signal.aborted) restoreAndRead(controller.signal); });
+    return () => { fence.invalidate(); controller.abort(); };
   }, []);
   useVisibleRefresh(read, !saving && action === null);
   const serverHeld = data?.actions.some(item => item.state === "RUNNING" || item.state === "OUTCOME_UNKNOWN") ?? false;
@@ -163,10 +166,11 @@ function ThreadSession({ conversationId, connectionId, workspaceId, label, mutat
     const value = { key: crypto.randomUUID(), body };
     try { window.sessionStorage.setItem(storageKey, JSON.stringify(value)); }
     catch { setStorageUnavailable(true); return; } // Dispatch requires a durable local ambiguity fence.
-    intent.current = value; writing.current = true; generation.current++; setSaving(true); setHeld(true); setError(null);
+    intent.current = value; writing.current = true; const version = loadFence.current.begin(), isCurrent = () => loadFence.current.isCurrent(version);
+    setSaving(true); setHeld(true); setError(null);
     try {
       const result = await request<MetaThreadActionDto>(url, mutationHeaders, value.body, value.key);
-      if (!alive.current) return;
+      if (!isCurrent()) return;
       if (!metaThreadActionMatches(body, result)) throw new Error("META_ROUTING_RESPONSE_UNAVAILABLE");
       setData(previous => previous ? { ...previous, actions: [result, ...previous.actions.filter(item => item.id !== result.id)], availability: { ...previous.availability, actions: [] } } : previous);
       if (result.state === "SUCCEEDED" || result.state === "FAILED") {
@@ -174,11 +178,11 @@ function ThreadSession({ conversationId, connectionId, workspaceId, label, mutat
         catch { setStorageUnavailable(true); }
       }
       setAction(null);
-    } catch (failure) { if (alive.current) {
+    } catch (failure) { if (isCurrent()) {
       setError(localizedUiError(locale, failure).message); setHeld(true); setAction(null);
       if (failure && typeof failure === "object" && "status" in failure && (failure.status === 401 || failure.status === 403)) setData(null);
     } }
-    finally { if (alive.current) { writing.current = false; setSaving(false); } }
+    finally { if (isCurrent()) { writing.current = false; setSaving(false); } }
   }
   return <ModalDialog close={saving ? () => {} : close} className="modal-backdrop" aria-labelledby="meta-thread-title"><div className={`modal ${styles.section}`}>
     <div className="modal-head"><div><h2 id="meta-thread-title">{t("tenant.metaRouting.threadTitle")}</h2><p><bdi>{label}</bdi></p></div><button type="button" disabled={saving} aria-label={t("tenant.metaRouting.close")} onClick={close}>×</button></div>
@@ -194,7 +198,7 @@ function ThreadSession({ conversationId, connectionId, workspaceId, label, mutat
         <strong>{t(`tenant.metaRouting.action.${item.action}`)}{item.targetRole ? ` · ${t(`tenant.metaRouting.role.${item.targetRole}`)}` : ""}</strong>
         <span>{t(`tenant.metaRouting.actionState.${item.state}`)}</span>
       </li>)}</ul> : <p>{t("tenant.metaRouting.noActions")}</p>}
-      {!unavailable ? <div className={styles.actions}>{data.availability.actions.map(item => <button className="button secondary" type="button" key={item} onClick={() => { generation.current++; setTarget(""); setAction(item); }}>{t(`tenant.metaRouting.action.${item}`)}</button>)}</div> : null}
+      {!unavailable ? <div className={styles.actions}>{data.availability.actions.map(item => <button className="button secondary" type="button" key={item} onClick={() => { loadFence.current.invalidate(); setTarget(""); setAction(item); }}>{t(`tenant.metaRouting.action.${item}`)}</button>)}</div> : null}
       {action && !unavailable ? <InlineConfirmation className={styles.confirm} busy={saving} aria-labelledby="meta-thread-confirm" cancel={() => setAction(null)}>
         <h3 id="meta-thread-confirm">{t("tenant.metaRouting.confirm", { action: t(`tenant.metaRouting.action.${action}`) })}</h3>
         <p>{t("tenant.metaRouting.effect")}</p>
