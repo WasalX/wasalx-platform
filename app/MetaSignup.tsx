@@ -180,7 +180,7 @@ function MetaSignupSession({ name, mutationHeaders, busyChanged, created, back, 
     startKey.current = crypto.randomUUID();
     if (targetConnectionId) heading.current?.focus({ preventScroll: true });
     const controller = new AbortController();
-    void loadSession(controller);
+    queueMicrotask(() => { if (!controller.signal.aborted) void loadSession(controller); });
     return () => { controller.abort(); leaveSession(); };
   }, [csrf, targetConnectionId, transitionId, legacyMigrationId, purpose]);
 
