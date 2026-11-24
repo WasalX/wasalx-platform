@@ -220,7 +220,11 @@ test("Storybook selects UI changes and unknown diffs", async (t) => {
   assert.equal(jobs.storybook.needs, "changes");
   assert.match(jobs.storybook.if, /github\.event_name == 'push'/u);
   assert.match(jobs.storybook.if, /github\.event_name == 'pull_request' && needs\.changes\.outputs\.storybook != 'false'/u);
-  assert(!jobs["ci-gate"].needs.includes("storybook"));
+  assert.match(jobs.storybook.if, /github\.event_name == 'merge_group'/u);
+  assert(jobs["ci-gate"].needs.includes("storybook"));
+  const [gateStep] = jobs["ci-gate"].steps;
+  assert.equal(gateStep.env.STORYBOOK_NEEDED, "${{ needs.changes.outputs.storybook }}");
+  assert.equal(gateStep.env.STORYBOOK, "${{ needs.storybook.result }}");
 
   const directory = await mkdtemp(join(tmpdir(), "storybook-selection-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
@@ -549,9 +553,13 @@ test("CI gates integration and infrastructure and runs portal integration files 
   assert.deepEqual(integration.permissions, { contents: "read" });
   assert.match(integration.services.postgres.image, /^postgres:[^@]+@sha256:[a-f0-9]{64}$/u);
   const devPreflightFile = "tests/installer-dev-recreatability.test.mjs";
-  const devPreflight = jobs.checks.steps.find(step => runsFile(step.run ?? "", devPreflightFile));
-  assert.equal(devPreflight?.if, "github.event_name == 'pull_request' && matrix.mode == 'unit' && matrix.shard == 1");
-  assert(portal.steps.some(step => !step.if && runsFile(step.run ?? "", devPreflightFile)));
+  const devPreflightSteps = jobs.checks.steps.filter(step => runsFile(step.run ?? "", devPreflightFile));
+  assert.equal(devPreflightSteps.length, 1);
+  assert.equal(devPreflightSteps[0].if, "matrix.mode == 'unit' && matrix.shard == 1");
+  assert(!unitFiles.includes(devPreflightFile));
+  assert(!portal.steps.some(step => runsFile(step.run ?? "", devPreflightFile)));
+  const shardStep = jobs.checks.steps.find(step => runsFile(step.run ?? "", "scripts/hosted-ci.mjs", "unit"));
+  assert(jobs.checks.steps.indexOf(devPreflightSteps[0]) < jobs.checks.steps.indexOf(shardStep));
   const dryrunFile = "scripts/dev-install/test_dryrun.py";
   assert(portal.steps.some(step => step.if === "github.event_name != 'pull_request'" && runsFile(step.run ?? "", dryrunFile, "--container")));
   assert(dryrun.steps.some(step => !step.if && runsFile(step.run ?? "", dryrunFile, "--container")));
@@ -592,16 +600,16 @@ test("CI gate requires each event's jobs and rejects unplanned skips, failures, 
     EVENT: "pull_request", CHANGES: "success", PRIVACY: "success", WORKFLOW_LINT: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: "success", IMAGES: "skipped",
     INTEGRATION_NEEDED: "true", INTEGRATION: "success", PORTAL_INTEGRATION: "success",
     INTEGRATION_COVERAGE: "success", INFRA_NEEDED: "true", INFRA: "success",
-    DEV_INSTALL_NEEDED: "true", DEV_INSTALL: "success",
+    DEV_INSTALL_NEEDED: "true", DEV_INSTALL: "success", STORYBOOK_NEEDED: "true", STORYBOOK: "success",
   };
   const unselected = {
     ...pr, INTEGRATION_NEEDED: "false", INTEGRATION: "skipped", PORTAL_INTEGRATION: "skipped",
     INTEGRATION_COVERAGE: "skipped", INFRA_NEEDED: "false", INFRA: "skipped",
-    DEV_INSTALL_NEEDED: "false", DEV_INSTALL: "skipped",
+    DEV_INSTALL_NEEDED: "false", DEV_INSTALL: "skipped", STORYBOOK_NEEDED: "false", STORYBOOK: "skipped",
   };
   const queue = {
     ...pr, EVENT: "merge_group", REVIEW: "skipped", IMAGES: "success",
-    INTEGRATION_NEEDED: "", INFRA_NEEDED: "", DEV_INSTALL_NEEDED: "", DEV_INSTALL: "skipped",
+    INTEGRATION_NEEDED: "", INFRA_NEEDED: "", DEV_INSTALL_NEEDED: "", DEV_INSTALL: "skipped", STORYBOOK_NEEDED: "",
   };
   const push = { ...queue, EVENT: "push", CHANGES: "skipped", CHECKS: "skipped", FULL_UNIT: "success", IMAGES: "skipped" };
   const dispatch = { ...push, EVENT: "workflow_dispatch", INFRA: "skipped", PRIVACY: "skipped" };
@@ -609,6 +617,9 @@ test("CI gate requires each event's jobs and rejects unplanned skips, failures, 
   for (const [lane, result, override, expected] of [
     ["PR with selected jobs", pr, {}, 0],
     ["PR with unselected jobs", unselected, {}, 0],
+    ["PR with a failed Storybook audit", pr, { STORYBOOK: "failure" }, 1],
+    ["PR with a cancelled Storybook audit", unselected, { STORYBOOK: "cancelled" }, 1],
+    ["PR with Storybook skipped without selection evidence", unselected, { STORYBOOK_NEEDED: "" }, 1],
     ["PR without a recorded skip reason", unselected, { INTEGRATION_NEEDED: "" }, 1],
     ["PR with cancelled queue images", pr, { IMAGES: "cancelled" }, 1],
     ["PR with a privacy finding", pr, { PRIVACY: "failure" }, 1],
@@ -618,6 +629,7 @@ test("CI gate requires each event's jobs and rejects unplanned skips, failures, 
     ["PR with new workflow lint findings", pr, { WORKFLOW_LINT: "failure" }, 1],
     ["PR with workflow lint skipped", pr, { WORKFLOW_LINT: "skipped" }, 1],
     ["merge queue", queue, {}, 0],
+    ["merge queue with Storybook skipped", queue, { STORYBOOK: "skipped" }, 1],
     ["merge queue with failed images", queue, { IMAGES: "failure" }, 1],
     ["main push", push, {}, 0],
     ["main push with skipped units", push, { FULL_UNIT: "skipped" }, 1],
@@ -796,7 +808,7 @@ test("PR image results are advisory while the merge queue requires the full imag
     if (imageResult === "failure") assert.match(advisory.stdout, /::warning::Advisory PR image builds: failure/u);
 
     const result = runWorkflowScript(gate.steps[0].run, {
-      EVENT: "merge_group", CHANGES: "success", PRIVACY: "success", WORKFLOW_LINT: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: "skipped",
+      EVENT: "merge_group", CHANGES: "success", PRIVACY: "success", WORKFLOW_LINT: "success", STORYBOOK: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: "skipped",
       IMAGES: imageResult, INTEGRATION: "success", PORTAL_INTEGRATION: "success",
       INTEGRATION_COVERAGE: "success", DEV_INSTALL: "skipped", INFRA: "success",
     });
@@ -804,7 +816,7 @@ test("PR image results are advisory while the merge queue requires the full imag
   }
   const summary = join(directory, "gate").replaceAll("\\", "/");
   const result = runWorkflowScript(gate.steps[0].run, {
-    EVENT: "pull_request", CHANGES: "success", PRIVACY: "success", WORKFLOW_LINT: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: "success",
+    EVENT: "pull_request", CHANGES: "success", PRIVACY: "success", WORKFLOW_LINT: "success", STORYBOOK: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: "success",
     IMAGES: "skipped", INTEGRATION_NEEDED: "false", INTEGRATION: "skipped",
     PORTAL_INTEGRATION: "skipped", INTEGRATION_COVERAGE: "skipped", DEV_INSTALL_NEEDED: "false", DEV_INSTALL: "skipped",
     INFRA_NEEDED: "false", INFRA: "skipped", GITHUB_STEP_SUMMARY: summary,
@@ -845,7 +857,8 @@ test("optional PR lanes run on diff errors and gate their applicable checks", as
       "scripts/release/installer-stack.mjs", "scripts/release/compose-stage-lock.mjs",
       "scripts/release/compose-stage-config.json", ".github/workflows/ci.yml"].join(" ")],
     ["integration", [".github/workflows/ci.yml", "scripts/test-postgres-integration.mjs",
-      "scripts/postgres-scenario-registry.mjs", ":(glob)tests/*postgres*.mjs"].join(" ")],
+      "scripts/postgres-scenario-registry.mjs", ":(glob)tests/*postgres*.mjs",
+      "tests/rendered-html.test.mjs", "tests/app-first-load-js-budget.json"].join(" ")],
   ]) {
     const detector = changes.steps.find(step => step.id === id);
     assert.equal(detector.if, "github.event_name == 'pull_request'");
@@ -873,7 +886,7 @@ ${detector.run}`, { GITHUB_OUTPUT: outputFile.replaceAll("\\", "/"), DIFF_PATHS:
   ]) {
     const pr = event === "pull_request";
     const result = runWorkflowScript(gateStep.run, {
-      EVENT: event, CHANGES: "success", PRIVACY: "success", WORKFLOW_LINT: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: pr ? "success" : "skipped",
+      EVENT: event, CHANGES: "success", PRIVACY: "success", WORKFLOW_LINT: "success", STORYBOOK: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: pr ? "success" : "skipped",
       IMAGES: pr ? "skipped" : "success", INTEGRATION_NEEDED: "false",
       INTEGRATION: pr ? "skipped" : "success", PORTAL_INTEGRATION: pr ? "skipped" : "success",
       INTEGRATION_COVERAGE: pr ? "skipped" : "success",
@@ -887,7 +900,7 @@ ${detector.run}`, { GITHUB_OUTPUT: outputFile.replaceAll("\\", "/"), DIFF_PATHS:
     ["true", "failure", 1], ["true", "cancelled", 1],
   ]) {
     const result = runWorkflowScript(gateStep.run, {
-      EVENT: "pull_request", CHANGES: "success", PRIVACY: "success", WORKFLOW_LINT: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: "success",
+      EVENT: "pull_request", CHANGES: "success", PRIVACY: "success", WORKFLOW_LINT: "success", STORYBOOK: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: "success",
       IMAGES: "skipped", INTEGRATION_NEEDED: "false",
       INTEGRATION: "skipped", PORTAL_INTEGRATION: "skipped", INTEGRATION_COVERAGE: "skipped",
       DEV_INSTALL_NEEDED: needed, DEV_INSTALL: jobResult, INFRA_NEEDED: "false", INFRA: "skipped",
@@ -906,7 +919,7 @@ ${detector.run}`, { GITHUB_OUTPUT: outputFile.replaceAll("\\", "/"), DIFF_PATHS:
   ]) {
     const pr = event === "pull_request";
     const result = runWorkflowScript(gateStep.run, {
-      EVENT: event, CHANGES: "success", PRIVACY: "success", WORKFLOW_LINT: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: pr ? "success" : "skipped",
+      EVENT: event, CHANGES: "success", PRIVACY: "success", WORKFLOW_LINT: "success", STORYBOOK: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: pr ? "success" : "skipped",
       IMAGES: pr ? "skipped" : "success", DEV_INSTALL_NEEDED: "false", DEV_INSTALL: "skipped",
       INFRA_NEEDED: "true", INFRA: "success", INTEGRATION_NEEDED: needed, GITHUB_STEP_SUMMARY: summary,
       INTEGRATION: postgres, PORTAL_INTEGRATION: portal, INTEGRATION_COVERAGE: coverage,

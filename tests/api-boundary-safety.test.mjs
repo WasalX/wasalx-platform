@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import test from "node:test";
 import { readTenantPortalSource } from "./helpers/tenant-portal-source.mjs";
 
@@ -73,4 +73,26 @@ test("group, case, and rule lists expose bounded cursor pagination without chang
   assert.match(shell,/window\.setTimeout\([\s\S]*\/api\/groups\?\$\{params\}[\s\S]*controller\.abort\(\)/u);
   assert.match(shell,/\/api\/rule-sets\?limit=200&before=/u);
   assert.match(caseUi,/\/api\/cases\?limit=200&before=/u);
+});
+
+test("operator-visible API errors never name the control plane (#339)", async () => {
+  // Portal routes and their server libraries return these messages to operator screens; the catalogues have their own test.
+  // Identifiers and module paths have no spaces; a message that never reaches an operator is listed here.
+  const internal = new Set(["lib/data.ts: Use the managed control-plane webhook ingress"]);
+  const files = [
+    ...(await readdir(new URL("../app/api", import.meta.url), { recursive: true })).map((path) => `app/api/${path.replaceAll("\\", "/")}`),
+    ...(await readdir(new URL("../lib", import.meta.url))).map((path) => `lib/${path}`),
+  ].filter((path) => /\.tsx?$/u.test(path));
+  assert.ok(files.length > 50);
+  const findings = [];
+  for (const path of files) {
+    for (const line of (await read(path)).split("\n")) {
+      if (/^\s*(?:\/\/|\*)/u.test(line)) continue;
+      for (const [, double, single, template] of line.matchAll(/"([^"\n]* [^"\n]*)"|'([^'\n]* [^'\n]*)'|`([^`\n]* [^`\n]*)`/gu)) {
+        const text = double ?? single ?? template;
+        if (/control[ -]plane/iu.test(text) && !internal.has(`${path}: ${text}`)) findings.push(`${path}: ${text}`);
+      }
+    }
+  }
+  assert.deepEqual(findings, [], "use operator words such as \"the managed service\"");
 });

@@ -2,7 +2,7 @@
 
 Follows engineering standard v1.20.
 
-WasalX Delivery owns this document, the merge queue, CI health and speed, releases, deploys, rollback, and alerts.
+WasalX Delivery owns this document, releases, deploys, rollback, and alerts. See [Test policy](#test-policy) for QA and CI ownership.
 
 ## Branching and merging
 
@@ -16,7 +16,7 @@ WasalX Delivery owns this document, the merge queue, CI health and speed, releas
 
 ## Checks
 
-- The [Storybook job](.github/workflows/ci.yml) runs on main and PRs that touch UI or Storybook inputs. It builds the static story index, audits every story with axe's WCAG 2.2 AA rules in Chromium, and fails on accessibility violations or render errors. It checks light and dark themes in English and Arabic (RTL). Product stories use both translations, and English design reference copy keeps its language in RTL layouts. The run's Storybook artifact contains screenshots and a browser report. Pixel comparisons need repeatable hosted-runner baselines.
+- The [Storybook job](.github/workflows/ci.yml) is required by `ci-gate` on main, in the merge queue, on manual CI runs, and on PRs that touch UI or Storybook inputs. It builds the static story index, audits every story with axe's WCAG 2.2 AA rules in Chromium, and fails on accessibility violations or render errors. It checks light and dark themes in English and Arabic (RTL). Product stories use both translations, and English design reference copy keeps its language in RTL layouts. The run's Storybook artifact contains screenshots and a browser report. Pixel comparisons need repeatable hosted-runner baselines.
 
 - PRs run lint, typecheck, test collection, both affected unit shards, and dependency review. [The unit selector](scripts/affected-unit-tests.mjs) follows relative imports from each test and includes tests with uncertain dependencies. A missing diff, an unmapped changed module, or changes to configuration, dependency inputs, workflows, shared fixtures, or the tracked file layout select the full inventory. On a PR, PostgreSQL and portal integration run when a file on the fixed path list in [ci.yml](.github/workflows/ci.yml) changes or CI cannot verify the diff. Otherwise, both first run in the merge queue. CI selects infrastructure jobs by path and narrows advisory image builds by their inputs, with `max-parallel: 8`. Unknown or shared image inputs select the full catalog.
 - Both unit shards run the full inventory on main pushes, merge groups, and manual CI runs. A stable release requires successful main CI for its exact commit.
@@ -33,6 +33,7 @@ WasalX Delivery owns this document, the merge queue, CI health and speed, releas
 ## Test policy
 
 - Fix a failing test or the defect it found. Keep required checks and lint rules in place. CI must pass on its first attempt without skipping tests or widening timeouts. File a flaky test as a High-priority bug and fix it or revert the change that introduced it.
+- WasalX QA owns tests at every layer, the end-to-end journey catalogue, samples and fixtures, coverage, failing and flaky tests, and nightly suite results. QA runs the pre-release sweep. WasalX Delivery owns the [merge gate](#branching-and-merging), pipeline faults, and [CI speed](#checks).
 - Revert the offending change if `main` or the merge queue stays red for 30 minutes. Replacements must preserve the original regression coverage. A test file that only detects changes may be removed after two weeks of evidence. Keep authorization, privacy, migration, and concurrency tests.
 - Record known Node unit-test failures in [test-quarantine.json](scripts/test-quarantine.json) with the runner file path, exact test name, owner, and UTC expiry date (`expiresOn`, `YYYY-MM-DD`). The hosted unit reporter labels matching failures and keeps their failing result. A row expires at midnight UTC on its expiry date and fails the unit check.
 - Every test file belongs to a named runner. Keep runner ownership and the coverage inventory current. The [ownership guard](tests/hosted-ci.test.mjs) detects gaps and stale entries.
@@ -116,7 +117,7 @@ Measure the latest 150 first-attempt PR runs from GitHub Actions timestamps. Spl
 
 In the daily Delivery check, report p50 and p95 changed lines across the last 100 merged PRs per repository. Exclude files marked `linguist-generated`.
 
-Keep these performance targets independent of the merge result. Address misses through the board while preserving the required checks.
+The `portal-integration` job enforces the `/app` JavaScript budget. Keep the other performance targets independent of the merge result and address misses through the board.
 
 ## Deviations
 

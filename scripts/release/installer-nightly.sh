@@ -17,6 +17,10 @@ work="$RUNNER_TEMP/wasalx-nightly"
 project=wasalx-nightly
 full_env="$work/full.env"
 diagnostics="$work/diagnostics"
+registry=127.0.0.1:5007
+registry_container="$project-registry"
+registry_image=docker.io/library/registry@sha256:6c5666b861f3505b116bb9aa9b25175e71210414bd010d92035ff64018f9457e
+registry_overlay="$full_env.$project.registry.compose.json"
 candidate_compose=(docker compose --env-file "$full_env" -f compose.yaml -f compose.full.yaml
   --profile full --profile runtime-workers --project-name "$project")
 compose=("${candidate_compose[@]}" -f scripts/release/installer-nightly.compose.yaml)
@@ -45,6 +49,12 @@ if [[ "${1:-}" == cleanup ]]; then
     docker rm --force "$verifier" >/dev/null || {
       status=$?
       failure "$status" 'docker rm --force' 'migration verifier teardown failed'
+    }
+  fi
+  if docker container inspect "$registry_container" >/dev/null 2>&1; then
+    docker rm --force "$registry_container" >/dev/null || {
+      status=$?
+      failure "$status" 'docker rm --force' 'guest registry teardown failed'
     }
   fi
   if remaining=$(inventory); then
@@ -87,6 +97,8 @@ phase() {
   if [[ "$name" == bundles ]]; then
     sed -nE '/^hosted bundle staging timing: route=(token|manifests|referrers|blobs) requests=[0-9]+ total_ms=[0-9]+ p95_ms=[0-9]+ max_ms=[0-9]+ http_404=[0-9]+ http_429=[0-9]+ transport_errors=[0-9]+$/p' \
       "$work/$name.raw" | tee -a "$diagnostics/installer.log"
+  elif [[ "$name" == registry-stage ]]; then
+    sed -nE '/^registry-stage source=[a-zA-Z0-9._:\/-]+@sha256:[0-9a-f]{64}$/p' "$work/$name.raw" >> "$diagnostics/installer.log"
   elif [[ "$name" == native-preflight ]]; then
     sed -nE '/^native docker diff service=[a-z0-9][a-z0-9_-]{0,62} elapsed=[0-9]+ms$/p' \
       "$work/$name.raw" | tee -a "$diagnostics/installer.log"
@@ -112,6 +124,89 @@ if [[ "${1:-}" == stage-bundles ]]; then
   phase bundles 5m python3 -I -B scripts/release/installer-hosted-bundles.py "$work/images-manifest.json"
   exit 0
 fi
+
+start_registry() {
+  local read_only=$1 pull=$2 mount="type=bind,src=$work/registry,dst=/var/lib/registry"
+  if [[ "$read_only" == true ]]; then mount+=,readonly; fi
+  cat > "$work/registry-config.json" <<EOF
+{
+  "version": "0.1",
+  "storage": {
+    "filesystem": {"rootdirectory": "/var/lib/registry"},
+    "maintenance": {"readonly": {"enabled": $read_only}, "uploadpurging": {"enabled": false}}
+  },
+  "validation": {"manifests": {"indexes": {"platforms": "list", "platformlist": [{"os": "linux", "architecture": "amd64"}]}}},
+  "http": {"addr": "$registry"}
+}
+EOF
+  docker run --detach --rm --pull "$pull" --name "$registry_container" --network host \
+    --env OTEL_TRACES_EXPORTER=none --mount "$mount" \
+    --mount "type=bind,src=$work/registry-config.json,dst=/etc/distribution/config.yml,readonly" "$registry_image"
+  curl --fail --silent --show-error --retry 5 --retry-connrefused --max-time 3 "http://$registry/v2/"
+}
+
+stage_registry() {
+  local source destination expected manifest platform
+  local copy=(skopeo copy --preserve-digests --dest-tls-verify=false)
+  mkdir -p "$work/registry"
+  start_registry false missing
+  {
+    jq -er '.images[] | .pullReference' "$work/images-manifest.json"
+    "${compose[@]}" config --images
+  } | LC_ALL=C sort -u | node --input-type=module -e '
+    import { readFileSync } from "node:fs";
+    import { localRegistryReference } from "./scripts/release/installer-hosted-images.mjs";
+    const seen = new Set();
+    for (const source of readFileSync(0, "utf8").split(/\s+/u).filter(value => value.includes("@"))) {
+      const destination = localRegistryReference(process.argv[1], source);
+      if (!seen.has(destination)) console.log(source.replace(/:[^/:]+(?=@)/u, ""), destination);
+      seen.add(destination);
+    }
+  ' "$registry" > "$work/registry-images"
+  test -s "$work/registry-images"
+  while read -r source destination; do
+    expected=${destination##*@}
+    printf 'registry-stage source=%s\n' "$source"
+    manifest=$(skopeo inspect --raw "docker://$source")
+    if jq -e 'has("manifests")' <<< "$manifest" > /dev/null; then
+      # Copy the guest platform and retain the upstream index bytes.
+      platform=$(jq -er '[.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64") | .digest]
+        | select(length == 1) | .[0] | select(test("^sha256:[0-9a-f]{64}$"))' <<< "$manifest")
+      "${copy[@]}" "docker://${source%@*}@$platform" "docker://${destination%@*}:amd64"
+    fi
+    "${copy[@]}" --multi-arch=index-only --digestfile "$work/copied.digest" \
+      "docker://$source" "docker://${destination%@*}:staged"
+    [[ "$(cat "$work/copied.digest")" == "$expected" ]]
+  done < "$work/registry-images"
+  docker stop "$registry_container"
+  start_registry true never
+  # An upload to the read-only registry must be refused.
+  test "$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+    --request POST "http://$registry/v2/staged/readonly-check/blobs/uploads/" --max-time 3)" = 405
+}
+
+block_registry_egress() {
+  local unit group tool family route iface
+  [[ -n "$(ip -o -4 route show default)" ]]
+  for unit in docker.service containerd.service; do
+    group=$(systemctl show "$unit" --property=ControlGroup --value)
+    [[ -n "$group" && -d "/sys/fs/cgroup$group" ]]
+    for tool in iptables ip6tables; do
+      sudo "$tool" -I OUTPUT 1 ! -o lo -m cgroup --path "${group#/}" -j REJECT
+      sudo "$tool" -C OUTPUT ! -o lo -m cgroup --path "${group#/}" -j REJECT
+    done
+  done
+  for family in 4 6; do
+    tool=iptables
+    if [[ "$family" == 6 ]]; then tool=ip6tables; fi
+    route=$(ip -o "-$family" route show default)
+    while read -r iface; do
+      [[ -n "$iface" ]] || continue
+      sudo "$tool" -I FORWARD 1 -o "$iface" -j REJECT
+      sudo "$tool" -C FORWARD -o "$iface" -j REJECT
+    done < <(awk '{ for (i=1; i<NF; i++) if ($i=="dev") print $(i+1) }' <<< "$route" | sort -u)
+  done
+}
 
 resources() {
   local name=$1
@@ -163,12 +258,18 @@ if ! git diff --quiet "$MAIN_SHA" "$commit" -- Dockerfile.foundation-keycloak co
   containers=$(inventory)
   test -z "$containers"
 fi
-stage=(--env-file "$full_env" --project-name "$project" --rehearsal-main "$MAIN_SHA")
+stage=(--env-file "$full_env" --project-name "$project" --rehearsal-main "$MAIN_SHA" --local-registry "$registry")
 manifest_hash=$(sha256sum "$work/images-manifest.json" | cut -d ' ' -f 1)
 hosted=(--hosted-images "$work/images-manifest.json" --hosted-images-sha256 "$manifest_hash"
   --hosted-trusted-root "$TRUSTED_ROOT")
 installer=(node scripts/release/installer-stages.mjs)
 phase fresh-preflight 2m "${installer[@]}" preflight "${stage[@]}" --capture-preimage
+# Staging is the last upstream access. Only the loopback registry serves the installer.
+export -f start_registry stage_registry block_registry_egress
+export registry registry_container registry_image work
+# A subprocess cannot inherit Bash arrays, so pass the original Compose inputs explicitly.
+phase registry-stage 12m bash -euo pipefail -c 'compose=("$@"); stage_registry' bash "${compose[@]}"
+phase registry-egress 30s bash -euo pipefail -c block_registry_egress
 phase preload 10m "${installer[@]}" preload-hosted "${stage[@]}" "${hosted[@]}"
 resources preloaded
 phase admission 5m "${installer[@]}" admit-hosted "${stage[@]}" "${hosted[@]}"
@@ -180,6 +281,9 @@ smoke() {
 
 phase fresh-install 10m "${installer[@]}" replace "${stage[@]}" "${hosted[@]}" --drained
 smoke fresh-smoke
+printf 'local-registry product=%s services=%s digests=PASS public-registry-egress=blocked\n' \
+  "$(jq -er '.images | length' "$work/images-manifest.json")" "$(jq -er '.services | length' "$work/fresh-smoke.json")" \
+  | tee -a "$diagnostics/phases.log"
 node scripts/release/installer-nightly-grafana.mjs "${compose[@]:1}"
 inventory > "$work/fresh.ids"
 test -s "$work/fresh.ids"
@@ -206,7 +310,8 @@ preflight="$work/preflight"
 
   # Nightly uses the ordinary replace path, whose actual held set is empty.
   phase probe-scan 5m sudo -H env "PATH=$PATH" node scripts/dev-install/probe.mjs \
-    --env-file "$full_env" --project-name "$project" --compose-file scripts/release/installer-nightly.compose.yaml --held-services ''
+    --env-file "$full_env" --project-name "$project" --compose-file scripts/release/installer-nightly.compose.yaml \
+    --compose-file "$registry_overlay" --held-services ''
   jq -e '.census == "PASS" and .services == 37 and .rerendered_hashes == .services
     and (.compose_hashes | length) == .services and (.fields | length) == 0' "$work/probe-scan.raw" > /dev/null
   printf 'probe-scan services=37 rerendered_hashes=37 census=PASS\n' | tee -a "$diagnostics/phases.log"

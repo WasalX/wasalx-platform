@@ -460,7 +460,10 @@ def build(image, output, cache="off"):
         context = Path(directory) / "source"
         context.mkdir()
         archive_path = Path(directory) / "source.tar"
-        subprocess.run(["git", "archive", "--format=tar", "--output=" + str(archive_path), commit], cwd=ROOT, check=True)
+        subprocess.run(
+            ["git", "-c", "core.autocrlf=false", "archive", "--format=tar", "--output=" + str(archive_path), commit],
+            cwd=ROOT, check=True,
+        )
         archive_digest = sha256(archive_path.read_bytes())
         with tarfile.open(archive_path) as archive:
             archive.extractall(context, filter="data")

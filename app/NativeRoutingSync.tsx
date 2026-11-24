@@ -89,12 +89,12 @@ export function NativeRoutingSync({ canWrite, mutationHeaders, refreshKey, catal
     setEditor(current => current ? { ...current, policies: current.policies.map(policy => policy.id === id ? { ...policy, ...change } : policy) } : current);
   };
 
-  return <section className={`panel ${styles.panel}`} aria-labelledby={titleId}>
+  return <section className={`panel ${styles.panel}`} aria-labelledby={titleId} aria-busy={loading || busy}>
     <div className="panel-heading">
       <div><h2 id={titleId}>{t("nativeRouting.title")}</h2><p>{t("nativeRouting.description")}</p></div>
       <button type="button" className="button secondary small" disabled={busy} onClick={() => void load()}>{t("nativeRouting.refresh")}</button>
     </div>
-    <div role="status" aria-live="polite" aria-busy={loading || busy}>
+    <div role="status">
       <b>{t(displayState ? `nativeRouting.state.${displayState}` : loading || busy ? "nativeRouting.loading" : "nativeRouting.unavailable")}</b>
       {status?.lastCheckedAt ? <p>{t("nativeRouting.checked", { time: formatDateTime(status.lastCheckedAt, locale) })}</p> : null}
       {displayState && ["DRIFT", "FAILED", "OUTCOME_UNKNOWN"].includes(displayState) ? <p>{t(`nativeRouting.help.${displayState}`)}</p> : null}

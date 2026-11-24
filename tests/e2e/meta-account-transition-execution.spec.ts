@@ -28,6 +28,7 @@ async function fixture(page:Page){
   const previewWrites:Array<{action:'create'|'cancel';body:Record<string,unknown>;key:string|null}>=[];
   let prepare:MetaTransitionPreviewPage['prepare']={accountRevision:1,bindingRevision:2};
   const expectedErrors:Array<{url:string;text:string}>=[];
+  const optionalAbortErrors:string[]=[],abortedRequests:string[]=[];
   let denied=false,delayRead=false,readStarted=false,releaseRead:(()=>void)|undefined;
   let handler:(route:Route,action:MetaTransitionExecutionAction,expectedRevision:number)=>Promise<void>=async(route,action,requestRevision)=>{
     value={...value,canRefresh:false,canCancel:false,execution:{...value.execution!,revision:requestRevision+1,state:action==='INITIATE'?'RESERVED':value.execution!.state,
@@ -41,7 +42,10 @@ async function fixture(page:Page){
   };
   page.on('pageerror',error=>pageErrors.push(error.message));
   page.on('console',message=>{if(message.type()!=='error')return;const index=expectedErrors.findIndex(item=>item.url===message.location().url&&item.text===message.text());
-    if(index>=0)expectedErrors.splice(index,1);else consoleErrors.push(message.text());});
+    if(index>=0){expectedErrors.splice(index,1);return;}
+    const abortIndex=message.text()==='Failed to load resource: net::ERR_FAILED'?optionalAbortErrors.indexOf(message.location().url):-1;
+    if(abortIndex>=0){optionalAbortErrors.splice(abortIndex,1);return;}
+    consoleErrors.push(message.text());});
   await page.route('**/api/connections/**',async route=>{
     const request=route.request(),url=new URL(request.url()),path=url.pathname,id=path.split('/')[3];
     if(path.includes('/meta/account-transitions')){
@@ -87,11 +91,14 @@ async function fixture(page:Page){
   });
   await installMetaRoutingReadFixture(page);
   const refresh=async()=>{await section(page).getByRole('button',{name:copy('checkStatus'),exact:true}).first().click();await expect(section(page).getByText(copy('loading'),{exact:true})).toHaveCount(0);};
-  return {writes,resolutions,previewWrites,pageErrors,consoleErrors,expectedErrors,refresh,get:()=>value,set:(next:MetaTransitionPreviewView)=>{value=next;},
+  return {writes,resolutions,previewWrites,pageErrors,consoleErrors,expectedErrors,abortedRequests,refresh,get:()=>value,set:(next:MetaTransitionPreviewView)=>{value=next;},
     setPrepare:(next:MetaTransitionPreviewPage['prepare'])=>{prepare=next;},
     setResolveHandler:(next:typeof resolveHandler)=>{resolveHandler=next;},
     setHandler:(next:typeof handler)=>{handler=next;},deny:()=>{denied=true;},delay:()=>{delayRead=true;readStarted=false;},readStarted:()=>readStarted,release:()=>{releaseRead?.();releaseRead=undefined;},
-    lost:(route:Route)=>{expectedErrors.push({url:route.request().url(),text:'Failed to load resource: net::ERR_FAILED'});return route.abort('failed');}};
+    lost:async(route:Route)=>{
+      const url=route.request().url();optionalAbortErrors.push(url);
+      await route.abort('failed');abortedRequests.push(url);
+    }};
 }
 
 test('Account change uses four deliberate actions and recovers the exact saved operation without replay',async({page},testInfo)=>{
@@ -214,6 +221,7 @@ test('An unadmitted request is resolved with its original key without repeating 
   expect(f.resolutions.every(value=>value.key===f.writes[0]!.key&&JSON.stringify(value.body)===JSON.stringify(f.writes[0]!.body))).toBe(true);
   expect(await page.evaluate(key=>sessionStorage.getItem(key),intentKey)).toBeNull();
   await page.reload();await expect(button(page,'initiate')).toBeEnabled();expect(f.resolutions).toHaveLength(2);expect(f.writes).toHaveLength(1);
+  expect(f.abortedRequests.map(url=>new URL(url).pathname.split('/').at(-1))).toEqual(['initiate','resolve']);
   expect(f.pageErrors).toEqual([]);expect(f.consoleErrors).toEqual([]);expect(f.expectedErrors).toEqual([]);
 });
 

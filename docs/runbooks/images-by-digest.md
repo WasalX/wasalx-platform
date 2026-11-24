@@ -160,6 +160,45 @@ This stage does not qualify live provider behavior, operator acceptance or
 production release. Legacy release-bundle, assisted and
 historical evidence contracts are unchanged.
 
+### Pre-staged registry installs
+
+Run the existing verify-only gate and transfer the signed evidence as described
+above. On the staging host, copy each signed product image and digest-pinned
+dependency from the active Compose profiles into the read-only guest registry
+without changing its manifest or index bytes. For source digest `sha256:<hex>`,
+publish it at `<registry-host>:<port>/staged/<hex>@sha256:<hex>`. The repository
+path is keyed by digest so identical manifests need only one staged copy. Keep
+any index and its required platform manifests in the registry.
+
+Restrict guest egress to the staging registry. Configure Docker to trust that
+registry. For any endpoint other than `localhost:<port>` or `127.0.0.1:<port>`,
+include the exact `host:port` in the installer process's
+`WASALX_LOCAL_REGISTRY_ALLOWLIST` (comma-separated). Use
+`--local-registry <registry-host>:<port>` through preflight, preload, admission,
+replacement and smoke. Retain the generated registry Compose overlay beside the
+environment file for preimage and rollback checks. Use an environment file unique
+to the candidate when its Compose inputs change.
+
+For a [fresh held DEV project](../../scripts/dev-install/README.md#fresh-held-guest-projects),
+add `--dev-fresh-held` on replace and smoke. If using the simulator, also pass
+`--dev-simulator` from preflight through smoke so each stage uses the same
+Compose model.
+
+Run `preflight --capture-preimage` with the registry option before preload. Run
+`preload-hosted` with the three hosted flags and the registry option after
+capture. It verifies the evidence offline, pulls each exact digest from the
+staging registry, and populates the existing product aliases. The installer
+rewrites digest-pinned dependency image refs to the staging registry and
+validates the loaded registry digests. Replacement uses Compose with pulls and
+builds disabled. Pass the registry option with the hosted flags for subsequent
+stages that read the Compose model.
+
+The full installer nightly stages the signed product images and pinned dependencies, makes
+the registry read-only, blocks public registry access for Docker, and checks the
+loaded registry digests and container identity through the existing admission
+and smoke stages. It copies the Linux AMD64 manifests plus their original
+multi-platform indexes.
+
 ## Public build inputs and inspection
 
 The add-on build input **`PUBLIC_ADDON_SOURCE`** supplies the source for Zammad and
@@ -200,6 +239,10 @@ public tuple in the archived build context. The effective Dockerfile digest and
 add-on tuple are recorded in the receipt and attestation. If a configured source
 is unavailable anonymously, those builds fail; this workflow supplies no credential
 and never publishes private source.
+
+The builder archives with `git -c core.autocrlf=false archive` so host settings
+cannot turn LF line endings in the committed source into CRLF in the build context.
+
 Public dependency registries and the reviewed
 Dockerfiles remain build inputs. The builder uses the public archive, pinned
 inputs and no secret or SSH mounts. Only the main publish lane authenticates

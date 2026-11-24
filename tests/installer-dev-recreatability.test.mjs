@@ -21,12 +21,20 @@ test("DEV preimage replay: recorded hash outcomes, modeled refusals", async t =>
   assert.equal(checksums.trim(), `${sha256(composeBytes)}  ${composeFile}\n${sha256(factsBytes)}  ${factsFile}`);
   const live = JSON.parse(composeBytes);
   const { project, compose_version: version, containers, preflight } = JSON.parse(factsBytes);
-  const candidate = JSON.parse(execFileSync("docker", ["compose", "--env-file", ".env.example",
+  const renderStart = performance.now();
+  const rendered = execFileSync("docker", ["compose", "--env-file", ".env.example",
     "--file", "compose.yaml", "--file", "compose.full.yaml",
     ...composeProfiles.flatMap(profile => ["--profile", profile]), "--project-name", project,
     "config", "--no-interpolate", "--no-env-resolution", "--format", "json"],
-  { cwd: repository, env: { ...process.env, COMPOSE_PROFILES: "", PORTAL_FIXTURE_ROLE: "" },
-    encoding: "utf8", timeout: 10_000, windowsHide: true }));
+  {
+    cwd: repository,
+    // Compose probes the Engine at startup even though this local render needs no daemon.
+    env: { ...process.env, COMPOSE_PROFILES: "", PORTAL_FIXTURE_ROLE: "",
+      DOCKER_CONTEXT: "", DOCKER_HOST: "tcp://127.0.0.1:0", DOCKER_TLS: "", DOCKER_TLS_VERIFY: "" },
+    encoding: "utf8", timeout: 10_000, windowsHide: true,
+  });
+  t.diagnostic(`Candidate Compose render took ${(performance.now() - renderStart).toFixed(1)} ms`);
+  const candidate = JSON.parse(rendered);
 
   const deployed = await mkdtemp(join(tmpdir(), "wasalx-dev-compose-fixture-"));
   t.after(() => rm(deployed, { recursive: true, force: true }));

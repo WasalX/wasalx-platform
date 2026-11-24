@@ -453,7 +453,8 @@ class PullTest(unittest.TestCase):
         bundle = self.work / "package"
         render.render_pull(identity, bundle)
         seals = (bundle / "SHA256SUMS").read_text().splitlines()
-        for file in ("scripts/release/cosign-pin.json", "scripts/release/installer-hosted-bundles.py"):
+        for file in ("scripts/release/cosign-pin.json", "scripts/release/installer-hosted-bundles.py",
+                     "scripts/installer-evidence.mjs"):
             self.assertEqual((bundle / file).read_bytes(), (HERE.parents[1] / file).read_bytes())
             self.assertTrue(any(entry.endswith(f"  {file}") for entry in seals))
         for entry in seals:

@@ -17,7 +17,7 @@ import { consumeExpectedDirectSetupDenial, metaDirectConsentJourney } from "./me
 import { consumeExpectedSignupDenial, metaSignupJourney } from "./meta-signup.fixture";
 import { ticketEventWorkflowJourney } from "./ticket-event-workflows.fixture";
 import type { TeamAccessData } from "../../lib/control-plane-data";
-import AxeBuilder from "@axe-core/playwright";
+import { expectAxeClean } from "../helpers/axe";
 import { expect, test, type Page } from "@playwright/test";
 
 const role = process.env.WASALX_E2E_ROLE ?? "tenant_owner";
@@ -57,7 +57,6 @@ test("Meta number release preserves reservation review and exact uncertain recov
 });
 
 test("Meta existing-number access stays paused and recovers without registration or replay", async ({ page }, testInfo) => {
-  test.setTimeout(150_000);
   test.skip(testInfo.project.name === "tablet-820");
   await metaAddAccessJourney(page, "en", role, testInfo);
 });
@@ -69,7 +68,6 @@ test("Meta external routing preserves exact lost-response recovery and separate 
 });
 
 test("Meta Business app consent and inert imports preserve unknown and stopped states", async ({ page }, testInfo) => {
-  test.setTimeout(120_000);
   test.skip(testInfo.project.name === "tablet-820");
   await metaCoexistenceJourney(page, "en", role, testInfo);
 });
@@ -388,21 +386,6 @@ function expectNetworkFailure(page: Page, pattern: RegExp) {
   }
   expect(mutations).toEqual([]);
 });
-
-async function expectAxeClean(page: Page) {
-  const result = await new AxeBuilder({ page })
-    .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"])
-    .analyze();
-  expect(
-    result.violations.map(({ id, impact, help, nodes }) => ({
-      id,
-      impact,
-      help,
-      nodes: nodes.map((node) => ({ target: node.target, html: node.html })),
-    })),
-    "axe must find no WCAG A/AA violations",
-  ).toEqual([]);
-}
 
 
 test("role navigation, history, titles, profile, and persisted theme behave as one application", async ({ page }, testInfo) => {
@@ -1767,7 +1750,6 @@ test("one-to-one bot configuration, simulation, handoff, and role boundaries sta
 
 (role === "tenant_owner" ? test : test.skip)("an ambiguous pairing-code outcome stays visible after the provider state changes", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop");
-  await page.clock.install();
   let failed = false;
   await page.route(/\/api\/connections\/12000000-0000-4000-8000-000000000002$/u, async (route) => route.fulfill({
     status: 200,
@@ -1790,13 +1772,14 @@ test("one-to-one bot configuration, simulation, handoff, and role boundaries sta
   const dialog = page.getByRole("dialog", { name: "Connection details" });
   await dialog.getByRole("button", { name: "Use a pairing code instead" }).click();
   const phone = dialog.getByRole("textbox", { name: "WhatsApp number" });
-  await phone.fill("12025550131");
+  await phone.fill("+12025550131");
   await dialog.getByRole("button", { name: "Request pairing code" }).click();
   const alert = dialog.getByRole("alert");
   await expect(alert).toContainText("This service is temporarily unavailable.");
   await expect(alert.getByRole("button", { name: "Retry same request" })).toBeVisible();
   await phone.fill("");
-  await page.clock.runFor(30_000);
+  await expect(dialog.locator(".connection-detail-shell")).not.toHaveAttribute("data-unsaved");
+  await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
   await expect(dialog.getByRole("heading", { name: "Connection failed" })).toBeVisible();
   await expect(alert).toContainText("This service is temporarily unavailable.");
   await expect(alert.getByRole("button", { name: "Retry same request" })).toBeVisible();
@@ -2496,7 +2479,7 @@ test("duplicate cleanup reconciles the connection list immediately on close", as
   await save.click();
   await expect(dialog.getByRole("alert")).toContainText("WhatsApp numbers: enter each number in international format, starting with + and the country code.");
   expect(patches).toEqual([]);
-  await numbers.fill("12025550142\n+12025550142");
+  await numbers.fill("+12025550142\n+1 (202) 555-0142");
   await save.click();
   await expect(dialog.getByRole("alert")).toContainText("WhatsApp numbers: remove repeated numbers, including differently formatted copies.");
   await expect(dialog.getByRole("alert")).not.toContainText("international format");

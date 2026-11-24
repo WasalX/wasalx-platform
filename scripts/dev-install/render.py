@@ -177,7 +177,7 @@ def render_pull(identity, bundle):
         "pull-config.json": (json.dumps(config, indent=2, sort_keys=True) + "\n").encode(),
     }
     for name in (
-        "scripts/dev-install/pull-verify.mjs", "scripts/release/installer-hosted-images.mjs",
+        "scripts/dev-install/pull-verify.mjs", "scripts/release/installer-hosted-images.mjs", "scripts/installer-evidence.mjs",
         "scripts/release/installer-hosted-bundles.py", "scripts/release/cosign-pin.json", "release/installer-images.json",
     ):
         files[name] = (ROOT / name).read_bytes()

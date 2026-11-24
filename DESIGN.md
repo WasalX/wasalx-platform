@@ -17,9 +17,9 @@ colors:
   accent-strong: "#5141c8"
   accent-solid: "#6557d8"
   accent-solid-hover: "#5141c8"
-  success: "#167d53"
-  warning: "#a45e09"
-  danger: "#c64343"
+  success: "#14744d"
+  warning: "#965608"
+  danger: "#b73737"
   danger-solid: "#7b2a2a"
   on-solid: "#ffffff"
   provider-whatsapp-groups: "#16855a" # token --wx-color-provider-waha
@@ -131,7 +131,7 @@ One neutral zinc ramp, one violet accent, three status colors and two provider m
 - **Text / Muted / Subtle**: light `#18181b / #696970 / #6f6f76`; dark `#f3f3f5 / #92929d / #85858f`.
 
 ### Status and provider
-- **Success / Warning / Danger**: light `#167d53 / #a45e09 / #c64343`; dark `#45c58a / #f3ad4e / #f06b6b`. Status color is always paired with a word or an icon, never color alone. **Danger solid** (`--wx-color-danger-solid`, light `#7b2a2a`, dark `#954242`) is the fill behind white text on a destructive button.
+- **Success / Warning / Danger**: light `#14744d / #965608 / #b73737`; dark `#45c58a / #f3ad4e / #f06b6b`. Each status badge keeps 4.5:1 text contrast on its 6% tint over every surface. Status color is always paired with a word or an icon, never color alone. **Danger solid** (`--wx-color-danger-solid`, light `#7b2a2a`, dark `#954242`) is the fill behind white text on a destructive button.
 - **Provider marks**: WhatsApp groups green (`--wx-color-provider-waha`: `#16855a` light, `#22a06b` dark) and Meta blue (`--wx-color-provider-meta`, `#1769e0`). Use them only to identify a channel; the public pages' WhatsApp icon uses the WhatsApp groups green.
 
 ### Named Rules
@@ -203,6 +203,6 @@ Page budgets for the portal. A miss becomes a board item.
 
 | Measure | Budget | How it is measured |
 | --- | --- | --- |
-| `/app` first-load JavaScript | At most 190,000 B gzip (162,000 B brotli) | Union of the client entry's dependencies and the static dependencies of every client reference `/app` renders, read from the production build's asset manifest (`dist/server/__vite_rsc_assets_manifest.js`); gzip level 9, brotli quality 11 (Node zlib); the CI portal build reports it from `tests/rendered-html.test.mjs` (#183, #213, #220) |
+| `/app` first-load JavaScript | [Gzip and brotli byte limits](tests/app-first-load-js-budget.json) | Union of the client entry's dependencies and the static dependencies of every client reference `/app` renders, read from the production build's asset manifest (`dist/server/__vite_rsc_assets_manifest.js`); gzip level 9, brotli quality 11 (Node zlib); CI reports the measured bytes and enforces both limits in `tests/rendered-html.test.mjs` (#183, #213, #220) |
 | Largest Contentful Paint (LCP) | Under 2.5 s at p75 | On DEV, per screen |
 | Interaction to Next Paint (INP) | Under 200 ms at p75 | On DEV, per screen |
