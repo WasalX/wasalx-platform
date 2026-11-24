@@ -839,7 +839,8 @@ test("optional PR lanes run on diff errors and gate their applicable checks", as
       "scripts/release/installer-stack.mjs", "scripts/release/compose-stage-lock.mjs",
       "scripts/release/compose-stage-config.json", ".github/workflows/ci.yml"].join(" ")],
     ["integration", [".github/workflows/ci.yml", "scripts/test-postgres-integration.mjs",
-      "scripts/postgres-scenario-registry.mjs", ":(glob)tests/*postgres*.mjs"].join(" ")],
+      "scripts/postgres-scenario-registry.mjs", ":(glob)tests/*postgres*.mjs",
+      "tests/rendered-html.test.mjs", "tests/app-first-load-js-budget.json"].join(" ")],
   ]) {
     const detector = changes.steps.find(step => step.id === id);
     assert.equal(detector.if, "github.event_name == 'pull_request'");
