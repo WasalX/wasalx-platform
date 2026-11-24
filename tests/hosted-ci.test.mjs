@@ -225,6 +225,7 @@ test("Storybook selects UI changes and unknown diffs", async (t) => {
   assert.match(jobs.storybook.if, /github\.event_name == 'push'/u);
   assert.match(jobs.storybook.if, /github\.event_name == 'pull_request' && needs\.changes\.outputs\.storybook != 'false'/u);
   assert.match(jobs.storybook.if, /github\.event_name == 'merge_group'/u);
+  assert.match(jobs.storybook.if, /github\.event_name == 'workflow_dispatch'/u);
   assert(jobs["ci-gate"].needs.includes("storybook"));
   const [gateStep] = jobs["ci-gate"].steps;
   assert.equal(gateStep.env.STORYBOOK_NEEDED, "${{ needs.changes.outputs.storybook }}");
@@ -662,6 +663,7 @@ test("CI gate requires each event's jobs and rejects unplanned skips, failures, 
     ["PR with application skipped without selection evidence", unselected, { APPLICATION_NEEDED: "" }, 1],
     ["merge queue with application skipped", queue, { APPLICATION_E2E: "skipped" }, 1],
     ["PR with a failed Storybook audit", pr, { STORYBOOK: "failure" }, 1],
+    ["PR with selected Storybook skipped", pr, { STORYBOOK: "skipped" }, 1],
     ["PR with a cancelled Storybook audit", unselected, { STORYBOOK: "cancelled" }, 1],
     ["PR with Storybook skipped without selection evidence", unselected, { STORYBOOK_NEEDED: "" }, 1],
     ["PR without a recorded skip reason", unselected, { INTEGRATION_NEEDED: "" }, 1],
@@ -676,6 +678,7 @@ test("CI gate requires each event's jobs and rejects unplanned skips, failures, 
     ["merge queue with Storybook skipped", queue, { STORYBOOK: "skipped" }, 1],
     ["merge queue with failed images", queue, { IMAGES: "failure" }, 1],
     ["main push", push, {}, 0],
+    ["main push with Storybook skipped", push, { STORYBOOK: "skipped" }, 1],
     ["main push with skipped units", push, { FULL_UNIT: "skipped" }, 1],
     ["main push with failed units", push, { FULL_UNIT: "failure" }, 1],
     ["main push with cancelled units", push, { FULL_UNIT: "cancelled" }, 1],
@@ -683,6 +686,7 @@ test("CI gate requires each event's jobs and rejects unplanned skips, failures, 
     ["main push with skipped infrastructure", push, { INFRA: "skipped" }, 1],
     ["main push with cancelled selection", push, { CHANGES: "cancelled" }, 1],
     ["manual dispatch", dispatch, {}, 0],
+    ["manual dispatch with Storybook skipped", dispatch, { STORYBOOK: "skipped" }, 1],
     ["manual dispatch with skipped units", dispatch, { FULL_UNIT: "skipped" }, 1],
     ["manual dispatch with cancelled infrastructure", dispatch, { INFRA: "cancelled" }, 1],
   ]) {

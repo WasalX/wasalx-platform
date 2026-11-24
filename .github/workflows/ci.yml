@@ -370,7 +370,7 @@ jobs:
 
   integration:
     needs: changes
-    if: &integration-needed >-
+    if: >-
       ${{ !cancelled() && (github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
       (github.event_name == 'pull_request' && (needs.changes.result != 'success' || needs.changes.outputs.integration != 'false'))) }}
@@ -542,6 +542,12 @@ jobs:
           WASALX_E2E_LOCALES: ${{ matrix.locale }}
           WASALX_E2E_ROLES: ${{ matrix.roles }}
         run: node scripts/run-application-e2e.mjs
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: failure()
+        with:
+          name: application-e2e-${{ matrix.locale }}-${{ matrix.roles }}
+          path: output/playwright/application*
+          retention-days: 7
 
   integration-coverage:
     needs: integration
