@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { access, readFile } from "node:fs/promises";
 import test from "node:test";
+import { readTenantPortalSource } from "./helpers/tenant-portal-source.mjs";
 import ts from "typescript";
 import { connectionIsReady } from "../lib/connection-readiness.ts";
 import { operatorFailureMessage, operatorLocalFailure } from "../lib/operator-ui.ts";
@@ -10,7 +11,7 @@ import { arabicTenantMessages } from "../lib/i18n/messages/ar/tenant.ts";
 const read = (path) => readFile(new URL(`../${path}`, import.meta.url), "utf8");
 
 test("connection drawer refresh propagates negative and positive worker readiness to its catalog row", async () => {
-  const source = await read("app/WasalXApp.tsx");
+  const source = await readTenantPortalSource();
   assert.match(source, /worker_ready\?: boolean \| null/);
   assert.match(source, /worker_ready: detail\.worker_ready \?\? false/);
   assert.match(source, /setLiveData\(result\.data\);\s*setConnectionOverrides\(\{\}\)/);
@@ -18,7 +19,7 @@ test("connection drawer refresh propagates negative and positive worker readines
 });
 
 test("Meta drawer refresh clears stale catalog readiness and adopts a newly processed current-session message", async () => {
-  const source = await read("app/WasalXApp.tsx");
+  const source = await readTenantPortalSource();
   const ast = ts.createSourceFile("WasalXApp.tsx", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
   let callback;
   const find = (node) => {
@@ -87,7 +88,7 @@ test("portal exposes the complete durable WAHA lifecycle route surface", async (
 
 test("linked groups refresh automatically while Meta also permits explicit first opt-in", async () => {
   const [source, english, arabic] = await Promise.all([
-    read("app/WasalXApp.tsx"),
+    readTenantPortalSource(),
     read("lib/i18n/messages/en/tenant.ts"),
     read("lib/i18n/messages/ar/tenant.ts"),
   ]);
@@ -103,7 +104,7 @@ test("linked groups refresh automatically while Meta also permits explicit first
 
 test("onboarding exposes no-store QR, pairing, and extension-assisted passkey recovery", async () => {
   const [source, dictionary, arabic] = await Promise.all([
-    read("app/WasalXApp.tsx"),
+    readTenantPortalSource(),
     read("lib/i18n/messages/en/tenant.ts"),
     read("lib/i18n/messages/ar/tenant.ts"),
   ]);
@@ -149,7 +150,7 @@ test("onboarding exposes no-store QR, pairing, and extension-assisted passkey re
 
 test("connection setup owns keyboard focus, Escape dismissal, and trigger restoration", async () => {
   const [source, modal, dictionary] = await Promise.all([
-    read("app/WasalXApp.tsx"),
+    readTenantPortalSource(),
     read("app/ModalDialog.tsx"),
     read("lib/i18n/messages/en/tenant.ts"),
   ]);
@@ -175,7 +176,7 @@ test("connection setup owns keyboard focus, Escape dismissal, and trigger restor
 });
 
 test("connection detail guards only the draft that changed and never traps persisted retries", async () => {
-  const source = await read("app/WasalXApp.tsx");
+  const source = await readTenantPortalSource();
   const detail = source.slice(
     source.indexOf("function ConnectionDetail("),
     source.indexOf("function MetaCredentialRotation("),
@@ -222,7 +223,7 @@ test("onboarding timing records only durable QR, human, and provider milestones"
     read("services/connector-worker/src/connection-operation-repository.ts"),
     read("services/control-api/src/waha-authorization.service.ts"),
     read("services/control-api/src/connections.controller.ts"),
-    read("app/WasalXApp.tsx"),
+    readTenantPortalSource(),
     read("lib/i18n/messages/en/tenant.ts"),
   ]);
   for (const column of ["onboarding_qr_ready_at", "onboarding_scan_completed_at", "onboarding_working_at"]) {
@@ -263,7 +264,7 @@ test("creation and lifecycle BFF routes preserve accepted status responses", asy
 
 test("WAHA onboarding exposes only the qualified immutable engine and fails closed across every write boundary", async () => {
   const [portal, route, control, repository, migration, fixture, dictionary] = await Promise.all([
-    read("app/WasalXApp.tsx"),
+    readTenantPortalSource(),
     read("app/api/connections/route.ts"),
     read("services/control-api/src/connections.controller.ts"),
     read("services/connector-worker/src/connection-operation-repository.ts"),
@@ -321,7 +322,7 @@ test("fixture creation rejects unsupported engines while preserving qualified pr
 
 
 test("manual Meta reservation conflicts keep safe localized meaning and preserve generic fallbacks", async () => {
-  const source = await read("app/WasalXApp.tsx");
+  const source = await readTenantPortalSource();
   const file = ts.createSourceFile("WasalXApp.tsx", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
   function find(node, predicate) {
     if (predicate(node)) return node;
