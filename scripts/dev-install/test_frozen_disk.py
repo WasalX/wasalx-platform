@@ -28,6 +28,8 @@ renderer = load("render", parent=".")
 SECOND = 10**9
 CAPTURED_NS = 1_700_000_000 * SECOND
 RENDER_NS = CAPTURED_NS + 40 * SECOND
+# overlay-action.sh stamps lease start, then verifies the packet, then captures the origin.
+LEASE_START_NS = CAPTURED_NS - 2 * SECOND
 ORIGIN = {"host_sha256": "1" * 64, "disk_device": 7, "disk_inode": 19}
 POLICY = {**ORIGIN, "max_age_seconds": 60}
 
@@ -37,8 +39,7 @@ def receipt_origin(**overrides):
     return "LEASE_RECEIPT_ORIGIN " + " ".join(f"{key}={value}" for key, value in values.items()) + "\n"
 
 
-def timing(phase, step, duration, size=None):
-    start = CAPTURED_NS
+def timing(phase, step, duration, size=None, start=CAPTURED_NS):
     byte_count = f" bytes={size}" if size is not None else ""
     return (
         f"PHASE_TIMING phase={phase} step={step} event=start epoch_ns={start} at=2023-11-14T22:13:20Z{byte_count}\n"
@@ -46,13 +47,13 @@ def timing(phase, step, duration, size=None):
     )
 
 
-def lease_receipt(phase, duration, steps=""):
+def lease_receipt(phase, duration, steps="", lease_start=LEASE_START_NS):
     terminal = {
         "install": "DEV_SIGNED_INSTALL=PASS release=HELD 2023-11-14T22:13:21Z",
         "rollback": "DISCARD_OVERLAY=PASS TOP_RESTORED 2023-11-14T22:13:21Z",
         "commit": "COMMIT_PASS 2023-11-14T22:13:21Z overlay_retained=fixture.qcow2",
     }
-    start, end = timing(phase, "lease", duration).splitlines(keepends=True)
+    start, end = timing(phase, "lease", duration, start=lease_start).splitlines(keepends=True)
     return start + steps + end + terminal[phase]
 
 
@@ -182,17 +183,20 @@ class HostPacketTest(unittest.TestCase):
             install, rollback = (parent / name for name in ("install.raw", "rollback.raw"))
             install.write_text(receipt_origin() + lease_receipt(
                 "install", 24 * SECOND, timing("install", "full-top-hash", 8 * SECOND, 2 * SECOND)), encoding="utf-8")
-            for name, override in (
-                ("other-host", {"host_sha256": "2" * 64}),
-                ("other-device", {"disk_device": 8}),
-                ("other-inode", {"disk_inode": 20}),
-                ("expired", {"captured_ns": RENDER_NS - 60 * SECOND - 1}),
-                ("future", {"captured_ns": RENDER_NS + 1}),
-                ("older-timings", {"captured_ns": CAPTURED_NS + 8 * SECOND}),
+            fresh = lease_receipt("rollback", 7 * SECOND)
+            # Starts just before the oldest allowed tick and ends after capture, so only the stale start is wrong.
+            stale = lease_receipt("rollback", 25 * SECOND, lease_start=RENDER_NS - 60 * SECOND - 1)
+            for name, override, text in (
+                ("other-host", {"host_sha256": "2" * 64}, fresh),
+                ("other-device", {"disk_device": 8}, fresh),
+                ("other-inode", {"disk_inode": 20}, fresh),
+                ("expired", {"captured_ns": RENDER_NS - 60 * SECOND - 1}, fresh),
+                ("future", {"captured_ns": RENDER_NS + 1}, fresh),
+                ("older-timings", {"captured_ns": CAPTURED_NS + 8 * SECOND}, fresh),
+                ("stale-lease-start", {}, stale),
             ):
                 with self.subTest(name=name):
-                    rollback.write_text(receipt_origin(**override) + lease_receipt("rollback", 7 * SECOND),
-                                        encoding="utf-8")
+                    rollback.write_text(receipt_origin(**override) + text, encoding="utf-8")
                     inputs = [install, rollback]
                     fields = {**json.loads(self.example.read_bytes()), "LEASE_RECEIPT_POLICY": POLICY,
                               "LEASE_RECEIPT_SHA256S": [hashlib.sha256(path.read_bytes()).hexdigest() for path in inputs]}
