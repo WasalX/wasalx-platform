@@ -48,10 +48,10 @@ function referencesFile(source, file) {
 const tofuFile = file => /^infra\/terraform\/tests\/[^/]+\.tftest\.(?:hcl|json)$/u.test(file);
 const postgresFile = file => /^tests\/.*(?:-postgres(?:-check)?|-real-schema-check)\.mjs$/u.test(file);
 
-function runWorkflowScript(script, env) {
+function runWorkflowScript(script, env, cwd) {
   const bash = process.platform === "win32" ? "C:/Program Files/Git/bin/bash.exe" : "bash";
   return spawnSync(bash, ["--noprofile", "--norc", "-e", "-o", "pipefail", "-c", script], {
-    env: { ...process.env, ...env }, encoding: "utf8", timeout: 10_000, windowsHide: true,
+    cwd, env: { ...process.env, ...env }, encoding: "utf8", timeout: 10_000, windowsHide: true,
   });
 }
 
@@ -172,6 +172,7 @@ test("nightly install is report-only, read-only and fails open on PR diff errors
   const path = ".github/workflows/nightly-install.yml";
   const { on, permissions, concurrency, jobs } = parse(await read(path));
   const job = jobs["nightly-install"];
+  assert.equal(job["continue-on-error"], undefined);
   assert.deepEqual(on, {
     schedule: [{ cron: "17 2 * * *" }],
     workflow_dispatch: null,
@@ -201,6 +202,61 @@ test("nightly install is report-only, read-only and fails open on PR diff errors
   assert(!parse(await read(".github/workflows/ci.yml")).jobs["ci-gate"].needs.includes("nightly-install"));
   const rehearsal = await read("scripts/release/installer-nightly.sh");
   assert.match(rehearsal, /phase native-preflight [^]*phase probe-scan 5m sudo -H env "PATH=\$PATH" node scripts\/dev-install\/probe\.mjs [^]*--held-services ''[^]*\.census == "PASS" and \.services == 37 and \.rerendered_hashes == \.services[^]*phase configured-reinstall/u);
+});
+
+test("PR installer skips only when the publication migration tree differs", async t => {
+  const { jobs } = parse(await read(".github/workflows/nightly-install.yml"));
+  const steps = jobs["nightly-install"].steps;
+  const changes = steps.find(step => step.id === "changes");
+  const check = steps.find(step => step.id === "migration-check");
+  const rehearsal = steps.find(step => step.name === "Rehearse full installation and controlled recreation");
+  assert.equal(check.if, "github.event_name == 'pull_request' && steps.changes.outputs.needed != 'false'");
+  assert.equal(check.env.PUBLICATION_COMMIT, "${{ steps.publication.outputs.commit }}");
+  assert.equal(rehearsal.if, "steps.changes.outputs.needed != 'false' && steps.migration-check.outputs.skip != 'true'");
+  assert.equal(rehearsal["continue-on-error"], undefined);
+
+  const directory = await mkdtemp(join(tmpdir(), "nightly-migrations-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const git = (...args) => execFileSync("git", args, { cwd: directory, encoding: "utf8", windowsHide: true }).trim();
+  git("init", "--quiet", "--template=");
+  git("config", "user.name", "Fixture");
+  git("config", "user.email", "fixture@example.invalid");
+  const migrations = "services/control-api/migrations";
+  const updated = `${migrations}/0001_updated.sql`;
+  const removed = `${migrations}/0002_removed.sql`;
+  const added = `${migrations}/0003_added.sql`;
+  await mkdir(join(directory, migrations), { recursive: true });
+  await writeFile(join(directory, updated), "SELECT 1;\n");
+  await writeFile(join(directory, removed), "SELECT 2;\n");
+  git("add", "--", migrations);
+  git("commit", "--quiet", "-m", "Published migrations");
+  const publication = git("rev-parse", "HEAD");
+  await writeFile(join(directory, updated), "SELECT 3;\n");
+  await writeFile(join(directory, added), "SELECT 4;\n");
+  git("rm", "--quiet", "--", removed);
+  git("add", "--", migrations);
+  git("commit", "--quiet", "-m", "Change migrations");
+  assert.equal(runWorkflowScript(changes.run, { GITHUB_OUTPUT: "selection" }, directory).status, 0);
+  assert.equal((await readFile(join(directory, "selection"), "utf8")).trim(), "needed=true");
+
+  const matching = git("rev-parse", "HEAD");
+  git("commit", "--quiet", "--allow-empty", "-m", "Unrelated candidate commit");
+  for (const [commit, status, skip] of [[publication, 0, true], [matching, 0, false], ["missing-commit", 128, false]]) {
+    const summaryFile = join(directory, "summary");
+    const outputFile = join(directory, "output");
+    await writeFile(summaryFile, "");
+    await writeFile(outputFile, "");
+    const result = runWorkflowScript(check.run, {
+      PUBLICATION_COMMIT: commit, GITHUB_OUTPUT: "output", GITHUB_STEP_SUMMARY: "summary",
+    }, directory);
+    assert.equal(result.status, status, result.error?.message ?? result.stderr);
+    assert.equal((await readFile(outputFile, "utf8")).trim(), skip ? "skip=true" : "");
+    const summary = await readFile(summaryFile, "utf8");
+    assert.equal(result.stdout, summary);
+    assert.equal(summary, skip
+      ? `Installer rehearsal skipped: PR changes migrations; main publication cannot represent them\n\n\`\`\`\n${[updated, removed, added].join("\n")}\n\`\`\`\n`
+      : "");
+  }
 });
 
 test("nightly MinIO mirrors retain the full installer content digests", async () => {
