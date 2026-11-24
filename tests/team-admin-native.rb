@@ -9,8 +9,11 @@ actor.permissions!('admin.group')
 actor.permissions!('admin.user')
 assert = ->(condition, message) { raise message unless condition }
 invoke = ->(kind, input, user = actor) do
-  Wasalx::PortalTeamAdministration.new(actor: user, authorizer: -> { user.reload }, envelope: { 'tenant_id' => owner.tenant_id, 'instance_id' => owner.instance_id,
-    'actor' => { 'user_id' => owner.portal_user_id }, 'operation' => kind, 'input' => input }).call
+  # Match the request boundary: native transaction dispatch can clear the current actor.
+  UserInfo.with_user_id(user.id) do
+    Wasalx::PortalTeamAdministration.new(actor: user, authorizer: -> { user.reload }, envelope: { 'tenant_id' => owner.tenant_id, 'instance_id' => owner.instance_id,
+      'actor' => { 'user_id' => owner.portal_user_id }, 'operation' => kind, 'input' => input }).call
+  end
 end
 UserInfo.with_user_id(actor.id) do
   Group.transaction do
@@ -59,7 +62,8 @@ UserInfo.with_user_id(actor.id) do
     workflow_denied = false
     begin
       invoke.call('TEAM_SAVE', { 'team_id' => team_id, 'operation_id' => restricted_id, 'expected_version' => invoke.call('TEAM_SHOW', { 'team_id' => team_id })[:version], 'name' => disallowed_name, 'note' => '', 'active' => true })
-    rescue ActiveRecord::RecordInvalid, Exceptions::UnprocessableContent
+    rescue Exceptions::ApplicationModel => error
+      raise unless error.record == group && error.message.include?("'name_last'")
       workflow_denied = true
     end
     assert.call(workflow_denied, 'native Group core workflow was bypassed')
