@@ -447,8 +447,7 @@ test("portal BFF and premium case UI expose complete loading, error, empty, and 
   for(const contract of ["Loading case links","Case links unavailable","No support cases are linked yet","Prepare the next case","Reauthenticate","Try again"])assert.match(messages,new RegExp(contract));
   assert.match(component,/ModalDialog/);assert.match(component,/data-modal-initial-focus/);
   assert.match(component,/role="status"[\s\S]{0,120}cases\.loading/u);
-  assert.match(component,/role="region"[\s\S]{0,320}tabIndex=\{0\}[\s\S]{0,160}tenant\.accessibility\.scrollTable/u);
-  assert.match(component,/table-scroll-cue[\s\S]{0,120}tenant\.accessibility\.scrollTableCue/u);
+  assert.match(component,/visible\.length \? <WideTable>[\s\S]*<\/table><\/WideTable>/u);
   assert.match(style,/\.table \{[\s\S]{0,80}min-width: 980px/u);
   assert.match(component,/mutationError\.code === "REAUTHENTICATION_REQUIRED"/u);
   assert.match(component,/return_to=%2Fapp%3Fview%3Dcases/u);
