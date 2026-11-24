@@ -182,6 +182,7 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
             "app/page.tsx": "portal",
             "services/invitation-mailer/src/removed.ts": "invitation-mailer",
             "scripts/release/patch-keycloak-jackson.py": "foundation-keycloak",
+            "infra/docker/full/keycloak/mail-fence/AllowedEmailSenderFactory.java": "foundation-keycloak",
             "tools/dev-secret-sidecar.mjs": "secret-sidecar",
             "infra/docker/Dockerfile.zammad": "zammad",
             "infra/docker/full/zammad/entrypoint.rb": "zammad",
