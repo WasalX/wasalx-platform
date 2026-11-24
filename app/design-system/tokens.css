@@ -17,6 +17,7 @@
   --wx-font-size-5: 1.25rem;
   --wx-font-size-6: 1.5rem;
   --wx-font-size-7: 2rem;
+  --wx-font-size-display: 3.75rem; /* public-page hero only */
   --wx-line-height-compact: 1.25;
   --wx-line-height-default: 1.43;
   --wx-line-height-relaxed: 1.6;
@@ -86,6 +87,7 @@
   --wx-color-success: #45c58a;
   --wx-color-warning: #f3ad4e;
   --wx-color-danger: #f06b6b;
+  --wx-color-danger-solid: #954242;
   --wx-color-on-solid: #ffffff;
   --wx-color-qr-surface: #ffffff;
   --wx-color-provider-waha: #22a06b;
@@ -121,6 +123,7 @@
   --wx-color-success: #167d53;
   --wx-color-warning: #a45e09;
   --wx-color-danger: #c64343;
+  --wx-color-danger-solid: #7b2a2a;
   --wx-color-on-solid: #ffffff;
   --wx-color-qr-surface: #ffffff;
   --wx-color-provider-waha: #16855a;

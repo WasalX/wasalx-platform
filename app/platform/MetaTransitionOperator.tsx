@@ -137,7 +137,7 @@ function ReviewSession({ planId, base, parentLoading, beginWrite, endWrite, auth
     {held ? <p role="status">{t(`${prefix}held`)}</p> : null}{storageFailed ? <p role="alert">{t(`${prefix}storage`)}</p> : null}
     {view ? <>
       <h3><bdi>{view.name}</bdi></h3><p>{t(`${prefix}phase.${view.phase}`)}</p>
-      <dl className={styles.detailGrid}><div><dt>{t(`${prefix}mode`)}</dt><dd>{t(`${prefix}mode.${view.requestedMode}`)}</dd></div><div><dt>{t(`${prefix}currencies`)}</dt><dd><bdi>{view.sourceCurrency ?? t(`${prefix}unknown`)}</bdi> → <bdi>{view.targetCurrency}</bdi></dd></div><div><dt>{t(`${prefix}connections`)}</dt><dd>{formatNumber(view.connectionCount, locale)}</dd></div></dl>
+      <dl className={styles.detailGrid}><div><dt>{t(`${prefix}mode`)}</dt><dd>{t(`${prefix}mode.${view.requestedMode}`)}</dd></div><div><dt>{t(`${prefix}currencies`)}</dt><dd><bdi>{view.sourceCurrency ?? t(`${prefix}unknown`)}</bdi> <span className="reading-arrow" aria-hidden="true">→</span> <bdi>{view.targetCurrency}</bdi></dd></div><div><dt>{t(`${prefix}connections`)}</dt><dd>{formatNumber(view.connectionCount, locale)}</dd></div></dl>
       <ul>{view.connectionNames.map((name, i) => <li key={i}><bdi>{name}</bdi></li>)}</ul>
       <dl className={styles.detailGrid}>{Object.entries(view.proof).map(([name, value]) => <div key={name}><dt>{t(`${prefix}proof.${name}`)}</dt><dd>{t(`${prefix}proofState.${value}`)}</dd></div>)}</dl>
       {view.checkpoints.length ? <ul>{view.checkpoints.map(item => <li key={item.stage}>{t(`${prefix}stage.${item.stage}`)}: {t(`${prefix}outcome.${item.outcome}`)}</li>)}</ul> : null}

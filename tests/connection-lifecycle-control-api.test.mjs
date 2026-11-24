@@ -56,6 +56,7 @@ test("connections continue past 200 with a tenant-scoped cursor and stable ties"
     await assert.rejects(() => controller.list(request, query, reply), BadRequestException);
   }
   assert.equal(queries, 2);
+  assert.deepEqual(await controller.list(request), records.slice(0, 200));
 });
 
 const metaAppId = "12025550130";

@@ -97,6 +97,9 @@ spec:
             - name: CLIENT_ROUTING_EXTERNAL_CONNECTORS_ENABLED
               valueFrom: { configMapKeyRef: { name: wasalx-runtime, key: CLIENT_ROUTING_EXTERNAL_CONNECTORS_ENABLED } }
 {{- end }}
+{{- if and (eq $name "invitation-mailer") (has $root.Values.environment (list "staging" "production")) }}
+            - { name: WASALX_TEST_EMAIL_RECIPIENT_ALLOWLIST, value: "*" }
+{{- end }}
           envFrom:
             - configMapRef: { name: wasalx-runtime }
             - secretRef: { name: {{ required (printf "%s.secretName is required" $name) $service.secretName | quote }} }

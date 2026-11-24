@@ -1,6 +1,7 @@
 import { renderNumberedChoices } from "../../core/src/outbound-text.js";
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
+import { recordStructuredLog, safeRequestId } from "@wasalx/observability";
 import type { DirectProviderMessage, MessagingProviderAdapter, ProviderGroup, ProviderMessage, ProviderMessageMutation, ProviderReceipt, SendMessage } from "./types.js";
 import { ProviderError } from "./types.js";
 import { parseWahaTestRecipientAllowlist, wahaMessageRecipient, wahaTestRecipientAllowed, type WahaTestRecipientAllowlist } from "../../core/src/waha-test-recipient-scope.js";
@@ -672,9 +673,11 @@ export function assertWahaTestOutboundAllowed(input: Pick<SendMessage, "groupId"
   const targetIds = [input.replyToMessageId, input.reaction?.messageId].filter(value => value !== undefined);
   if (!wahaTestRecipientAllowed(allowlist, input.groupId)
     || (allowlist !== undefined && targetIds.some(value => wahaMessageRecipient(value) !== wahaMessageRecipient(`false_${input.groupId}_scope`)))) {
-    // Recipient identifiers, message bodies and secrets must not enter this log.
-    console.warn("WAHA test recipient scope refused outbound send");
-    throw new ProviderError("WAHA recipient is outside the configured test scope", false, "WAHA_TEST_RECIPIENT_NOT_ALLOWED");
+    const errorCode = "WAHA_TEST_RECIPIENT_NOT_ALLOWED";
+    recordStructuredLog("warn", "waha.test_recipient_scope_refused", {
+      request_id: safeRequestId(), component: "waha-connector", error_code: errorCode,
+    });
+    throw new ProviderError("WAHA recipient is outside the configured test scope", false, errorCode);
   }
 }
 

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { readTenantPortalSource } from "./helpers/tenant-portal-source.mjs";
 import { englishTenantMessages } from "../lib/i18n/messages/en/tenant.ts";
 
 const originalBackend = process.env.PORTAL_DATA_BACKEND;
@@ -9,11 +10,9 @@ process.env.PORTAL_DATA_BACKEND = "fixture";
 delete process.env.PORTAL_FIXTURE_ROLE;
 
 const fixture = await import(`../lib/fixture-data.ts?privacy-portal=${Date.now()}`);
-const portalSource = await readFile(new URL("../app/WasalXApp.tsx", import.meta.url), "utf8");
-const privacySource = portalSource.slice(
-  portalSource.indexOf("function PrivacySettings"),
-  portalSource.indexOf("type TeamMember"),
-);
+const portalSource = readTenantPortalSource();
+const settingsSource = await readFile(new URL("../app/TenantSettings.tsx", import.meta.url), "utf8");
+const privacySource = settingsSource.slice(settingsSource.indexOf("function PrivacySettings"));
 
 test("privacy settings are role-aware, private-demo safe, and content-minimizing", () => {
   assert.match(portalSource, /tenant\.settings\.sections\.privacy/u);

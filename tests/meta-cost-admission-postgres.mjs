@@ -58,7 +58,7 @@ export async function verifyMetaCostSelectorSemantics(options){
    const unresolved=await head();assert.equal(unresolved.state,'UNPRICED');assert.equal(unresolved.evidence_mode,'SIMULATED');assert.equal(unresolved.amount,null);
   }
   await act({deliveryId:effect.job.id,expectedHeadId:(await head()).id,selectorEvidence:f.selector});
-  const free=await f.begin();await f.complete(free);await f.emit(free.external,{billable:false,pricing_model:'PMP',category:'service',type:'free_customer_service'});await f.drain();
+  const free=await f.begin();await f.complete(free);await f.emit(free.external,{billable:false,pricing_model:'PMP',category:'service',type:'free_customer_service',subtype:'free_tier'});await f.drain();
   const freeUpstream=(await f.heads(free.job.id)).find(row=>row.purpose==='UPSTREAM_REFERENCE');assert.equal(freeUpstream.state,'ESTIMATED');assert.equal(freeUpstream.reason,'REPORTED_FREE');assert.equal(decimal(freeUpstream.amount),'0');assert.equal(freeUpstream.selector_evidence,null);
   assert((await f.heads(effect.job.id)).every(row=>row.evidence_mode==='SIMULATED'));assert((await f.usage()).totals.every(row=>row.evidenceMode==='SIMULATED'));
   const authDefinition=f.definition('UPSTREAM_REFERENCE');authDefinition.rates.push({...authDefinition.rates[0],category:'authentication',schedule:'AUTHENTICATION_INTERNATIONAL',unitPrice:'0.123456'});

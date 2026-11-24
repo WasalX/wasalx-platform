@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { readTenantPortalSource } from "./helpers/tenant-portal-source.mjs";
 import { BadRequestException } from "../services/control-api/node_modules/@nestjs/common/index.js";
 import { DeliveryProcessor } from "../services/connector-worker/dist/services/connector-worker/src/processor.js";
 import { wahaDeferralExpired } from "../services/connector-worker/dist/services/connector-worker/src/repository.js";
@@ -125,7 +126,7 @@ test("tenant operators can change only the existing audited group-initiation pol
   const [route,portal,screen,service,controller,permissions]=await Promise.all([
     readFile(new URL("../app/api/waha-outbound-safety/route.ts",import.meta.url),"utf8"),
     readFile(new URL("../lib/control-plane-data.ts",import.meta.url),"utf8"),
-    readFile(new URL("../app/WasalXApp.tsx",import.meta.url),"utf8"),
+    readTenantPortalSource(),
     readFile(new URL("../services/control-api/src/waha-outbound-safety.service.ts",import.meta.url),"utf8"),
     readFile(new URL("../services/control-api/src/waha-outbound-safety.controller.ts",import.meta.url),"utf8"),
     readFile(new URL("../packages/core/src/tenant-permissions.ts",import.meta.url),"utf8"),
