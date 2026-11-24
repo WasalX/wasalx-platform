@@ -22,6 +22,14 @@ const eslintConfig = defineConfig([
   react.configs.flat["jsx-runtime"],
   reactHooks.configs.flat["recommended-latest"],
   jsxA11y.flatConfigs.recommended,
+  {
+    rules: {
+      // Named scroll regions take focus so keyboard users can scroll them (ScrollRegion in app/tenant-ui.tsx).
+      "jsx-a11y/no-noninteractive-tabindex": ["error", { tags: [], roles: ["tabpanel", "region"], allowExpressionValues: true }],
+      // list-style:none can hide list semantics in Safari/VoiceOver, so styled lists keep role="list".
+      "jsx-a11y/no-redundant-roles": ["error", { ul: ["list"], ol: ["list"] }],
+    },
+  },
   next.configs["core-web-vitals"],
   {
     languageOptions: {

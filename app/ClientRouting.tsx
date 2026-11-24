@@ -1,7 +1,5 @@
 "use client";
 
-/* eslint-disable jsx-a11y/no-noninteractive-tabindex -- horizontal tables must be keyboard-scrollable */
-
 import { draftSupportQueues, type SupportQueueOrigin } from "../lib/client-routing-draft";
 import { clientRoutingQueueWarnings } from "../lib/client-routing-availability";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -14,6 +12,7 @@ import {
 } from "../packages/core/src/client-routing";
 import { ModalDialog } from "./ModalDialog";
 import { useI18n } from "./I18nProvider";
+import { ScrollRegion } from "./tenant-ui";
 import { useVisibleRefresh } from "./use-visible-refresh";
 import { NativeRoutingSync } from "./NativeRoutingSync";
 
@@ -1001,10 +1000,8 @@ function ClientTable({
               placeholder={t("routing.clients.searchPlaceholder")}
             />
           </label>
-          <div
+          <ScrollRegion
             className="table-wrap routing-table-wrap"
-            tabIndex={0}
-            role="region"
             aria-label={t("routing.clients.tableLabel")}
           >
             <table className="routing-table">
@@ -1063,7 +1060,7 @@ function ClientTable({
                 ))}
               </tbody>
             </table>
-          </div>
+          </ScrollRegion>
           {!visible.length ? (
             <Empty
               title={t("routing.clients.noMatchTitle")}

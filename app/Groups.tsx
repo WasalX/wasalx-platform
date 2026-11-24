@@ -177,10 +177,11 @@ export function Groups({
       const result = await response.json().catch(() => ({})) as {
         succeeded?: number;
         failed?: number;
-        results?: Array<{ id: string; ok: boolean; error?: string }>;
-        error?: string;
+        results?: Array<{ id: string; ok: boolean }>;
+        code?: string;
       };
-      if (!response.ok && response.status !== 207) throw new Error(response.status >= 500 ? t("tenant.group.bulk.error") : result.error ?? t("tenant.group.bulk.error"));
+      // operatorFailureMessage maps the code or status to catalogue text; the API's English text is never shown.
+      if (!response.ok && response.status !== 207) throw Object.assign(new Error(), { status: response.status, code: result.code });
       bulkOperation.current=null;
       const succeededIds = new Set((result.results ?? []).filter((item) => item.ok).map((item) => item.id));
       setGroupStateOverrides((current) => {
