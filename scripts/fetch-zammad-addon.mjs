@@ -1,9 +1,37 @@
 import assert from "node:assert/strict";
 import {spawnSync} from "node:child_process";
+import {lstatSync, readFileSync} from "node:fs";
 import {readFile, cp, mkdir, access, readdir} from "node:fs/promises";
 import {lstat} from "node:fs/promises";
 import {resolve} from "node:path";
 import {pathToFileURL} from "node:url";
+
+export const unitAddonSources = [
+  "tests/portal-delegation-test.rb",
+  "tests/portal-groups-contract.rb",
+  "tests/portal-mail-delivery-contract.rb",
+  "tests/portal-upload-expiry-test.rb",
+  "zammad-package/app/controllers/api/v1/wasalx_controller.rb",
+  "zammad-package/app/controllers/api/v1/wasalx_portal_workspace_controller.rb",
+  "zammad-package/app/frontend/apps/mobile/pages/wasalx-groups/routes.ts",
+  "zammad-package/lib/wasalx/group_workspace.rb",
+  "zammad-package/lib/wasalx/session_assurance.rb",
+  "zammad-package/lib/wasalx/session_refresh.rb",
+  "zammad-package/lib/wasalx/session_state.rb",
+];
+
+function requireUnitAddonFiles(root, files, source) {
+  const missing = files.filter(file => !lstatSync(resolve(root, file), {throwIfNoEntry: false})?.isFile());
+  assert.equal(missing.length, 0, `Missing required Zammad add-on inputs (${source}): ${missing.join(", ")}`);
+}
+
+export function validateUnitAddonInputs(root = process.cwd()) {
+  requireUnitAddonFiles(root, unitAddonSources, "staged files; run pnpm run zammad:package");
+  const {packageVersion} = JSON.parse(readFileSync(resolve(root, "zammad-addon.json"), "utf8"));
+  assert.match(packageVersion, /^\d+\.\d+\.\d+$/u, "Invalid Zammad add-on package version");
+  requireUnitAddonFiles(root, [`build/zammad/wasalx-${packageVersion}.zpm`], "built package; run pnpm run zammad:package");
+}
+
 export function validatePin(pin, approvedRepository = "WasalX/wasalx-zammad-addon") {
   assert(/^[a-f0-9]{40}$/.test(pin.commit));
   assert.equal(pin.repository, approvedRepository);
@@ -39,6 +67,7 @@ async function main() {
     git(["-C",checkout,"-c","core.hooksPath=/dev/null","-c","core.autocrlf=false","checkout","--detach","FETCH_HEAD"]);
   }
   assert.equal(git(["-C",checkout,"rev-parse","HEAD"]),pin.commit);
+  requireUnitAddonFiles(checkout, unitAddonSources, "pinned checkout");
   assert.equal(git(["-C",checkout,"status","--porcelain"]),"");
   const contracts=(await readdir(resolve(checkout,"tests"))).filter(name=>name.endsWith(".rb")).map(name=>"tests/"+name);
   const inputs=["zammad-package","build/zammad","tests/fixtures",...contracts].map(path=>[path,path]);
