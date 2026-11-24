@@ -1,4 +1,5 @@
 """Scan event text and newly introduced Git lines using public patterns."""
+from itertools import islice
 import json
 import os
 from pathlib import Path
@@ -57,7 +58,7 @@ def changes(parent, commit):
     raw, separator, patch = diff.partition(b"\0\0")
     if not separator:
         raise ValueError
-    paths = iter(raw.split(b"\0")[1::2])
+    paths = islice(raw.split(b"\0"), 1, None, 2)
     previous_header = None
     number = None
     for line in patch.split(b"\n"):
