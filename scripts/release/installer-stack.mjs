@@ -537,10 +537,10 @@ export async function verifyStack({ repositoryRoot: verificationRoot = root } = 
   const candidateTree = process.env.WASALX_CANDIDATE_TREE;
   const parsed = argumentsFrom(process.argv.slice(2));
   const { project, candidateImages } = parsed;
+  const overlay = devWebhookPreflightOverlay(parsed);
   assert.match(candidateSha ?? "", shaPattern, "WASALX_CANDIDATE_SHA is required");
   assert.match(candidateTree ?? "", shaPattern, "WASALX_CANDIDATE_TREE is required");
   assert.match(project ?? "", /^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$/u, "Compose project is invalid");
-  const overlay = devWebhookPreflightOverlay(parsed);
   const requestedFiles = parsed.composeFiles.length ? parsed.composeFiles : ["compose.yaml", "compose.smoke.yaml"];
   const profiles = parsed.profiles;
   const fullMode = parsed.full;

@@ -5,6 +5,7 @@ import { syncBuiltinESMExports } from "node:module";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { parse } from "yaml";
 import { projectStack, devHeldServices, devPreservedServices, devContainerPreimage, devValueDigest, assertInstallHostname, devReviewAuthConfiguration, verifyStack } from "../scripts/release/installer-stack.mjs";
 import { executeStage, run, stageFailureReason } from "../scripts/release/installer-stages.mjs";
 import { repositoryDigestMatches } from "../scripts/installer-evidence.mjs";
@@ -158,8 +159,8 @@ test("installer smoke forwards the DEV option and verifies the selected Compose 
 
 test("DEV preflight overlay only runs a local notice", async () => {
   const overlay = await readFile(new URL("../scripts/release/installer-dev-skip-webhook.compose.yaml", import.meta.url), "utf8");
-  const command = JSON.parse(overlay.match(/^    command: (\[.*\])$/mu)[1]);
-  assert.deepEqual(command, ["node", "--eval", "console.log('public webhook preflight skipped by DEV option')"]);
+  const command = ["node", "--eval", "console.log('public webhook preflight skipped by DEV option')"];
+  assert.deepEqual(parse(overlay), { services: { "public-webhook-preflight": { command } } });
   const result = spawnSync(process.execPath, command.slice(1), { encoding: "utf8", timeout: 10000, windowsHide: true });
   assert.equal(result.status, 0);
   assert.equal(result.stdout, "public webhook preflight skipped by DEV option\n");
