@@ -197,7 +197,9 @@ The full installer nightly stages the signed product images and pinned dependenc
 the registry read-only, blocks public registry access for Docker, and checks the
 loaded registry digests and container identity through the existing admission
 and smoke stages. It copies the Linux AMD64 manifests plus their original
-multi-platform indexes.
+multi-platform indexes. In PR rehearsals, smoke checks the running Zammad
+package against the catalog at the signed image publication's source commit.
+Failed smoke checks report a check name or verifier line and a redacted reason.
 
 ## Public build inputs and inspection
 

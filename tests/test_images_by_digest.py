@@ -87,7 +87,8 @@ class ImagePublicationTests(unittest.TestCase):
 
     def test_merge_group_workflow_selects_all_21_images(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
-        step = workflow.split("      - id: matrix\n", 1)[1].split("\n\n", 1)[0]
+        after_matrix_id = workflow.split("      - id: matrix\n", 1)[1]
+        step = re.split(r"\n(?= {6}- | {2}\S)", after_matrix_id, maxsplit=1)[0]
         script = textwrap.dedent(step.split("        run: |\n", 1)[1])
         bash = "C:/Program Files/Git/bin/bash.exe" if os.name == "nt" else "bash"
         helpers = '''\
