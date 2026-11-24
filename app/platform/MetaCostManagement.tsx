@@ -4,7 +4,8 @@ import { parseMetaCostSelectorEvidence, parseMetaCostTariff, type MetaCostTariff
 import { formatDateTime, formatNumber } from "../../lib/i18n/format";
 import { platformRequest } from "../../lib/platform-client";
 import { useI18n } from "../I18nProvider";
-import { MetaCostUsage, type CostUsage } from "../MetaCostUsage";
+import { MetaCostDisclosure } from "../MetaCostDisclosure";
+import type { CostUsage } from "../MetaCostUsage";
 import styles from "../MetaCostUsage.module.css";
 import {MetaCostStatementManagement} from "./MetaCostStatementManagement";
 
@@ -33,7 +34,7 @@ export function PlatformMetaCosts({tenantId,csrfToken}:OperatorScope){
   return <>
     {feedback?<p role={feedback==="cost.manage.saved"?"status":"alert"}>{t(feedback)}</p>:null}
     {uncertain?<button type="button" disabled={busy} onClick={()=>{if(intent.current)void mutate(intent.current.path,intent.current.body);}}>{t("cost.manage.reconcile")}</button>:null}
-    <MetaCostUsage canExport platform={scope} refreshKey={revision} management={(snapshot,account,window)=>account==="unattributed"?null:
+    <MetaCostDisclosure canExport platform={scope} refreshKey={revision} management={(snapshot,account,window)=>account==="unattributed"?null:
       <div key={account}><Management scope={scope} snapshot={snapshot} accountId={account} mutate={mutate} busy={busy} uncertain={uncertain}/><MetaCostStatementManagement scope={scope} accountId={account} window={window} revision={revision} mutate={mutate} busy={busy} uncertain={uncertain}/></div>}/>
   </>;
 }
