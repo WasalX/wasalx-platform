@@ -27,7 +27,7 @@ function Workspace({ locale = "en", kind = "export" }: { locale?: "en" | "ar"; k
   </I18nProvider>;
 }
 export default {
-  title: "Product/Privacy targets", component: Workspace, parameters: { layout: "fullscreen", docs: { description: {
+  title: "Product/Privacy targets", component: Workspace, args: { locale: "en" }, parameters: { layout: "fullscreen", docs: { description: {
     component: "Real privacy dialogs with synthetic browser-controlled responses. This fixture does not qualify native policy or privacy execution.",
   } } },
 } satisfies Meta<typeof Workspace>;

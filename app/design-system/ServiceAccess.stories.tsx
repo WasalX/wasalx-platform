@@ -15,7 +15,7 @@ function Workspace({ locale = "en", protectedOwner = false }: { locale?: "en" | 
   }, []);
   return <I18nProvider locale={locale} messages={getMessages(locale)} renderedAt={1792252800000}><main className="wx-story-section" lang={locale} dir={locale === "ar" ? "rtl" : "ltr"}>{protectedOwner ? <SupportTeams execute={execute} scope="storybook:synthetic-protected-owner" owner/> : <div className="panel"><ServiceAccess execute={execute} scope="storybook:synthetic-service-access" teamId={team}/><button type="button" className="button secondary" onClick={() => setTeam(team === "2" ? "3" : "2")}>Synthetic selection change</button></div>}</main></I18nProvider>;
 }
-export default { title: "Product/Service access", component: Workspace, parameters: { layout: "fullscreen", docs: { description: { component: "Actual owner service-access component; browser fixtures are synthetic exploratory UI evidence, never native identity or provider acceptance." } } } } satisfies Meta<typeof Workspace>;
+export default { title: "Product/Service access", component: Workspace, args: { locale: "en" }, parameters: { layout: "fullscreen", docs: { description: { component: "Actual owner service-access component; browser fixtures are synthetic exploratory UI evidence, never native identity or provider acceptance." } } } } satisfies Meta<typeof Workspace>;
 type Story = StoryObj<typeof Workspace>;
 export const English: Story = {};
 export const Arabic: Story = { args: { locale: "ar" } };
