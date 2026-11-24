@@ -539,7 +539,7 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
       puts JSON.generate(receipt: Package::Migration.exists?(name: 'wasalx', version: '202609020014'), package_version: package&.version, package_state: package&.state, attributes: attributes)
     `).split("\n").find((line) => line.startsWith("{")) ?? "");
     assert.equal(blockedState.receipt, false);
-    assert.equal(blockedState.package_version, "0.5.84");
+    assert.equal(blockedState.package_version, "0.5.85");
 
     assert.equal(blockedState.package_state, "installed");
     assert.deepEqual(blockedState.attributes, [
@@ -2085,6 +2085,7 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
       "native-ticket-transfer-create-workflow-and-email-driver",
       "native-full-article-text-bounds-version-and-policy",
       "native-ticket-upload-ownership-target-and-selected-set",
+      "native-attachment-only-group-reply-keeps-empty-caption",
       "native-group-receipt-fences-races-and-savepoints",
       "native-binary-staging-target-ownership-and-idempotent-retry",
       "native-portal-preview-reuses-route-and-does-not-admit-effects",

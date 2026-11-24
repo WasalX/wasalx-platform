@@ -21,7 +21,15 @@ jobs:
         with:
           node-version: '24.13.1'
           package-manager-cache: false
-      - uses: ./.github/actions/ci-pnpm
+      - id: pnpm
+        uses: ./.github/actions/ci-pnpm
+      - name: Build service prerequisites
+        uses: ./.github/actions/ci-pnpm
+        with:
+          task: build
+          dependency-key: ${{ steps.pnpm.outputs.dependency-key }}
+      - name: Verify control API accepts attachment-only outbound articles
+        run: node --test tests/outbound-media.test.mjs
       - name: Prepare compatibility fixtures and Chromium
         run: |
           pnpm run zammad:fetch

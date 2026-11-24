@@ -105,8 +105,11 @@ UserInfo.with_user_id(actor.id) do
       http = ActionDispatch::Integration::Session.new(Rails.application)
       http.host!('localhost')
       http.post(Wasalx::PortalDelegation::PATH, params: body, headers: { 'Authorization' => "Token token=#{runtime.token}",
-        'Content-Type' => 'application/json', 'X-Wasalx-Timestamp' => timestamp, 'X-Wasalx-Signature' => signature })
-      [http.response.status, JSON.parse(http.response.body)]
+        'Content-Type' => 'application/json', 'Accept' => 'application/json',
+        'X-Wasalx-Timestamp' => timestamp, 'X-Wasalx-Signature' => signature })
+      response = http.response
+      assert.call(response.media_type == 'application/json', "Signed portal #{operation} returned non-JSON (HTTP #{response.status})")
+      [response.status, JSON.parse(response.body)]
     end
     customer = ticket = expected_sender = nil
     Transaction.execute do

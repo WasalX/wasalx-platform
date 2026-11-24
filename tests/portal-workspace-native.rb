@@ -686,6 +686,33 @@ begin
     end
   end
 
+  check.call('native-attachment-only-group-reply-keeps-empty-caption') do
+    media_ticket = make_ticket.call(group, 'attachment-only', true)
+    actor_id = members['agent'].user_id
+    cache_id = SecureRandom.uuid
+    begin
+      upload = UserInfo.with_user_id(actor_id) do
+        UploadCache.new(cache_id).add(filename: 'reply.txt', data: 'Synthetic media-only reply',
+          preferences: { 'Content-Type' => 'text/plain', 'Wasalx-Portal-Target' => { 'kind' => 'TICKET', 'id' => media_ticket.id.to_s } },
+          created_by_id: actor_id)
+      end
+      before_admissions = admissions.length
+      status, result = call.call('REPLY', { ticket_id: media_ticket.id.to_s, operation_id: SecureRandom.uuid,
+        expected_updated_at: media_ticket.reload.updated_at.utc.iso8601(6), body: '', internal: false,
+        form_id: cache_id, attachment_ids: [upload.id.to_s] })
+      assert.call(status == 200, "Native attachment-only group reply failed (#{status})")
+      attachment_reply = Ticket::Article.find(result.fetch('article_id'))
+      assert.call(attachment_reply.type.name == 'wasalx group message' && attachment_reply.body == '' &&
+        attachment_reply.attachments.map(&:filename) == ['reply.txt'], 'Native group reply changed the blank caption or selected attachment')
+      CommunicateWasalxJob.new.perform(attachment_reply.id)
+      assert.call(admissions.length == before_admissions + 1 && admissions.last[:article_id] == attachment_reply.id &&
+        admissions.last[:body] == '' && admissions.last[:attachments].map { |file| file.fetch(:filename) } == ['reply.txt'],
+        'Outbound group reply lost the attachment or added a caption')
+    ensure
+      UserInfo.with_user_id(actor_id) { UploadCache.new(cache_id).destroy }
+    end
+  end
+
   check.call('native-group-receipt-fences-races-and-savepoints') do
     require 'timeout'
     actor = members['agent'].user.reload

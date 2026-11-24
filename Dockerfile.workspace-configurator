@@ -25,8 +25,8 @@ COPY scripts/build-zammad-package.mjs ./scripts/build-zammad-package.mjs
 COPY zammad-package ./zammad-package
 RUN node scripts/build-zammad-package.mjs \
     && printf '%s  %s\n' \
-      '9673aefce89b6aa4d767eed01ae574d48397de28de5ff6f4c65d86ceee6ee761' \
-      'build/zammad/wasalx-0.5.84.zpm' | sha256sum --check --strict
+      '5dd05809de037aa9a1ccbe10b4c2efda5cd94005aba5595613348b4174339cac' \
+      'build/zammad/wasalx-0.5.85.zpm' | sha256sum --check --strict
 
 
 # Reuse the hardened runtime and unaffected zlib pin used by the other services.
@@ -40,8 +40,8 @@ COPY --from=node:22-bookworm-slim@sha256:de170b39439eb0e5a3444ad7d60b015614a381e
 RUN node -e "const assert = require('node:assert/strict'); assert.equal(process.version, 'v22.23.4'); assert.equal(process.versions.undici, '6.29.1')"
 LABEL org.opencontainers.image.title="WasalX workspace configurator" \
       org.opencontainers.image.version="0.1.0" \
-      io.wasalx.zammad-package.version="0.5.84" \
-      io.wasalx.zammad-package.sha256="9673aefce89b6aa4d767eed01ae574d48397de28de5ff6f4c65d86ceee6ee761"
+      io.wasalx.zammad-package.version="0.5.85" \
+      io.wasalx.zammad-package.sha256="5dd05809de037aa9a1ccbe10b4c2efda5cd94005aba5595613348b4174339cac"
 
 ENV NODE_ENV=production
 ENV HOME=/tmp
@@ -49,7 +49,7 @@ ENV PATH=/usr/local/bin:/usr/bin:/bin
 WORKDIR /app
 COPY --from=build --chown=1000:1000 /workspace/services/workspace-configurator/package.json ./package.json
 COPY --from=build --chown=1000:1000 /workspace/services/workspace-configurator/dist ./dist
-COPY --from=package-artifact --chown=1000:1000 /workspace/build/zammad/wasalx-0.5.84.zpm /app/artifacts/wasalx-0.5.84.zpm
+COPY --from=package-artifact --chown=1000:1000 /workspace/build/zammad/wasalx-0.5.85.zpm /app/artifacts/wasalx-0.5.85.zpm
 
 ARG WASALX_CANDIDATE_SHA=unfrozen
 ARG WASALX_CANDIDATE_TREE=unfrozen
