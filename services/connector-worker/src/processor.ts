@@ -1,6 +1,6 @@
 import {currentMetaRuntimeCandidate} from "./meta-request-provenance.js";
 import {currentMetaTransportBinding} from "./meta-transport-binding.js";
-import {verifyMetaInheritedTemplateSend} from "./meta-template-send.js";
+import { verifyApprovedTicketTemplateSend, verifyMetaInheritedTemplateSend } from "./meta-template-send.js";
 import {parseMetaBillingSnapshot} from "../../../packages/core/src/meta-account-policy.js";
 import {assertMetaLifecycleAccess} from "../../../packages/core/src/meta-account-relation.js";
 import {assertMetaCredentialProof} from "../../../packages/core/src/meta-account-relation.js";
@@ -121,6 +121,7 @@ export class DeliveryProcessor{
     const beforeMessageSend=async(hash:string,phoneNumberId:string)=>{
       try{
         assertProof();
+        await verifyApprovedTicketTemplateSend(job,adapter);
         const templateProof=await verifyMetaInheritedTemplateSend(job,leaseId,
           {context:(currentJob,currentLease)=>this.repository.metaInheritedTemplateContext(currentJob,currentLease)},adapter);
         // A failed/missing local descriptor is UNKNOWN, never a caller-selected mode.

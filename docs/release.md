@@ -47,3 +47,11 @@ Live-provider qualification with real WhatsApp or Meta services and real
 customers is a separate milestone that requires the owner's approval for the
 paid provider accounts and access it needs. A stable
 release proves the platform end to end in its own environments.
+
+### Closed WhatsApp customer-service windows
+
+For direct tickets in human handoff, WasalX checks the 24-hour window against
+the last retained customer message. Free-text replies require an open window.
+The Zammad template action lists approved templates that the outbound path can
+send with positional body parameters. WasalX checks approval and content again
+before dispatch and reports the delivery state through the ticket's WasalX panel.

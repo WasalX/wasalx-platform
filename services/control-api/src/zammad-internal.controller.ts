@@ -1,9 +1,14 @@
+import { assertMetaCredentialProof } from '@wasalx/core/meta-account-relation';
+import { approvedTicketTemplate } from '@wasalx/core/meta-template-continuity';
+import { assertDirectNativeBarrier } from '@wasalx/core/direct-keep-open';
+import { MetaCredentialService } from './meta-credential.service.js';
+import { MetaGroupsClientFactory } from './meta-groups.client.js';
 import {assertMetaDirectEffectCurrent} from '@wasalx/core/meta-direct-identity';
 import {directControlDeliveryAllowed,directHumanDeliveryAllowed} from '@wasalx/core/direct-delivery-guards';
 import { createHash } from "node:crypto";
 import {reserveDirectNativeReply,admitDirectReplyIntent,completeDirectReplyIntent,reconcileAbsentDirectReplyIntent} from "./direct-native-operations.js";
 import type { PoolClient } from "pg";
-import { BadRequestException, Body, ConflictException, Controller, Get, Headers, NotFoundException, Param, Post, Query, Req, SetMetadata, UnauthorizedException } from "@nestjs/common";
+import { BadRequestException, Body, ConflictException, Controller, Get, Headers, NotFoundException, Param, Post, Query, Req, ServiceUnavailableException, SetMetadata, UnauthorizedException } from "@nestjs/common";
 import { clientRoutingApplies, normalizeRoutingEmail, parseClientRouting, resolveClientRoute, type ClientRoute, type ClientRoutingDefinition } from "@wasalx/core/client-routing";
 import { PUBLIC_ROUTE } from "./auth.guard.js";
 import { DatabaseService } from "./database.service.js";
@@ -20,6 +25,8 @@ import {ticketCommandAdmission,assertTicketCommandBarrier,lockTicketCommand} fro
 
 type OutboundAttachment={id?:string|number;filename?:string;content_type?:string;size?:string|number};
 type OutboundBody={native_reply_intent_id?:string;tenant_id?:string;connection_id?:string;group_id?:string;ticket_id?:string|number;article_id?:string|number;body?:string;content_type?:string;reply_to_message_id?:string;reply_to_article_id?:string|number;idempotency_key?:string;internal?:boolean;agent?:{id?:string|number;display_name?:string};attachments?:OutboundAttachment[]};
+type TicketTemplateBody={tenant_id?:string;connection_id?:string;group_id?:string;ticket_id?:string|number;
+  request_token?:string;template_id?:string;template_sha256?:string;parameters?:unknown};
 type ValidAttachment={id:number;filename:string;mimeType:string;byteSize:number};
 export type QueuedOutboundAttachment=
   |{source:"ARTICLE";id:number;filename:string;mimeType:string;byteSize:number}
@@ -29,7 +36,8 @@ export type QueueOutboundInput={tenantId:string;connectionId:string;groupBinding
   replyToMessageId:string|null;idempotencyKey:string;requestSha256:string;agentDisplayName:string|null;agentPrefixSnapshot:string|null;
   agentIdentityPlacementSnapshot:"HEADER"|"FOOTER"|"OFF"|null;
   deliveryOrigin:"TICKET"|"GROUP_WORKSPACE";directOrigin:"HUMAN"|null;attachments:QueuedOutboundAttachment[];mentions:string[];
-  quoteGroupId?:string;replyToArticleId?:string;directOwnershipEpoch?:number;metaRoutingEpoch?:number;metaRoutingSourceEventId?:string};
+  quoteGroupId?:string;replyToArticleId?:string;directOwnershipEpoch?:number;metaRoutingEpoch?:number;metaRoutingSourceEventId?:string;
+  templateContent?:{type:"template";name:string;languageCode:string;bodyParameters:string[];ticketTemplateId:string;ticketTemplateSha256:string}};
 type RetryBody={tenant_id?:string;instance_id?:string;ticket_id?:string|number;article_id?:string|number;delivery_id?:string;actor_id?:string|number;idempotency_key?:string;confirm_outcome_unknown?:boolean};
 type EmailRoutingBody={tenant_id?:string;instance_id?:string;ticket_id?:string|number;article_id?:string|number;ticket_number?:string;sender_email?:string;admitted_at?:string;entry_group_id?:string|number};
 type EmailRoutingAcknowledgementBody={tenant_id?:string;instance_id?:string;route_id?:string;ticket_id?:string|number;article_id?:string|number;idempotency_key?:string;application_status?:string;observed_group_id?:string|number;observed_owner_id?:string|number|null};
@@ -45,7 +53,8 @@ const DELIVERY_CONTEXT_STATES=new Set(["QUEUED","CLAIMED","SENDING","SENT","DELI
 @Controller("internal/v1/zammad")
 @SetMetadata(PUBLIC_ROUTE,true)
 export class ZammadInternalController{
-  constructor(private readonly database:DatabaseService,private readonly auth:ServiceAuthService,private readonly drain:TenantDrainService){}
+  constructor(private readonly database:DatabaseService,private readonly auth:ServiceAuthService,private readonly drain:TenantDrainService,
+    private readonly metaCredentials:MetaCredentialService,private readonly metaClients:MetaGroupsClientFactory){}
   private async claims(authorization:string|undefined,scope:string,request?:ZammadServiceRequest){const claims=await this.auth.verify(authorization,scope,request);const rows=await this.database.rows<{id:string}>(claims.tenantId,"SELECT id FROM zammad_instances WHERE tenant_id=$1 AND id=$2 AND state='WORKING'",[claims.tenantId,claims.instanceId]);if(!rows[0])throw new UnauthorizedException("Zammad instance is not active");return claims}
   @Get("health")async health(@Headers("authorization")authorization:string|undefined,@Req()request?:ZammadServiceRequest){const claims=await this.claims(authorization,"zammad:health",request);return{ok:true,tenant_id:claims.tenantId,instance_id:claims.instanceId,time:new Date().toISOString()}}
   @Post("privacy/admission")
@@ -251,7 +260,8 @@ export class ZammadInternalController{
           SELECT delivery.id,delivery.zammad_article_id,delivery.state,delivery.updated_at,delivery.manual_retry_allowed
             FROM delivery_outbox delivery
            WHERE delivery.tenant_id=$1 AND delivery.zammad_ticket_id=$2
-             AND delivery.zammad_article_id ~ '^[1-9][0-9]*$'
+             AND (delivery.zammad_article_id ~ '^[1-9][0-9]*$' OR
+               (delivery.bot_conversation_id=conversation.id AND app.is_ticket_template(delivery.bot_content)))
              AND delivery.content_redacted_at IS NULL
            ORDER BY delivery.updated_at DESC,delivery.id DESC LIMIT 1
         ) latest_delivery ON true
@@ -275,7 +285,7 @@ export class ZammadInternalController{
       zammad_article_id:context.zammad_article_id,
       delivery_state:context.delivery_state===null?null:contextEnum(context.delivery_state,DELIVERY_CONTEXT_STATES,"delivery state"),
       delivery_updated_at:isoOrNull(context.delivery_updated_at),
-      delivery_retry_allowed:retryAllowed(context.delivery_state,context.manual_retry_allowed),
+      delivery_retry_allowed:context.zammad_article_id!==null&&retryAllowed(context.delivery_state,context.manual_retry_allowed),
       delivery_retry_requires_confirmation:false,
     };
   }
@@ -366,9 +376,12 @@ async quotedCommandAdmission(@Headers('authorization') authorization:string|unde
     if(typeof body.has_attachments!=="boolean"||(!input.body.trim()&&!body.has_attachments))throw new BadRequestException("A message or attachment is required");
     return this.database.withTenant(claims.tenantId,async client=>{
       const route=await resolveOutboundRoute(client,claims,input,true);
-      if(route.bot_conversation_id&&route.provider==='META')await assertMetaDirectEffectCurrent(client,{
-        tenantId:claims.tenantId,conversationId:route.bot_conversation_id,connectionId:input.connectionId,ticketId:input.ticketId,
-        appId:process.env.META_APP_ID??'',nonwaiting:true});
+      if(route.bot_conversation_id&&route.provider==='META'){
+        await assertMetaDirectEffectCurrent(client,{
+          tenantId:claims.tenantId,conversationId:route.bot_conversation_id,connectionId:input.connectionId,ticketId:input.ticketId,
+          appId:process.env.META_APP_ID??'',nonwaiting:true});
+        await requireOpenCustomerWindow(client,input);
+      }
       const prepared=await prepareTicketReply(client,{
         tenantId:claims.tenantId,connectionId:input.connectionId,groupId:input.groupId,ticketId:input.ticketId,
         requested:input.replyToMessageId,requestedArticleId:input.replyToArticleId,direct:!!route.bot_conversation_id,
@@ -407,10 +420,15 @@ async quotedCommandAdmission(@Headers('authorization') authorization:string|unde
     const claims=await this.claims(authorization,"zammad:outbound",request);
     if(!claims.userId||!body.operation_id||!UUID.test(body.operation_id)||!body.connection_id||!UUID.test(body.connection_id)||
       !body.chat_id||body.chat_id.length>512||hasControl(body.chat_id)||!body.request_sha256||!/^[a-f0-9]{64}$/u.test(body.request_sha256))throw new BadRequestException("Direct reply admission is invalid");
-    return this.database.withTenant(claims.tenantId,client=>reserveDirectNativeReply(client,{tenantId:claims.tenantId,
-      instanceId:claims.instanceId,operationId:body.operation_id!,connectionId:body.connection_id!,chatId:body.chat_id!,
-      ticketId:String(positiveIdentifier(body.ticket_id,"Ticket ID")),nativeGroupId:String(positiveIdentifier(body.native_group_id,"Native group")),
-      actorId:claims.userId!,actorFullGroupIds:claims.groupIds,requestSha256:body.request_sha256!,appId:process.env.META_APP_ID??''}));
+    return this.database.withTenant(claims.tenantId,async client=>{
+      const connection=(await client.query<{provider:string}>("SELECT provider FROM connections WHERE tenant_id=$1 AND id=$2",
+        [claims.tenantId,body.connection_id])).rows[0];
+      if(connection?.provider==="META")await requireOpenCustomerWindow(client,{connectionId:body.connection_id!,groupId:body.chat_id!});
+      return reserveDirectNativeReply(client,{tenantId:claims.tenantId,
+        instanceId:claims.instanceId,operationId:body.operation_id!,connectionId:body.connection_id!,chatId:body.chat_id!,
+        ticketId:String(positiveIdentifier(body.ticket_id,"Ticket ID")),nativeGroupId:String(positiveIdentifier(body.native_group_id,"Native group")),
+        actorId:claims.userId!,actorFullGroupIds:claims.groupIds,requestSha256:body.request_sha256!,appId:process.env.META_APP_ID??''});
+    });
   }
   @Post("outbound")async outbound(@Headers("authorization")authorization:string|undefined,@Body()body:OutboundBody,@Req()request?:ZammadServiceRequest){
     const claims=await this.claims(authorization,"zammad:outbound",request);
@@ -442,7 +460,8 @@ async quotedCommandAdmission(@Headers('authorization') authorization:string|unde
         directOrigin:route.bot_conversation_id?"HUMAN":null,directOwnershipEpoch,metaRoutingEpoch:admitted?.routingEpoch,metaRoutingSourceEventId:admitted?.routingSourceEventId,mentions:[],
         ...(!route.bot_conversation_id||input.replyToArticleId||input.replyToMessageId?{quoteGroupId:input.groupId}:{}),
         ...(input.replyToArticleId?{replyToArticleId:input.replyToArticleId}:{}),
-        attachments:input.attachments.map(attachment=>({source:"ARTICLE" as const,...attachment}))});
+        attachments:input.attachments.map(attachment=>({source:"ARTICLE" as const,...attachment}))},
+        route.bot_conversation_id&&route.provider==="META"?()=>requireOpenCustomerWindow(client,input):undefined);
       if(admitted&&!admitted.acceptedDeliveryId)await completeDirectReplyIntent(client,{tenantId:claims.tenantId,
         operationId:body.native_reply_intent_id!,articleId:input.articleId,deliveryId:queued.id});
       Reflect.deleteProperty(queued,"duplicate");
@@ -451,6 +470,96 @@ async quotedCommandAdmission(@Headers('authorization') authorization:string|unde
     await this.drain.wake(claims.tenantId);
     return result;
   }
+  @Post("ticket-templates/catalog")
+  async ticketTemplates(@Headers("authorization")authorization:string|undefined,@Body()body:TicketTemplateBody,@Req()request?:ZammadServiceRequest){
+    const claims=await this.claims(authorization,"zammad:outbound",request);
+    const input=validateTicketTemplateTarget(body,claims);
+    return this.database.withTenant(claims.tenantId,async client=>{
+      await assertTicketCommandBarrier(client,{tenantId:claims.tenantId,ticketId:input.ticketId});
+      const context=await this.ticketTemplateContext(client,claims,input);
+      const open=await customerWindowOpen(client,input);
+      if(open!==false)return {window:open===true?"OPEN":"UNKNOWN",templates:[]};
+      return {window:"CLOSED",templates:await this.approvedTemplates(client,claims,input,context)};
+    });
+  }
+
+  @Post("ticket-templates/send")
+  async sendTicketTemplate(@Headers("authorization")authorization:string|undefined,@Body()body:TicketTemplateBody,@Req()request?:ZammadServiceRequest){
+    const claims=await this.claims(authorization,"zammad:outbound",request);
+    const input=validateTicketTemplateTarget(body,claims);
+    const {request_token:token,template_id:id,template_sha256:sha256,parameters}=body;
+    if(typeof token!=="string"||!UUID.test(token)||typeof id!=="string"||!/^[0-9]{1,32}$/u.test(id)
+      ||typeof sha256!=="string"||!/^[a-f0-9]{64}$/u.test(sha256)||!Array.isArray(parameters)||parameters.length>20
+      ||parameters.some(value=>typeof value!=="string"||value!==value.trim()||!value||[...value].length>1024||hasControl(value))
+      ||Buffer.byteLength(JSON.stringify(parameters))>12_000)throw new BadRequestException("Invalid ticket template selection");
+    const idempotencyKey=`ticket-template:${claims.instanceId}:${input.ticketId}:${claims.userId}:${token.toLowerCase()}`;
+    const requestSha256=createHash("sha256").update(JSON.stringify([input.connectionId,input.groupId,id,sha256,parameters])).digest("hex");
+    const result=await this.database.withTenant(claims.tenantId,async client=>{
+      await lockTicketCommand(client,{tenantId:claims.tenantId,ticketId:input.ticketId,instanceId:claims.instanceId});
+      const context=await this.ticketTemplateContext(client,claims,input);
+      const queueInput:QueueOutboundInput={tenantId:claims.tenantId,connectionId:input.connectionId,
+        groupBindingId:null,workspaceGroupId:null,botConversationId:context.id,externalChatId:input.groupId,
+        ticketId:input.ticketId,articleId:null,body:"",contentType:"text/plain",replyToMessageId:null,idempotencyKey,requestSha256,
+        agentDisplayName:null,agentPrefixSnapshot:null,agentIdentityPlacementSnapshot:"OFF",deliveryOrigin:"TICKET",directOrigin:"HUMAN",
+        directOwnershipEpoch:Number(context.human_ownership_epoch),attachments:[],mentions:[]};
+      const accepted=await acceptedOutboundParts(client,queueInput);
+      if(accepted)return {id:accepted.id,state:accepted.state};
+      await assertTicketCommandBarrier(client,{tenantId:claims.tenantId,ticketId:input.ticketId});
+      await assertDirectNativeBarrier(client,{tenantId:claims.tenantId,conversationId:context.id});
+      if(await customerWindowOpen(client,input)!==false)throw new ConflictException("The closed customer-service window could not be verified");
+      const templates=await this.approvedTemplates(client,claims,input,context);
+      const template=templates.find(item=>item.id===id&&item.semanticSha256===sha256);
+      if(!template||parameters.length!==template.parameterCount)throw new ConflictException("The approved template or its parameters changed");
+      if(await customerWindowOpen(client,input)!==false)throw new ConflictException("The closed customer-service window changed");
+      // The provider renders the approved body. Keep the ticket status free of parameter values.
+      const queued=await queueOutboundParts(client,{...queueInput,body:template.name,templateContent:{type:"template",name:template.name,
+        languageCode:template.language,bodyParameters:parameters,ticketTemplateId:id,ticketTemplateSha256:sha256}});
+      if(!queued.duplicate)await client.query(`INSERT INTO audit_events (tenant_id,actor_type,actor_id,action,target_type,target_id,request_id,new_value)
+        VALUES ($1,'ZAMMAD_AGENT',$2,'delivery.template_queued','delivery',$3,$4,$5)`,[claims.tenantId,claims.userId,queued.id,idempotencyKey,{ticket_id:input.ticketId}]);
+      return {id:queued.id,state:queued.state};
+    });
+    await this.drain.wake(claims.tenantId);
+    return result;
+  }
+
+  private async ticketTemplateContext(client:PoolClient,claims:ZammadClaims,input:ReturnType<typeof validateTicketTemplateTarget>){
+    const result=await client.query<{id:string;human_ownership_epoch:string;secret_reference:string;phone_id:string;account_id:string;proof:unknown}>(`
+      SELECT conversation.id,conversation.human_ownership_epoch,connection.secret_reference,session.opaque_session_id AS phone_id,
+        session.provider_state_data->>'wabaId' AS account_id,session.provider_state_data->'metaAccountProof' AS proof
+      FROM bot_conversations conversation JOIN connections connection
+        ON connection.tenant_id=conversation.tenant_id AND connection.id=conversation.connection_id
+      JOIN provider_sessions session ON session.tenant_id=connection.tenant_id AND session.connection_id=connection.id
+      JOIN bot_assignments assignment ON assignment.tenant_id=conversation.tenant_id AND assignment.id=conversation.assignment_id
+      WHERE conversation.tenant_id=$1 AND conversation.connection_id=$2 AND conversation.external_chat_id=$3
+        AND conversation.zammad_ticket_id=$4 AND conversation.state='HUMAN' AND assignment.state='ACTIVE'
+        AND connection.provider='META' AND connection.state='WORKING' AND session.ownership_state='ACTIVE' AND session.state='WORKING'
+        AND NOT EXISTS(SELECT 1 FROM whatsapp_groups g WHERE g.tenant_id=conversation.tenant_id
+          AND g.connection_id=conversation.connection_id AND g.external_group_id=conversation.external_chat_id)`,
+      [claims.tenantId,input.connectionId,input.groupId,input.ticketId]);
+    const context=result.rows[0];
+    if(result.rows.length!==1||!context||!context.account_id)throw new NotFoundException("Direct WhatsApp template destination was not found");
+    return context;
+  }
+
+  private async approvedTemplates(client:PoolClient,claims:ZammadClaims,input:ReturnType<typeof validateTicketTemplateTarget>,
+    context:Awaited<ReturnType<ZammadInternalController["ticketTemplateContext"]>>){
+    const appId=process.env.META_APP_ID??"";
+    try{
+      const assertCurrent=()=>assertMetaDirectEffectCurrent(client,{tenantId:claims.tenantId,conversationId:context.id,
+        connectionId:input.connectionId,ticketId:input.ticketId,appId,nonwaiting:true,ticketTemplate:true});
+      await assertCurrent();
+      const current=await this.ticketTemplateContext(client,claims,input);
+      if(current.id!==context.id||current.human_ownership_epoch!==context.human_ownership_epoch)throw new Error("Ticket ownership changed");
+      const token=await this.metaCredentials.resolveAccessToken(current.secret_reference,{tenantId:claims.tenantId,connectionId:input.connectionId});
+      if(!assertMetaCredentialProof(current.proof,{appId,accessToken:token}))throw new Error("Template account proof is unavailable");
+      const inventory=await this.metaClients.create(token,current.phone_id,assertCurrent).templateInventory(current.account_id);
+      if(!inventory.complete)throw new Error("Incomplete template inventory");
+      return inventory.items.flatMap(item=>{const approved=approvedTicketTemplate(item);return approved?[approved]:[]});
+    }catch{
+      throw new ServiceUnavailableException("The approved templates could not be verified");
+    }
+  }
+
   @Post("retry")async retry(@Headers("authorization")authorization:string|undefined,@Body()body:RetryBody,@Req()request?:ZammadServiceRequest){
     const claims=await this.claims(authorization,"zammad:retry",request);
     if(!claims.userId)throw new UnauthorizedException("A Zammad agent identity is required");
@@ -597,11 +706,12 @@ function outboundFingerprint(input:{connectionId:string;groupId:string;ticketId:
 function retryFingerprint(input:{ticketId:string;articleId:string;actorId:string;deliveryId:string;confirmOutcomeUnknown:boolean}){return createHash("sha256").update(JSON.stringify(input)).digest("hex")}
 function mediaIdempotencyKey(base:string,attachmentId:string|number){return`wasalx-media:${createHash("sha256").update(`${base}\0${attachmentId}`).digest("hex")}`}
 
-export async function queueOutboundParts(client:PoolClient,input:QueueOutboundInput){
+export async function queueOutboundParts(client:PoolClient,input:QueueOutboundInput,beforeEnqueue?:()=>Promise<void>){
   if(input.ticketId)await lockTicketCommand(client,{tenantId:input.tenantId,ticketId:input.ticketId});
   const accepted=await acceptedOutboundParts(client,input);
   if(accepted)return accepted;
   if(input.ticketId)await assertTicketCommandBarrier(client,{tenantId:input.tenantId,ticketId:input.ticketId});
+  await beforeEnqueue?.();
   let eventReceipt:TicketEventReceipt|null=null;
   if(input.quoteGroupId&&input.ticketId){
     await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))",[`ticket-outbound:${input.tenantId}:${input.ticketId}`]);
@@ -634,14 +744,14 @@ export async function queueOutboundParts(client:PoolClient,input:QueueOutboundIn
     const created=(await client.query<{id:string;state:string;message_text:string;participant_name:string|null;provider_timestamp:string}>(`INSERT INTO delivery_outbox
       (tenant_id,connection_id,group_binding_id,group_workspace_group_id,bot_conversation_id,external_chat_id,zammad_ticket_id,zammad_article_id,
        message_body,content_type,reply_to_message_id,idempotency_key,state,available_at,safe_error,request_sha256,agent_display_name,
-       agent_prefix_snapshot,batch_id,batch_sequence,batch_part_count,direct_origin,delivery_origin,mentions,agent_identity_placement_snapshot,direct_ownership_epoch,meta_routing_epoch,meta_routing_source_event_id)
+       agent_prefix_snapshot,batch_id,batch_sequence,batch_part_count,direct_origin,delivery_origin,mentions,agent_identity_placement_snapshot,direct_ownership_epoch,meta_routing_epoch,meta_routing_source_event_id,bot_content)
       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'QUEUED',CASE WHEN $17=0 THEN now() ELSE 'infinity'::timestamptz END,
-       CASE WHEN $17=0 THEN NULL ELSE 'Waiting for an earlier message part to complete.' END,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)
+       CASE WHEN $17=0 THEN NULL ELSE 'Waiting for an earlier message part to complete.' END,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26)
       ${conflictClause}
       RETURNING id,state,message_body AS message_text,agent_display_name AS participant_name,created_at AS provider_timestamp`,[
       input.tenantId,input.connectionId,input.groupBindingId,input.workspaceGroupId,input.botConversationId,input.externalChatId,
       input.ticketId,input.articleId,part.body,part.contentType,input.replyToMessageId,partKey,input.requestSha256,
-      input.agentDisplayName,index===0?input.agentPrefixSnapshot:null,batchId,index,parts.length,input.directOrigin,input.deliveryOrigin,index===0?input.mentions:[],index===0?input.agentIdentityPlacementSnapshot:"OFF",input.directOwnershipEpoch??null,input.metaRoutingEpoch??null,input.metaRoutingSourceEventId??null,
+      input.agentDisplayName,index===0?input.agentPrefixSnapshot:null,batchId,index,parts.length,input.directOrigin,input.deliveryOrigin,index===0?input.mentions:[],index===0?input.agentIdentityPlacementSnapshot:"OFF",input.directOwnershipEpoch??null,input.metaRoutingEpoch??null,input.metaRoutingSourceEventId??null,input.templateContent??null,
     ])).rows[0];
     if(!created)break;
     primary??={...created,...(part.attachment?{media_filename:part.attachment.filename,
@@ -762,6 +872,19 @@ async function resolveOutboundRoute(client:PoolClient,claims:ZammadClaims,input:
          FOR SHARE OF c,conversation`,[claims.tenantId,input.connectionId,input.groupId,input.ticketId,allowBotPreview])).rows[0];
       if(!route)throw new NotFoundException("WhatsApp destination was not found");
   return route;
+}
+
+function validateTicketTemplateTarget(body:TicketTemplateBody,claims:ZammadClaims){
+  if(!claims.userId||body?.tenant_id!==claims.tenantId)throw new UnauthorizedException("A matching Zammad agent identity is required");
+  if(typeof body.connection_id!=="string"||!UUID.test(body.connection_id)||typeof body.group_id!=="string"||
+    !body.group_id||body.group_id.length>512||hasControl(body.group_id))throw new BadRequestException("Invalid ticket template destination");
+  return {connectionId:body.connection_id,groupId:body.group_id,ticketId:String(positiveIdentifier(body.ticket_id,"Ticket ID"))};
+}
+async function customerWindowOpen(client:PoolClient,input:{connectionId:string;groupId:string}){
+  return (await client.query<{open:boolean|null}>("SELECT app.meta_customer_window_open($1,$2) AS open",[input.connectionId,input.groupId])).rows[0]?.open;
+}
+async function requireOpenCustomerWindow(client:PoolClient,input:{connectionId:string;groupId:string}){
+  if(await customerWindowOpen(client,input)!==true)throw new ConflictException("The customer-service window is closed; send an approved template instead.");
 }
 
 function validateReplyBody(body:OutboundBody,claims:ZammadClaims){

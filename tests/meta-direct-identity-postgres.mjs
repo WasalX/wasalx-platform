@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {withFixtureTenant,routingFixtureEnvironment,observeRoutingFixture} from './meta-routing-fixture.mjs';
 import {metaRoutingUnits} from '../packages/core/dist/meta-routing.js';
+import {readMetaTemplateInventory} from '../packages/core/dist/meta-template-inventory.js';
 import {bindMetaPrimaryRouting} from '../services/connector-worker/dist/services/connector-worker/src/meta-routing.js';
 import {verifyMetaRoutingEffects} from './meta-routing-postgres.mjs';
 import {OutboxRepository} from '../services/connector-worker/dist/services/connector-worker/src/repository.js';
@@ -82,9 +83,10 @@ export async function verifyMetaDirectIdentityPostgres(adminUrl,workerConfig,app
  const restoreRoutingEnvironment=routingFixtureEnvironment(appId);
  const asset={providerSessionId:sessionId,phoneNumberId,wabaId};
  const secretReference=`secret://${tenantId}/connections/${connectionId}/meta`;
+ const templateAccessToken='simulated-ticket-template-access-token';
  const metadata=verifyMetaCredentialMetadata({data:{is_valid:true,app_id:appId,scopes:['whatsapp_business_management','whatsapp_business_messaging'],expires_at:0}},{appId});
  const proof={schemaVersion:1,claim:'PHONE_ACCOUNT_RELATION_VERIFIED',tenantId,connectionId,...asset,secretReference,
-  graphVersion:'v24.0',verifiedAt:metadata.verifiedAt,responseSha256:'a'.repeat(64),credentialFingerprint:'b'.repeat(64),
+  graphVersion:'v24.0',verifiedAt:metadata.verifiedAt,responseSha256:'a'.repeat(64),credentialFingerprint:createHash('sha256').update(templateAccessToken).digest('hex'),
   operationId:randomUUID(),fencingToken:1,credentialMetadata:metadata};
  const conversationId=randomUUID();
  const prefix=`direct-identity-${tenantId}`,ticketId='98231';
@@ -164,6 +166,14 @@ export async function verifyMetaDirectIdentityPostgres(adminUrl,workerConfig,app
    create:async()=>{throw new Error('Existing HUMAN fixture must append')},
    append:async id=>{assert.equal(id,ticketId);callbacks++;await inbound.assertMetaDirectIdentityCurrent(callbackInput.event,callbackInput.leaseId,phone,appId);return '98232'}
   });
+  const windowAt=async now=>tx(async c=>(await c.query(
+    'SELECT app.meta_customer_window_open($1,$2,$3) AS open',[connectionId,phone,now])).rows[0].open);
+  const deadline=Date.parse(message.timestamp)+24*60*60*1000;
+  assert.equal(await windowAt(new Date(deadline-1)),true);
+  assert.equal(await windowAt(new Date(deadline)),false);
+  assert.equal(await windowAt(new Date(deadline+1)),false);
+  assert.equal(await tx(async c=>(await c.query(
+    "SELECT app.meta_customer_window_open($1,'15558880999',$2) AS open",[connectionId,new Date(deadline)])).rows[0].open),null);
   assert.equal(callbacks,1);assert.equal(processed.state,'HUMAN');assert.equal(processed.queued,false);
   assert.equal((await admin.query('SELECT meta_direct_native_anchor FROM event_inbox WHERE id=$1',[callbackInput.event.id])).rows[0].meta_direct_native_anchor,null,'Later unrelated ordinary turns cannot replace immutable original alias provenance');
   assert.equal((await admin.query('SELECT id FROM normalized_messages WHERE event_inbox_id=$1',[callbackInput.event.id])).rowCount,1,'Independent guard is compatible with actual outer normalized FK KEY SHARE');
@@ -633,6 +643,57 @@ export async function verifyMetaDirectIdentityPostgres(adminUrl,workerConfig,app
   const previousMetaAppId=process.env.META_APP_ID;process.env.META_APP_ID=appId;
   try{
    assert.deepEqual(await controller.outboundPreflight('Synthetic native claims',connectionId,phone,ticketId),{available:true,keep_open:false});
+   await queueScenario(async c=>{
+    const lastMessage=(await c.query('SELECT max(provider_timestamp) AS at FROM normalized_messages WHERE tenant_id=$1 AND connection_id=$2 AND external_group_id=$3',
+      [tenantId,connectionId,phone])).rows[0].at;
+    assert(lastMessage);
+    const endsAt=lastMessage.getTime()+24*60*60*1000;
+    let now=new Date(endsAt-1),inventoryReads=0;
+    const query=(sql,values)=>sql==='SELECT app.meta_customer_window_open($1,$2) AS open'
+      ? c.query('SELECT app.meta_customer_window_open($1,$2,$3) AS open',[...values,now])
+      : c.query(sql,values);
+    const db={rows:async(scope,sql,values)=>{assert.equal(scope,tenantId);return (await query(sql,values)).rows},
+      withTenant:async(scope,fn)=>{assert.equal(scope,tenantId);return fn({query})}};
+    const signed={verify:async()=>({tenantId,instanceId,userId:'3',groupIds:['2'],groupAdmin:false})};
+    const clients={create:(token,phoneId,beforeRequest)=>{
+      assert.equal(token,templateAccessToken);
+      assert.equal(phoneId,phoneNumberId);
+      return {templateInventory:account=>readMetaTemplateInventory(account,async path=>{
+        await beforeRequest();inventoryReads++;
+        assert.equal(path,'/'+wabaId+'/message_templates');
+        return {data:['APPROVED','PAUSED'].map((status,index)=>({id:String(341+index),name:'order_update_'+index,language:'ar',
+          category:'UTILITY',status,parameter_format:'POSITIONAL',components:[{type:'BODY',text:'Order {{1}}'}]}))};
+      })};
+    }};
+    const service=new ZammadInternalController(db,signed,{wake:async()=>{}},
+      {resolveAccessToken:async()=>templateAccessToken},clients);
+    const target={tenant_id:tenantId,connection_id:connectionId,group_id:phone,ticket_id:ticketId};
+    assert.deepEqual(await service.ticketTemplates('Synthetic native claims',target),{window:'OPEN',templates:[]});
+    assert.equal(inventoryReads,0);
+    now=new Date(endsAt);
+    const catalog=await service.ticketTemplates('Synthetic native claims',target);
+    assert.equal(catalog.window,'CLOSED');
+    assert.deepEqual(catalog.templates.map(item=>[item.id,item.parameterCount]),[['341',1]]);
+    const selection={...target,template_id:'341',request_token:randomUUID(),
+      template_sha256:catalog.templates[0].semanticSha256,parameters:['42']};
+    await assert.rejects(service.sendTicketTemplate('Synthetic native claims',{...selection,template_id:'342'}),{status:409});
+    await assert.rejects(service.outbound('Synthetic native claims',{...target,article_id:9988,body:'Free text',
+      agent:{id:'3'},idempotency_key:randomUUID()}),{status:409});
+    const queued=await service.sendTicketTemplate('Synthetic native claims',selection);
+    assert.equal(queued.state,'QUEUED');
+    const readsAfterSend=inventoryReads;
+    assert.deepEqual(await service.sendTicketTemplate('Synthetic native claims',selection),queued);
+    assert.equal(inventoryReads,readsAfterSend);
+    await assert.rejects(service.sendTicketTemplate('Synthetic native claims',{...selection,parameters:['43']}),{status:409});
+    const delivery=(await c.query('SELECT bot_content,zammad_ticket_id,zammad_article_id FROM delivery_outbox WHERE tenant_id=$1 AND id=$2',
+      [tenantId,queued.id])).rows[0];
+    assert.equal(delivery.zammad_ticket_id,ticketId);
+    assert.equal(delivery.zammad_article_id,null);
+    assert.equal(delivery.bot_content.type,'template');
+    assert.deepEqual(delivery.bot_content.bodyParameters,['42']);
+    assert.equal((await c.query("SELECT count(*)::int AS count FROM audit_events WHERE tenant_id=$1 AND target_id=$2 AND action='delivery.template_queued'",
+      [tenantId,queued.id])).rows[0].count,1);
+   },apiPool);
    await queueScenario(async c=>{
    await c.query("UPDATE meta_direct_identity_aliases SET state='HELD',revision=revision+1 WHERE id=$1",[bsuidAlias]);
    // Reuse this transaction for the API adapter so its held alias is visible.

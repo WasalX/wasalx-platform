@@ -1,3 +1,4 @@
+import { approvedTicketTemplate } from '../../../packages/core/src/meta-template-continuity.js';
 import { createHash } from 'node:crypto';
 import { MetaGroupsAdapter } from '../../../packages/connectors/src/meta.js';
 import { ProviderError } from '../../../packages/connectors/src/types.js';
@@ -55,4 +56,18 @@ export async function verifyMetaInheritedTemplateSend(job: DeliveryJob, leaseId:
     bindingId: initial.bindingId, bindingRevision: initial.bindingRevision, targetSafetyRevision: initial.targetSafetyRevision,
     targetTemplateId: mapping.targetTemplateId, semanticSha256: mapping.semanticSha256,
     inventoryResponseSha256: digest(inventory), observedAt: new Date().toISOString() };
+}
+
+/** Read the same account inventory again under the final delivery lease. */
+export async function verifyApprovedTicketTemplateSend(job: DeliveryJob, adapter: Pick<MetaGroupsAdapter, 'templatePreparationCalls'>) {
+  if (!job.ticketTemplate) return;
+  const held = () => new ProviderError('The selected template is no longer approved or has changed.', false,
+    'META_TEMPLATE_SEND_HELD', undefined, true);
+  const accountId = job.metaCredentialContext?.wabaId;
+  if (job.directOrigin !== 'HUMAN' || job.recipientType !== 'DIRECT' || job.articleId || !accountId || !job.template) throw held();
+  const inventory = await adapter.templatePreparationCalls().inventory(accountId);
+  const found = inventory.complete && inventory.items.find(item => item.id === job.ticketTemplate?.id);
+  const approval = found ? approvedTicketTemplate(found) : null;
+  if (!approval || approval.semanticSha256 !== job.ticketTemplate.semanticSha256 || approval.name !== job.template.name ||
+    approval.language !== job.template.languageCode || approval.parameterCount !== job.template.bodyParameters.length) throw held();
 }
