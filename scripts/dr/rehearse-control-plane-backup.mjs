@@ -39,7 +39,7 @@ export async function rehearseControlPlaneBackup(environment, { run = execute, n
   async function getObject(key, destination, { version, range } = {}) {
     const result = await command("aws", [
       ...aws, "get-object", "--bucket", bucket, "--key", key,
-      ...(version ? ["--version-id", version] : []),
+      ...(version ? [`--version-id=${version}`] : []),
       ...(range ? ["--range", range] : []),
       "--query", "VersionId", "--output", "json", destination,
     ], "Backup object download", range ? 60_000 : 3_600_000);

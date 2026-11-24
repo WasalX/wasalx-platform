@@ -290,6 +290,7 @@ test("quarterly restore uses the exact archive version and cleans scratch on fai
   const directory = await mkdtemp(join(tmpdir(), "wasalx-dr-quarterly-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const value = manifest();
+  value.storage.objectVersionId = "-opaque-version-id";
   const environment = {
     BACKUP_S3_BUCKET: value.storage.bucket, BACKUP_S3_REGION: value.workload.region,
     BACKUP_S3_ENDPOINT: "https://s3.example.test", CACHE_DIRECTORY: directory, STATE_DIRECTORY: directory,
@@ -334,7 +335,7 @@ test("quarterly restore uses the exact archive version and cleans scratch on fai
     }
     calls.push("artifact");
     assert.equal(key, source.storage.objectKey);
-    assert.equal(args[args.indexOf("--version-id") + 1], value.storage.objectVersionId);
+    assert.ok(args.includes(`--version-id=${value.storage.objectVersionId}`));
     await writeFile(destination, "synthetic dump");
     const version = failedStage === "artifact" ? "wrong-version" : value.storage.objectVersionId;
     return { stdout: JSON.stringify(version) };
