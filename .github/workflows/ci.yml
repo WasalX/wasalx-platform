@@ -2,7 +2,7 @@ name: ci
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, edited]
   merge_group:
   push:
     branches: [main]
@@ -38,6 +38,40 @@ jobs:
         with:
           fetch-depth: ${{ github.event_name == 'merge_group' && '0' || '2' }}
           persist-credentials: false
+      - name: Compare workflow lint with the PR base
+        if: github.event_name == 'pull_request'
+        run: |
+          base=$(git rev-parse HEAD^1)
+          if git diff --quiet "$base" HEAD -- .github/workflows .github/actions; then
+            exit 0
+          fi
+          lint=$(mktemp -d)
+          curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --max-time 60 \
+            https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz \
+            --output "$lint/actionlint.tar.gz"
+          printf '%s  %s\n' 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8 "$lint/actionlint.tar.gz" |
+            sha256sum --check --strict
+          tar -xzf "$lint/actionlint.tar.gz" -C "$lint" actionlint
+          git worktree add --quiet --detach "$lint/base" "$base"
+
+          # Compare findings without line numbers so moving a workflow line doesn't change the baseline.
+          export LC_ALL=C
+          findings() {
+            local status=0
+            (cd "$1" && "$lint/actionlint" -no-color -format '{{json .}}') > "$lint/findings.json" || status=$?
+            if [[ "$status" == 1 ]]; then
+              jq -ec '.[] | [.filepath, .kind, .message]' "$lint/findings.json" | sort
+            else
+              return "$status"
+            fi
+          }
+          findings "$lint/base" > "$lint/baseline"
+          findings "$GITHUB_WORKSPACE" > "$lint/candidate"
+          comm -13 "$lint/baseline" "$lint/candidate" > "$lint/new"
+          printf 'actionlint findings: base %s, candidate %s, new %s\n' \
+            "$(wc -l < "$lint/baseline")" "$(wc -l < "$lint/candidate")" "$(wc -l < "$lint/new")" |
+            tee -a "$GITHUB_STEP_SUMMARY"
+          test ! -s "$lint/new"
       - id: infra
         if: github.event_name == 'pull_request'
         run: |
@@ -83,6 +117,10 @@ jobs:
           images=$(jq '.include | length > 0' <<< "$matrix")
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
           echo "images=$images" >> "$GITHUB_OUTPUT"
+
+  privacy:
+    if: github.event_name != 'workflow_dispatch'
+    uses: ./.github/workflows/privacy.yml
 
   dependency-review:
     if: github.event_name == 'pull_request'
@@ -475,7 +513,7 @@ jobs:
 
   ci-gate:
     if: always()
-    needs: [changes, dependency-review, checks, images, integration, portal-integration, integration-coverage, infra-validate, dev-install-dryrun]
+    needs: [changes, privacy, dependency-review, checks, images, integration, portal-integration, integration-coverage, infra-validate, dev-install-dryrun]
     runs-on: ubuntu-slim
     timeout-minutes: 2
     permissions: {}
@@ -484,6 +522,7 @@ jobs:
         env:
           EVENT: ${{ github.event_name }}
           CHANGES: ${{ needs.changes.result }}
+          PRIVACY: ${{ needs.privacy.result }}
           CHECKS: ${{ needs.checks.result }}
           REVIEW: ${{ needs.dependency-review.result }}
           IMAGES: ${{ needs.images.result }}
@@ -496,6 +535,10 @@ jobs:
           DEV_INSTALL_NEEDED: ${{ needs.changes.outputs.dev-install }}
           DEV_INSTALL: ${{ needs.dev-install-dryrun.result }}
         run: |
+          case "$EVENT:$PRIVACY" in
+            pull_request:success|merge_group:success|push:success|workflow_dispatch:skipped) ;;
+            *) echo 'Privacy scan did not pass.'; exit 1 ;;
+          esac
           if [[ "$EVENT" == push || "$EVENT" == workflow_dispatch ]]; then
             test "$CHANGES:$CHECKS:$REVIEW:$IMAGES:$DEV_INSTALL" = skipped:skipped:skipped:skipped:skipped || exit 1
             test "$INTEGRATION:$PORTAL_INTEGRATION:$INTEGRATION_COVERAGE" = success:success:success || exit 1

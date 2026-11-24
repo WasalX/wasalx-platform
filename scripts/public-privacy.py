@@ -1,0 +1,132 @@
+"""Scan event text and newly introduced Git lines using public patterns."""
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+
+
+OCTET = r"(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[0-9]{1,2})"
+RULES = {
+    "github-token": r"\b(?:gh[pousr]_[a-zA-Z0-9]{36}|github_pat_[a-zA-Z0-9_]{82})\b",
+    "aws-key-id": r"\b(?:AKIA|ASIA)[A-Z0-9]{16}\b",
+    "slack-token": r"\bxox[baprs]-[0-9]{8,}-[a-zA-Z0-9-]{12,}\b",
+    "jwt": r"\beyJ[a-zA-Z0-9_-]{5,}\.eyJ[a-zA-Z0-9_-]{5,}\.[a-zA-Z0-9_-]{16,}\b",
+    "private-key": r"-----BEGIN (?:(?:RSA|DSA|EC|OPENSSH|ENCRYPTED) )?PRIVATE KEY-----",
+    "private-ipv4": rf"(?<![0-9.])(?:10\.{OCTET}|172\.(?:1[6-9]|2[0-9]|3[01])|192\.168)\.{OCTET}\.{OCTET}(?![0-9]|\.[0-9])",
+    "private-host": r"(?i)(?<![\w.-])(?:[a-z0-9-]+\.)+(?:internal|lan|local|home\.arpa)(?![\w-]|\.[a-z0-9])",
+    "private-path": r"""(?i)(?<![\w])(?:[a-z]:[\\/]+[^\s"'<>|/\\]+|/(?:home|users)/[\w.-]+/)""",
+}
+RULES = {name: re.compile(pattern) for name, pattern in RULES.items()}
+SHA = re.compile(r"[0-9a-f]{40}")
+HUNK = re.compile(rb"@@ -[0-9]+(?:,[0-9]+)? \+([0-9]+)(?:,[0-9]+)? @@")
+
+
+def git(*args):
+    return subprocess.check_output(["git", *args], stderr=subprocess.DEVNULL)
+
+
+def matches(text):
+    return [name for name, pattern in RULES.items() if pattern.search(text)]
+
+
+def findings(text, location):
+    for number, line in enumerate(text.splitlines(), 1):
+        for rule in matches(line):
+            yield location, number, rule
+
+
+def changes(parent, commit):
+    diff = git("diff-tree", "-r", "--root", "--no-commit-id", "--no-ext-diff", "--no-textconv",
+               "--no-renames", "--no-color", "--text", "--unified=0", "--patch-with-raw",
+               "-z", "--diff-filter=AMT", *parent[:1], commit)
+    if not diff:
+        return
+    # Raw NUL-delimited paths are in patch order and preserve unusual filenames.
+    raw, separator, patch = diff.partition(b"\0\0")
+    if not separator:
+        raise ValueError
+    paths = iter(raw.split(b"\0")[1::2])
+    previous_header = None
+    number = None
+    for line in patch.split(b"\n"):
+        if line.startswith(b"diff --git "):
+            # Git can emit separate deletion and addition patches for a type change.
+            if line != previous_header:
+                path = next(paths).decode("utf-8", errors="replace")
+                path_rules = matches(path)
+                location = "<redacted path>" if path_rules else path
+                for rule in path_rules:
+                    yield location, 1, rule
+                previous_header = line
+            number = None
+        elif line.startswith(b"@@ "):
+            number = int(HUNK.match(line)[1])
+        elif number is not None and line.startswith(b"+"):
+            for rule in matches(line[1:].decode("utf-8", errors="replace")):
+                yield location, number, rule
+            number += 1
+    if next(paths, None) is not None:
+        raise ValueError
+
+
+def commit_findings(base, head):
+    if not (SHA.fullmatch(base) and SHA.fullmatch(head)):
+        raise ValueError
+    log = git("log", "--no-show-signature", "-z", "--format=%H%x00%P%x00%an <%ae>%x00%cn <%ce>%x00%B",
+              f"{base}..{head}", "--")
+    if not log:
+        return
+    fields = log.decode("utf-8", errors="replace").removesuffix("\0").split("\0")
+    for index in range(0, len(fields), 5):
+        commit, parents, author, committer, message = fields[index:index + 5]
+        yield from findings(author, "commit.author")
+        yield from findings(committer, "commit.committer")
+        yield from findings(message, "commit.message")
+        yield from changes(parents.split(), commit)
+
+
+def scan(event, payload):
+    if event in ("pull_request", "issues"):
+        field = "pull_request" if event == "pull_request" else "issue"
+        item = payload[field]
+        yield from findings(item["title"], f"{field}.title")
+        body = item["body"]
+        if body is not None:
+            yield from findings(body, f"{field}.body")
+        if event == "issues":
+            return
+        yield from findings(item["head"]["ref"], "pull_request.head.ref")
+        base, head = item["base"]["sha"], os.environ["GITHUB_SHA"]
+    elif event == "merge_group":
+        base, head = payload["merge_group"]["base_sha"], payload["merge_group"]["head_sha"]
+    elif event == "push":
+        yield from findings(payload["ref"], "push.ref")
+        base, head = payload["before"], payload["after"]
+        if base == "0" * 40:
+            # A new branch has no previous tip. Exclude the default branch history.
+            default = payload["repository"]["default_branch"]
+            base = git("rev-parse", "--verify", "--end-of-options",
+                       f"refs/remotes/origin/{default}^{{commit}}").decode("ascii").strip()
+    else:
+        raise ValueError
+    yield from commit_findings(base, head)
+
+
+def main():
+    try:
+        payload = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text(encoding="utf-8"))
+        result = 0
+        for path, number, rule in scan(os.environ["GITHUB_EVENT_NAME"], payload):
+            print(f"privacy {json.dumps(path)}:{number} {rule}")
+            result = 1
+        return result
+    except (AttributeError, KeyError, OSError, StopIteration, TypeError, ValueError, subprocess.CalledProcessError):
+        # Exception messages and Git stderr can contain untrusted text.
+        print("Privacy scan could not read its input.")
+        return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())
