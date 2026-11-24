@@ -84,7 +84,10 @@ phase() {
     /^flock: cannot open lock file \/tmp\/wasalx-compose-stage\.lock: [[:print:]]+$/p;
     /^unrecreatable fields: \[("[a-zA-Z0-9_.-]+"(,|\]))+$/p;
     /^hosted bundle staging reason: [[:print:]]+$/p' "$work/$name.raw" >> "$diagnostics/installer.log"
-  if [[ "$name" == native-preflight ]]; then
+  if [[ "$name" == bundles ]]; then
+    sed -nE '/^hosted bundle staging timing: route=(token|manifests|referrers|blobs) requests=[0-9]+ total_ms=[0-9]+ p95_ms=[0-9]+ max_ms=[0-9]+ http_404=[0-9]+ http_429=[0-9]+ transport_errors=[0-9]+$/p' \
+      "$work/$name.raw" | tee -a "$diagnostics/installer.log"
+  elif [[ "$name" == native-preflight ]]; then
     sed -nE '/^native docker diff service=[a-z0-9][a-z0-9_-]{0,62} elapsed=[0-9]+ms$/p' \
       "$work/$name.raw" | tee -a "$diagnostics/installer.log"
     if (( status != 0 )); then

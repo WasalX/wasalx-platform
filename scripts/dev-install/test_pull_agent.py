@@ -16,9 +16,10 @@ import sys
 import tempfile
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
+from urllib.request import Request
 
 
 HERE = Path(__file__).resolve().parent
@@ -28,6 +29,9 @@ spec.loader.exec_module(agent)
 spec = importlib.util.spec_from_file_location("render", HERE / "render.py")
 render = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(render)
+spec = importlib.util.spec_from_file_location("bundle_stager", HERE.parent / "release/installer-hosted-bundles.py")
+stager = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(stager)
 COMMIT, TREE, TAG, MOVED = "1" * 40, "2" * 40, "v1.2.3-rc.1", "4" * 40
 COMPOSE_DIGEST = "sha256:" + "ab" * 32
 COMPOSE_REF = f"postgres@{COMPOSE_DIGEST}"
@@ -122,6 +126,36 @@ class PublicAPI:
         else:
             raise AssertionError(path)
         return Reply(json.dumps(value).encode(), headers)
+
+
+class RegistryStagingTest(unittest.TestCase):
+    def test_redacted_request_errors_identify_http_status_and_read_phase(self):
+        request = Request("https://ghcr.io/token?scope=synthetic-private-value",
+                          headers={"Authorization": "Bearer fixture-value"})
+        for response_error, expected in (
+            (HTTPError("https://example.invalid/?signed=fixture-value", 429, "fixture-value", {}, None),
+             "phase=headers http_status=429"),
+            (URLError(ConnectionResetError(104, "fixture-value")), "phase=headers socket_error=ConnectionResetError errno=104"),
+            (None, "phase=body socket_error=TimeoutError"),
+        ):
+            with self.subTest(expected=expected):
+                opener = Mock()
+                if response_error is None:
+                    response = Mock()
+                    response.read.side_effect = TimeoutError("fixture-value")
+                    opener.open.return_value.__enter__ = Mock(return_value=response)
+                    opener.open.return_value.__exit__ = Mock(return_value=False)
+                else:
+                    opener.open.side_effect = response_error
+                timings = {}
+                with self.assertRaises(stager.RegistryRequestError) as failed:
+                    stager.registry_bytes(opener, request, "wasalx/portal", timings)
+                reason = str(failed.exception)
+                self.assertRegex(reason, r"^GET /token repo=wasalx/portal " + expected + r" elapsed_ms=\d+$")
+                self.assertNotIn("fixture-value", reason)
+                self.assertNotIn("synthetic-private-value", reason)
+                self.assertEqual(timings["token"][0][1], 429 if isinstance(response_error, HTTPError) else None)
+                opener.open.assert_called_once_with(request, timeout=30)
 
 
 class PullTest(unittest.TestCase):

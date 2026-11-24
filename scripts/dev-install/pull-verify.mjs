@@ -46,7 +46,7 @@ if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) 
         await run("python3", ["-I", "-B", stager, hostedImages], { timeout: 300_000 });
       } catch (error) {
         command = "python3 -I -B scripts/release/installer-hosted-bundles.py";
-        reason = error.stderr?.match(/^hosted bundle staging reason: ([a-zA-Z0-9 ().]+)$/mu)?.[1]
+        reason = error.stderr?.match(/^hosted bundle staging reason: ([a-zA-Z0-9 /:._=()-]{1,480})$/mu)?.[1]
           ?? "cannot acquire the public manifest and Sigstore bundles";
         throw error;
       }
