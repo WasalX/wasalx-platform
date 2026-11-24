@@ -960,14 +960,22 @@ test("lazy slots in panels, drawers and dialogs use a compact, accurately labell
     read("lib/i18n/messages/ar/tenant.ts"),
   ]);
   const views = ["BotAutomation", "PluginCatalog", "ClientRouting", "InboxWorkspace", "CaseLifecycle"];
-  const wrapped = (fallback) => [...source.matchAll(new RegExp(String.raw`<Suspense fallback=\{<${fallback} />\}>\s*(?:\{[^<]*)?<(\w+)`, "gu"))].map((match) => match[1]);
+  const wrapped = (fallback) => [...source.matchAll(new RegExp(String.raw`<Suspense fallback=\{<${fallback}(?: quiet)? />\}>\s*(?:\{[^<]*)?<(\w+)`, "gu"))].map((match) => match[1]);
   assert.deepEqual(wrapped("WorkspaceLoading"), views, "WorkspaceLoading is only for whole views");
   const slots = wrapped("SectionLoading");
   for (const slot of ["MetaCostUsage", "SupportTeams", "MailboxAdministration", "ConnectedDataServices", "MetaNumberRelease", "MetaTemplatePreparation", "MetaSignup", "NativeRoutingSync", "WorkspaceAccess"]) {
     assert.ok(slots.includes(slot), `${slot} must load with the compact SectionLoading state`);
   }
   assert.equal(slots.filter((slot) => slot === "MetaSignup").length, 2, "the reconnect section and the add-connection dialog both stay compact");
-  assert.match(source, /function SectionLoading\(\) \{[\s\S]*?className="review-loading compact" role="status" aria-live="polite" aria-busy="true"[\s\S]*?t\("tenant\.loading\.section"\)/u);
+  assert.match(source, /function SectionLoading\(\{ quiet = false \}: \{ quiet\?: boolean \}\) \{[\s\S]*?className="review-loading compact" role=\{quiet \? undefined : "status"\}>[\s\S]*?t\("tenant\.loading\.section"\)/u);
+  assert.match(source, /function WorkspaceLoading\(\) \{[\s\S]*?className="review-loading workspace-loading" role="status">[\s\S]*?t\("tenant\.loading\.workspace"\)/u);
+  for (const name of ["WorkspaceLoading", "SectionLoading"]) {
+    const body = source.slice(source.indexOf(`function ${name}(`), source.indexOf("\n}\n", source.indexOf(`function ${name}(`)));
+    assert.doesNotMatch(body, /aria-busy|aria-live/u, `${name} is one plain status region; busy hides its announcement`);
+  }
+  // A revoked Meta connection loads number release beside the Meta section; only the Meta section announces.
+  assert.deepEqual([...source.matchAll(/<Suspense fallback=\{<SectionLoading quiet \/>\}>\s*<(\w+)/gu)].map((match) => match[1]), ["MetaNumberRelease"]);
+  assert.match(source, /detail\.provider === "META" \? \(\s*<Suspense fallback=\{<SectionLoading \/>\}>\s*\{!sessionExpired \? <MetaTemplatePreparation/u);
   assert.match(english, /"tenant\.loading\.section": "Loading this section…"/u);
   assert.match(arabic, /"tenant\.loading\.section": "جارٍ تحميل هذا القسم…"/u);
 });
