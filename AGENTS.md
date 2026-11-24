@@ -52,7 +52,7 @@ Live-provider qualification is a separate release milestone.
 - Validate inputs against their schemas at every trust boundary.
 - Store and compare instants in UTC. Convert to the user's time zone for display.
 - Make jobs, webhooks, and message handlers idempotent. Set timeouts and bounded retries with backoff for outbound calls.
-- Use structured logs with a request or trace ID. Identify people and records by ID only.
+- Use `recordStructuredLog` from `@wasalx/observability` for runtime warnings and include a request or trace ID. Identify people and records by ID only.
 - Paginate lists that can grow.
 - Extend Zammad through package-owned code and verified extension points. Never patch Zammad core. Require compatibility coverage for upgrades.
 - Use the design tokens and Impeccable for UI work. Meet WCAG 2.2 AA, source English and Arabic text from translation files, and check RTL layout. Verify affected operator journeys in a real browser.
