@@ -201,6 +201,15 @@ test("form controls keep a visible keyboard focus ring, also in forced colors", 
   assert.deepEqual(removals, [], "form-control rules must not remove the shared focus outline");
 });
 
+test("toggle switches keep a 31 x 18 track with a 44 x 44 hit area on coarse pointers", async () => {
+  const globals = await read("app/globals.css");
+  const [, width, height] = globals.match(/\.switch\{[^}]*width:(\d+)px;height:(\d+)px/u);
+  const coarse = globals.match(/@media\(any-pointer:coarse\)\{:is\(button[^{]*\{min-block-size:44px\}.*?\}\}/u)[0];
+  assert.match(coarse, /^@media\(any-pointer:coarse\)\{:is\(button:not\(\.switch\),/u, "the 44 px button minimum must not stretch the switch track");
+  const [, block, inline] = coarse.match(/\.switch::after\{content:"";position:absolute;inset:-([\d.]+)px -([\d.]+)px\}/u);
+  assert.deepEqual([Number(width) + 2 * Number(inline), Number(height) + 2 * Number(block)], [44, 44]);
+});
+
 test("the production portal consumes governed tokens without duplicate theme values", async () => {
   const layout = await read("app/layout.tsx");
   const globals = await read("app/globals.css");

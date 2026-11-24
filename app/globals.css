@@ -208,7 +208,7 @@ bdi{unicode-bidi:isolate}
 
 /* Readable operational evidence and generous touch targets. */
 th,td,td small,.status,.timeline :where(p,small),.audit-note small,.support-layout :where(small,dt,dd,p,li),.rules-layout :where(small,code),.rule-governance-dialog :where(small,dt,dd,p,li,code){font-size:var(--wx-font-size-1)}
-@media(any-pointer:coarse){:is(button,input:where(:not([type="hidden"]):not([type="checkbox"]):not([type="radio"])),select,textarea,.button.small,.top-locale-switcher .wx-button){min-block-size:44px}:is(.button,.button.small,.icon-button,.select,.filter-button,.text-button,.more,.toast-action,.toast-dismiss,.modal-head>button,.tabs button,.settings-nav button,.notification-list>button,.workflow-graph .react-flow__controls-button){min-inline-size:44px}}
+@media(any-pointer:coarse){:is(button:not(.switch),input:where(:not([type="hidden"]):not([type="checkbox"]):not([type="radio"])),select,textarea,.button.small,.top-locale-switcher .wx-button){min-block-size:44px}:is(.button,.button.small,.icon-button,.select,.filter-button,.text-button,.more,.toast-action,.toast-dismiss,.modal-head>button,.tabs button,.settings-nav button,.notification-list>button,.workflow-graph .react-flow__controls-button){min-inline-size:44px}.switch{position:relative}.switch::after{content:"";position:absolute;inset:-13px -6.5px}}
 
 /* Direct WhatsApp automation */
 .bot-automation{display:flex;min-width:0;flex-direction:column;gap:var(--wx-space-4)}
