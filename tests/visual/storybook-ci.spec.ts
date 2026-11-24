@@ -15,12 +15,13 @@ const wcagTags = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"];
 for (const theme of ["light", "dark"] as const) {
   for (const locale of supportedLocales) {
     test.describe(`${theme} ${locale}`, () => {
-      test.use({ colorScheme: theme, locale: languageTag(locale), reducedMotion: "reduce" });
+      test.use({ colorScheme: theme, locale: languageTag(locale) });
 
       for (const [storyId, entry] of stories) {
         test(storyId, async ({ page }, testInfo) => {
           const errors: string[] = [];
           page.on("pageerror", error => errors.push(error.message));
+          await page.emulateMedia({ reducedMotion: "reduce" });
           await page.clock.setFixedTime(new Date("2026-10-17T16:00:00Z"));
           const globals = `a11y.manual:!true;auditTheme:${theme};auditLocale:${locale}`;
           const response = await page.goto(`/iframe.html?${new URLSearchParams({ id: storyId, viewMode: "story", globals })}`);
