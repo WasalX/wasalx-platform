@@ -100,18 +100,26 @@ jobs:
   workflow-lint:
     runs-on: ubuntu-24.04
     timeout-minutes: 1
+    env:
+      ACTIONLINT_URL: https://github.com/kjanat/actionlint/releases/download/v1.17.1/actionlint_1.17.1_linux_amd64.tar.gz
+      ACTIONLINT_SHA256: 6bfe0f49f0e108b9b23732baf7de63bfa4d89174fa40f9cb98feb9676df3318f
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/actionlint-release.tar.gz
+          key: actionlint-${{ env.ACTIONLINT_SHA256 }}
       - name: Lint workflows with actionlint
-        env:
-          ACTIONLINT_URL: https://github.com/kjanat/actionlint/releases/download/v1.17.1/actionlint_1.17.1_linux_amd64.tar.gz
-          ACTIONLINT_SHA256: 6bfe0f49f0e108b9b23732baf7de63bfa4d89174fa40f9cb98feb9676df3318f
         run: |
+          archive="$RUNNER_TEMP/actionlint-release.tar.gz"
+          if [[ ! -f "$archive" ]]; then
+            bash scripts/release/fetch-verified-asset.sh "$ACTIONLINT_URL" "$archive" "$ACTIONLINT_SHA256"
+          fi
+          printf '%s  %s\n' "$ACTIONLINT_SHA256" "$archive" | sha256sum --check --strict
           scratch=$(mktemp -d)
-          bash scripts/release/fetch-verified-asset.sh "$ACTIONLINT_URL" "$scratch/actionlint.tar.gz" "$ACTIONLINT_SHA256"
-          tar -xzf "$scratch/actionlint.tar.gz" -C "$scratch" actionlint
+          tar -xzf "$archive" -C "$scratch" actionlint
           "$scratch/actionlint" -shellcheck= -pyflakes=
 
   storybook:

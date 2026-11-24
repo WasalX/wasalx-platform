@@ -545,7 +545,7 @@ ${copy.run}`], {
   }
 });
 
-test("workflow lint fails on any actionlint finding or download verification failure", async t => {
+test("workflow lint verifies fresh and cached releases and fails on any finding", async t => {
   const { jobs } = parse(await read(".github/workflows/ci.yml"));
   const job = jobs["workflow-lint"];
   const step = job.steps.find(step => step.run);
@@ -555,18 +555,29 @@ test("workflow lint fails on any actionlint finding or download verification fai
 
   const directory = await mkdtemp(join(tmpdir(), "ci-workflow-lint-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
-  for (const [download, lint, expected] of [[0, 0, 0], [0, 1, 1], [2, 0, 2]]) {
+  const archivePath = join(directory, "actionlint-release.tar.gz");
+  const release = "actionlint release fixture";
+  const sha256 = createHash("sha256").update(release).digest("hex");
+  for (const [cached, download, lint, expected] of [
+    [undefined, 0, 0, 0], [undefined, 2, 0, 2], [release, 99, 0, 0], [release, 99, 1, 1], ["corrupt", 99, 0, 1],
+  ]) {
+    await rm(archivePath, { force: true });
+    if (cached !== undefined) await writeFile(archivePath, cached);
     const result = runWorkflowScript(`
 mktemp() { pwd; }
 bash() {
   [[ "$1" == scripts/release/fetch-verified-asset.sh && "$2" == https://* && "$4" =~ ^[a-f0-9]{64}$ ]] || exit 99
-  return "$DOWNLOAD_STATUS"
+  if [[ "$DOWNLOAD_STATUS" != 0 ]]; then return "$DOWNLOAD_STATUS"; fi
+  printf '%s' "$RELEASE_CONTENTS" > "$3"
 }
 tar() {
   printf '#!/usr/bin/env bash\\nexit %s\\n' "$LINT_STATUS" > "$4/actionlint"
   chmod +x "$4/actionlint"
 }
-${step.run}`, { ...step.env, DOWNLOAD_STATUS: String(download), LINT_STATUS: String(lint) }, directory);
+${step.run}`, {
+      ...job.env, RUNNER_TEMP: directory.replaceAll("\\", "/"), ACTIONLINT_SHA256: sha256,
+      RELEASE_CONTENTS: release, DOWNLOAD_STATUS: String(download), LINT_STATUS: String(lint),
+    }, directory);
     assert.ifError(result.error);
     assert.equal(result.status, expected, result.stdout + result.stderr);
   }
