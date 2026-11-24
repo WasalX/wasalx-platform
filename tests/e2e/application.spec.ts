@@ -17,7 +17,7 @@ import { consumeExpectedDirectSetupDenial, metaDirectConsentJourney } from "./me
 import { consumeExpectedSignupDenial, metaSignupJourney } from "./meta-signup.fixture";
 import { ticketEventWorkflowJourney } from "./ticket-event-workflows.fixture";
 import type { TeamAccessData } from "../../lib/control-plane-data";
-import AxeBuilder from "@axe-core/playwright";
+import { expectAxeClean } from "../helpers/axe";
 import { expect, test, type Page } from "@playwright/test";
 
 const role = process.env.WASALX_E2E_ROLE ?? "tenant_owner";
@@ -388,21 +388,6 @@ function expectNetworkFailure(page: Page, pattern: RegExp) {
   }
   expect(mutations).toEqual([]);
 });
-
-async function expectAxeClean(page: Page) {
-  const result = await new AxeBuilder({ page })
-    .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"])
-    .analyze();
-  expect(
-    result.violations.map(({ id, impact, help, nodes }) => ({
-      id,
-      impact,
-      help,
-      nodes: nodes.map((node) => ({ target: node.target, html: node.html })),
-    })),
-    "axe must find no WCAG A/AA violations",
-  ).toEqual([]);
-}
 
 
 test("role navigation, history, titles, profile, and persisted theme behave as one application", async ({ page }, testInfo) => {
