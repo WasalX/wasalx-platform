@@ -81,11 +81,24 @@ def changes(parent, commit):
         raise ValueError
 
 
-def commit_findings(base, head):
-    if not (SHA.fullmatch(base) and SHA.fullmatch(head)):
+def merge_parent(parents, upstream):
+    if len(parents) > 1:
+        for parent in parents:
+            ancestry = subprocess.run(["git", "merge-base", "--is-ancestor", parent, upstream],
+                                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if ancestry.returncode == 0:
+                return [parent]
+            if ancestry.returncode != 1:
+                ancestry.check_returncode()
+    return parents[:1]
+
+
+def commit_findings(base, head, upstream=None):
+    upstream = upstream or base
+    if not all(SHA.fullmatch(sha) for sha in (base, head, upstream)):
         raise ValueError
     log = git("log", "--no-show-signature", "-z", "--format=%H%x00%P%x00%an <%ae>%x00%cn <%ce>%x00%B",
-              f"{base}..{head}", "--")
+              head, f"^{base}", f"^{upstream}", "--")
     if not log:
         return
     fields = log.decode("utf-8", errors="replace").removesuffix("\0").split("\0")
@@ -94,10 +107,12 @@ def commit_findings(base, head):
         yield from findings(author, "commit.author")
         yield from findings(committer, "commit.committer")
         yield from findings(message, "commit.message")
-        yield from changes(parents.split(), commit)
+        # Diff a merge against its upstream parent to exclude files already published on main.
+        yield from changes(merge_parent(parents.split(), upstream), commit)
 
 
 def scan(event, payload):
+    upstream = None
     if event in ("pull_request", "issues"):
         field = "pull_request" if event == "pull_request" else "issue"
         item = payload[field]
@@ -112,17 +127,19 @@ def scan(event, payload):
     elif event == "merge_group":
         base, head = payload["merge_group"]["base_sha"], payload["merge_group"]["head_sha"]
     elif event == "push":
-        yield from findings(payload["ref"], "push.ref")
+        ref = payload["ref"]
+        yield from findings(ref, "push.ref")
         base, head = payload["before"], payload["after"]
-        if base == "0" * 40 or payload.get("forced") is True:
-            default = payload["repository"]["default_branch"]
-            # The previous branch tip may be absent after a force-push.
-            if base == "0" * 40 or payload["ref"] != f"refs/heads/{default}":
-                base = git("rev-parse", "--verify", "--end-of-options",
+        default = payload["repository"]["default_branch"]
+        if ref != f"refs/heads/{default}" or base == "0" * 40:
+            upstream = git("rev-parse", "--verify", "--end-of-options",
                            f"refs/remotes/origin/{default}^{{commit}}").decode("ascii").strip()
+            # New or force-pushed branches may have no reachable previous tip.
+            if base == "0" * 40 or payload.get("forced") is True:
+                base = upstream
     else:
         raise ValueError
-    yield from commit_findings(base, head)
+    yield from commit_findings(base, head, upstream)
 
 
 def main():

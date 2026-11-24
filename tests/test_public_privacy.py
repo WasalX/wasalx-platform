@@ -123,6 +123,24 @@ class PublicPrivacyTest(unittest.TestCase):
             'privacy "pull_request.body":1 private-host',
         ])
 
+    def test_merge_from_main_scans_resolution_without_rescanning_main(self):
+        self.git("switch", "-c", "fixture")
+        before = self.commit("feature branch")
+        self.git("switch", "main")
+        (self.repo / "existing.txt").write_text(f"https://{HOST}\n", encoding="utf-8")
+        self.base = self.commit("publish an upstream fixture")
+        self.git("update-ref", "refs/remotes/origin/main", self.base)
+        self.git("switch", "fixture")
+        self.git("merge", "--no-commit", "main")
+        (self.repo / "resolution.txt").write_text(TOKEN + "\n", encoding="utf-8")
+        head = self.commit("complete the merge")
+
+        expected = ['privacy "resolution.txt":1 github-token']
+        self.assertEqual(self.scan("pull_request", self.pr(), 1, head), expected)
+        payload = {"before": before, "after": head, "ref": "refs/heads/fixture",
+                   "repository": {"default_branch": "main"}}
+        self.assertEqual(self.scan("push", payload, 1, head), expected)
+
     def test_type_change_scans_the_new_file(self):
         file = self.repo / "mode-fixture"
         file.write_text("target", encoding="utf-8")
