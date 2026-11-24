@@ -12,9 +12,9 @@ on:
       - 'gh-readonly-queue/**'
 
 concurrency:
-  # A ci.yml call keeps ci's workflow name, so a PR edit never cancels the ci privacy job.
-  group: privacy-${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  # Never cancel or supersede: each run screens only its own event's text and commits.
+  group: privacy-${{ github.run_id }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
