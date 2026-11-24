@@ -279,7 +279,7 @@ gh() {
   const cases = [
     { ready: base, selected: base, lookups: commits.slice(0, 1), reason: "requested base has a complete publication" },
     { ready: commits[4], incomplete: commits[1], expired: commits[2], noJob: commits[3],
-      selected: commits[4], lookups: commits.slice(0, 5), reason: "newest complete first-parent publication" },
+      selected: commits[4], lookups: commits.slice(0, 5) },
     { ready: commits[5], lookups: commits.slice(0, 5), reason: "No complete green main publication" },
     { ready: side, lookups: commits.slice(0, 5), reason: "No complete green main publication" },
     { ready: commits[1], lookupError: base, lookups: commits.slice(0, 1), status: 17 },
@@ -292,19 +292,26 @@ gh() {
     exact = false, lookups, status = selected ? 0 : 1, reason } of cases) {
     await writeFile(join(directory, "lookups"), "");
     await writeFile(join(directory, "publication-output"), "");
+    await writeFile(join(directory, "publication-summary"), "");
     const result = spawnSync(bash, ["--noprofile", "--norc", "-euo", "pipefail", "-c", ghFixture + publication.run], {
       ...options, timeout: 10_000, env: {
         ...process.env, GITHUB_REPOSITORY: "fixture/nightly", BASE: base, READY: ready, INCOMPLETE: incomplete,
         EXPIRED: expired, NO_JOB: noJob, LOOKUP_ERROR: lookupError, INVALID: String(invalid),
         GITHUB_EVENT_NAME: exact ? "push" : "schedule", GITHUB_REF_TYPE: exact ? "tag" : "branch",
         GITHUB_REF: exact ? `refs/tags/${tag}` : "refs/heads/main",
-        GITHUB_SHA: base, GITHUB_OUTPUT: "publication-output", RUNNER_TEMP: ".",
+        GITHUB_SHA: base, GITHUB_OUTPUT: "publication-output", GITHUB_STEP_SUMMARY: "publication-summary", RUNNER_TEMP: ".",
       },
     });
     assert.ifError(result.error);
     assert.equal(result.status, status, result.stdout + result.stderr);
     assert.equal((await readFile(join(directory, "publication-output"), "utf8")).trim(), selected ? `commit=${selected}` : "");
     if (reason) assert.ok((result.stdout + result.stderr).includes(reason), result.stderr);
+    const warning = selected && selected !== base
+      ? `Nightly images come from ${selected} (run 101) because requested base ${base} has no complete green publication.`
+      : "";
+    const annotations = result.stderr.split(/\r?\n/u).filter(line => line.startsWith("::warning::"));
+    assert.deepEqual(annotations, warning ? [`::warning::${warning}`] : []);
+    assert.equal((await readFile(join(directory, "publication-summary"), "utf8")).trim(), warning);
     if (selected) {
       const manifest = join(directory, "wasalx-nightly", "images-manifest.json");
       assert.equal(JSON.parse(await readFile(manifest, "utf8")).commit, selected);

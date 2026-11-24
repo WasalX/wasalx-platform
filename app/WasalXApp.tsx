@@ -697,7 +697,7 @@ function Empty({ title, body }: { title: string; body: string }) {
 function WorkspaceLoading() {
   const { t } = useI18n();
   return (
-    <div className="review-loading workspace-loading" role="status" aria-live="polite" aria-busy="true">
+    <div className="review-loading workspace-loading" role="status">
       <span aria-hidden="true" />
       <b>{t("tenant.loading.workspace")}</b>
     </div>
@@ -705,10 +705,11 @@ function WorkspaceLoading() {
 }
 
 // Lazy slots inside panels, drawers and dialogs: compact and labelled for the section, not the workspace.
-function SectionLoading() {
+// quiet: a slot that always loads beside another slot shows the same text without a second announcement.
+function SectionLoading({ quiet = false }: { quiet?: boolean }) {
   const { t } = useI18n();
   return (
-    <div className="review-loading compact" role="status" aria-live="polite" aria-busy="true">
+    <div className="review-loading compact" role={quiet ? undefined : "status"}>
       <span aria-hidden="true" />
       <b>{t("tenant.loading.section")}</b>
     </div>
@@ -906,7 +907,7 @@ function NotificationCenter({
       {open ? (
         <section id="operational-notifications" className="notification-panel" aria-labelledby="operational-notifications-title">
           <header><span><h2 id="operational-notifications-title">{t("tenant.notifications.title")}</h2><small>{items.length ? t(items.length === 1 ? "tenant.notifications.needReview.one" : "tenant.notifications.needReview", { count: formatNumber(items.length, locale) }) : t("tenant.notifications.none")}</small></span><button className="text-button" onClick={() => close(true)}>{t("common.actions.close")}</button></header>
-          {items.length ? <div className="notification-list">{items.map((item) => <button key={item.id} onClick={() => { close(true); navigate(item.view, item.target); }}><span className={`notification-mark ${item.tone}`} /><span><b><bdi>{item.title}</bdi></b><small>{item.body}</small></span><span aria-hidden="true">→</span></button>)}</div> : <Empty title={t("tenant.notifications.allClear")} body={t("tenant.notifications.allClearBody")} />}
+          {items.length ? <div className="notification-list">{items.map((item) => <button key={item.id} onClick={() => { close(true); navigate(item.view, item.target); }}><span className={`notification-mark ${item.tone}`} /><span><b><bdi>{item.title}</bdi></b><small>{item.body}</small></span><span className="reading-arrow" aria-hidden="true">→</span></button>)}</div> : <Empty title={t("tenant.notifications.allClear")} body={t("tenant.notifications.allClearBody")} />}
         </section>
       ) : null}
     </div>
@@ -1896,7 +1897,7 @@ function Overview({
       <div className="metrics">
         <button onClick={() => navigate("connections")} className="metric">
           <span>
-            {t("tenant.overview.workingConnections")} <i className="info" aria-hidden="true">i</i>
+            {t("tenant.overview.workingConnections")}
           </span>
           <strong>
             {formatNumber(working, locale)}
@@ -1904,22 +1905,22 @@ function Overview({
           </strong>
           <footer>
             <b className={connectionIssues||noneWorking?"warning-text":"positive"}>{connectionIssues?t("tenant.overview.requireAction", { count: formatNumber(connectionIssues, locale) }):noneWorking?t("tenant.health.noWorkingConnections"):t("tenant.overview.healthy")}</b>
-            <span>{t("tenant.actions.viewAll")} →</span>
+            <span>{t("tenant.actions.viewAll")} <span className="reading-arrow" aria-hidden="true">→</span></span>
           </footer>
         </button>
         <button onClick={() => navigate("groups")} className="metric">
           <span>
-            {t("tenant.overview.activeGroups")} <i className="info" aria-hidden="true">i</i>
+            {t("tenant.overview.activeGroups")}
           </span>
           <strong>{formatNumber(activeGroups, locale)}</strong>
           <footer>
             <b>{t("tenant.overview.bindingsConfigured", { count: formatNumber(data.groups.filter(group=>group.zammad_group&&group.zammad_group!=="Not configured").length, locale) })}</b>
-            <span>{t("tenant.actions.manage")} →</span>
+            <span>{t("tenant.actions.manage")} <span className="reading-arrow" aria-hidden="true">→</span></span>
           </footer>
         </button>
         <button onClick={() => navigate("deliveries")} className="metric">
           <span>
-            {t("tenant.overview.deliverySuccess")} <i className="info" aria-hidden="true">i</i>
+            {t("tenant.overview.deliverySuccess")}
           </span>
           <strong>{success===null?"—":formatNumber(success / 100, locale, { style:"percent", maximumFractionDigits:1 })}</strong>
           <footer>
@@ -1932,12 +1933,12 @@ function Overview({
           className={`metric ${attention ? "attention" : ""}`}
         >
           <span>
-            {t("tenant.overview.needsAttention")} <i className="info" aria-hidden="true">i</i>
+            {t("tenant.overview.needsAttention")}
           </span>
           <strong>{formatNumber(attention, locale)}</strong>
           <footer>
             <b className={attention?"warning-text":"positive"}>{t(attention?"tenant.status.actionRequired":"tenant.overview.healthy")}</b>
-            <span>{t("tenant.actions.resolve")} <span aria-hidden="true">→</span></span>
+            <span>{t("tenant.actions.resolve")} <span className="reading-arrow" aria-hidden="true">→</span></span>
           </footer>
         </button>
       </div>
@@ -1976,7 +1977,7 @@ function Overview({
             className="text-button"
             onClick={() => navigate("deliveries")}
           >
-            {t("tenant.overview.viewAllDeliveries")} →
+            {t("tenant.overview.viewAllDeliveries")} <span className="reading-arrow" aria-hidden="true">→</span>
           </button>
         </div>
         <DeliveryTable rows={data.deliveries.slice(0, 4)} compact openCase={canReadCases ? (ticket) => navigate("inbox", { ticket }) : undefined} />
@@ -2893,7 +2894,7 @@ function ConnectionDetail({
               </div>
             </section>
 
-            {detail.provider === "META" && state === "REVOKED" && canConfigure && !sessionExpired ? <Suspense fallback={<SectionLoading />}><MetaNumberRelease
+            {detail.provider === "META" && state === "REVOKED" && canConfigure && !sessionExpired ? <Suspense fallback={<SectionLoading quiet />}><MetaNumberRelease
               tenantId={tenantId} actorId={actorId} connectionId={id} connectionName={String(detail.name ?? "")} mutationHeaders={mutationHeaders} busyChanged={setMetaNumberReleasePending}
             /></Suspense> : null}
 
@@ -3078,7 +3079,7 @@ function ConnectionDetail({
                             type="tel"
                             inputMode="tel"
                             autoComplete="tel"
-                            placeholder="+9665XXXXXXXX"
+                            placeholder={t("tenant.connection.authorization.pairing.numberExample")}
                             value={pairingPhone}
                             onChange={(event) => {
                               setPairingPhone(event.target.value);
@@ -4187,7 +4188,7 @@ function Groups({
           <table>
             <thead>
               <tr>
-                {canToggle ? <th className="select-column"><input type="checkbox" checked={allVisibleSelected} aria-label={t(allVisibleSelected ? "tenant.group.selection.clearVisible" : "tenant.group.selection.selectVisible")} onChange={toggleVisible} /></th> : null}
+                {canToggle ? <th className="select-column"><label><input type="checkbox" checked={allVisibleSelected} aria-label={t(allVisibleSelected ? "tenant.group.selection.clearVisible" : "tenant.group.selection.selectVisible")} onChange={toggleVisible} /></label></th> : null}
                 <th>{t("tenant.group.columns.group")}</th>
                 <th>{t("tenant.group.columns.destination")}</th>
                 <th>{t("tenant.group.columns.rule")}</th>
@@ -4200,7 +4201,7 @@ function Groups({
             <tbody>
               {displayedRows.map((row) => {const activationCodes=groupActivationCodes(row);return(
                 <tr key={String(row.id)}>
-                  {canToggle ? <td className="select-column"><input type="checkbox" checked={selected.has(String(row.id))} aria-label={t("tenant.group.selection.selectNamed", { name: String(row.name) })} onChange={() => toggleSelection(String(row.id))} /></td> : null}
+                  {canToggle ? <td className="select-column"><label><input type="checkbox" checked={selected.has(String(row.id))} aria-label={t("tenant.group.selection.selectNamed", { name: String(row.name) })} onChange={() => toggleSelection(String(row.id))} /></label></td> : null}
                   <td>
                     <div className="cell-main">
                       <span className="group-logo">#</span>
@@ -5360,7 +5361,7 @@ function RuleGovernanceDialog({
     {error ? <div className="settings-feedback error" role="alert"><span>!</span><p>{error}</p>{versions === null ? <button className="button small" disabled={loading} onClick={() => void load()}>{t("common.actions.retry")}</button> : <button className="text-button" onClick={() => setError(null)}>{t("tenant.rules.actions.dismiss")}</button>}</div> : null}
     {loading && versions === null ? <div className="review-loading" role="status"><span /><span /><b>{t("tenant.rules.governance.loading")}</b></div> : error && versions === null ? null : items.length ? <div className="rule-governance-body">
       <section className="rule-version-list" aria-labelledby="version-list-heading"><div className="connection-detail-section-head"><div><h3 id="version-list-heading">{t("tenant.rules.governance.history")}</h3><p>{t("tenant.rules.governance.historyBody")}</p></div><button className="button small secondary" disabled={loading} onClick={() => void load()}>{t(loading ? "tenant.rules.actions.refreshing" : "tenant.rules.actions.refresh")}</button></div>{items.map((item) => <article key={item.id}><span className="rule-version-number">{t("tenant.rules.versionShort")}<bdi>{formatNumber(item.version, locale)}</bdi></span><span><b><bdi>{item.name}</bdi></b><small><bdi>{formatNumber(Array.isArray(item.rules) ? item.rules.length : 0, locale)}</bdi> {t("tenant.rules.rulesCountLabel")} · {t("tenant.rules.revision")} <bdi>{formatNumber(item.revision, locale)}</bdi></small></span><Status value={item.state} /><span className="rule-version-actions">{canManage?(item.rules??[]).map((rule,index)=><label key={`${item.id}:${index}`}>{String(rule.name)} — {t("tenant.rules.teamPolicy")}<select disabled={operating||cloneSourceId!==null} value={clonePolicies[`${item.id}:${index}`]??String((rule.matcherOptions as Record<string,unknown>|undefined)?.teamSenderPolicy??"include")} onChange={event=>setClonePolicies(current=>({...current,[`${item.id}:${index}`]:event.target.value as "include"|"exclude"}))}><option value="include">{t("tenant.rules.teamPolicy.include")}</option><option value="exclude">{t("tenant.rules.teamPolicy.exclude")}</option></select></label>):null}{canManage ? <button className="button small secondary" disabled={operating || Boolean(cloneSourceId && cloneSourceId !== item.id)} onClick={() => void cloneVersion(item)}>{t(operating && cloneSourceId === item.id ? "tenant.rules.actions.recording" : "tenant.rules.actions.clone")}</button> : null}<button className="text-button" onClick={() => { setLeftId(item.id); setComparison(null); setRightId((current) => { const right = items.find((other) => other.id === current); return right && right.id !== item.id && ruleSetFamily(right) === ruleSetFamily(item) ? current : items.find((other) => other.id !== item.id && ruleSetFamily(other) === ruleSetFamily(item))?.id ?? ""; }); }}>{t("tenant.rules.actions.compare")}</button>{canManage && item.state === "DRAFT" ? <button className="button small" onClick={() => void prepare("activate", item)}>{t("tenant.rules.actions.activateEllipsis")}</button> : null}{canManage && item.state === "RETIRED" ? <button className="button small secondary" onClick={() => void prepare("rollback", item)}>{t("tenant.rules.actions.rollbackEllipsis")}</button> : null}</span></article>)}{canLoadOlder?<div className="audit-pagination"><button className="button secondary" disabled={loadingOlder} onClick={()=>void loadOlder()}>{t(loadingOlder?"tenant.rules.governance.loadingOlder":"tenant.rules.governance.loadOlder")}</button></div>:null}</section>
-      <section className="rule-compare-panel" aria-labelledby="rule-compare-heading"><div className="connection-detail-section-head"><div><h3 id="rule-compare-heading">{t("tenant.rules.comparison.title")}</h3><p>{t("tenant.rules.comparison.body")}</p></div></div><div className="rule-compare-selectors"><label>{t("tenant.rules.comparison.from")}<select value={leftId} onChange={(event) => { setLeftId(event.target.value); setComparison(null); const selected = items.find((item) => item.id === event.target.value); const candidate = items.find((item) => selected && ruleSetFamily(item) === ruleSetFamily(selected) && item.id !== selected.id); setRightId(candidate?.id ?? ""); }}>{items.map((item) => <option key={item.id} value={item.id}>{item.name} · {t("tenant.rules.versionShort")}{formatNumber(item.version, locale)} · {t(`tenant.rules.state.${item.state.toLowerCase()}`)}</option>)}</select></label><span aria-hidden="true">→</span><label>{t("tenant.rules.comparison.to")}<select value={rightId} onChange={(event) => { setRightId(event.target.value); setComparison(null); }}>{comparable.map((item) => <option key={item.id} value={item.id}>{item.name} · {t("tenant.rules.versionShort")}{formatNumber(item.version, locale)} · {t(`tenant.rules.state.${item.state.toLowerCase()}`)}</option>)}</select></label><button className="button primary" disabled={!leftId || !rightId || leftId === rightId || comparing} onClick={() => void compare()}>{t(comparing ? "tenant.rules.actions.comparing" : "tenant.rules.actions.compare")}</button></div>{comparison ? <div className="rule-comparison-result"><div className="rule-comparison-summary"><span><b>{formatNumber(comparisonSummary.added, locale)}</b><small>{t("tenant.rules.comparison.added")}</small></span><span><b>{formatNumber(comparisonSummary.removed, locale)}</b><small>{t("tenant.rules.comparison.removed")}</small></span><span><b>{formatNumber(comparisonSummary.changed, locale)}</b><small>{t("tenant.rules.comparison.changed")}</small></span><span><b>{formatNumber(comparisonSummary.unchanged, locale)}</b><small>{t("tenant.rules.comparison.unchanged")}</small></span></div><div className="rule-change-list">{presentedChanges.map(({ change, fields, kind }, index) => <div key={`${String(change.name)}-${index}`}><Status value={kind} /><span><b><bdi>{String(change.name)}</bdi></b>{kind === "CHANGED" ? <ul className="rule-change-evidence" aria-label={t("tenant.rules.comparison.changedFields", { name: String(change.name) })}>{fields.map((field) => <li key={field.key}><bdi>{field.summary}</bdi></li>)}</ul> : <small>{t(kind === "UNCHANGED" && change.kind === "CHANGED" ? "tenant.rules.comparison.noMaterialChanges" : `tenant.rules.change.${kind.toLowerCase()}`)}</small>}</span></div>)}</div></div> : <div className="rule-history-empty"><span>◇</span><div><b>{t("tenant.rules.comparison.selectTwo")}</b><p>{t("tenant.rules.comparison.readOnly")}</p></div></div>}</section>
+      <section className="rule-compare-panel" aria-labelledby="rule-compare-heading"><div className="connection-detail-section-head"><div><h3 id="rule-compare-heading">{t("tenant.rules.comparison.title")}</h3><p>{t("tenant.rules.comparison.body")}</p></div></div><div className="rule-compare-selectors"><label>{t("tenant.rules.comparison.from")}<select value={leftId} onChange={(event) => { setLeftId(event.target.value); setComparison(null); const selected = items.find((item) => item.id === event.target.value); const candidate = items.find((item) => selected && ruleSetFamily(item) === ruleSetFamily(selected) && item.id !== selected.id); setRightId(candidate?.id ?? ""); }}>{items.map((item) => <option key={item.id} value={item.id}>{item.name} · {t("tenant.rules.versionShort")}{formatNumber(item.version, locale)} · {t(`tenant.rules.state.${item.state.toLowerCase()}`)}</option>)}</select></label><span className="reading-arrow" aria-hidden="true">→</span><label>{t("tenant.rules.comparison.to")}<select value={rightId} onChange={(event) => { setRightId(event.target.value); setComparison(null); }}>{comparable.map((item) => <option key={item.id} value={item.id}>{item.name} · {t("tenant.rules.versionShort")}{formatNumber(item.version, locale)} · {t(`tenant.rules.state.${item.state.toLowerCase()}`)}</option>)}</select></label><button className="button primary" disabled={!leftId || !rightId || leftId === rightId || comparing} onClick={() => void compare()}>{t(comparing ? "tenant.rules.actions.comparing" : "tenant.rules.actions.compare")}</button></div>{comparison ? <div className="rule-comparison-result"><div className="rule-comparison-summary"><span><b>{formatNumber(comparisonSummary.added, locale)}</b><small>{t("tenant.rules.comparison.added")}</small></span><span><b>{formatNumber(comparisonSummary.removed, locale)}</b><small>{t("tenant.rules.comparison.removed")}</small></span><span><b>{formatNumber(comparisonSummary.changed, locale)}</b><small>{t("tenant.rules.comparison.changed")}</small></span><span><b>{formatNumber(comparisonSummary.unchanged, locale)}</b><small>{t("tenant.rules.comparison.unchanged")}</small></span></div><div className="rule-change-list">{presentedChanges.map(({ change, fields, kind }, index) => <div key={`${String(change.name)}-${index}`}><Status value={kind} /><span><b><bdi>{String(change.name)}</bdi></b>{kind === "CHANGED" ? <ul className="rule-change-evidence" aria-label={t("tenant.rules.comparison.changedFields", { name: String(change.name) })}>{fields.map((field) => <li key={field.key}><bdi>{field.summary}</bdi></li>)}</ul> : <small>{t(kind === "UNCHANGED" && change.kind === "CHANGED" ? "tenant.rules.comparison.noMaterialChanges" : `tenant.rules.change.${kind.toLowerCase()}`)}</small>}</span></div>)}</div></div> : <div className="rule-history-empty"><span>◇</span><div><b>{t("tenant.rules.comparison.selectTwo")}</b><p>{t("tenant.rules.comparison.readOnly")}</p></div></div>}</section>
       {operation ? <InlineConfirmation busy={operating} className={`rule-operation-confirm ${operation.kind}`} aria-labelledby="rule-operation-title" cancel={() => { setOperation(null); setReadiness(null); setConfirmation(""); }}><div><span className="eyebrow">{t(operation.kind === "activate" ? "tenant.rules.operation.activation" : "tenant.rules.operation.rollback")}</span><h3 id="rule-operation-title">{t(operation.kind === "activate" ? "tenant.rules.operation.activateTitle" : "tenant.rules.operation.restoreTitle", { version: formatNumber(operation.target.version, locale) })}</h3><p>{t(operation.kind === "activate" ? "tenant.rules.operation.activateBody" : "tenant.rules.operation.restoreBody")}</p></div>{readiness ? <div className={`rule-readiness ${readiness.ready === true ? "ready" : "blocked"}`}><span>{readiness.ready === true ? "✓" : "!"}</span><div><b>{t(readiness.ready === true ? "tenant.rules.readiness.passed" : "tenant.rules.readiness.blocked")}</b><small><bdi>{formatNumber(Number(readiness.enabledRuleCount ?? 0), locale)}</bdi> {t("tenant.rules.readiness.enabledRules")} · <bdi>{formatNumber(Number(readiness.checkedExamples ?? 0), locale)}</bdi> {t("tenant.rules.readiness.examplesChecked")}</small></div></div> : <div className="review-loading compact" role="status"><span /><b>{t("tenant.rules.readiness.checking")}</b></div>}{blockers.length ? <ul className="rule-issue-list blockers">{blockers.map((item, index) => <li key={`${String(item.code)}-${index}`}><b>{ruleReadinessIssue(item.code, t)}</b></li>)}</ul> : null}{warnings.length ? <ul className="rule-issue-list warnings">{warnings.map((item, index) => <li key={`${String(item.code)}-${index}`}><b>{ruleReadinessIssue(item.code, t)}</b></li>)}</ul> : null}{operation.kind === "rollback" ? <label className="rule-rollback-confirmation">{t("tenant.rules.operation.typeRollback")} <code>{t("tenant.rules.operation.rollbackConfirmation")}</code> {t("tenant.rules.operation.typeRollbackSuffix")}<input value={confirmation} onChange={(event) => setConfirmation(event.target.value)} autoComplete="off" /></label> : null}<div className="modal-actions"><button className="button secondary" data-inline-confirm-initial-focus disabled={operating} onClick={() => { setOperation(null); setReadiness(null); setConfirmation(""); }}>{t("tenant.rules.actions.cancel")}</button><button className={operation.kind === "activate" ? "button primary" : "button connection-detail-danger-button"} disabled={operating || readiness?.ready !== true || (operation.kind === "rollback" && confirmation !== "ROLLBACK")} onClick={() => void execute()}>{t(operating ? "tenant.rules.actions.recording" : operation.kind === "activate" ? "tenant.rules.actions.activateVersion" : "tenant.rules.actions.createRollback")}</button></div></InlineConfirmation> : null}
     </div> : <Empty title={t("tenant.rules.empty.title")} body={t("tenant.rules.empty.body")} />}
   </div></ModalDialog>;
@@ -5530,7 +5531,7 @@ function RuleModal({
         </label>
         <label htmlFor="rule-team-policy">{t("tenant.rules.teamPolicy")}<select id="rule-team-policy" value={form.teamSenderPolicy} onChange={(event)=>updateForm("teamSenderPolicy",event.target.value as "include"|"exclude")}><option value="include">{t("tenant.rules.teamPolicy.include")}</option><option value="exclude">{t("tenant.rules.teamPolicy.exclude")}</option></select><small>{t("tenant.rules.teamPolicy.help")}</small></label>
         {form.matcherType === "exact_length" || form.matcherType === "prefix_length" ? <div className="rule-modal-grid">{form.matcherType === "prefix_length" ? <label>{t("tenant.rules.modal.prefix")}<input required maxLength={64} value={form.prefix} onChange={(event) => updateForm("prefix", event.target.value)} placeholder={t("tenant.rules.modal.prefixPlaceholder")} /></label> : null}<label>{t("tenant.rules.modal.digitLength")}<input type="number" min={1} max={64} value={form.digitLength} onChange={(event) => updateForm("digitLength", Number(event.target.value))} /></label></div> : <label>{t(form.matcherType === "advanced" ? "tenant.rules.modal.safeExpression" : "tenant.rules.modal.literalPattern")}<input className="mono" required maxLength={240} value={form.pattern} onChange={(event) => updateForm("pattern", event.target.value)} placeholder={t(form.matcherType === "advanced" ? "tenant.rules.modal.advancedPlaceholder" : "tenant.rules.modal.literalPlaceholder")} /><small>{t(form.matcherType === "advanced" ? "tenant.rules.modal.advancedHelp" : "tenant.rules.modal.literalHelp")}</small></label>}
-        <fieldset className="rule-command-config"><legend>{t("tenant.rules.command.title")}</legend><label className="check"><input type="checkbox" checked={form.groupCommand} onChange={event=>{const enabled=event.target.checked;setForm(current=>({...current,groupCommand:enabled,...(enabled?{matcherType:"starts_with",pattern:"/status"}:{}),actionId:current.actionId||commandActions[0]?.action_key||""}));if(enabled)setSample("/status ORD-42");setTestedSignature(null);setTestResult(null);setError(null)}}/><span><b>{t("tenant.rules.command.enable")}</b><small>{t("tenant.rules.command.enableBody")}</small></span></label>{form.groupCommand?<div className="rule-command-fields"><label>{t("tenant.rules.command.action")}<select required value={form.actionId} onChange={event=>updateForm("actionId",event.target.value)}><option value="">{t("tenant.rules.command.selectAction")}</option>{commandActions.map(action=><option key={action.action_key} value={action.action_key}>{action.name}</option>)}</select><small>{commandActions.length?t("tenant.rules.command.getOnly"):t("tenant.rules.command.noActions")}</small></label><div><b>{t("tenant.rules.command.input")}</b><small>{t("tenant.rules.command.inputBody")}</small>{commandInputs.map((row,index)=><div className="rule-command-input" key={index}><input aria-label={t("tenant.rules.command.inputKey")} placeholder={t("tenant.rules.command.inputKey")} value={row.key} maxLength={128} onChange={event=>{setCommandInputs(current=>current.map((item,itemIndex)=>itemIndex===index?{...item,key:event.target.value}:item));setTestedSignature(null)}}/><input aria-label={t("tenant.rules.command.inputValue")} placeholder="{{message.argument}}" value={row.value} maxLength={500} onChange={event=>{setCommandInputs(current=>current.map((item,itemIndex)=>itemIndex===index?{...item,value:event.target.value}:item));setTestedSignature(null)}}/><button type="button" className="button small secondary" disabled={commandInputs.length===1} onClick={()=>setCommandInputs(current=>current.filter((_,itemIndex)=>itemIndex!==index))}>{t("tenant.rules.command.remove")}</button></div>)}<button type="button" className="text-button" onClick={()=>setCommandInputs(current=>[...current,{key:"",value:""}])}>{t("tenant.rules.command.addInput")}</button></div><label>{t("tenant.rules.command.successReply")}<textarea rows={2} required maxLength={1000} value={form.successReply} onChange={event=>updateForm("successReply",event.target.value)}/></label><label>{t("tenant.rules.command.failureReply")}<textarea rows={2} required maxLength={1000} value={form.failureReply} onChange={event=>updateForm("failureReply",event.target.value)}/></label><p className="form-note">{t("tenant.rules.command.variables")}</p></div>:null}</fieldset>
+        <fieldset className="rule-command-config"><legend>{t("tenant.rules.command.title")}</legend><label className="check"><input type="checkbox" checked={form.groupCommand} onChange={event=>{const enabled=event.target.checked;setForm(current=>({...current,groupCommand:enabled,...(enabled?{matcherType:"starts_with",pattern:"/status"}:{}),actionId:current.actionId||commandActions[0]?.action_key||""}));if(enabled)setSample("/status ORD-42");setTestedSignature(null);setTestResult(null);setError(null)}}/><span><b>{t("tenant.rules.command.enable")}</b><small>{t("tenant.rules.command.enableBody")}</small></span></label>{form.groupCommand?<div className="rule-command-fields"><label>{t("tenant.rules.command.action")}<select required value={form.actionId} onChange={event=>updateForm("actionId",event.target.value)}><option value="">{t("tenant.rules.command.selectAction")}</option>{commandActions.map(action=><option key={action.action_key} value={action.action_key}>{action.name}</option>)}</select><small>{commandActions.length?t("tenant.rules.command.getOnly"):t("tenant.rules.command.noActions")}</small></label><div><b>{t("tenant.rules.command.input")}</b><small>{t("tenant.rules.command.inputBody")}</small>{commandInputs.map((row,index)=><div className="rule-command-input" key={index}><input aria-label={t("tenant.rules.command.inputKey")} placeholder={t("tenant.rules.command.inputKey")} value={row.key} maxLength={128} onChange={event=>{setCommandInputs(current=>current.map((item,itemIndex)=>itemIndex===index?{...item,key:event.target.value}:item));setTestedSignature(null)}}/><input aria-label={t("tenant.rules.command.inputValue")} placeholder={t("tenant.rules.command.inputValueExample")} value={row.value} maxLength={500} onChange={event=>{setCommandInputs(current=>current.map((item,itemIndex)=>itemIndex===index?{...item,value:event.target.value}:item));setTestedSignature(null)}}/><button type="button" className="button small secondary" disabled={commandInputs.length===1} onClick={()=>setCommandInputs(current=>current.filter((_,itemIndex)=>itemIndex!==index))}>{t("tenant.rules.command.remove")}</button></div>)}<button type="button" className="text-button" onClick={()=>setCommandInputs(current=>[...current,{key:"",value:""}])}>{t("tenant.rules.command.addInput")}</button></div><label>{t("tenant.rules.command.successReply")}<textarea rows={2} required maxLength={1000} value={form.successReply} onChange={event=>updateForm("successReply",event.target.value)}/></label><label>{t("tenant.rules.command.failureReply")}<textarea rows={2} required maxLength={1000} value={form.failureReply} onChange={event=>updateForm("failureReply",event.target.value)}/></label><p className="form-note">{t("tenant.rules.command.variables")}</p></div>:null}</fieldset>
         <label>{t("tenant.rules.modal.representativeMessage")}<textarea rows={3} required value={sample} onChange={(event) => { setSample(event.target.value); setTestedSignature(null); setTestResult(null); setError(null); }} /></label>
         <div className="candidate-expression"><small>{t("tenant.rules.modal.generatedExpression")}</small><code><bdi>{candidatePattern || t("tenant.rules.modal.addPattern")}</bdi></code></div>
         {error ? <div className="settings-feedback error rule-modal-feedback" role="alert"><span>!</span><p>{error}</p></div> : null}
