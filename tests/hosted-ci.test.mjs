@@ -9,11 +9,9 @@ import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
 import { collectFile, collectionFiles, inventory, isTestFile, shardFiles } from "../scripts/hosted-ci.mjs";
 import { selectUnitFiles } from "../scripts/affected-unit-tests.mjs";
+import { unitAddonSources, validateUnitAddonInputs } from "../scripts/fetch-zammad-addon.mjs";
 import { unitAllowlist, unitFiles } from "../scripts/test-unit.mjs";
 import { reportTimingsWithQuarantine, validateQuarantine } from "../scripts/hosted-ci-timing-reporter.mjs";
-import { addonSkips, skipPattern } from "../scripts/hosted-ci-policy.mjs";
-import { generateBaseline } from "../scripts/generate-hosted-ci-baseline.mjs";
-import baseline from "../scripts/hosted-ci-baseline.mjs";
 import { parsePostgresShardArgs, postgresScenarioGroups, verifyPostgresReports } from "../scripts/postgres-scenario-registry.mjs";
 
 const repository = fileURLToPath(new URL("../", import.meta.url));
@@ -1179,45 +1177,37 @@ test("collection skips test bodies, reports import errors and kills hanging impo
   assert.equal(timeout.diagnostic, "Collection import timed out");
 });
 
-test("add-on exceptions bind exact entrypoints and names and disappear as inputs arrive", async t => {
-  assert.equal(baseline.tests.length, 10);
-  assert.equal(new Set(baseline.tests.map(entry => entry.file + "::" + entry.name)).size, 9);
-  assert.deepEqual(addonSkips("tests/unlisted.test.mjs", () => false), []);
-  for (const entry of baseline.tests) {
-    assert.equal(entry.reason, "needs the add-on source");
-    assert(addonSkips(entry.entrypoint, () => false).includes(entry));
-    assert(!addonSkips(entry.entrypoint, input => input === entry.input).includes(entry));
-  }
+test("unit runners fail before launching tests when a staged add-on input is missing", async t => {
   const directory = await mkdtemp(join(tmpdir(), "hosted-addon-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
-  const file = join(directory, "fixture.mjs");
-  const name = baseline.tests[0].name;
-  const pattern = skipPattern([{ name }]);
-  const env = { ...process.env };
-  delete env.NODE_TEST_CONTEXT;
-  const run = args => spawnSync(process.execPath, ["--test", "--test-reporter=tap", ...args, file], { env, encoding: "utf8", windowsHide: true });
-  await writeFile(file, `import test from 'node:test'; test(${JSON.stringify(name)},()=>{throw Error('ADDON_TEST_EXECUTED')});\n`);
-  assert.equal(run([`--test-skip-pattern=${pattern}`]).status, 0);
-  assert.equal(run([]).status, 1);
-  await writeFile(file, `import test from 'node:test'; test(${JSON.stringify(name + " new")},()=>{throw Error('UNLISTED_FAILURE')});\n`);
-  assert.equal(run([`--test-skip-pattern=${pattern}`]).status, 1);
-  await writeFile(file, `import test from 'node:test'; test(${JSON.stringify(name)},()=>{throw Error('FOREIGN_FILE_FAILURE')});\n`);
-  assert.equal(addonSkips(file).length, 0);
-  assert.equal(run([]).status, 1);
-  assert(new RegExp(skipPattern([{ name: "literal (name) [x].*" }])).test("literal (name) [x].*"));
+  const missingFixture = "tests/portal-upload-expiry-test.rb";
+  const archive = "build/zammad/wasalx-1.2.3.zpm";
+  const stage = async file => {
+    await mkdir(join(directory, posix.dirname(file)), { recursive: true });
+    await writeFile(join(directory, file), "fixture");
+  };
+  await writeFile(join(directory, "zammad-addon.json"), JSON.stringify({ packageVersion: "1.2.3" }));
+  await Promise.all(unitAddonSources.filter(file => file !== missingFixture).map(stage));
+  const options = { cwd: directory, encoding: "utf8", timeout: 10_000, windowsHide: true };
+  for (const missing of [missingFixture, archive]) {
+    for (const [file, ...args] of [["hosted-ci.mjs", "unit", "1", "2"], ["test-unit.mjs"]]) {
+      const result = spawnSync(process.execPath, [join(repository, "scripts", file), ...args], options);
+      assert.ifError(result.error);
+      assert.equal(result.status, 1, result.stderr);
+      assert.match(result.stderr, /Missing required Zammad add-on inputs/u);
+      assert(result.stderr.includes(missing), result.stderr);
+      assert.equal(result.stdout, "");
+    }
+    await stage(missing);
+  }
+  assert.doesNotThrow(() => validateUnitAddonInputs(directory));
 });
 
-test("baseline generation retains every logged failure and rejects unclassified failures", () => {
-  const root = "/home/runner/work/wasalx-platform/wasalx-platform/";
-  const line = (job, text) => `${job}\tstep\t${text}`;
-  const failures = Array.from({ length: 10 }, (_, i) => [
-    line("Unit 1/6", `test at tests/case-${i}.test.mjs:1:1`),
-    line("Unit 1/6", `✖ case ${i} (0.1ms)`),
-    line("Unit 1/6", `  Error: ENOENT: no such file or directory, open '${root}zammad-package/file-${i}.rb'`),
-  ]).flat();
-  const log = failures.join("\n");
-  const generated = generateBaseline(log);
-  assert.equal(generated.tests[9].name, "case 9");
-  assert.equal(generated.tests[9].input, "zammad-package/file-9.rb");
-  assert.throws(() => generateBaseline(log.replace("open '", "unexpected '")));
+test("full unit shards cover the unit inventory, including the add-on fixture consumers", () => {
+  const covered = [1, 2].flatMap(shard => shardFiles(unitFiles, shard, 2));
+  assert.deepEqual(covered.sort(), [...new Set(unitFiles)].sort());
+  for (const file of ["workspace-binary", "simulation-native-group", "application-e2e-harness",
+    "zammad-agent-context", "portal-workspace", "workspace-configurator"]) {
+    assert(covered.includes(`tests/${file}.test.mjs`), file);
+  }
 });

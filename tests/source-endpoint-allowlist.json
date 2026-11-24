@@ -43,7 +43,6 @@
   { "path": "scripts/dev-install/templates/pull-agent.py", "literal": "https://quay.io/v2/auth", "reason": "Public GitHub or registry endpoint required by the pull agent protocol." },
   { "path": "scripts/dev-install/templates/pull-agent.py", "literal": "https://github.com/", "reason": "Public GitHub or registry endpoint required by the pull agent protocol." },
   { "path": "scripts/fetch-zammad-addon.mjs", "literal": "https://github.com/", "reason": "The add-on fetcher checks and uses canonical GitHub source URLs." },
-  { "path": "scripts/generate-hosted-ci-baseline.mjs", "literal": "https://github.com/WasalX/wasalx-platform/actions/runs/44043107820", "reason": "Identifies the public run used to derive the recorded CI baseline." },
   { "path": "scripts/prepare-zammad-previous-stable-image.mjs", "literal": "postgresql://zammad:/zammad", "reason": "Uses the canonical GitHub source or the local database reference in the compatibility build." },
   { "path": "scripts/prepare-zammad-previous-stable-image.mjs", "literal": "https://github.com/", "reason": "Uses the canonical GitHub source or the local database reference in the compatibility build." },
   { "path": "scripts/prepare-zammad-typecheck.mjs", "literal": "https://raw.githubusercontent.com/zammad/zammad/", "reason": "Downloads the upstream file from the add-on typecheck source pin." },
