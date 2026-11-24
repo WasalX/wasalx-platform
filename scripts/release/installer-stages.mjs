@@ -41,7 +41,7 @@ export async function verifyBuildContext(candidateSha, root = repository) {
     const actual = createHash("sha1").update(Buffer.from(`blob ${bytes.length}\0`)).update(bytes).digest("hex");
     assert.equal(actual, expected, "build input differs from canonical Git bytes; use git -c core.autocrlf=false archive");
   }
-  const archive = spawnSync("git", ["archive", "--format=tar", candidateSha],
+  const archive = spawnSync("git", ["-c", "core.autocrlf=false", "archive", "--format=tar", candidateSha],
     { cwd: root, timeout: 20_000, killSignal: "SIGKILL", maxBuffer: 128 * 1024 ** 2, windowsHide: true });
   assert.equal(archive.status, 0, "cannot archive canonical build context");
   return archive.stdout;

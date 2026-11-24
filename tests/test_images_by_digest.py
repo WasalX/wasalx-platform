@@ -29,6 +29,22 @@ with patch.object(sys, "path", [str(RELEASE), *sys.path]):
 
 
 class ImagePublicationTests(unittest.TestCase):
+    def test_git_archives_disable_autocrlf(self):
+        script_paths = subprocess.check_output(
+            ["git", "grep", "-Ilz", "-F", "archive", "--", "scripts", ":(exclude,glob)**/*.md"],
+            cwd=ROOT, timeout=10,
+        ).decode().split("\0")
+        # Cover shell commands and literal subprocess argument lists.
+        archive_command = re.compile(
+            r'''\bgit(?:[ \t]+[^\s;&|]+)*?[ \t]+archive\b'''
+            r'''|["']git["']\s*,\s*\[?\s*(?:["'][^"'\n]*["']\s*,\s*)*?["']archive["']'''
+        )
+        for path in filter(None, script_paths):
+            source = (ROOT / path).read_text(encoding="utf-8").replace("\\\n", " ")
+            for command in archive_command.findall(source):
+                args = re.sub(r'''["',\[\]]''', " ", command).split()
+                self.assertIn(" -c core.autocrlf=false ", " ".join(args), path)
+
     def test_synthetic_mail_policies_are_explicit_and_nightly_allows_only_its_owner(self):
         with tempfile.TemporaryDirectory() as directory:
             for mode in ["simulation", "nightly"]:
@@ -111,8 +127,8 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
         commit, tree, epoch = "a" * 40, "b" * 40, "1794938086"
 
         def invoke(args, **kwargs):
-            if args[:2] == ["git", "archive"]:
-                with tarfile.open(args[3].removeprefix("--output="), "w") as archive:
+            if args[:4] == ["git", "-c", "core.autocrlf=false", "archive"]:
+                with tarfile.open(args[5].removeprefix("--output="), "w") as archive:
                     archive.add(ROOT / row["dockerfile"], arcname=row["dockerfile"])
 
         for image, contact_email in [("portal", " synthetic-contact "), ("portal", ""),

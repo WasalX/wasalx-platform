@@ -200,6 +200,10 @@ public tuple in the archived build context. The effective Dockerfile digest and
 add-on tuple are recorded in the receipt and attestation. If a configured source
 is unavailable anonymously, those builds fail; this workflow supplies no credential
 and never publishes private source.
+
+The builder archives with `git -c core.autocrlf=false archive` so host settings
+cannot turn LF line endings in the committed source into CRLF in the build context.
+
 Public dependency registries and the reviewed
 Dockerfiles remain build inputs. The builder uses the public archive, pinned
 inputs and no secret or SSH mounts. Only the main publish lane authenticates
