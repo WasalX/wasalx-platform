@@ -155,7 +155,16 @@ begin
     assert.call(request.call(:get, '/api/v1/wasalx/service/catalog', tokens['runtime']) == 200, 'Runtime catalog permission failed')
     assert.call(request.call(:get, '/api/v1/wasalx/service/catalog', tokens['privacy']) == 403, 'Privacy token gained runtime authority')
     arbitrary = Token.create!(user_id: owner.id, action: 'api', persistent: true, name: 'WasalX Service', preferences: { permission: ['admin.system'] })
-    assert.call(request.call(:get, '/api/v1/wasalx/service/catalog', arbitrary) == 403, 'Arbitrary human admin token admitted machine endpoint')
+    status = request.call(:get, '/api/v1/wasalx/service/catalog', arbitrary)
+    assert.call(status == 401, "MFA-required human token returned #{status}, expected 401")
+    # Reach machine authorization with a valid synthetic non-MFA policy.
+    policy['mfa_required'] = false
+    begin
+      status = request.call(:get, '/api/v1/wasalx/service/catalog', arbitrary)
+      assert.call(status == 403, "Human admin token returned #{status} at the machine endpoint, expected 403")
+    ensure
+      policy['mfa_required'] = true
+    end
     native_input = { job_id: '30000000-0000-4000-8000-000000000001', lease_id: SecureRandom.uuid, fencing_token: 1, operation: 'READ_TICKET', native_id: '999999999', attempt: 0 }
     assert.call(request.call(:post, '/api/v1/wasalx/privacy', tokens['privacy'], native_input) == 200 && JSON.parse(http.response.body).nil?, 'Admitted absent ticket did not return explicit null')
     assert.call(request.call(:post, '/api/v1/wasalx/privacy', tokens['runtime'], native_input) == 403, 'Runtime token gained privacy authority')
