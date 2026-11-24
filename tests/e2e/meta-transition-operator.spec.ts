@@ -82,7 +82,10 @@ test("operator records three explicit local reviews and independently selected m
   expect((await new AxeBuilder({ page }).include('[role="dialog"]').analyze()).violations).toEqual([]); await record(page); await expect.poll(() => h.writes.length).toBe(4); await expect(x.dialog().getByLabel(text("reviewKind"), { exact: true }).locator('option[value="PREREQUISITES"]')).toHaveCount(0);
   expect(h.writes[3]!.body.managed).toEqual({ arrangementVersionId: id(20), targetReceivingBusinessId: "9", targetTermsDocumentText: "Approved target terms / الشروط المعتمدة", targetTermsVersion: "2026.10" });
   h.current.originalGrant = { sourcePayment: "CARD", managed: h.writes[3]!.body.managed! }; h.current.actions.PREREQUISITES = true; h.current.revision++;
-  await x.dialog().getByRole("button", { name: text("refresh"), exact: true }).click(); await prepare(page, "PREREQUISITES"); await expect(x.dialog().getByLabel(text("sourcePayment"), { exact: true })).toBeDisabled(); await expect(x.dialog().getByLabel(text("arrangement"), { exact: true })).toBeDisabled(); await expect(x.dialog().getByLabel(text("receiver"), { exact: true })).toHaveAttribute("readonly", ""); await expect(x.dialog().getByLabel(text("terms"), { exact: true })).toHaveValue("Approved target terms / الشروط المعتمدة");
+  await x.dialog().getByRole("button", { name: text("refresh"), exact: true }).click(); await prepare(page, "PREREQUISITES"); await expect(x.dialog().getByLabel(text("sourcePayment"), { exact: true })).toBeDisabled(); await expect(x.dialog().getByLabel(text("arrangement"), { exact: true })).toBeDisabled(); await expect(x.dialog().getByLabel(text("receiver"), { exact: true })).toHaveAttribute("readonly", "");
+  const savedTerms = x.dialog().getByRole("textbox", { name: text("terms"), exact: true });
+  await expect(savedTerms).toHaveAttribute("readonly", "");
+  await expect(savedTerms).toHaveValue("Approved target terms / الشروط المعتمدة");
   expect(new Set(h.writes.map(write => write.key)).size).toBe(4); expect(h.expected).toEqual([]); expect(h.errors).toEqual([]);
 });
 
