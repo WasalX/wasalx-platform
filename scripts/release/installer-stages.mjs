@@ -8,7 +8,7 @@ import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { stripVTControlCharacters } from "node:util";
 import { activeServiceNames, assertDevInstallPreimages, devContainerPreimage, devColdResidents, devHeldServices, devHeldPrerequisites, devPreservedServices, devValueDigest, captureDevReviewAuth, assertDevReviewAuthRows, devReviewAuthEnvironment, devReviewAuthConfiguration, assertInstallHostname } from "./installer-stack.mjs";
-import { devSkipPublicWebhookPreflightFlag, devWebhookPreflightOverlay, oneShotServiceNames, rehearsalComposeFile, rehearsalImageSource } from "./installer-stack.mjs";
+import { devFreshHeldFlag, devFreshHeldPlan, devGuestComposeFiles, devSimulatorFlag, devSkipPublicWebhookPreflightFlag, devWebhookPreflightOverlay, oneShotServiceNames, rehearsalComposeFile, rehearsalImageSource } from "./installer-stack.mjs";
 import { parseRailsJson } from "./simulation-rails-json.mjs";
 import { sha256, preserveReplacement, readBoundArtifacts, writeArtifactState,
   assertRetainedPreimage, composeProfiles, dockerfileOf, imageServices, inspectOwned, preparePrivateDirectory, preimagePath, fenceReplacementEffects, rollbackReplacement } from "./installer-artifacts.mjs";
@@ -522,11 +522,15 @@ export async function executeStage(action, context) {
   if (action === "replace") {
     if (admission) await preparePrivateDirectory(context);
     assert.ok(drained, "replace requires --drained after test quiescence and in-flight review");
-    if (model.services.migrate) {
+    const freshHold = context.devFreshHeld ? devFreshHeldPlan(model, active) : null;
+    assert.ok(!freshHold || !retryReviewed, "fresh held replacement cannot retry");
+    const verifyMigrations = async () => {
+      if (!model.services.migrate) return;
       const index = plan.findIndex(({ id }) => id === "control-api");
       assert.ok(index >= 0, "migration image missing from candidate plan");
       await verifyMigrationInputs(context, imageIds[index]);
-    }
+    };
+    if (!freshHold) await verifyMigrations();
     let devRecord;
     if (context.devPreimagesFile) {
       assert.equal(retryReviewed, false, "DEV preserving replacement cannot replay a prior attempt");
@@ -546,11 +550,28 @@ export async function executeStage(action, context) {
       assert.equal(manifest.images[index]?.imageId, imageIds[index], "candidate immutable image changed since build");
     }
     const effects = await readOptionalState(context, "replacement-effects");
+    if (freshHold) {
+      assert.ok(!effects && snapshot.containers.length === 0, "fresh held project must have no previous replacement or containers");
+      const label = `label=com.docker.compose.project=${project}`;
+      for (const [resource, definitions] of [["volume", model.volumes], ["network", model.networks]]) {
+        assert.equal(await execute("docker", [resource, "ls", "--quiet", "--filter", label], environment), "",
+          `fresh held project must have no existing Compose ${resource}s`);
+        const names = new Set(Object.values(definitions ?? {}).map(({ name }) => name));
+        if (names.size) {
+          const existing = await execute("docker", [resource, "ls", "--format", "{{.Name}}"], environment);
+          assert.ok(!existing.split(/\r?\n/u).some(name => names.has(name)), `fresh held project must have no existing named ${resource}s`);
+        }
+      }
+    }
     if (effects) {
       assert.equal(effects.transactionId, snapshot.transactionId, "effect fence transaction changed");
       assert.ok(retryReviewed, "partial replacement requires --retry-reviewed");
     } else await assertRetainedPreimage(context, snapshot);
     const before = await inspect();
+    if (freshHold) {
+      assert.equal(before.length, 0, "fresh held project must have no existing containers");
+      await verifyMigrations();
+    }
     assert.ok(before.every(({ service }) => active.includes(service)), "review owned orphan containers before replacement");
     const marker = resolve(directory, `replacement-started-${project}.json`);
     const attempt = { candidateSha, candidateTree, project, startedAt: new Date().toISOString(), imageIds, ...(devRecord ? { devPreimagesSha256: context.devPreimagesSha256 } : {}) };
@@ -582,15 +603,23 @@ export async function executeStage(action, context) {
     }
     // Let Compose reconcile only changed services. Do not force-recreate healthy
     // databases, identity services or provider sessions; never down/prune volumes.
-    const exit = await execute("docker", [...composeArguments, "up", "--no-build", "--pull", "never", "--wait"], environment, true);
-    if (exit === 0) await recordReplacementAfter(context, snapshot, await inspectOwned(context), targets);
-    return exit;
+    const up = [...composeArguments, "up", "--no-build", "--pull", "never"];
+    const exit = await execute("docker", [...up, "--wait", ...(freshHold?.start ?? [])], environment, true);
+    if (exit !== 0) return exit;
+    if (freshHold) {
+      const created = await execute("docker", [...up, "--no-start", "--no-deps", ...freshHold.held], environment, true);
+      if (created !== 0) return created;
+    }
+    await recordReplacementAfter(context, snapshot, await inspectOwned(context), targets);
+    return 0;
   }
   assert.equal(action, "smoke");
   return execute(process.execPath, [verifier, project, "--full", "--env-file", context.envFile,
     "--compose-file", "compose.yaml", "--compose-file", "compose.full.yaml",
     ...(context.imageSource ? ["--compose-file", rehearsalComposeFile, "--rehearsal-main", context.imageSource.commit] : []),
     ...(context.devSkipPublicWebhookPreflight ? [devSkipPublicWebhookPreflightFlag] : []),
+    ...(context.devFreshHeld ? [devFreshHeldFlag] : []),
+    ...(context.devSimulator ? [devSimulatorFlag] : []),
     ...composeProfiles.flatMap((profile) => ["--profile", profile]),
     ...(context.devPreimagesFile ? ["--dev-preimages", context.devPreimagesFile, "--dev-preimages-sha256", context.devPreimagesSha256] : []),
     ...plan.flatMap(({ id, reference }) => ["--candidate-image", `${id}=${reference}`]),
@@ -703,6 +732,7 @@ async function main() {
   let hostedImages; let hostedImagesSha256; let hostedTrustedRoot;
   let rehearsalMain;
   let devSkipPublicWebhookPreflight = false;
+  let devFreshHeld = false; let devSimulator = false;
   for (let i = 0; i < extra.length; i += 1) {
     if (["--hosted-images", "--hosted-images-sha256", "--hosted-trusted-root"].includes(extra[i])) {
       const flag = extra[i], value = extra[++i];
@@ -720,6 +750,12 @@ async function main() {
     } else if (extra[i] === devSkipPublicWebhookPreflightFlag) {
       assert.equal(devSkipPublicWebhookPreflight, false, `${extra[i]} can be provided only once`);
       devSkipPublicWebhookPreflight = true;
+    } else if (extra[i] === devFreshHeldFlag) {
+      assert.equal(devFreshHeld, false, `${extra[i]} can be provided only once`);
+      devFreshHeld = true;
+    } else if (extra[i] === devSimulatorFlag) {
+      assert.equal(devSimulator, false, `${extra[i]} can be provided only once`);
+      devSimulator = true;
     } else if (extra[i] === "--service") {
       assert.equal(action, "release-held"); assert.equal(service, undefined);
       service = extra[++i]; assert.match(service ?? "", /^[a-z0-9][a-z0-9_.-]*$/u);
@@ -748,6 +784,11 @@ async function main() {
       else { assert.equal(captureDevPreimagesFile, undefined); captureDevPreimagesFile = value; }
     } else rest.push(extra[i]);
   }
+  const guestFiles = devGuestComposeFiles({ project, rehearsalMain, devFreshHeld, devSimulator });
+  assert.ok(!devFreshHeld || (["replace", "smoke"].includes(action) && !devPreimagesFile && !captureDevPreimagesFile),
+    "fresh held mode requires replace or smoke without existing DEV preimages");
+  assert.ok(!devSimulator || !["replace", "smoke", "qualify"].includes(action) || devFreshHeld,
+    "simulator replacement requires --dev-fresh-held");
   const overlay = devWebhookPreflightOverlay({ project, rehearsalMain, devSkipPublicWebhookPreflight });
   assert.equal(Boolean(hostedImages), Boolean(hostedImagesSha256), "hosted inventory hash required");
   assert.equal(Boolean(hostedImages), Boolean(hostedTrustedRoot), "separate trusted Sigstore root required");
@@ -837,7 +878,7 @@ async function main() {
   const composeArguments = [
     "compose", "--env-file", envFile, "--file", "compose.yaml", "--file", "compose.full.yaml",
     ...(imageSource ? ["--file", rehearsalComposeFile] : []),
-    ...overlay.flatMap(file => ["--file", file]),
+    ...[...guestFiles, ...overlay].flatMap(file => ["--file", file]),
     ...composeProfiles.flatMap((profile) => ["--profile", profile]), "--project-name", project,
   ];
   run("docker", [...composeArguments, "config", "--quiet"], environment);
@@ -855,7 +896,7 @@ async function main() {
     try {
       const exit = await executeStage(stage, { plan, candidateSha, candidateTree, environment, composeArguments,
         buildContext, buildContextSha256, catalog, catalogSha256: sha256(catalogBytes), rollbackSafetyFile, rollbackSafetySha256,
-        hostedImages, hostedImagesSha256, hostedTrustedRoot, imageSource, devSkipPublicWebhookPreflight,
+        hostedImages, hostedImagesSha256, hostedTrustedRoot, imageSource, devSkipPublicWebhookPreflight, devFreshHeld, devSimulator,
         project, envFile, repository, capturePreimage: rest.includes("--capture-preimage"),
         privateDirectory: resolve(homedir(), `.local/state/wasalx-compose/${candidateSha}/${project}`),
         nativePackage: catalog.tenantProvisioning.package, model: safeCompose, directory: resolve(repository, `output/release-evidence/${candidateSha}`),
