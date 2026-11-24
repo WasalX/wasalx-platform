@@ -27,9 +27,9 @@ export function takeListPage<T>(rows: T[], limit: number, key: (row: T) => strin
 }
 
 export function withListCursor<T>(
-  reply: Pick<FastifyReply, "header">,
+  reply: Pick<FastifyReply, "header"> | undefined,
   page: { items: T[]; next_cursor: string | null },
 ) {
-  if (page.next_cursor) reply.header("x-next-cursor", page.next_cursor);
+  if (page.next_cursor) reply?.header("x-next-cursor", page.next_cursor);
   return page.items;
 }

@@ -703,8 +703,8 @@ export class ConnectionsController {
   @Requires("connection:read")
   async list(
     @Req() request: AuthenticatedRequest,
-    @Query() query: ListPageQuery,
-    @Res({ passthrough: true }) reply: FastifyReply,
+    @Query() query: ListPageQuery = {},
+    @Res({ passthrough: true }) reply?: FastifyReply,
   ) {
     const limit = listLimit(query.limit);
     const cursor = listCursor(query.cursor);
