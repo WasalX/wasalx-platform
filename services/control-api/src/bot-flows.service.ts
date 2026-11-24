@@ -6,6 +6,7 @@ import { directMessageCapabilities, parseBotFlow, validateBotFlowVariableProvena
 import { parseTicketEventFlow, ticketEvents, validateTicketEventCapabilities, type TicketEventDefinition } from "@wasalx/core/ticket-event-flow";
 import { maximumMediaBytes, normalizeMediaMime, safeMediaFilename } from "@wasalx/core/media";
 import { providerOutboundMediaRule } from "@wasalx/core/provider-media-capabilities";
+import { botHandoffMaxAttemptsFromEnvironment } from "@wasalx/core/delivery";
 import { isOwnedSecretReference } from "@wasalx/core/secret-reference";
 import { clientRoutingApplies, clientRoutingTargetBlockers, hasCredentialQueryParameter, parseClientRouting, resolveClientRoute, type ClientRoutingDefinition, type ClientRoutingInput } from "@wasalx/core/client-routing";
 import type { PoolClient } from "pg";
@@ -44,6 +45,8 @@ type CatalogCursor={v:1;tenant:string;kind:CatalogKind;sort:string;id:string};
 
 @Injectable()
 export class BotFlowsService {
+  private readonly botHandoffMaxAttempts = botHandoffMaxAttemptsFromEnvironment(process.env);
+
   constructor(private readonly database: DatabaseService,private readonly drain:TenantDrainService,private readonly catalogs:ZammadRoutingCatalogService,private readonly webhookSecrets?:WebhookSecretService,private readonly routingConnectors?:RoutingConnectorsConfig,private readonly secretProvisioning?:SecretProvisioningService) {}
 
   async list(principal: Principal, query: ListPageQuery = {}) {
@@ -725,8 +728,8 @@ export class BotFlowsService {
         if(input.action==="RETRY_HANDOFF"){
           if(!current.handoff_id)throw new ConflictException("No failed human handoff is available to retry");
           const retried=retryableHandoff?await client.query(`UPDATE bot_handoff_jobs SET state='QUEUED',available_at=now(),safe_error=NULL,updated_at=now()
-            WHERE tenant_id=$1 AND id=$2 AND state='FAILED_RETRYABLE' AND attempts<8
-              AND lease_id IS NULL AND lease_expires_at IS NULL`,[principal.tenantId,current.handoff_id]):await client.query(`INSERT INTO bot_handoff_jobs
+            WHERE tenant_id=$1 AND id=$2 AND state='FAILED_RETRYABLE' AND attempts<$3
+              AND lease_id IS NULL AND lease_expires_at IS NULL`,[principal.tenantId,current.handoff_id,this.botHandoffMaxAttempts]):await client.query(`INSERT INTO bot_handoff_jobs
             (tenant_id,conversation_id,source_event_id,handoff_node_id,zammad_group_id,zammad_owner_id,priority)
             SELECT tenant_id,conversation_id,source_event_id,handoff_node_id,zammad_group_id,zammad_owner_id,priority FROM bot_handoff_jobs
             WHERE tenant_id=$1 AND id=$2 AND state='FAILED_TERMINAL' ON CONFLICT DO NOTHING`,[principal.tenantId,current.handoff_id]);

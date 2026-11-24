@@ -2,7 +2,7 @@ import { useState } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { getMessages } from "../../lib/i18n/messages";
 import { I18nProvider, useI18n } from "../I18nProvider";
-import { PrivacyHoldDialog, PrivacyRequestDialog } from "../WasalXApp";
+import { PrivacyHoldDialog, PrivacyRequestDialog } from "../TenantSettings";
 import "../globals.css";
 
 const headers = { "content-type": "application/json" };

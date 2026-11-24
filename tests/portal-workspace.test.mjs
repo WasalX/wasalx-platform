@@ -3,6 +3,7 @@ import { createHash, createHmac } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
+import { readTenantPortalSource } from "./helpers/tenant-portal-source.mjs";
 import ts from "typescript";
 import { PortalWorkspaceController, validateWorkspaceRequest } from "../services/control-api/dist/portal-workspace.controller.js";
 import { ZammadServiceSecretService } from "../services/control-api/dist/zammad-service-secret.service.js";
@@ -296,7 +297,7 @@ test("source context is a read and requires the same current actor before return
 });
 
 test("source navigation keeps exact UUID targets on WasalX and removes malformed or stale target parameters", () => {
-  const file = ts.createSourceFile("WasalXApp.tsx", readFileSync(new URL("../app/WasalXApp.tsx", import.meta.url), "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const file = ts.createSourceFile("WasalXApp.tsx", readTenantPortalSource(), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
   const declaration = name => {
     const node = file.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === name);
     assert.ok(node, name);

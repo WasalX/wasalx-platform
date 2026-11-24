@@ -11,14 +11,13 @@ html:has(.marketing-shell.theme-light) { color-scheme: light; }
 html:has(.marketing-shell.theme-dark) { color-scheme: dark; }
 html:has(.marketing-shell) { scroll-padding-block-start: 5.5rem; }
 .marketing-shell.theme-dark { background: var(--bg); }
-.marketing-shell.theme-dark .inbox-window { box-shadow: 0 16px 48px -20px var(--wx-color-shadow); }
 .marketing-shell a { color: inherit; text-decoration: none; }
 .marketing-shell :where(a, button, input, select, textarea):focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
 .marketing-shell .marketing-skip { background: var(--text); color: var(--bg); position: fixed; inset-block-start: var(--wx-space-2); inset-inline-start: var(--wx-space-4); padding: var(--wx-space-3); transform: translateY(-160%); z-index: 50; }
 .marketing-skip:focus-visible { transform: none; }
 .marketing-header { display: flex; align-items: center; gap: var(--wx-space-8); position: sticky; inset-block-start: 0; z-index: 40; padding: var(--wx-space-3) max(var(--wx-space-8), calc((100% - 72rem) / 2)); background: var(--surface); border-block-end: 1px solid var(--border); }
 .theme-dark .marketing-header { background: var(--bg); }
-.marketing-brand { font-size: 1.75rem; font-weight: 750; letter-spacing: -.04em; line-height: 1.2; white-space: nowrap; }
+.marketing-brand { font-size: var(--wx-font-size-6); font-weight: 750; letter-spacing: -.04em; line-height: 1.2; white-space: nowrap; }
 .marketing-brand span { color: var(--accent); }
 .marketing-header nav { display: flex; flex-direction: row; gap: var(--wx-space-8); margin-inline-start: auto; }
 .marketing-header a:not(.marketing-brand) { font-size: var(--wx-font-size-3); font-weight: var(--wx-weight-medium); }
@@ -32,7 +31,7 @@ html:has(.marketing-shell) { scroll-padding-block-start: 5.5rem; }
 .marketing-theme-toggle:hover { background: var(--surface-2); }
 .marketing-theme-toggle svg { inline-size: 1.2rem; block-size: 1.2rem; }
 .marketing-hero { max-inline-size: 76rem; margin: auto; padding: var(--wx-space-12) var(--wx-space-8) var(--wx-space-6); text-align: center; }
-.marketing-hero h1 { margin: 0; font-size: clamp(2.5rem, 1.35rem + 3vw, 3.75rem); line-height: 1.1; font-weight: 750; letter-spacing: -.04em; text-wrap: balance; }
+.marketing-hero h1 { margin: 0; font-size: clamp(var(--wx-font-size-7), var(--wx-font-size-5) + 3vw, var(--wx-font-size-display)); line-height: 1.1; font-weight: 750; letter-spacing: -.04em; text-wrap: balance; }
 .marketing-title-end { display: block; color: var(--accent); }
 .marketing-type-line { display: grid; position: relative; margin-block-end: .08em; }
 .marketing-type-reserve, .marketing-type-text { grid-area: 1 / 1; }
@@ -43,7 +42,7 @@ html:has(.marketing-shell) { scroll-padding-block-start: 5.5rem; }
 .marketing-type-soon { position: absolute; inset-block-end: 100%; inset-inline: 0; font-size: var(--wx-font-size-1); font-weight: var(--wx-weight-medium); color: var(--muted); letter-spacing: 0; opacity: 0; }
 .marketing-type-soon[data-shown="true"] { opacity: 1; }
 [data-motion="off"] .marketing-caret { visibility: hidden; }
-.marketing-hero > p { max-inline-size: 40rem; margin: var(--wx-space-6) auto; font-size: clamp(1rem, .8rem + .5vw, 1.2rem); color: var(--muted); text-wrap: pretty; }
+.marketing-hero > p { max-inline-size: 40rem; margin: var(--wx-space-6) auto; font-size: clamp(var(--wx-font-size-4), var(--wx-font-size-2) + .5vw, var(--wx-font-size-5)); color: var(--muted); text-wrap: pretty; }
 .marketing-shell .wx-button { min-block-size: 2.75rem; border-radius: var(--wx-radius-panel); font-weight: var(--wx-weight-medium); }
 .marketing-shell .wx-button-primary { color: var(--wx-color-on-solid); padding: var(--wx-space-3) var(--wx-space-6); }
 .marketing-icon { display: inline-block; flex: none; vertical-align: middle; }
@@ -53,19 +52,19 @@ html:has(.marketing-shell) { scroll-padding-block-start: 5.5rem; }
 .marketing-hero-actions { display: flex; justify-content: center; }
 .marketing-channels { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--wx-space-3); margin-block-start: var(--wx-space-8); }
 .marketing-channels ul { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--wx-space-2); margin: 0; padding: 0; list-style: none; }
-.marketing-channels li { display: flex; align-items: center; gap: var(--wx-space-2); padding: var(--wx-space-2) var(--wx-space-4); border: 1px solid var(--border); border-radius: 999px; font-size: var(--wx-font-size-3); font-weight: var(--wx-weight-medium); }
+.marketing-channels li { display: flex; align-items: center; gap: var(--wx-space-2); padding: var(--wx-space-2) var(--wx-space-4); border: 1px solid var(--border); border-radius: var(--wx-radius-dialog); font-size: var(--wx-font-size-3); font-weight: var(--wx-weight-medium); }
 .marketing-channels > ul > li:has(.marketing-icon-whatsapp) { color: var(--success); border-color: color-mix(in srgb, var(--success) 24%, var(--surface)); }
 .marketing-channels .marketing-icon { inline-size: 1.15rem; block-size: 1.15rem; }
-.marketing-icon-whatsapp { color: #25d366; }
+.marketing-icon-whatsapp { color: var(--wx-color-provider-waha); }
 .marketing-icon-instagram, .marketing-icon-x, .marketing-icon-tiktok, .marketing-icon-slack { color: var(--text); }
 .marketing-channels .marketing-icon-email { color: var(--accent); }
 .marketing-upcoming { display: flex; align-items: center; flex-wrap: wrap; justify-content: center; gap: var(--wx-space-3); padding: var(--wx-space-1) var(--wx-space-3); border: 1px dashed var(--border-strong); border-radius: var(--wx-radius-panel); background: var(--surface-2); }
 .marketing-upcoming > strong, .inbox-upcoming > strong { font-size: var(--wx-font-size-1); font-weight: var(--wx-weight-semibold); color: var(--text); }
 .marketing-upcoming li, .marketing-upcoming li:first-child { background: transparent; border: 0; padding-inline: var(--wx-space-1); font-size: var(--wx-font-size-1); font-weight: var(--wx-weight-regular); }
 .marketing-inbox { max-inline-size: 86rem; margin: var(--wx-space-2) auto 0; padding-inline: var(--wx-space-6); scroll-margin-block-start: var(--wx-space-4); }
-.inbox-window { border-radius: var(--wx-radius-dialog); background: var(--surface); box-shadow: 0 16px 48px -20px color-mix(in srgb, var(--text) 22%, transparent); overflow: clip; }
+.inbox-window { border-radius: var(--wx-radius-dialog); background: var(--surface); box-shadow: var(--shadow); overflow: clip; }
 .inbox-label { display: flex; align-items: center; flex-wrap: wrap; gap: var(--wx-space-2); padding: var(--wx-space-2) var(--wx-space-4); border-block-end: 1px solid var(--border); background: var(--surface-2); font-size: var(--wx-font-size-2); font-weight: var(--wx-weight-medium); }
-.inbox-wordmark { font-weight: 750; letter-spacing: -.04em; font-size: 1rem; }
+.inbox-wordmark { font-weight: 750; letter-spacing: -.04em; font-size: var(--wx-font-size-4); }
 .inbox-wordmark span { color: var(--accent); }
 .marketing-motion-toggle { display: inline-flex; align-items: center; gap: var(--wx-space-2); margin-inline-start: auto; padding: var(--wx-space-2); min-block-size: 2.75rem; border: 0; background: transparent; color: var(--muted); font-size: var(--wx-font-size-1); border-radius: var(--wx-radius-panel); }
 .marketing-motion-toggle:hover { background: var(--accent-wash); color: var(--accent); }
@@ -121,13 +120,13 @@ html:has(.marketing-shell) { scroll-padding-block-start: 5.5rem; }
 .inbox-conversation-heading .inbox-active-title { display: flex; align-items: center; gap: var(--wx-space-3); }
 .inbox-active-title > svg { flex: none; }
 .inbox-active-title > span { display: grid; gap: var(--wx-space-1); }
-.inbox-status { display: inline-flex; align-items: center; gap: var(--wx-space-1); padding: var(--wx-space-1) var(--wx-space-3); border-radius: 999px; background: color-mix(in srgb, var(--success) 9%, var(--surface)); color: var(--success); font-size: var(--wx-font-size-1); font-weight: var(--wx-weight-medium); white-space: nowrap; }
+.inbox-status { display: inline-flex; align-items: center; gap: var(--wx-space-1); padding: var(--wx-space-1) var(--wx-space-3); border-radius: var(--wx-radius-dialog); background: color-mix(in srgb, var(--success) 9%, var(--surface)); color: var(--success); font-size: var(--wx-font-size-1); font-weight: var(--wx-weight-medium); white-space: nowrap; }
 .inbox-status svg { inline-size: 1rem; block-size: 1rem; }
 .inbox-assignment { display: flex; align-items: center; flex-wrap: wrap; gap: var(--wx-space-3); padding: var(--wx-space-3) var(--wx-space-6); color: var(--muted); font-size: var(--wx-font-size-1); }
 .inbox-assignment strong { display: inline-flex; align-items: center; gap: var(--wx-space-2); color: var(--text); font-weight: var(--wx-weight-medium); }
 .marketing-inbox .inbox-assignment { gap: var(--wx-space-2); padding: 0; }
 .marketing-inbox .inbox-assignment strong { gap: var(--wx-space-1); }
-.marketing-inbox .inbox-assignment .inbox-avatar { inline-size: 1.25rem; block-size: 1.25rem; font-size: .65rem; }
+.marketing-inbox .inbox-assignment .inbox-avatar { inline-size: 1.25rem; block-size: 1.25rem; font-size: var(--wx-font-size-1); }
 .marketing-inbox .inbox-assignment[data-assigned="true"] strong { color: var(--text); }
 .inbox-avatar { display: inline-grid; flex: none; inline-size: 1.75rem; block-size: 1.75rem; place-items: center; border-radius: 50%; background: var(--accent-wash); color: var(--accent); font-size: var(--wx-font-size-1); font-weight: var(--wx-weight-semibold); }
 .inbox-avatar-customer { background: color-mix(in srgb, var(--success) 12%, var(--surface)); color: var(--success); }
@@ -137,7 +136,7 @@ html:has(.marketing-shell) { scroll-padding-block-start: 5.5rem; }
 .inbox-message strong { font-size: var(--wx-font-size-1); }
 .inbox-message p { margin: 0; }
 .inbox-day { align-self: center; color: var(--muted); font-size: var(--wx-font-size-1); }
-.inbox-message time { display: block; margin-block-start: var(--wx-space-1); color: var(--muted); font-size: .65rem; font-variant-numeric: tabular-nums; }
+.inbox-message time { display: block; margin-block-start: var(--wx-space-1); color: var(--muted); font-size: var(--wx-font-size-1); font-variant-numeric: tabular-nums; }
 .inbox-trigger { display: flex; flex-wrap: wrap; align-items: center; gap: var(--wx-space-2); padding-block: var(--wx-space-2); font-size: var(--wx-font-size-1); }
 .inbox-trigger > span { display: inline-flex; align-items: center; gap: var(--wx-space-1); color: var(--success); }
 .inbox-trigger svg { inline-size: 1rem; block-size: 1rem; }
@@ -150,12 +149,12 @@ html:has(.marketing-shell) { scroll-padding-block-start: 5.5rem; }
 .marketing-inbox .inbox-messages > * { flex-shrink: 0; }
 .marketing-inbox .inbox-messages:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
 .inbox-message > div { min-inline-size: 0; }
-.inbox-bubble { margin-block-start: var(--wx-space-1); padding: var(--wx-space-2) var(--wx-space-3); border-radius: var(--wx-radius-panel); background: var(--surface); box-shadow: 0 2px 4px var(--wx-color-control-shadow); overflow-wrap: anywhere; white-space: pre-wrap; }
+.inbox-bubble { margin-block-start: var(--wx-space-1); padding: var(--wx-space-2) var(--wx-space-3); border-radius: var(--wx-radius-panel); background: var(--surface); box-shadow: 0 1px 1px var(--wx-color-control-shadow); overflow-wrap: anywhere; white-space: pre-wrap; }
 .theme-dark .inbox-bubble { background: var(--surface-3); box-shadow: none; }
 .marketing-inbox .inbox-message-outbound { flex-direction: row-reverse; text-align: start; }
 .inbox-message-outbound .inbox-bubble { background: var(--wx-color-accent-solid); color: var(--wx-color-on-solid); text-align: start; }
 .inbox-bubble blockquote, .inbox-composer blockquote { display: grid; gap: var(--wx-space-1); margin: 0 0 var(--wx-space-2); padding: var(--wx-space-2); border-inline-start: 1px solid currentColor; background: color-mix(in srgb, currentColor 7%, transparent); font-size: var(--wx-font-size-1); }
-.inbox-message-outbound .inbox-bubble blockquote { background: color-mix(in srgb, var(--wx-color-accent-solid) 82%, #000); color: var(--wx-color-on-solid); }
+.inbox-message-outbound .inbox-bubble blockquote { background: color-mix(in srgb, var(--wx-color-overlay) 25%, transparent); color: var(--wx-color-on-solid); }
 .inbox-bubble blockquote > span { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .inbox-original { padding-block: var(--wx-space-1); }
 .inbox-original[data-highlighted="true"] .inbox-bubble { outline: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border)); }
@@ -197,7 +196,7 @@ html:has(.marketing-shell) { scroll-padding-block-start: 5.5rem; }
 .marketing-actions span { max-inline-size: 23ch; font-size: var(--wx-font-size-2); color: var(--muted); }
 .marketing-groups { background: color-mix(in srgb, var(--accent) 5%, var(--surface)); }
 .marketing-section-inner { display: grid; grid-template-columns: 1fr 1fr; align-items: center; gap: var(--wx-space-16); max-inline-size: 72rem; padding: var(--wx-space-16) var(--wx-space-8); margin: auto; }
-.marketing-shell h2 { margin: 0 0 var(--wx-space-4); font-size: clamp(1.6rem, 1.1rem + 1.5vw, 2.4rem); line-height: 1.2; letter-spacing: -.035em; font-weight: 700; text-wrap: balance; }
+.marketing-shell h2 { margin: 0 0 var(--wx-space-4); font-size: clamp(var(--wx-font-size-6), var(--wx-font-size-4) + 1.5vw, var(--wx-font-size-7)); line-height: 1.2; letter-spacing: -.035em; font-weight: 700; text-wrap: balance; }
 .marketing-section-copy > p, .marketing-connected p { color: var(--muted); margin: 0; max-inline-size: 47ch; text-wrap: pretty; }
 .marketing-section-copy ul { list-style: none; padding: 0; margin: var(--wx-space-6) 0 0; display: grid; gap: var(--wx-space-3); }
 .marketing-section-copy li { display: flex; align-items: center; gap: var(--wx-space-3); font-size: var(--wx-font-size-3); }
@@ -211,14 +210,14 @@ html:has(.marketing-shell) { scroll-padding-block-start: 5.5rem; }
 .marketing-group-ticket .inbox-ticket-state { margin-inline-start: auto; }
 .marketing-section-copy > .marketing-trigger-description { display: flex; align-items: start; gap: var(--wx-space-3); margin-block-start: var(--wx-space-4); color: var(--text); font-size: var(--wx-font-size-3); }
 .marketing-trigger-description svg { color: var(--accent); margin-block-start: .2em; inline-size: 1.25rem; }
-.marketing-group-rule { display: flex; align-items: center; gap: var(--wx-space-3); padding: var(--wx-space-3) var(--wx-space-4); background: var(--accent-wash); border-block-end: 1px solid var(--border); border-inline-start: 3px solid var(--accent); font-size: var(--wx-font-size-2); }
+.marketing-group-rule { display: flex; align-items: center; gap: var(--wx-space-3); padding: var(--wx-space-3) var(--wx-space-4); background: var(--accent-wash); border-block-end: 1px solid var(--border); font-size: var(--wx-font-size-2); }
 .marketing-group-rule > svg { color: var(--accent); inline-size: 1.1rem; }
 .marketing-group-rule > span:first-of-type { display: grid; gap: var(--wx-space-1); }
 .marketing-group-rule strong { font-size: var(--wx-font-size-1); font-weight: var(--wx-weight-semibold); color: var(--accent); }
 .marketing-rule-active { display: inline-flex; align-items: center; gap: var(--wx-space-1); margin-inline-start: auto; color: var(--text); font-size: var(--wx-font-size-1); white-space: nowrap; }
 .marketing-rule-active svg { inline-size: 1rem; color: var(--success); }
 .marketing-shell .inbox-bubble mark { background: var(--wx-color-accent-solid); color: var(--wx-color-on-solid); font-weight: var(--wx-weight-semibold); border-radius: var(--wx-radius-control); padding: .1em .3em; box-decoration-break: clone; }
-.marketing-shell .inbox-message-trigger .inbox-bubble { background: color-mix(in srgb, var(--accent) 12%, var(--surface)); border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--border)); border-inline-start: 3px solid var(--accent); box-shadow: none; }
+.marketing-shell .inbox-message-trigger .inbox-bubble { background: color-mix(in srgb, var(--accent) 12%, var(--surface)); border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--border)); box-shadow: none; }
 .inbox-trigger-label { display: inline-flex; align-items: center; gap: var(--wx-space-1); padding: .1rem var(--wx-space-2); border-radius: var(--wx-radius-control); background: var(--wx-color-accent-solid); color: var(--wx-color-on-solid); font-size: var(--wx-font-size-1); font-weight: var(--wx-weight-medium); }
 .inbox-trigger-label svg { inline-size: .85rem; block-size: .85rem; }
 .inbox-rule-toggle { border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--border)); background: var(--accent-wash); }
@@ -232,7 +231,7 @@ html:has(.marketing-shell) { scroll-padding-block-start: 5.5rem; }
 .marketing-flow-steps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--wx-space-8); list-style: none; padding: 0; margin: 0; }
 .marketing-flow-node { display: flex; align-items: center; gap: var(--wx-space-3); position: relative; min-inline-size: 0; padding: var(--wx-space-3); background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--wx-radius-panel); font-size: var(--wx-font-size-3); }
 .marketing-flow-node > svg { color: var(--accent); inline-size: 1.25rem; }
-.marketing-flow-node > .marketing-icon-whatsapp { color: #25d366; }
+.marketing-flow-node > .marketing-icon-whatsapp { color: var(--wx-color-provider-waha); }
 .marketing-flow-node strong { font-weight: var(--wx-weight-medium); }
 .marketing-flow-node > span { display: grid; gap: var(--wx-space-1); }
 .marketing-flow-node small { color: var(--muted); font-size: var(--wx-font-size-1); }
@@ -240,7 +239,7 @@ html:has(.marketing-shell) { scroll-padding-block-start: 5.5rem; }
 .marketing-flow-node > .marketing-icon-arrow { position: absolute; inset-inline-start: calc(100% + var(--wx-space-1)); inset-block-start: calc(50% - .75rem); inline-size: 1.5rem; color: var(--muted); }
 .marketing-connected { display: grid; grid-template-columns: 1fr 1fr; gap: var(--wx-space-12); max-inline-size: 72rem; margin: auto; padding: var(--wx-space-16) var(--wx-space-8); }
 .marketing-connected { align-items: center; padding-block-start: 0; }
-.marketing-connected h2 { font-size: clamp(1.35rem, 1rem + .6vw, 1.75rem); }
+.marketing-connected h2 { font-size: clamp(var(--wx-font-size-5), var(--wx-font-size-4) + .6vw, var(--wx-font-size-6)); }
 .marketing-connected p { font-size: var(--wx-font-size-3); }
 .marketing-email-example { display: flex; align-items: center; gap: var(--wx-space-3); padding: var(--wx-space-4); border: 1px solid var(--border); border-radius: var(--wx-radius-panel); }
 .marketing-email-example > svg { color: var(--accent); }
@@ -254,7 +253,7 @@ html:has(.marketing-shell) { scroll-padding-block-start: 5.5rem; }
 .marketing-contact-address { display: flex; align-items: center; min-block-size: 2.75rem; font-size: var(--wx-font-size-3); }
 .marketing-contact-address:hover { text-decoration: underline; }
 .marketing-footer { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: var(--wx-space-6); max-inline-size: 76rem; margin: auto; padding: var(--wx-space-8); }
-.marketing-footer .marketing-brand { font-size: 1.4rem; justify-self: start; }
+.marketing-footer .marketing-brand { justify-self: start; }
 .marketing-footer p, .marketing-footer > span { color: var(--muted); font-size: var(--wx-font-size-1); margin: 0; }
 .marketing-footer-copy { display: grid; gap: var(--wx-space-1); text-align: center; }
 .marketing-footer > span { justify-self: end; }
@@ -292,7 +291,7 @@ html:has(.marketing-shell) { scroll-padding-block-start: 5.5rem; }
 .inbox-status-control { display: inline-flex; position: relative; color: var(--accent); }
 .inbox-status-control[data-state="closed"] { color: var(--muted); }
 .inbox-status-control::before { content: ""; position: absolute; inset-inline-start: var(--wx-space-3); inset-block-start: calc(50% - .2rem); inline-size: .4rem; block-size: .4rem; border-radius: 50%; background: currentColor; pointer-events: none; }
-.inbox-status-control select { min-block-size: 2.25rem; min-inline-size: 7rem; padding: var(--wx-space-1) var(--wx-space-3); padding-inline-start: var(--wx-space-6); border: 1px solid var(--border); border-radius: 999px; background: var(--surface); color: inherit; font: inherit; font-size: var(--wx-font-size-3); font-weight: var(--wx-weight-medium); cursor: pointer; }
+.inbox-status-control select { min-block-size: 2.25rem; min-inline-size: 7rem; padding: var(--wx-space-1) var(--wx-space-3); padding-inline-start: var(--wx-space-6); border: 1px solid var(--border); border-radius: var(--wx-radius-dialog); background: var(--surface); color: inherit; font: inherit; font-size: var(--wx-font-size-3); font-weight: var(--wx-weight-medium); cursor: pointer; }
 .inbox-status-control select:hover { border-color: currentColor; }
 .marketing-shell select, .marketing-shell option { font-family: var(--font-sans); }
 @supports (appearance: base-select) {
@@ -309,7 +308,7 @@ html:has(.marketing-shell) { scroll-padding-block-start: 5.5rem; }
 .inbox-message-meta time { margin: 0; }
 .marketing-inbox .inbox-message > .inbox-avatar { inline-size: 1.4rem; block-size: 1.4rem; margin-block-start: var(--wx-space-1); }
 .marketing-inbox .inbox-message { font-size: var(--wx-font-size-3); }
-.marketing-inbox .inbox-ticket-note { font-size: .7rem; margin-block-start: var(--wx-space-1); }
+.marketing-inbox .inbox-ticket-note { font-size: var(--wx-font-size-1); margin-block-start: var(--wx-space-1); }
 .marketing-inbox .inbox-trigger { gap: var(--wx-space-1); padding: 0; }
 .marketing-inbox .inbox-trigger button { min-block-size: 2rem; border: 0; font-size: var(--wx-font-size-1); }
 .marketing-inbox .inbox-trigger button:disabled { color: var(--muted); background: var(--surface-2); }
@@ -344,10 +343,8 @@ html:has(.marketing-shell) { scroll-padding-block-start: 5.5rem; }
 }
 @media (max-width: 680px) {
   .marketing-header { padding: var(--wx-space-3) var(--wx-space-4); gap: var(--wx-space-3); }
-  .marketing-brand { font-size: 1.5rem; }
   .marketing-header-actions { gap: var(--wx-space-2); }
   .marketing-hero { padding: var(--wx-space-8) var(--wx-space-4) var(--wx-space-6); }
-  .marketing-hero h1 { font-size: clamp(2rem, 1.2rem + 4vw, 2.75rem); }
   .marketing-hero > p { font-size: var(--wx-font-size-4); margin-block: var(--wx-space-4) var(--wx-space-6); }
   .marketing-channels { gap: var(--wx-space-3); margin-block-start: var(--wx-space-6); }
   .marketing-channels li { padding: var(--wx-space-2) var(--wx-space-3); font-size: var(--wx-font-size-1); }
@@ -374,7 +371,7 @@ html:has(.marketing-shell) { scroll-padding-block-start: 5.5rem; }
   .inbox-source-icon { inline-size: 1.25rem; block-size: 1.75rem; background: transparent; }
   .inbox-source-icon svg { inline-size: 1.25rem; }
   .inbox-row-copy strong { font-size: var(--wx-font-size-2); }
-  .inbox-row-copy small { font-size: .7rem; }
+  .inbox-row-copy small { font-size: var(--wx-font-size-1); }
   .inbox-upcoming { display: flex; flex-wrap: wrap; gap: var(--wx-space-3); align-items: center; padding: var(--wx-space-3); }
   .inbox-upcoming ul { gap: var(--wx-space-3); margin: 0; }
   .inbox-active-title > svg { inline-size: 1.25rem; block-size: 1.25rem; }
@@ -430,7 +427,7 @@ html:has(.marketing-shell) { scroll-padding-block-start: 5.5rem; }
 .inbox-trigger-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--wx-space-2); }
 .inbox-trigger-fields > label:only-child { grid-column: 1 / -1; }
 .inbox-history-entry { display: flex; flex-direction: column; }
-.inbox-active-rule { display: flex; align-items: center; flex-wrap: wrap; gap: var(--wx-space-2); padding: var(--wx-space-2) var(--wx-space-4); border-block-end: 1px solid var(--border); border-inline-start: 3px solid var(--accent); background: var(--accent-wash); color: var(--text); font-size: var(--wx-font-size-1); }
+.inbox-active-rule { display: flex; align-items: center; flex-wrap: wrap; gap: var(--wx-space-2); padding: var(--wx-space-2) var(--wx-space-4); border-block-end: 1px solid var(--border); background: var(--accent-wash); color: var(--text); font-size: var(--wx-font-size-1); }
 .inbox-active-rule > svg, .inbox-active-rule > strong { color: var(--accent); }
 .inbox-active-rule > span { display: inline-flex; align-items: center; gap: var(--wx-space-1); margin-inline-start: auto; color: var(--text); }
 .inbox-active-rule > span svg { color: var(--success); }

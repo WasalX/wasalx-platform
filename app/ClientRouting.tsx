@@ -725,10 +725,12 @@ export function ClientRouting({
               catalog={catalog}
               mutationHeaders={mutationHeaders}
             />
-            <details className="routing-raw">
-              <summary>{t("routing.detail.raw")}</summary>
-              <pre>{JSON.stringify(definition, null, 2)}</pre>
-            </details>
+            {canWrite ? (
+              <details className="routing-raw">
+                <summary>{t("routing.detail.raw")}</summary>
+                <pre>{JSON.stringify(definition, null, 2)}</pre>
+              </details>
+            ) : null}
           </section>
         ) : error ? null : (
           <section className="panel">
@@ -2098,7 +2100,7 @@ function RoutingSimulator({
             name="email"
             type="email"
             autoComplete="off"
-            placeholder="agent@client.example"
+            placeholder={t("routing.simulator.emailExample")}
           />
         </label>
         <label>
@@ -2110,7 +2112,7 @@ function RoutingSimulator({
           <input
             name="identifierNamespace"
             autoComplete="off"
-            placeholder="crm"
+            placeholder={t("routing.simulator.namespaceExample")}
           />
         </label>
         <label>
@@ -2118,7 +2120,7 @@ function RoutingSimulator({
           <input
             name="whatsappGroupId"
             autoComplete="off"
-            placeholder="120363…@g.us"
+            placeholder={t("routing.simulator.groupExample")}
             dir="ltr"
           />
         </label>

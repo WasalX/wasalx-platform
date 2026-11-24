@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { readTenantPortalSource } from "./helpers/tenant-portal-source.mjs";
 
 import { arabicTenantMessages } from "../lib/i18n/messages/ar/tenant.ts";
 import { englishTenantMessages } from "../lib/i18n/messages/en/tenant.ts";
@@ -10,10 +11,8 @@ import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { formatNumber } from "../lib/i18n/format.ts";
 
-const tenantSourceUrl = new URL("../app/WasalXApp.tsx", import.meta.url);
-
 test("rule inspection renders saved parameters, escaped literals, and explicit missing values in both locales", async () => {
-  const source = await readFile(tenantSourceUrl, "utf8");
+  const source = readTenantPortalSource();
   const parsed = ts.createSourceFile("WasalXApp.tsx", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
   assert.match(source, /<RuleMatcherCondition rule=\{selectedRule\} locale=\{locale\} t=\{t\} \/>/u);
   assert.ok(!parsed.statements.some(node => ts.isFunctionDeclaration(node) && node.name?.text === "RulePrefixFacts"));
@@ -52,7 +51,7 @@ test("rule inspection renders saved parameters, escaped literals, and explicit m
 });
 
 test("audit events have distinct localized actions while direct-flow events retain their category", async () => {
-  const source = await readFile(tenantSourceUrl, "utf8");
+  const source = readTenantPortalSource();
   const parsed = ts.createSourceFile("WasalXApp.tsx", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
   const helper = parsed.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === "friendlyAuditAction");
   assert.ok(helper);
@@ -91,11 +90,11 @@ test("audit events have distinct localized actions while direct-flow events reta
 });
 
 test("known uncertain and suspended states retain distinct truthful labels", async () => {
-  const source=await readFile(tenantSourceUrl,"utf8");
+  const source=readTenantPortalSource();
   const parsed=ts.createSourceFile("WasalXApp.tsx",source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
   const [helper,component]=["statusPresentation","Status"].map(name=>parsed.statements.find(node=>ts.isFunctionDeclaration(node)&&node.name?.text===name));
   assert.ok(helper&&component);
-  const compiled=ts.transpileModule(`${helper.getText(parsed)}\n${component.getText(parsed)}`,{compilerOptions:{jsx:ts.JsxEmit.React}}).outputText;
+  const compiled=ts.transpileModule(`${helper.getText(parsed)}\n${component.getText(parsed)}`.replace(/^export /gmu,""),{compilerOptions:{jsx:ts.JsxEmit.React}}).outputText;
   // The connections state filter reuses the row badge label, so a revoked row and its filter option read the same.
   assert.match(source,/<option key=\{value\} value=\{value\}>\{t\(statusPresentation\(value\)\[0\]\)\}<\/option>/u);
   for(const dictionary of [englishTenantMessages,arabicTenantMessages]){
@@ -114,7 +113,7 @@ test("known uncertain and suspended states retain distinct truthful labels", asy
 
 test("tenant shell uses the locale provider, explicit render time, and document direction", async () => {
   const [source, page] = await Promise.all([
-    readFile(tenantSourceUrl, "utf8"),
+    readTenantPortalSource(),
     readFile(new URL("../app/app/page.tsx", import.meta.url), "utf8"),
   ]);
   assert.match(page, /<I18nProvider/);
@@ -130,7 +129,7 @@ test("tenant shell uses the locale provider, explicit render time, and document 
 });
 
 test("tenant errors are mapped to stable localized copy instead of raw provider detail", async () => {
-  const source = await readFile(tenantSourceUrl, "utf8");
+  const source = readTenantPortalSource();
   assert.match(source, /localizedUiError\(locale, \{ status: response\.status, code: body\.code \}\)\.message/u);
   assert.match(source, /أعد التحقق/u);
   assert.doesNotMatch(source, /body\.(?:message|error)/u);
@@ -153,7 +152,7 @@ test("tenant catalogs retain exact bilingual parity and meaningful Arabic shell 
 });
 
 test("tenant routes contain no unreviewed visible English literals", async () => {
-  const source = await readFile(tenantSourceUrl, "utf8");
+  const source = readTenantPortalSource();
   const file = ts.createSourceFile(
     "app/WasalXApp.tsx",
     source,
@@ -162,11 +161,8 @@ test("tenant routes contain no unreviewed visible English literals", async () =>
     ts.ScriptKind.TSX,
   );
   const visibleAttributes = new Set(["alt", "aria-label", "placeholder", "title"]);
-  // These are product names, locale-independent examples, or exact operator
-  // confirmation tokens validated by the API. They must remain unchanged.
+  // These are product names or exact operator confirmation tokens validated by the API. They must remain unchanged.
   const reviewedBrandTerms = new Set([
-    "{{message.argument}}",
-    "+9665XXXXXXXX",
     "ABC",
     "N",
     "RETRY",
@@ -223,7 +219,8 @@ test("tenant routes contain no unreviewed visible English literals", async () =>
 
 test("owner-facing health, access and settings states stay truthful and consistent", async () => {
   const read = path => readFile(new URL(`../${path}`, import.meta.url), "utf8");
-  const [source, inbox, mailboxes, mailboxAdmin, serviceAccess, routing] = await Promise.all(["app/WasalXApp.tsx", "app/Inbox.tsx",
+  const source = readTenantPortalSource();
+  const [inbox, mailboxes, mailboxAdmin, serviceAccess, routing] = await Promise.all(["app/Inbox.tsx",
     "app/MailboxSettings.tsx", "app/MailboxAdministration.tsx", "app/ServiceAccess.tsx", "app/NativeRoutingSync.tsx"].map(read));
   // Zero working connections is never reported as healthy.
   assert.match(source, /const noneWorking = data\.connections\.length > 0 && working === 0;/u);

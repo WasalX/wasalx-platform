@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readTenantPortalSource } from "./helpers/tenant-portal-source.mjs";
 import { readFile } from "node:fs/promises";
 import { englishTenantMessages } from "../lib/i18n/messages/en/tenant.ts";
 import ts from "typescript";
 
-const app = await readFile(new URL("../app/WasalXApp.tsx", import.meta.url), "utf8");
+const app = await readTenantPortalSource();
 const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
 const route = await readFile(new URL("../app/api/groups/[id]/binding/route.ts", import.meta.url), "utf8");
 const controller = await readFile(new URL("../services/control-api/src/groups.controller.ts", import.meta.url), "utf8");
