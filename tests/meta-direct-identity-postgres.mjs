@@ -630,6 +630,18 @@ export async function verifyMetaDirectIdentityPostgres(adminUrl,workerConfig,app
    [historical,tenantId,assignmentId,connectionId,versionId,phone,reference(phone),ticketId]));
   const database={withTenant:(scope,fn)=>tx(fn,scope,apiPool),rows:(scope,sql,values)=>tx(async c=>(await c.query(sql,values)).rows,scope,apiPool)};
   const controller=new ZammadInternalController(database,{verify:async()=>({tenantId,instanceId,userId:'3',groupIds:['2'],groupAdmin:false})},{wake:async()=>{throw new Error('Read-only preflight cannot enqueue')}});
+  await queueScenario(async c=>{
+   await c.query("UPDATE normalized_messages SET provider_timestamp='2035-01-15T19:00:00Z' WHERE tenant_id=$1 AND id=$2",
+    [tenantId,normalizedSource.rows[0].id]);
+   await c.query("UPDATE normalized_messages SET provider_timestamp='2035-01-15T20:00:00Z',from_me=true WHERE tenant_id=$1 AND event_inbox_id=$2",
+    [tenantId,confirm.event.id]);
+   const db={withTenant:async(scope,fn)=>{assert.equal(scope,tenantId);return fn(c)},
+    rows:async(scope,sql,values)=>{assert.equal(scope,tenantId);return(await c.query(sql,values)).rows}};
+   const ticketContext=new ZammadInternalController(db,{verify:async()=>({tenantId,instanceId})},
+    {wake:async()=>assert.fail('context cannot wake workers')});
+   const context=await ticketContext.ticketContext('Synthetic native claims',ticketId);
+   assert.equal(context.service_window_expires_at,'2035-01-16T19:00:00.000Z');
+  },apiPool);
   const previousMetaAppId=process.env.META_APP_ID;process.env.META_APP_ID=appId;
   try{
    assert.deepEqual(await controller.outboundPreflight('Synthetic native claims',connectionId,phone,ticketId),{available:true,keep_open:false});
