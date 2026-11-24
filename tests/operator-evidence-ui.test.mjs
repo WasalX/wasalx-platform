@@ -17,7 +17,10 @@ test("automation and tenant screens show no raw flow definition or developer ter
   assert.equal(source.match(/JSON\.stringify\(definition/gu)?.length, 1);
   assert.match(source, /<details className="routing-raw">\s*<summary>\{t\("bot\.flow\.schema\.title"\)\}<\/summary>\s*<p>\{t\("bot\.flow\.schema\.help"\)\}<\/p>\s*<pre aria-label=\{t\("bot\.flow\.schema\.label"\)\}><code>\{JSON\.stringify\(definition/u);
   assert.doesNotMatch(source, /<details className="routing-raw"[^>]*\sopen/u);
-  assert.doesNotMatch(await read("app/ClientRouting.tsx"), /placeholder="ACME-42"/u);
+  // Example input values come from the catalogues, never a literal in code.
+  for (const file of ["app/WasalXApp.tsx", "app/ClientRouting.tsx", "app/BotAutomation.tsx", "app/CaseLifecycle.tsx", "app/platform/PlatformConsole.tsx"]) {
+    assert.doesNotMatch(await read(file), /placeholder="/u, file);
+  }
   const values = (text) => [...text.matchAll(/^ {2}"[^"]+": "((?:[^"\\]|\\.)*)",\r?$/gmu)].map((match) => match[1].replace(/\{[^}]+\}/gu, ""));
   for (const catalogue of ["automation", "tenant"]) {
     for (const value of values(await read(`lib/i18n/messages/en/${catalogue}.ts`))) {
