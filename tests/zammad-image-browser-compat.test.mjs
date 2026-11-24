@@ -273,11 +273,13 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
   let fixture;
   let runnerConnected = false;
   let primaryError;
+  const fixtureRequests = [];
+  const fixtureErrors = [];
   const groupActorExpectations = new Map();
   const observedGroupActors = new Set();
   const state = { customerId: null, ticketId: null, ticketNumber: null, articleId: null, closedTicketId: null, closedTicketNumber: null, closedArticleId: null, links: [], requests: [], sentMessages: [], liveMessages: [] };
   try {
-    fixture = createServer(async (request, response) => {
+    const handleFixtureRequest = async (request, response) => {
       const body = [];
       for await (const chunk of request) body.push(chunk);
       const raw = Buffer.concat(body).toString("utf8");
@@ -341,8 +343,16 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
         group_id: groupId, message_id: existingMessageId,
       };
       else if (request.method === "GET" && url.pathname.endsWith("/group-workspace/groups")) {
-        assert.equal(url.searchParams.get("limit"), "50");
-        assert.ok(["MY", "TEAM", "UNASSIGNED", "ALL"].includes(url.searchParams.get("scope") ?? ""));
+        const limit = url.searchParams.get("limit");
+        const scope = url.searchParams.get("scope");
+        if (limit === "1") {
+          assert.equal(url.searchParams.get("selected"), groupId, "Group operation must authorize its exact group");
+          assert.equal(scope, "ALL");
+          assert.equal(url.searchParams.has("after"), false);
+        } else {
+          assert.equal(limit, "50", "Browser group pagination must request 50 groups");
+          assert.ok(["MY", "TEAM", "UNASSIGNED", "ALL"].includes(scope));
+        }
         value = { items: [{ id: groupId, name: "Riyadh Operations", access_scope: "MY", unread_count: 2, send_available: true,
           media_capabilities: { accepted: [{ mime_type: "image/png", maximum_bytes: 15_000_000 }, { mime_type: "audio/webm", maximum_bytes: 25_000_000 }], voice_recording: true, maximum_files: 10, maximum_total_bytes: 250_000_000 } }], next_cursor: null };
       }
@@ -391,6 +401,13 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
       } else if (request.method === "POST" && url.pathname.endsWith("/read")) value = { state: "QUEUED" };
       else { response.writeHead(404).end(); return; }
       response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(value));
+    };
+    fixture = createServer((request, response) => {
+      fixtureRequests.push(handleFixtureRequest(request, response).catch(error => {
+        fixtureErrors.push(error);
+        if (response.headersSent) response.destroy();
+        else response.writeHead(500).end();
+      }));
     });
     await new Promise((resolve, reject) => fixture.once("error", reject).listen(fixturePort, fixtureEndpointAddress.listenHost, resolve));
     const fixtureAddress = fixture.address();
@@ -1124,12 +1141,14 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
       await adminPage.waitForFunction(() => window.App?.WebSocket?.channel()
         && !window.App.Config.get('core_workflow_ajax_mode')
         && Object.keys(window.App.FormHandlerCoreWorkflow.getRequests()).length === 0);
-      const machineSave = adminPage.waitForResponse(response => new URL(response.url()).pathname === `/api/v1/users/${machineUiSeed.id}`
-        && ['PUT', 'PATCH'].includes(response.request().method()), { timeout: 30_000 });
       await adminPage.screenshot({ path: join(evidenceDirectory, `native-permission-${scenario.name}-before.png`), fullPage: false });
       saveAttempted = true;
-      await machineDialog.getByRole('button', { name: language.submit, exact: true }).click();
-      assert.equal((await machineSave).status(), 200);
+      const [machineSave] = await Promise.all([
+        adminPage.waitForResponse(response => new URL(response.url()).pathname === `/api/v1/users/${machineUiSeed.id}`
+          && ['PUT', 'PATCH'].includes(response.request().method()), { timeout: 30_000 }),
+        machineDialog.getByRole('button', { name: language.submit, exact: true }).click(),
+      ]);
+      assert.equal(machineSave.status(), 200);
       await machineDialog.waitFor({ state: 'hidden' });
       await adminPage.reload({ waitUntil: "domcontentloaded" });
       await adminPage.waitForFunction(locale => window.App?.i18n?.get() === locale
@@ -1227,28 +1246,32 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
 
     const fileInput = page.locator('input[type="file"][multiple]');
     await page.getByRole("button", { name: "Attach files" }).waitFor();
-    const uploadResponsePromise = page.waitForResponse((response) => response.url().includes("/api/v1/upload_caches/") && response.request().method() === "POST");
-    await fileInput.setInputFiles({ name: "proof.png", mimeType: "image/png", buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WlU4XcAAAAASUVORK5CYII=", "base64") });
-    const uploadResponse = await uploadResponsePromise;
+    const [uploadResponse] = await Promise.all([
+      page.waitForResponse(response => response.url().includes("/api/v1/upload_caches/") && response.request().method() === "POST"),
+      fileInput.setInputFiles({ name: "proof.png", mimeType: "image/png", buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WlU4XcAAAAASUVORK5CYII=", "base64") }),
+    ]);
     const uploadPayload = await uploadResponse.json();
     assert.equal(uploadResponse.status(), 200, JSON.stringify(uploadPayload));
-    await page.waitForTimeout(250);
+    await page.getByText("proof.png").first().waitFor();
     const uploadUi = await page.evaluate(() => ({
       error: document.querySelector("#wasalx-group-message-error")?.textContent?.trim() || null,
       visible: document.body.innerText.includes("proof.png"),
     }));
     assert.equal(uploadUi.error, null, JSON.stringify({ uploadPayload, uploadUi }));
     assert.equal(uploadUi.visible, true, JSON.stringify({ uploadPayload, uploadUi }));
-    const attachmentSendResponsePromise = page.waitForResponse((response) => response.url().includes("/api/v1/wasalx/group_workspace/groups/") && response.url().endsWith("/send") && response.request().method() === "POST");
-    await page.getByRole("button", { name: "Send", exact: true }).click();
-    const attachmentSendResponse = await attachmentSendResponsePromise;
+    const [attachmentSendResponse] = await Promise.all([
+      page.waitForResponse(response => response.url().includes("/api/v1/wasalx/group_workspace/groups/")
+        && response.url().endsWith("/send") && response.request().method() === "POST"),
+      page.getByRole("button", { name: "Send", exact: true }).click(),
+    ]);
     const attachmentSendPayload = await attachmentSendResponse.json();
-    await page.waitForTimeout(250);
+    assert.equal(attachmentSendResponse.status(), 202, JSON.stringify(attachmentSendPayload));
+    await page.locator(`[data-message-id="${state.sentMessages[0].id}"]`)
+      .filter({ hasText: "proof.png" }).waitFor();
     const attachmentSendUi = await page.evaluate(() => ({
       error: document.querySelector("#wasalx-group-message-error")?.textContent?.trim() || null,
       visible: document.body.innerText.includes("proof.png"),
     }));
-    assert.equal(attachmentSendResponse.status(), 202, JSON.stringify({ attachmentSendPayload, attachmentSendUi }));
     assert.equal(attachmentSendUi.error, null, JSON.stringify({ attachmentSendPayload, attachmentSendUi }));
     assert.equal(attachmentSendUi.visible, true, JSON.stringify({ attachmentSendPayload, attachmentSendUi }));
     const attachment = state.requests.filter((request) => request.path.endsWith("/send")).at(-1)?.body?.attachments?.[0];
@@ -1265,18 +1288,24 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
     await page.getByRole("link", { name: `Ticket #${state.ticketNumber}` }).waitFor();
 
     const createMessage = page.locator(`[data-message-id="${createMessageId}"]`);
+    const selectedGroupAuthorizedSince = start => state.requests.slice(start).some(request => request.method === "GET"
+      && request.path === "/internal/v1/zammad/group-workspace/groups" && new URLSearchParams(request.query).get("limit") === "1");
     await createMessage.getByRole("button", { name: "Create ticket" }).click();
     const createForm = createMessage.locator("form");
     assert.equal(await createForm.getByLabel("Ticket title").inputValue(), "Riyadh Operations — Create shipment SHIP-42");
+    const ticketCreateStart = state.requests.length;
     await createForm.getByRole("button", { name: "Create ticket" }).click();
     await page.getByRole("link", { name: /Open ticket #/u }).waitFor();
+    assert.ok(selectedGroupAuthorizedSince(ticketCreateStart), "Create must authorize the selected group");
 
     const linkMessage = page.locator(`[data-message-id="${linkMessageId}"]`);
     await linkMessage.getByRole("button", { name: "Link to ticket" }).click();
     const linkForm = linkMessage.locator("form");
     await linkForm.getByLabel("Ticket number").fill(String(state.ticketNumber));
+    const ticketLinkStart = state.requests.length;
     await linkForm.getByRole("button", { name: "Link message" }).click();
     await page.getByRole("link", { name: `Open ticket #${state.ticketNumber}` }).waitFor();
+    assert.ok(selectedGroupAuthorizedSince(ticketLinkStart), "Link must authorize the selected group");
 
     const heading = page.getByRole("heading", { name: "WhatsApp Groups" });
     await heading.evaluate((element) => element.closest(".flex.h-full")?.setAttribute("data-wasalx-test-root", ""));
@@ -1343,11 +1372,13 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
       return JSON.parse(raw.split('\n').find(line => line.startsWith('{')) ?? '');
     };
     const submitReplyTicket = async (articleExpected) => {
-      const pending = page.waitForResponse(response => new URL(response.url()).pathname.endsWith('/graphql')
-        && response.request().method() === 'POST'
-        && /^ticketUpdate$/iu.test(response.request().postDataJSON()?.operationName ?? ''), { timeout: 60_000 });
-      await page.getByRole('button', { name: 'Update', exact: true }).click();
-      const response = await pending; const data = await response.json();
+      const [response] = await Promise.all([
+        page.waitForResponse(response => new URL(response.url()).pathname.endsWith('/graphql')
+          && response.request().method() === 'POST'
+          && /^ticketUpdate$/iu.test(response.request().postDataJSON()?.operationName ?? ''), { timeout: 60_000 }),
+        page.getByRole('button', { name: 'Update', exact: true }).click(),
+      ]);
+      const data = await response.json();
       assert.equal(response.status(), 200); assert.ok(!data.errors?.length);
       assert.ok(!data.data?.ticketUpdate?.errors?.length); assert.ok(data.data?.ticketUpdate?.ticket);
       assert.equal(response.request().postDataJSON()?.variables?.input?.article != null, articleExpected);
@@ -2040,7 +2071,12 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
   } finally {
     await settleNativeCompatibility({ project, directory, runnerContainer, runnerConnected, primaryError,
       closeBrowser: async () => { if (browser) await browser.close(); },
-      closeFixture: async () => { if (fixture) await new Promise((resolve, reject) => fixture.close((error) => error ? reject(error) : resolve())); },
+      closeFixture: async () => {
+        const closeError = fixture && await new Promise(resolve => fixture.close(resolve));
+        await Promise.all(fixtureRequests);
+        if (closeError) fixtureErrors.push(closeError);
+        if (fixtureErrors.length) throw new AggregateError(fixtureErrors, "Control fixture request failed");
+      },
       command: (args) => execFileSync("docker", args, { encoding: "utf8", timeout: 120_000, maxBuffer: 64 * 1024,
         env: { ...process.env, WASALX_ZAMMAD_TEST_IMAGE: image }, stdio: ["ignore", "pipe", "pipe"] }),
       removeWorkspace: () => rm(directory, { recursive: true, force: true }),
