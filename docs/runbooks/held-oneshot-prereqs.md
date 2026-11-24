@@ -32,10 +32,12 @@ verification. The hostname must match exactly; missing, empty or mismatched
 values refuse before installer actions. There is no default.
 
 For a guarded DEV install, pass `--dev-skip-public-webhook-preflight` on every
-installer stage that uses the Compose model. This default-off option replaces
-the public webhook check with a local notice and records the skip in the run
-log and stack verification receipt. It is refused for staging, production and
-rehearsals. The webhook origin must still be configured.
+installer stage, including `verify-hosted`. The installer writes
+`public webhook preflight skipped by DEV option` once to stderr. In the Compose
+stages, this default-off option replaces the public webhook check with a local
+notice. Stack verification records the skip in its receipt. The installer
+refuses the option for staging, production and rehearsals. The webhook origin
+must still be configured.
 
 When admitting DEV review origins with `--dev-review-origin` and
 `--dev-review-identity-origin`, also set `WASALX_DEV_REVIEW_ORIGIN_SUFFIX` to the
