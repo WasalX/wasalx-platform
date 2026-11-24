@@ -97,6 +97,59 @@ jobs:
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
           echo "images=$images" >> "$GITHUB_OUTPUT"
 
+  workflow-lint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: ${{ github.event_name == 'merge_group' && '0' || '2' }}
+          persist-credentials: false
+      - name: Compare actionlint findings with the base
+        env:
+          EVENT: ${{ github.event_name }}
+          MERGE_GROUP_BASE: ${{ github.event.merge_group.base_sha }}
+          ACTIONLINT_URL: https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz
+          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+        run: |
+          base=HEAD^1
+          if [[ "$EVENT" == merge_group ]]; then
+            base="$MERGE_GROUP_BASE"
+            [[ "$base" =~ ^[a-f0-9]{40}$ ]]
+          fi
+          if [[ "$EVENT" == pull_request ]] && git diff --quiet --no-ext-diff --no-renames "$base" HEAD -- \
+            .github/ \
+            scripts/release/fetch-verified-asset.sh; then
+            echo 'Actionlint skipped because workflow inputs did not change.' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          scratch=$(mktemp -d)
+          bash scripts/release/fetch-verified-asset.sh "$ACTIONLINT_URL" "$scratch/actionlint.tar.gz" "$ACTIONLINT_SHA256"
+          tar -xzf "$scratch/actionlint.tar.gz" -C "$scratch" actionlint
+          git worktree add --detach "$scratch/base" "$base"
+          export LC_ALL=C
+          # File, rule and message identify findings without counting shifted line numbers as new.
+          format='{{range .}}{{printf "%q\t%q\t%q\n" .Filepath .Kind .Message}}{{end}}'
+          findings() {
+            local tree="$1" output="$2" status=0
+            (cd "$tree" && "$scratch/actionlint" -shellcheck= -pyflakes= -format "$format") > "$output" || status=$?
+            case "$status" in
+              0) test ! -s "$output" ;;
+              1) test -s "$output" ;;
+              *) return "$status" ;;
+            esac
+            sort -o "$output" "$output"
+          }
+          findings "$scratch/base" "$scratch/base.txt"
+          findings "$PWD" "$scratch/candidate.txt"
+          comm -13 "$scratch/base.txt" "$scratch/candidate.txt" > "$scratch/new.txt"
+          printf 'Actionlint findings base: %s, candidate: %s, new: %s\n' \
+            "$(wc -l < "$scratch/base.txt")" "$(wc -l < "$scratch/candidate.txt")" \
+            "$(wc -l < "$scratch/new.txt")" | tee -a "$GITHUB_STEP_SUMMARY"
+          cat "$scratch/new.txt"
+          test ! -s "$scratch/new.txt"
+
   storybook:
     needs: changes
     if: >-
@@ -524,7 +577,7 @@ jobs:
 
   ci-gate:
     if: always()
-    needs: [changes, dependency-review, checks, images, integration, portal-integration, integration-coverage, infra-validate, dev-install-dryrun]
+    needs: [changes, workflow-lint, dependency-review, checks, images, integration, portal-integration, integration-coverage, infra-validate, dev-install-dryrun]
     runs-on: ubuntu-slim
     timeout-minutes: 2
     permissions: {}
@@ -533,6 +586,7 @@ jobs:
         env:
           EVENT: ${{ github.event_name }}
           CHANGES: ${{ needs.changes.result }}
+          WORKFLOW_LINT: ${{ needs.workflow-lint.result }}
           CHECKS: ${{ needs.checks.result }}
           REVIEW: ${{ needs.dependency-review.result }}
           IMAGES: ${{ needs.images.result }}
@@ -545,6 +599,7 @@ jobs:
           DEV_INSTALL_NEEDED: ${{ needs.changes.outputs.dev-install }}
           DEV_INSTALL: ${{ needs.dev-install-dryrun.result }}
         run: |
+          test "$WORKFLOW_LINT" = success || exit 1
           if [[ "$EVENT" == push || "$EVENT" == workflow_dispatch ]]; then
             test "$CHANGES:$CHECKS:$REVIEW:$IMAGES:$DEV_INSTALL" = skipped:skipped:skipped:skipped:skipped || exit 1
             test "$INTEGRATION:$PORTAL_INTEGRATION:$INTEGRATION_COVERAGE" = success:success:success || exit 1
