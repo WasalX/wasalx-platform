@@ -74,11 +74,12 @@ jobs:
           needed=true
           if git diff --quiet --no-ext-diff --no-renames HEAD^1 HEAD -- \
             ':(glob)scripts/release/installer-*' ':(glob)scripts/dev-install/**' ':(glob)compose*.yaml' \
+            services/control-api/migrations/ \
             release/installer-images.json scripts/installer-evidence.mjs ':(glob)infra/docker/full/**' \
             Dockerfile.foundation-keycloak scripts/release/patch-keycloak-jackson.py \
             scripts/release/compose-stage-lock.mjs scripts/release/compose-stage-config.json scripts/release/simulation-rails-json.mjs \
             scripts/release/preflight-full-env.mjs scripts/release/generate-simulation-env.py \
-            scripts/release/images-by-digest.py scripts/release/product-images.json scripts/release/image-manifest.sh \
+            scripts/release/images-by-digest.py scripts/release/image_registry_retry.py scripts/release/product-images.json scripts/release/image-manifest.sh \
             tests/pull-verify.test.mjs scripts/release/cosign-pin.json .github/actions/cosign/action.yml \
             tests/installer-nightly-grafana.test.mjs .github/workflows/nightly-install.yml; then
             needed=false
@@ -114,6 +115,19 @@ jobs:
             commit=$(download_nightly_image_manifest "$base" "$work")
           fi
           echo "commit=$commit" >> "$GITHUB_OUTPUT"
+      - name: Check whether the publication represents the PR migrations
+        id: migration-check
+        if: github.event_name == 'pull_request' && steps.changes.outputs.needed != 'false'
+        env:
+          PUBLICATION_COMMIT: ${{ steps.publication.outputs.commit }}
+        run: |
+          changed=$(git -c core.quotePath=true diff --name-only --no-ext-diff --no-renames \
+            "$PUBLICATION_COMMIT" HEAD -- services/control-api/migrations/)
+          if [[ -n "$changed" ]]; then
+            printf 'Installer rehearsal skipped: PR changes migrations; main publication cannot represent them\n\n```\n%s\n```\n' \
+              "$changed" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo 'skip=true' >> "$GITHUB_OUTPUT"
+          fi
       - if: steps.changes.outputs.needed != 'false'
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -123,11 +137,11 @@ jobs:
         run: |
           python3 -I -B scripts/dev-install/test_pull_agent.py
           node --test tests/pull-verify.test.mjs
-      - if: steps.changes.outputs.needed != 'false'
+      - if: steps.changes.outputs.needed != 'false' && (steps.migration-check.outputs.skip != 'true' || steps.changes.outputs.pull == 'true')
         uses: ./.github/actions/cosign
       - name: Initialize pinned Sigstore trust
         id: trust
-        if: steps.changes.outputs.needed != 'false'
+        if: steps.changes.outputs.needed != 'false' && (steps.migration-check.outputs.skip != 'true' || steps.changes.outputs.pull == 'true')
         run: |
           export TUF_ROOT="$RUNNER_TEMP/wasalx-nightly/tuf"
           cosign initialize
@@ -148,15 +162,16 @@ jobs:
           cd "$work/pr-head"
           python3 -I -B scripts/dev-install/test_pull_agent.py --live --candidate "$PR_HEAD" \
             --manifest "$work/images-manifest.json" --cosign "$cosign" --trust "$TRUSTED_ROOT"
-      - name: Rehearse full installation and controlled recreation
+      - name: Test the installer Grafana probe
         if: steps.changes.outputs.needed != 'false'
+        run: node --test tests/installer-nightly-grafana.test.mjs
+      - name: Rehearse full installation and controlled recreation
+        if: steps.changes.outputs.needed != 'false' && steps.migration-check.outputs.skip != 'true'
         timeout-minutes: 47
         env:
           MAIN_SHA: ${{ steps.publication.outputs.commit }}
           TRUSTED_ROOT: ${{ steps.trust.outputs.root }}
-        run: |
-          node --test tests/installer-nightly-grafana.test.mjs
-          bash scripts/release/installer-nightly.sh
+        run: bash scripts/release/installer-nightly.sh
       - name: Confirm census PASS
         if: steps.changes.outputs.needed != 'false' && steps.publication.outputs.commit == github.sha
         env:
@@ -166,7 +181,7 @@ jobs:
           grep -Fxq "installer=$COMMIT tree=$(git rev-parse 'HEAD^{tree}') images=$COMMIT" "$log"
           grep -Fxq 'probe-scan services=37 rerendered_hashes=37 census=PASS' "$log"
       - name: Tear down the disposable stack and volumes
-        if: always() && steps.changes.outputs.needed != 'false'
+        if: always() && steps.changes.outputs.needed != 'false' && steps.migration-check.outputs.skip != 'true'
         timeout-minutes: 4
         run: bash scripts/release/installer-nightly.sh cleanup
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

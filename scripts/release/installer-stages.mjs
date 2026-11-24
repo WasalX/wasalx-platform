@@ -11,7 +11,7 @@ import { activeServiceNames, assertDevInstallPreimages, devContainerPreimage, de
 import { devFreshHeldFlag, devFreshHeldPlan, devGuestComposeFiles, devSimulatorFlag, devSkipPublicWebhookPreflightFlag, devWebhookPreflightOverlay, oneShotServiceNames, rehearsalComposeFile, rehearsalImageSource } from "./installer-stack.mjs";
 import { parseRailsJson } from "./simulation-rails-json.mjs";
 import { sha256, preserveReplacement, readBoundArtifacts, writeArtifactState,
-  assertRetainedPreimage, composeProfiles, dockerfileOf, imageServices, inspectOwned, preparePrivateDirectory, preimagePath, fenceReplacementEffects, rollbackReplacement } from "./installer-artifacts.mjs";
+  assertRetainedPreimage, composeProfiles, dockerfileOf, imageServices, inspectOwned, preparePrivateDirectory, preimagePath, fenceReplacementEffects, replacementTargetNames, rollbackReplacement } from "./installer-artifacts.mjs";
 import { produceRollbackSafety, readOptionalState, recordReplacementAfter } from "./installer-rollback-state.mjs";
 import { enterComposeStageLock as enterStageLock, composeStageLockConflict } from "./compose-stage-lock.mjs";
 import { hostedIssuer, readHostedInventory, verifyHostedImages } from "./installer-hosted-images.mjs";
@@ -530,7 +530,6 @@ export async function executeStage(action, context) {
       assert.ok(index >= 0, "migration image missing from candidate plan");
       await verifyMigrationInputs(context, imageIds[index]);
     };
-    if (!freshHold) await verifyMigrations();
     let devRecord;
     if (context.devPreimagesFile) {
       assert.equal(retryReviewed, false, "DEV preserving replacement cannot replay a prior attempt");
@@ -545,7 +544,10 @@ export async function executeStage(action, context) {
       assert.deepEqual((await devInspect(context)).map(devContainerPreimage).sort((a,b)=>a.service.localeCompare(b.service)), devRecord.services);
       assert.deepEqual(await readDevNativeSync(context), devRecord.nativeSync, "DEV native-sync preimage changed before replacement");
     }
-    const { manifest, snapshot } = await readBoundArtifacts(context);
+    const { manifest, snapshot } = await readBoundArtifacts(context, {
+      replacementTargets: devRecord ? active.filter((name) => !devPreservedServices.includes(name)) : active,
+    });
+    if (!freshHold) await verifyMigrations();
     for (let index = 0; index < plan.length; index += 1) {
       assert.equal(manifest.images[index]?.imageId, imageIds[index], "candidate immutable image changed since build");
     }
@@ -581,7 +583,8 @@ export async function executeStage(action, context) {
       await writeFile(resolve(directory, `replacement-retry-${project}-${Date.now()}.json`),
         `${JSON.stringify(attempt)}\n`, { flag: "wx", mode: 0o600 });
     }
-    const old = before.filter(({ service, running }) => running && model.services[service]?.build && (!devRecord || !devPreservedServices.includes(service)));
+    const targets = replacementTargetNames(model, active, devRecord);
+    const old = before.filter(({ service, running }) => running && targets.includes(service));
     if (old.length) {
       const exit = await execute("docker", ["stop", "--time", "60", ...old.map(({ id }) => id)], environment, true);
       if (exit !== 0) return exit;
@@ -595,7 +598,6 @@ export async function executeStage(action, context) {
       assert.equal((await inspectImage(plan[index].reference))?.Id, imageIds[index], "candidate image changed during replacement");
     }
     await fenceReplacementEffects(context, manifest.preimage.transactionId);
-    const targets = active.filter((name) => model.services[name].build && (!devRecord || !devPreservedServices.includes(name)));
     if (devRecord) {
       const exit = await replaceDevHeld(context, devRecord);
       if (exit === 0) await recordReplacementAfter(context, snapshot, await inspectOwned(context), targets);
@@ -832,6 +834,8 @@ async function main() {
     const catalog = JSON.parse(await readFile(resolve(repository, "release/installer-images.json"), "utf8"));
     await executeStage(action, { candidateSha, candidateTree, catalog, plan: catalog.images,
       hostedImages, hostedImagesSha256, hostedTrustedRoot, environment: process.env });
+    // verify-hosted never takes the stage lock, so this is its only print; Compose stages print after the lock below.
+    if (devSkipPublicWebhookPreflight) process.stderr.write("public webhook preflight skipped by DEV option\n");
     process.stdout.write("hosted inputs verified; no images loaded or tagged\n");
     return 0;
   }

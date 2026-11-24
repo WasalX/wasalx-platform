@@ -1,0 +1,30 @@
+name: privacy
+
+on:
+  workflow_call:
+  pull_request:
+    types: [edited]
+  issues:
+    types: [opened, edited, reopened]
+  push:
+    branches-ignore:
+      - main
+      - 'gh-readonly-queue/**'
+
+permissions:
+  contents: read
+
+jobs:
+  privacy-scan:
+    if: github.event_name != 'push' || !github.event.deleted
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: ${{ (github.event_name == 'issues' || (github.event_name == 'pull_request' && github.event.action == 'edited')) && '1' || '0' }}
+          persist-credentials: false
+      - name: Screen the event and introduced commits
+        run: python3 -I -B scripts/public-privacy.py
+      - name: Verify privacy detection and redacted output
+        run: python3 -I -B tests/test_public_privacy.py

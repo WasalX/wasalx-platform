@@ -84,10 +84,10 @@ function referencesFile(source, file) {
 const tofuFile = file => /^infra\/terraform\/tests\/[^/]+\.tftest\.(?:hcl|json)$/u.test(file);
 const postgresFile = file => /^tests\/.*(?:-postgres(?:-check)?|-real-schema-check)\.mjs$/u.test(file);
 
-function runWorkflowScript(script, env) {
+function runWorkflowScript(script, env, cwd) {
   const bash = process.platform === "win32" ? "C:/Program Files/Git/bin/bash.exe" : "bash";
   return spawnSync(bash, ["--noprofile", "--norc", "-e", "-o", "pipefail", "-c", script], {
-    env: { ...process.env, ...env }, encoding: "utf8", timeout: 10_000, windowsHide: true,
+    cwd, env: { ...process.env, ...env }, encoding: "utf8", timeout: 10_000, windowsHide: true,
   });
 }
 
@@ -115,7 +115,11 @@ test("tracked tests belong to a named CI runner or the test allowlist", async ()
   const workflows = tracked.filter(file => file.startsWith(".github/workflows/") && /\.ya?ml$/u.test(file));
   const workflowJobs = new Map(await Promise.all(workflows.map(async file =>
     [file, parse(await read(file)).jobs])));
-  const jobs = { ...workflowJobs.get(".github/workflows/ci.yml"), ...workflowJobs.get(".github/workflows/nightly-install.yml") };
+  const jobs = {
+    ...workflowJobs.get(".github/workflows/ci.yml"),
+    ...workflowJobs.get(".github/workflows/nightly-install.yml"),
+    ...workflowJobs.get(".github/workflows/privacy.yml"),
+  };
   const runText = job => (job.steps ?? []).map(step => step.run ?? "").join("\n");
   const ciCommands = [...workflowJobs.values()].flatMap(workflow => Object.values(workflow).map(runText)).join("\n");
   const ciScripts = new Set(commands(ciCommands).map(command => {
@@ -237,6 +241,7 @@ test("nightly install is report-only, read-only and fails open on PR diff errors
   const path = ".github/workflows/nightly-install.yml";
   const { on, permissions, concurrency, jobs } = parse(await read(path));
   const job = jobs["nightly-install"];
+  assert.equal(job["continue-on-error"], undefined);
   assert.deepEqual(on, {
     schedule: [{ cron: "17 2 * * *" }],
     workflow_dispatch: null,
@@ -269,6 +274,61 @@ test("nightly install is report-only, read-only and fails open on PR diff errors
   assert(!parse(await read(".github/workflows/ci.yml")).jobs["ci-gate"].needs.includes("nightly-install"));
   const rehearsal = await read("scripts/release/installer-nightly.sh");
   assert.match(rehearsal, /phase native-preflight [^]*phase probe-scan 5m sudo -H env "PATH=\$PATH" node scripts\/dev-install\/probe\.mjs [^]*--held-services ''[^]*\.census == "PASS" and \.services == 37 and \.rerendered_hashes == \.services[^]*phase configured-reinstall/u);
+});
+
+test("PR installer skips only when the publication migration tree differs", async t => {
+  const { jobs } = parse(await read(".github/workflows/nightly-install.yml"));
+  const steps = jobs["nightly-install"].steps;
+  const changes = steps.find(step => step.id === "changes");
+  const check = steps.find(step => step.id === "migration-check");
+  const rehearsal = steps.find(step => step.name === "Rehearse full installation and controlled recreation");
+  assert.equal(check.if, "github.event_name == 'pull_request' && steps.changes.outputs.needed != 'false'");
+  assert.equal(check.env.PUBLICATION_COMMIT, "${{ steps.publication.outputs.commit }}");
+  assert.equal(rehearsal.if, "steps.changes.outputs.needed != 'false' && steps.migration-check.outputs.skip != 'true'");
+  assert.equal(rehearsal["continue-on-error"], undefined);
+
+  const directory = await mkdtemp(join(tmpdir(), "nightly-migrations-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const git = (...args) => execFileSync("git", args, { cwd: directory, encoding: "utf8", windowsHide: true }).trim();
+  git("init", "--quiet", "--template=");
+  git("config", "user.name", "Fixture");
+  git("config", "user.email", "fixture@example.invalid");
+  const migrations = "services/control-api/migrations";
+  const updated = `${migrations}/0001_updated.sql`;
+  const removed = `${migrations}/0002_removed.sql`;
+  const added = `${migrations}/0003_added.sql`;
+  await mkdir(join(directory, migrations), { recursive: true });
+  await writeFile(join(directory, updated), "SELECT 1;\n");
+  await writeFile(join(directory, removed), "SELECT 2;\n");
+  git("add", "--", migrations);
+  git("commit", "--quiet", "-m", "Published migrations");
+  const publication = git("rev-parse", "HEAD");
+  await writeFile(join(directory, updated), "SELECT 3;\n");
+  await writeFile(join(directory, added), "SELECT 4;\n");
+  git("rm", "--quiet", "--", removed);
+  git("add", "--", migrations);
+  git("commit", "--quiet", "-m", "Change migrations");
+  assert.equal(runWorkflowScript(changes.run, { GITHUB_OUTPUT: "selection" }, directory).status, 0);
+  assert.equal((await readFile(join(directory, "selection"), "utf8")).trim(), "needed=true");
+
+  const matching = git("rev-parse", "HEAD");
+  git("commit", "--quiet", "--allow-empty", "-m", "Unrelated candidate commit");
+  for (const [commit, status, skip] of [[publication, 0, true], [matching, 0, false], ["missing-commit", 128, false]]) {
+    const summaryFile = join(directory, "summary");
+    const outputFile = join(directory, "output");
+    await writeFile(summaryFile, "");
+    await writeFile(outputFile, "");
+    const result = runWorkflowScript(check.run, {
+      PUBLICATION_COMMIT: commit, GITHUB_OUTPUT: "output", GITHUB_STEP_SUMMARY: "summary",
+    }, directory);
+    assert.equal(result.status, status, result.error?.message ?? result.stderr);
+    assert.equal((await readFile(outputFile, "utf8")).trim(), skip ? "skip=true" : "");
+    const summary = await readFile(summaryFile, "utf8");
+    assert.equal(result.stdout, summary);
+    assert.equal(summary, skip
+      ? `Installer rehearsal skipped: PR changes migrations; main publication cannot represent them\n\n\`\`\`\n${[updated, removed, added].join("\n")}\n\`\`\`\n`
+      : "");
+  }
 });
 
 test("nightly MinIO mirrors retain the full installer content digests", async () => {
@@ -498,6 +558,12 @@ test("CI gates integration and infrastructure and runs portal integration files 
   assert(gate.needs.includes("dev-install-dryrun"));
   const [gateStep] = gate.steps;
   assert(gate.needs.includes("workflow-lint"));
+  assert(gate.needs.includes("privacy"));
+  assert(!on.pull_request.types.includes("edited"));
+  const metadataWorkflow = parse(await read(".github/workflows/privacy.yml"));
+  assert.deepEqual(metadataWorkflow.on.pull_request.types, ["edited"]);
+  assert.equal(jobs.privacy.uses, "./.github/workflows/privacy.yml");
+  assert.equal(gateStep.env.PRIVACY, "${{ needs.privacy.result }}");
   assert.equal(gateStep.env.WORKFLOW_LINT, "${{ needs.workflow-lint.result }}");
   assert.equal(gateStep.env.INTEGRATION_NEEDED, "${{ needs.changes.outputs.integration }}");
   assert.equal(gateStep.env.INTEGRATION, "${{ needs.integration.result }}");
@@ -517,7 +583,7 @@ test("CI gate requires each event's jobs and rejects unplanned skips, failures, 
   t.after(() => rm(directory, { recursive: true, force: true }));
   const summary = join(directory, "summary.md");
   const pr = {
-    EVENT: "pull_request", CHANGES: "success", WORKFLOW_LINT: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: "success", IMAGES: "skipped",
+    EVENT: "pull_request", CHANGES: "success", PRIVACY: "success", WORKFLOW_LINT: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: "success", IMAGES: "skipped",
     INTEGRATION_NEEDED: "true", INTEGRATION: "success", PORTAL_INTEGRATION: "success",
     INTEGRATION_COVERAGE: "success", INFRA_NEEDED: "true", INFRA: "success",
     DEV_INSTALL_NEEDED: "true", DEV_INSTALL: "success",
@@ -532,13 +598,17 @@ test("CI gate requires each event's jobs and rejects unplanned skips, failures, 
     INTEGRATION_NEEDED: "", INFRA_NEEDED: "", DEV_INSTALL_NEEDED: "", DEV_INSTALL: "skipped",
   };
   const push = { ...queue, EVENT: "push", CHANGES: "skipped", CHECKS: "skipped", FULL_UNIT: "success", IMAGES: "skipped" };
-  const dispatch = { ...push, EVENT: "workflow_dispatch", INFRA: "skipped" };
+  const dispatch = { ...push, EVENT: "workflow_dispatch", INFRA: "skipped", PRIVACY: "skipped" };
 
   for (const [lane, result, override, expected] of [
     ["PR with selected jobs", pr, {}, 0],
     ["PR with unselected jobs", unselected, {}, 0],
     ["PR without a recorded skip reason", unselected, { INTEGRATION_NEEDED: "" }, 1],
     ["PR with cancelled queue images", pr, { IMAGES: "cancelled" }, 1],
+    ["PR with a privacy finding", pr, { PRIVACY: "failure" }, 1],
+    ["PR with a skipped privacy scan", pr, { PRIVACY: "skipped" }, 1],
+    ["merge queue with a cancelled privacy scan", queue, { PRIVACY: "cancelled" }, 1],
+    ["main push with a failed privacy scan", push, { PRIVACY: "failure" }, 1],
     ["PR with new workflow lint findings", pr, { WORKFLOW_LINT: "failure" }, 1],
     ["PR with workflow lint skipped", pr, { WORKFLOW_LINT: "skipped" }, 1],
     ["merge queue", queue, {}, 0],
@@ -720,7 +790,7 @@ test("PR image results are advisory while the merge queue requires the full imag
     if (imageResult === "failure") assert.match(advisory.stdout, /::warning::Advisory PR image builds: failure/u);
 
     const result = runWorkflowScript(gate.steps[0].run, {
-      EVENT: "merge_group", CHANGES: "success", WORKFLOW_LINT: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: "skipped",
+      EVENT: "merge_group", CHANGES: "success", PRIVACY: "success", WORKFLOW_LINT: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: "skipped",
       IMAGES: imageResult, INTEGRATION: "success", PORTAL_INTEGRATION: "success",
       INTEGRATION_COVERAGE: "success", DEV_INSTALL: "skipped", INFRA: "success",
     });
@@ -728,7 +798,7 @@ test("PR image results are advisory while the merge queue requires the full imag
   }
   const summary = join(directory, "gate").replaceAll("\\", "/");
   const result = runWorkflowScript(gate.steps[0].run, {
-    EVENT: "pull_request", CHANGES: "success", WORKFLOW_LINT: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: "success",
+    EVENT: "pull_request", CHANGES: "success", PRIVACY: "success", WORKFLOW_LINT: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: "success",
     IMAGES: "skipped", INTEGRATION_NEEDED: "false", INTEGRATION: "skipped",
     PORTAL_INTEGRATION: "skipped", INTEGRATION_COVERAGE: "skipped", DEV_INSTALL_NEEDED: "false", DEV_INSTALL: "skipped",
     INFRA_NEEDED: "false", INFRA: "skipped", GITHUB_STEP_SUMMARY: summary,
@@ -797,7 +867,7 @@ ${detector.run}`, { GITHUB_OUTPUT: outputFile.replaceAll("\\", "/"), DIFF_PATHS:
   ]) {
     const pr = event === "pull_request";
     const result = runWorkflowScript(gateStep.run, {
-      EVENT: event, CHANGES: "success", WORKFLOW_LINT: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: pr ? "success" : "skipped",
+      EVENT: event, CHANGES: "success", PRIVACY: "success", WORKFLOW_LINT: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: pr ? "success" : "skipped",
       IMAGES: pr ? "skipped" : "success", INTEGRATION_NEEDED: "false",
       INTEGRATION: pr ? "skipped" : "success", PORTAL_INTEGRATION: pr ? "skipped" : "success",
       INTEGRATION_COVERAGE: pr ? "skipped" : "success",
@@ -811,7 +881,7 @@ ${detector.run}`, { GITHUB_OUTPUT: outputFile.replaceAll("\\", "/"), DIFF_PATHS:
     ["true", "failure", 1], ["true", "cancelled", 1],
   ]) {
     const result = runWorkflowScript(gateStep.run, {
-      EVENT: "pull_request", CHANGES: "success", WORKFLOW_LINT: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: "success",
+      EVENT: "pull_request", CHANGES: "success", PRIVACY: "success", WORKFLOW_LINT: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: "success",
       IMAGES: "skipped", INTEGRATION_NEEDED: "false",
       INTEGRATION: "skipped", PORTAL_INTEGRATION: "skipped", INTEGRATION_COVERAGE: "skipped",
       DEV_INSTALL_NEEDED: needed, DEV_INSTALL: jobResult, INFRA_NEEDED: "false", INFRA: "skipped",
@@ -830,7 +900,7 @@ ${detector.run}`, { GITHUB_OUTPUT: outputFile.replaceAll("\\", "/"), DIFF_PATHS:
   ]) {
     const pr = event === "pull_request";
     const result = runWorkflowScript(gateStep.run, {
-      EVENT: event, CHANGES: "success", WORKFLOW_LINT: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: pr ? "success" : "skipped",
+      EVENT: event, CHANGES: "success", PRIVACY: "success", WORKFLOW_LINT: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: pr ? "success" : "skipped",
       IMAGES: pr ? "skipped" : "success", DEV_INSTALL_NEEDED: "false", DEV_INSTALL: "skipped",
       INFRA_NEEDED: "true", INFRA: "success", INTEGRATION_NEEDED: needed, GITHUB_STEP_SUMMARY: summary,
       INTEGRATION: postgres, PORTAL_INTEGRATION: portal, INTEGRATION_COVERAGE: coverage,

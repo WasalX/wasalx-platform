@@ -24,6 +24,7 @@ WasalX Delivery owns this document, the merge queue, CI health and speed, releas
 - `ci-gate` always runs. A failed or cancelled required job fails the gate. Only jobs explicitly excluded by the workflow's event or path selection may be skipped.
 - The advisory [TypeScript comparison](.github/workflows/typescript-comparison.yml) compares TypeScript 5 and 7 diagnostics, compiler time, and service output on the PR candidate and its main baseline. It runs the unit suite on TypeScript 7 output when the emitted files differ.
 - The QEMU frozen-disk discard runs nightly at 02:17 UTC, on PRs, and on manual dispatch. The full install and recreation rehearsal uses a complete `main` publication and runs on the same schedule, on PRs, on manual dispatch from `main`, and when an RC tag is pushed. If the Keycloak inputs differ from that publication, the rehearsal first builds the candidate Keycloak image and verifies startup and realm bootstrap in the disposable stack. On PRs, each rehearsal runs only when its inputs change. See the [nightly installer workflow](.github/workflows/nightly-install.yml).
+  For a PR, the workflow skips full installation when the candidate's control API migration tree differs from the resolved publication. The job summary gives the reason and lists the changed paths. The workflow reports the rehearsal result independently of `ci-gate`.
 - The [pnpm cache action](.github/actions/ci-pnpm/action.yml) saves pnpm dependency and service build caches on main pushes only. A workspace dependency cache miss clears partial module directories before the frozen install. PostgreSQL integration and portal integration always force clean service builds.
 - Run CI on free GitHub-hosted runners. Cancel older CI runs only for the same PR. Keep workflow permissions read-only at the top level, grant writes per job, and pin actions by full commit SHA. Prohibit `pull_request_target`. Fork PRs receive no secrets.
 - Set job time limits from the measured p95 plus 25 percent, rounded up to a whole minute. Review limits monthly. A higher limit needs new measurements in a separate PR. See the [CI timing sample](.github/ci-timings.json) and [current coverage](#deviations).
@@ -41,7 +42,9 @@ WasalX Delivery owns this document, the merge queue, CI health and speed, releas
 
 ## Privacy checks
 
-Before every push, run the private privacy check on the diff, commits, branch name, PR title and body, and any public issue text. Require zero blocking findings and a finished scan. Report counts only. See the [CI privacy check deviation](#deviations).
+Before every push, run the private privacy check on the diff, commits, branch name, PR title and body, and any public issue text. Require zero blocking findings and a finished scan. Report counts only.
+
+The [public privacy workflow](.github/workflows/privacy.yml) scans newly introduced commit text, paths, added lines, and PR and issue titles and bodies with generic patterns. The scan runs on branch pushes, PRs, and the merge queue. `ci-gate` fails if the scan fails on a PR, in the queue, or on a push to main. PR title or body edits trigger the privacy workflow by itself. Issue findings appear in Actions after publication. Findings show a location, line, and rule, and redact paths that match a rule.
 
 ## Environments
 
@@ -53,7 +56,7 @@ Before every push, run the private privacy check on the diff, commits, branch na
 
 ## Releases
 
-- The [image publication workflow](.github/workflows/branch-image.yml) runs once per eligible `main` commit with `max-parallel: 21`. After the complete manifest is published, a serialized job advances the `:main` aliases only when it can verify a fast-forward.
+- The [image publication workflow](.github/workflows/branch-image.yml) runs once per eligible `main` commit with `max-parallel: 21`. After the complete manifest is published, a serialized job advances the `:main` aliases only when it can verify a fast-forward. The job annotates skipped moves as warnings and retries registry errors during tag creation or digest inspection. A digest mismatch fails the job.
 - The manual [image mirror workflow](.github/workflows/mirror-images.yml) runs only from `main`. It copies the installer's pinned object-storage images to the project registry and fails on any digest mismatch.
 - Publish one GitHub Release per release milestone. Cut immutable, annotated `vMAJOR.MINOR.PATCH-rc.N` and `vMAJOR.MINOR.PATCH` tags using the identity authorized by the release tag ruleset. Promote the same image digests across environments. PR builds never publish release images.
 - Follow the [release criteria and nightly installer evidence rules](docs/release.md) for digest promotion, installer rehearsals, and stable release.
@@ -119,13 +122,13 @@ Keep these performance targets independent of the merge result. Address misses t
 
 | Rule | Reason | Review date |
 | --- | --- | --- |
-| §4 CI privacy check on every push and in the queue | Hosted runners cannot use the private list without exposing it. Every agent push runs the pre-push privacy check. A public required check is planned. | 2026-12-14 |
+| §4 CI privacy check on every push and in the queue | Hosted CI uses generic public patterns. The full deny list and commit identity checks stay in the private pre-push check. | 2026-12-14 |
 | §4/§8 Measure job durations and cap timeouts from p95 | The [timing sample](.github/ci-timings.json) covers the jobs with timeouts in `ci.yml`. Those timeouts still exceed the measured limits. Sampling the other workflows and lowering timeouts are follow-ups. | 2026-12-14 |
 | §4 Local pre-commit and pre-push hooks | Agents run the checks in their push workflow. Repository hooks are pending. | 2026-12-14 |
 | §4 Runner pickup under 5 s | Measured hosted-runner pickup makes 60 s the working target. Tracked in [#181](https://github.com/WasalX/wasalx-platform/issues/181). | 2026-12-14 |
 | §4 PR feedback for `ci.yml` (p50 ≤ 1 min and p95 ≤ 2 min) | On 2026-11-24, the newest 62 successful PR runs measured p50 2.4 min and p95 5.2 min. The PR path still runs the full test and build matrix. | 2026-12-08 |
 | §2 Attest artifacts with `actions/attest-build-provenance` and verify with `gh attestation verify` | Images are signed with Cosign and carry BuildKit provenance. The installer verifies them. | 2026-12-14 |
 | §4 Run the full suite on main and merge groups | Main pushes skip PR-only checks and queue image builds because the merge queue already qualified the exact tree. | 2026-12-14 |
-| §6 Automatic production backups and quarterly restore tests | There is no production data yet. The [backup job](infra/helm/wasalx/templates/control-plane-backup.yaml) is disabled by default and the [restore rehearsal script](scripts/dr/rehearse-postgres-restore.mjs) is unwired. | 2026-12-14 |
+| §6 Automatic production backups and quarterly restore tests | There is no production data yet. The [control-plane backup and restore runbook](docs/runbooks/control-plane-backup-restore.md) covers enabling backups, installing the quarterly timer, and recording the first successful host rehearsal. | 2026-12-14 |
 | §1 One formatter and one linter per language in CI | Ruby, Python, shell, SQL, and CSS lack CI linters. TypeScript and JavaScript use ESLint and still need a formatter. OpenTofu is the only language with a formatter check. | 2026-12-14 |
 | §6 Staging rollback rehearsal for every release candidate | Staging is not in service. Once it is, deploy each RC, roll back to the previous release, verify health, and record the rehearsal in the deployment audit. | 2026-12-14 |

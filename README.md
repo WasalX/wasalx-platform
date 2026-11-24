@@ -32,3 +32,12 @@ both services. The worker applies these limits when scheduling additional
 retries, and the control API uses the handoff limit when an operator brings
 forward an already scheduled retry. Invalid values fail startup with the
 variable name in the error.
+
+## Direct ticket replies
+
+The connector independently requests a read receipt for the latest eligible
+inbound message linked to the ticket when the reply was queued. It requests a
+typing indicator while the reply is still sending. Meta combines the signals
+when both apply. WAHA uses separate requests and targets the specific inbound ID.
+Each inbound message is claimed once, and signal failures leave the reply
+delivery result intact.

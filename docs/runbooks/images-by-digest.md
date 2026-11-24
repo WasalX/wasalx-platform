@@ -83,6 +83,13 @@ The optional `admit-hosted` stage admits already loaded images. It never pulls,
 loads, builds, replaces or starts a service. Keep the existing local
 `preflight -> build -> replace -> smoke` path for local builds.
 
+An exited, non-target container with Docker restart policy `no` can be retained
+in the replacement preimage even when its Compose hash differs. The private
+preimage records both hashes and the suspected Compose reference field families.
+Replacement and rollback refuse to target or recreate that container, including
+when the drift involves `network_mode` or fields that could not be identified.
+A project-wide Compose replacement includes every active service in this check.
+
 After the verify-only gate below passes, run the existing `preflight --capture-preimage` for the exact
 candidate/project **without hosted flags**. Retain its private replacement
 preimage and rollback tags. Admission requires that existing preimage; capturing
