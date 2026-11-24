@@ -881,7 +881,7 @@ test("optional PR lanes run on diff errors and gate their applicable checks", as
       "zammad-addon.json", "zammad-package/", "build/zammad/", "release/installer-images.json",
       ":(glob)scripts/*zammad*", ":(glob)scripts/contracts/*mailbox*", "scripts/release/operator-input.mjs",
       "tests/zammad-image-browser-compat.test.mjs", "tests/fixtures/native-compat-cleanup.mjs", ":(glob)tests/**/*.rb",
-      "services/control-api/src/zammad-internal.controller.ts", "tests/outbound-media.test.mjs",
+      "services/control-api/src/zammad-internal.controller.ts", "tests/outbound-media.test.mjs", "tests/helpers/operator-input-fixtures.mjs",
       ":(glob)**/package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", ".npmrc", "patches/",
       ".github/actions/ci-pnpm/", ".github/workflows/ci.yml", ".github/workflows/zammad-compatibility.yml",
     ].join(" ")],

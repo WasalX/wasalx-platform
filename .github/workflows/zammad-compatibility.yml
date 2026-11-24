@@ -29,7 +29,7 @@ jobs:
           task: build
           dependency-key: ${{ steps.pnpm.outputs.dependency-key }}
       - name: Verify control API accepts attachment-only outbound articles
-        run: node --test tests/outbound-media.test.mjs
+        run: node --import ./tests/helpers/operator-input-fixtures.mjs --test tests/outbound-media.test.mjs
       - name: Prepare compatibility fixtures and Chromium
         run: |
           pnpm run zammad:fetch
