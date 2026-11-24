@@ -778,9 +778,11 @@ test("landing motion can pause, respects reduced motion and yields to inbox inte
   await expect(page.locator(".marketing-caret")).toHaveAttribute("data-running", "true");
   const title = page.locator(".marketing-type-text");
   const advanceHeadline = async (matches: (value: string | null) => boolean) => {
-    // Each character schedules the next timer after React commits it.
-    for (let elapsed = 0; elapsed < 5000 && !matches(await title.textContent()); elapsed += 100) {
-      await page.clock.runFor(100);
+    // Advance the word hold, then step below the 35 ms delete delay as React commits each character.
+    for (let elapsed = 0; elapsed < 5000 && !matches(await title.textContent());) {
+      const step = elapsed === 0 ? 2200 : 25;
+      await page.clock.runFor(step);
+      elapsed += step;
     }
   };
   const initial = await title.textContent();
