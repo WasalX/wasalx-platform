@@ -41,6 +41,7 @@
     "src/tenant-permissions.ts",
     "src/ticket-event-runtime.ts",
     "src/outbound-text.ts",
+    "src/delivery.ts",
     "src/ticket-command-guards.ts",
     "src/direct-keep-open.ts",
     "src/direct-customer-close.ts",

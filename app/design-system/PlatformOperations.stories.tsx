@@ -1,4 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
+import type { ComponentProps } from "react";
+import { defaultLocale, type Locale } from "../../lib/i18n/locales.ts";
 import { getMessages } from "../../lib/i18n/messages/index.ts";
 import { I18nProvider } from "../I18nProvider";
 import { PlatformConsole } from "../platform/PlatformConsole";
@@ -48,9 +50,13 @@ const operator = {
   recoveryScope: "a".repeat(64),
 };
 
+function Workspace({ locale = defaultLocale, ...args }: ComponentProps<typeof PlatformConsole> & { locale?: Locale }) {
+  return <I18nProvider locale={locale} messages={getMessages(locale)} renderedAt={now}><PlatformConsole {...args} /></I18nProvider>;
+}
+
 const meta = {
   title: "Product/Platform operations",
-  component: PlatformConsole,
+  component: Workspace,
   tags: ["autodocs", "visual"],
   parameters: {
     layout: "fullscreen",
@@ -60,15 +66,12 @@ const meta = {
       },
     },
   },
-  decorators: [
-    (Story) => <I18nProvider locale="en" messages={getMessages("en")} renderedAt={now}><Story /></I18nProvider>,
-  ],
-  args: { initialOverview: overview, initialTenants: tenants, operator },
-} satisfies Meta<typeof PlatformConsole>;
+  args: { initialOverview: overview, initialTenants: tenants, operator, locale: defaultLocale, initialTheme: "dark" },
+} satisfies Meta<typeof Workspace>;
 
 export default meta;
 type Story = StoryObj<typeof meta>;
 
 export const Dark: Story = { args: { initialTheme: "dark" } };
 export const Light: Story = { args: { initialTheme: "light" } };
-export const Arabic: Story = { render: args => <I18nProvider locale="ar" messages={getMessages("ar")} renderedAt={now}><PlatformConsole {...args} /></I18nProvider> };
+export const Arabic: Story = { args: { locale: "ar" } };
