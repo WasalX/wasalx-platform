@@ -4,7 +4,6 @@ import { ModalDialog } from "./ModalDialog";
 import { useI18n } from "./I18nProvider";
 import { formatDateTime, formatNumber } from "../lib/i18n/format.ts";
 import { operatorFailureMessage, operatorLocalFailure } from "../lib/operator-ui.ts";
-import { can } from "../lib/tenant-permissions.ts";
 import { type RecordRow, RelativeTime, type TenantTranslator, apiError, isOpaqueIdentifier, Empty, Toolbar } from "./tenant-ui";
 
 function friendlyAuditAction(value: unknown, t: TenantTranslator) {
