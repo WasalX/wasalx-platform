@@ -542,7 +542,7 @@ test("CI gate requires each event's jobs and rejects unplanned skips, failures, 
   assert.match(await readFile(summary, "utf8"), /Event push ran both full unit shards/u);
 });
 
-test("CI seeds pnpm caches on main and builds cleanly in the merge queue", async () => {
+test("CI seeds pnpm caches on main and builds cleanly in the merge queue", async t => {
   const { jobs } = parse(await read(".github/workflows/ci.yml"));
   const actionPath = "./.github/actions/ci-pnpm";
   const action = parse(await read(".github/actions/ci-pnpm/action.yml"));
@@ -554,6 +554,31 @@ test("CI seeds pnpm caches on main and builds cleanly in the merge queue", async
   const store = action.runs.steps.find(step => step.id === "store");
   assert(action.runs.steps.indexOf(modules) < action.runs.steps.indexOf(store));
   assert(store?.if.includes("steps.modules.outputs.cache-hit != 'true'"));
+  assert.equal(modules.with.key, "${{ steps.pnpm.outputs.dependency-key }}");
+  assert(!Object.hasOwn(modules.with, "restore-keys"), "Workspace modules require an exact dependency key");
+
+  const keyStep = action.runs.steps.find(step => step.id === "pnpm");
+  assert.deepEqual(keyStep.env, {
+    MODULES_HASH: "${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', '**/package.json', 'patches/**', '.npmrc') }}",
+    RUNNER_PLATFORM: "${{ runner.os }}-${{ runner.arch }}",
+  });
+  const directory = await mkdtemp(join(tmpdir(), "wasalx-cache-key-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const keyScript = 'corepack() { :; }\npnpm() { echo store; }\nnode() { echo "$NODE_VERSION"; }\n' + keyStep.run;
+  for (const [index, platform, version, hash] of [
+    [1, "Linux-X64", "v24.13.1", "hash1"],
+    [2, "Linux-ARM64", "v24.13.1", "hash1"],
+    [3, "Linux-X64", "v24.13.2", "hash1"],
+    [4, "Linux-X64", "v24.13.1", "hash2"],
+  ]) {
+    const output = join(directory, String(index)).replaceAll("\\", "/");
+    const result = runWorkflowScript(keyScript, {
+      GITHUB_OUTPUT: output, MODULES_HASH: hash, RUNNER_PLATFORM: platform, NODE_VERSION: version,
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal((await readFile(output, "utf8")).trim(), "store=store\n" +
+      `dependency-key=pnpm-modules-v1-${platform}-${version}-${hash}`);
+  }
 
   const mainOnly = "github.event_name == 'push' && github.ref == 'refs/heads/main'";
   const saveSteps = action.runs.steps.filter(step => step.uses?.startsWith("actions/cache/save@"));
@@ -573,13 +598,25 @@ test("CI seeds pnpm caches on main and builds cleanly in the merge queue", async
   assert(restore?.if.includes("inputs.force-build != 'true'"));
   assert(restore.if.includes("github.event_name == 'merge_group'"));
   assert(restore.if.includes("github.event_name == 'pull_request'"));
-  assert.match(restore.with["restore-keys"], /github\.event_name == 'pull_request'/u);
+  assert.equal(restore.with.key, "${{ steps.build-key.outputs.key }}");
+  assert.equal(restore.with["restore-keys"], "${{ github.event_name == 'pull_request' && steps.build-key.outputs.prefix || '' }}");
+  assert.equal(action.runs.steps.find(step => step.id === "build-key").env.BUILD_CONFIG,
+    "${{ hashFiles('tsconfig.json', 'services/*/tsconfig*.json', 'packages/*/tsconfig*.json', 'scripts/build-services.mjs', '.gitattributes') }}");
+  assert.equal(action.runs.steps.find(step => step.name === "Report service build cache hit").if,
+    "always() && inputs.task == 'build'");
 
   const commands = name => 'pnpm() { printf "%s\\n" "$*"; }\n' + action.runs.steps.find(step => step.name === name).run;
-  for (const [hit, flags] of [["true", "--offline"], ["", "--fetch-retries=2"]]) {
-    const result = runWorkflowScript(commands("Install workspace dependencies"), { MODULES_HIT: hit });
+  const install = 'rm() { echo "cleanup $*"; }\n' + commands("Install workspace dependencies");
+  for (const [hit, lines] of [
+    ["true", ["install --frozen-lockfile --offline"]],
+    ["false", ["cleanup -rf -- node_modules services/*/node_modules packages/*/node_modules",
+      "install --frozen-lockfile --fetch-retries=2"]],
+    ["", ["cleanup -rf -- node_modules services/*/node_modules packages/*/node_modules",
+      "install --frozen-lockfile --fetch-retries=2"]],
+  ]) {
+    const result = runWorkflowScript("set -f\n" + install, { MODULES_HIT: hit });
     assert.equal(result.status, 0, result.stderr);
-    assert.equal(result.stdout.trim(), `install --frozen-lockfile ${flags}`);
+    assert.deepEqual(result.stdout.trim().split(/\r?\n/u), lines);
   }
   for (const [force, exact, matched, suffix] of [
     ["true", "", "", " --force"],
