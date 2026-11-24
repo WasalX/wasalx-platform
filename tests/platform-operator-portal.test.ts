@@ -411,6 +411,11 @@ test("operator states, provisioning choices, metering totals, and session recove
   assert.doesNotMatch(componentSource, /<Status value="HEALTHY" label=\{t\("platform\.workers\.healthyRatio"/u);
   assert.match(componentSource, /overview\.metering_capture/);
   assert.match(componentSource, /monthCostSummary/);
+  // The overview month is the UTC calendar month (#263), so the label says so in both languages.
+  for (const key of ["platform.summary.monthCost", "platform.summary.monthCostUnpriced"] as const) {
+    assert.match(englishPlatformMessages[key], /this month \(UTC\)/u, key);
+    assert.match(arabicPlatformMessages[key], /هذا الشهر بتوقيت UTC/u, key);
+  }
   assert.match(componentSource, /name="name" required minLength=\{2\} maxLength=\{120\}/u);
   assert.match(componentSource, /name="displayName" required maxLength=\{120\}/u);
   assert.match(componentSource, /name="email" required type="email" maxLength=\{320\}/u);

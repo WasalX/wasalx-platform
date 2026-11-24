@@ -1,5 +1,16 @@
 # WasalX platform
 
+See [Meta upstream message cost estimates](docs/runbooks/meta-cost-reference-tariff.md) for the provider rate catalog and tariff upload.
+
+## Zammad ticket context
+
+`GET /internal/v1/zammad/tickets/:ticketId/context` returns
+`service_window_expires_at` as a UTC ISO 8601 instant. It is the latest known
+inbound customer message time for the ticket's direct conversation plus the
+connection provider's customer-service window. Past instants indicate a closed
+window. The field is `null` for group tickets, providers without a window, or
+when the inbound timestamp is unavailable.
+
 ## Bot delivery retry limits
 
 Set these optional variables in the service environment. For the Compose stack,

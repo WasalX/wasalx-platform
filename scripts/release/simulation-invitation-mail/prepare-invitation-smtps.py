@@ -67,7 +67,7 @@ for source,destination in [('smtp-simulation-server.mjs','smtp-simulation-server
 ports=model['services']['portal']['ports'];assert len(ports)==1 and ports[0]['host_ip']=='127.0.0.1';portal='http://127.0.0.1:'+str(ports[0]['published'])
 # Existing worker networks are all isolated by simulation overlay; add only native
 # internal network for sink access. Never re-enable any other excluded service.
-overlay={'services':{'invitation-mailer':{'image':image['Id'],'environment':{'INVITATION_EMAIL_PROVIDER_URL':'smtps://alpha-smtps:465','INVITATION_EMAIL_FROM':sender,'INVITATION_EMAIL_TEMPLATE_ID':'wasalx-invitation-v1','PORTAL_PUBLIC_ORIGIN':portal,'NODE_EXTRA_CA_CERTS':'/simulation-smtp-ca/ca.crt'},'networks':{'tenant-zammad':None},'volumes':[str(target/'ca.crt')+':/simulation-smtp-ca/ca.crt:ro']}}}
+overlay={'services':{'invitation-mailer':{'image':image['Id'],'environment':{'INVITATION_EMAIL_PROVIDER_URL':'smtps://alpha-smtps:465','INVITATION_EMAIL_FROM':sender,'INVITATION_EMAIL_TEMPLATE_ID':'wasalx-invitation-v1','PORTAL_PUBLIC_ORIGIN':portal,'NODE_EXTRA_CA_CERTS':'/simulation-smtp-ca/ca.crt','WASALX_TEST_EMAIL_RECIPIENT_ALLOWLIST':json.dumps(allowed)},'networks':{'tenant-zammad':None},'volumes':[str(target/'ca.crt')+':/simulation-smtp-ca/ca.crt:ro']}}}
 overlay_path=private/'compose.simulation-invitation-smtps.yaml'
 with open(overlay_path,'x') as f:os.chmod(overlay_path,0o600);json.dump(overlay,f)
 full=compose+['-f',str(private/'compose.simulation-smtps.yaml'),'-f',str(overlay_path)]

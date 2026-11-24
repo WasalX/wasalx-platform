@@ -44,7 +44,7 @@ overlay_floor() {
 }
 check_hash() { printf '%s  %s\n' "$1" "$2" | sha256sum -c -; }
 
-stamp lease start
+lease_start="$(stamp lease start)"
 root_floor
 test "$(findmnt -n -T "$STATE" -o SOURCE)" = "$STATE_MOUNT_SOURCE"
 test "$(findmnt -n -T "$DISK_STATE" -o SOURCE)" = "$STATE_MOUNT_SOURCE"
@@ -61,11 +61,14 @@ if test "$MODE" != rollback || test "$LEASE_UNIT" != "$LEASE_PREFIX-install-$RUN
 fi
 grep -Fqx "0::/system.slice/$LEASE_UNIT" /proc/self/cgroup
 (cd "$STAGING" && sha256sum --check --strict --quiet DEV-SHA256SUMS)
-for input in overlay-action.sh frozen-disk.py host.env dev-guest-phase.sh dev-step-lock.sh probe-up.py run-id; do
+for input in overlay-action.sh frozen-disk.py host-maintenance.py host.env dev-guest-phase.sh dev-step-lock.sh probe-up.py run-id; do
     cmp -s -- "$STATE/$input" "$STAGING/$input"
 done
 exec 8>>"$DISK_STATE/host-action.lock"
 flock -n 8
+/usr/bin/python3 -I -B "$STATE/host-maintenance.py" timing-origin "$TOP" ||
+    printf 'LEASE_RECEIPT_ORIGIN unavailable\n'
+printf '%s\n' "$lease_start"
 "$ENGINE_FREE" "$ENGINE_RUN"
 check_hash "$POWEROFF_SHA" "$POWEROFF_HELPER"
 

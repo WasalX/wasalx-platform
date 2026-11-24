@@ -59,6 +59,7 @@ export async function invitationMailStage(s, { config }) {
   const env = Object.fromEntries(mailer.Config.Env.map(x => { const at = x.indexOf('='); return [x.slice(0, at), x.slice(at + 1)]; }));
   assert.equal(env.INVITATION_EMAIL_PROVIDER_URL, 'smtps://alpha-smtps:465');
   assert.equal(env.INVITATION_EMAIL_FROM, auth.username);
+  assert.deepEqual(JSON.parse(env.WASALX_TEST_EMAIL_RECIPIENT_ALLOWLIST), cfg.allowedRecipients);
   assert(env.NODE_EXTRA_CA_CERTS);
   await mount(env.NODE_EXTRA_CA_CERTS, mailer);
   const shared = Object.keys(mailer.NetworkSettings.Networks).filter(n => sink.NetworkSettings.Networks[n]);
