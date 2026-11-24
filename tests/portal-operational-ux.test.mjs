@@ -601,7 +601,7 @@ test("portal UX has no dead operational controls and keeps sensitive content fai
   assert.match(rulesRoute, /import type \{ TriggerRule \}/u);
   assert.doesNotMatch(rulesRoute, /compileRule|re2-wasm/u);
   assert.match(rulesRoute, /request\.headers\.get\("idempotency-key"\)/u);
-  assert.match(rulesRoute, /Advanced expression creation requires the Node control plane/u);
+  assert.match(rulesRoute, /Advanced expression creation requires the managed service/u);
 
   assert.match(app, /window\.history\[replace \? "replaceState" : "pushState"\]/u);
   assert.match(app, /useLayoutEffect\(\(\) => \{\s*const restore = \(event\?: PopStateEvent\) => \{/u);

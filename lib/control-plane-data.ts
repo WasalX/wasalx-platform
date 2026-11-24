@@ -809,7 +809,7 @@ export async function getTeamAccess(): Promise<TeamAccessData> {
     if (page.members_next_cursor) query.set("member_cursor", page.members_next_cursor);
     if (page.invitations_next_cursor) query.set("invitation_cursor", page.invitations_next_cursor);
     const continuation = query.toString();
-    if (seen.has(continuation)) throw new ControlPlaneError("The control plane repeated a team page cursor", 502);
+    if (seen.has(continuation)) throw new ControlPlaneError("The service repeated a team page cursor", 502);
     seen.add(continuation);
     page = await call<TeamPage>(session, "/v1/team?" + continuation);
     first.members.push(...page.members);
@@ -1038,7 +1038,7 @@ async function callList<T>(session: PortalSession, path: string) {
     const page = await call<T[]>(session, target, {}, headers => { cursor = headers.get("x-next-cursor"); });
     for (const item of page) items.push(item);
     if (cursor) {
-      if (seen.has(cursor)) throw new ControlPlaneError("The control plane repeated a page cursor", 502);
+      if (seen.has(cursor)) throw new ControlPlaneError("The service repeated a page cursor", 502);
       seen.add(cursor);
     }
   } while (cursor);
@@ -1087,7 +1087,7 @@ async function call<T>(
     body = await readBoundedJson(response, 10 * 1024 * 1024);
   } catch {
     // Keep confirmed access denials even when their body cannot supply trusted detail.
-    throw new ControlPlaneError("The control plane returned an invalid response",
+    throw new ControlPlaneError("The service returned an invalid response",
       response.status === 401 || response.status === 403 ? response.status : 502);
   }
   if (!response.ok) {
@@ -1098,7 +1098,7 @@ async function call<T>(
         detail.effect === "NONE" && detail.terminal === true ? { effect: "NONE" as const, terminal: true as const } : undefined;
 
     throw new ControlPlaneError(
-      typeof detail.message === "string" ? detail.message : typeof detail.error === "string" ? detail.error : "Control plane request failed",
+      typeof detail.message === "string" ? detail.message : typeof detail.error === "string" ? detail.error : "The service request failed",
       response.status,
       typeof detail.code === "string" ? detail.code : undefined,
       workspaceProof,

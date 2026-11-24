@@ -71,7 +71,7 @@ export async function POST(request: Request) {
     if (provider === "META") {
       if (!isControlPlaneBackend()) {
         return NextResponse.json(
-          { error: "Official Meta connections require the persistent control plane." },
+          { error: "Official Meta connections require the managed service." },
           { status: 503 },
         );
       }
