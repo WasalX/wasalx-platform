@@ -17,11 +17,13 @@ export const nativeRoutingUnavailable=():NativeRoutingSyncStatus=>({state:"UNCON
 export function nativeRoutingStatus(row:NativeRoutingProjection,now=Date.now()):NativeRoutingSyncStatus{
   const checkedTime=new Date(row.last_checked_at??NaN).getTime();
   const lastCheckedAt=Number.isFinite(checkedTime)?new Date(checkedTime).toISOString():null;
+  const checkingFailedStatus=row.sync_state==="FAILED"&&row.next_action==="CHECK";
   // A due background check is not proof that it ran before the receipt expired.
-  const state=row.sync_state==="SYNCED"&&(!lastCheckedAt||now-checkedTime>6*60_000||checkedTime-now>30_000)?"PENDING":row.sync_state;
+  const expiredReadback=row.sync_state==="SYNCED"&&(!lastCheckedAt||now-checkedTime>6*60_000||checkedTime-now>30_000);
+  const state=checkingFailedStatus||expiredReadback?"PENDING":row.sync_state;
   return{state,desiredRevision:nativeRoutingRevision(Number(row.desired_revision),1),appliedRevision:nativeRoutingRevision(Number(row.applied_revision)),
     desiredSha256:row.desired_sha256,observedSha256:row.observed_sha256,lastCheckedAt,
-    errorCode:row.error_code,safeRetry:state===row.sync_state&&row.safe_retry&&["PENDING","FAILED"].includes(row.sync_state),departmentDefaults:parseDepartmentDefaults(row.department_defaults)};
+    errorCode:checkingFailedStatus?null:row.error_code,safeRetry:state===row.sync_state&&row.safe_retry&&["PENDING","FAILED"].includes(row.sync_state),departmentDefaults:parseDepartmentDefaults(row.department_defaults)};
 }
 export function validateNativeRoutingResponse(value:unknown,request:NativeRoutingRequest):NativeRoutingResponse{
   if(!value||typeof value!=="object"||Array.isArray(value))throw new Error("NATIVE_ROUTING_INVALID_RECEIPT");
