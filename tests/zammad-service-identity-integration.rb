@@ -46,12 +46,15 @@ begin
     secrets = tokens.transform_values(&:token)
     retired = false
     control_available = true
+    policy = { 'mfa_required' => true, 'session_timeout_minutes' => 60, 'policy_version' => 1,
+      'subject' => owner_subject, 'mfa_amr_values' => ['mfa'], 'mfa_acr_values' => [] }
     Wasalx::Client.define_singleton_method(:post) do |path, input, scope:, **_options|
       raise Wasalx::Client::RequestFailed, 'Synthetic control unavailable' unless control_available
       raise 'Unexpected signed control scope' unless %w[zammad:membership zammad:privacy].include?(scope)
       case path
       when '/internal/v1/zammad/membership/check'
-        { 'allowed' => input[:user_id] == member.portal_user_id && input[:revision] == member.reload.revision }
+        { 'allowed' => input[:user_id] == member.portal_user_id && input[:native_user_id] == owner.id.to_s &&
+          input[:revision] == member.reload.revision, 'authentication_policy' => policy }
       when '/internal/v1/zammad/membership/retired'
         { 'retired' => retired && input[:subject] == legacy_subject }
       when '/internal/v1/zammad/privacy/admission'

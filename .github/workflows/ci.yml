@@ -72,18 +72,6 @@ jobs:
             needed=false
           fi
           echo "needed=$needed" >> "$GITHUB_OUTPUT"
-      - id: matrix
-        env:
-          EVENT: ${{ github.event_name }}
-        run: |
-          args=()
-          if [ "$EVENT" = pull_request ]; then
-            args+=(--pull-request)
-          fi
-          matrix=$(python3 scripts/release/images-by-digest.py matrix "${args[@]}")
-          images=$(jq '.include | length > 0' <<< "$matrix")
-          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
-          echo "images=$images" >> "$GITHUB_OUTPUT"
       - id: zammad
         if: github.event_name == 'pull_request'
         run: |
@@ -98,6 +86,18 @@ jobs:
             needed=false
           fi
           echo "needed=$needed" >> "$GITHUB_OUTPUT"
+      - id: matrix
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          args=()
+          if [ "$EVENT" = pull_request ]; then
+            args+=(--pull-request)
+          fi
+          matrix=$(python3 scripts/release/images-by-digest.py matrix "${args[@]}")
+          images=$(jq '.include | length > 0' <<< "$matrix")
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          echo "images=$images" >> "$GITHUB_OUTPUT"
 
   dependency-review:
     if: github.event_name == 'pull_request'
@@ -138,7 +138,40 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-depth: ${{ matrix.mode == 'lint' && (github.event_name == 'merge_group' && '0' || '2') || '1' }}
           persist-credentials: false
+      - name: Check workflow lint against the base
+        if: matrix.mode == 'lint'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          LC_ALL: C
+        run: |
+          work=$(mktemp -d)
+          trap 'rm -rf "$work"' EXIT
+          bash scripts/release/fetch-verified-asset.sh \
+            https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz \
+            "$work/actionlint.tar.gz" 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+          tar -xzf "$work/actionlint.tar.gz" -C "$work" actionlint
+          mkdir "$work/base"
+          git archive "$BASE_SHA" .github | tar -x -C "$work/base"
+          git -C "$work/base" init --quiet
+
+          for side in base candidate; do
+            directory="$work/base"
+            if [[ "$side" == candidate ]]; then directory="$GITHUB_WORKSPACE"; fi
+            status=0
+            (cd "$directory" && "$work/actionlint" -shellcheck= -pyflakes= -format '{{json .}}') > "$work/$side.json" || status=$?
+            case "$status" in
+              0) : > "$work/$side.txt" ;;
+              1) jq -ce '.[] | [.filepath, .kind, .message]' "$work/$side.json" | sort > "$work/$side.txt" ;;
+              *) exit "$status" ;;
+            esac
+            printf 'actionlint %s findings: %s\n' "$side" "$(wc -l < "$work/$side.txt")"
+          done
+          comm -13 "$work/base.txt" "$work/candidate.txt" > "$work/new.txt"
+          printf 'actionlint new findings: %s\n' "$(wc -l < "$work/new.txt")"
+          cat "$work/new.txt"
+          test ! -s "$work/new.txt"
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24.13.1'
