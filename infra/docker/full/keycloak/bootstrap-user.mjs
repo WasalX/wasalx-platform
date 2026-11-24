@@ -41,6 +41,7 @@ const zammadOrigin = publicOrigin("WASALX_ZAMMAD_PUBLIC_ORIGIN", "http://127.0.0
 const zammadBackchannelOrigin = new URL(zammadOrigin).hostname === "127.0.0.1"
   ? "http://zammad-nginx:8080" : zammadOrigin;
 const smtpConfigured = Object.values(smtp).every(Boolean);
+const passwordResetEnabled = process.env.WASALX_KEYCLOAK_PASSWORD_RESET_ENABLED === "true";
 const routableEmail = value => {
   const domain = value.slice(value.lastIndexOf("@") + 1).toLowerCase();
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(value)
@@ -57,7 +58,7 @@ if (smtpConfigured && (!/^[1-9]\d{0,4}$/u.test(smtp.port) || Number(smtp.port) >
 if (qualificationOwnerEmail && !routableEmail(qualificationOwnerEmail)) {
   throw new Error("WASALX_QUALIFICATION_OWNER_EMAIL must be a routable email address");
 }
-if (smtpConfigured && !qualificationOwnerEmail) {
+if (smtpConfigured && passwordResetEnabled && !qualificationOwnerEmail) {
   throw new Error("WASALX_QUALIFICATION_OWNER_EMAIL is required when password recovery is enabled");
 }
 
@@ -190,7 +191,7 @@ async function reconcileTotpEnrollment(token, realm, username) {
 
 async function reconcileRealmPresentation(token, realm) {
   stage = `${realm} presentation reconciliation`;
-  const recoveryEnabled = realm === "wasalx" && smtpConfigured;
+  const realmSmtpEnabled = realm === "wasalx" && smtpConfigured;
   const response = await fetch(`${baseUrl}/admin/realms/${encodeURIComponent(realm)}`, {
     method: "PUT",
     headers: {
@@ -203,7 +204,7 @@ async function reconcileRealmPresentation(token, realm) {
       internationalizationEnabled: true,
       supportedLocales: ["en", "ar"],
       defaultLocale: "en",
-      resetPasswordAllowed: recoveryEnabled,
+      resetPasswordAllowed: realmSmtpEnabled && passwordResetEnabled,
       eventsEnabled: true,
       enabledEventTypes: [
         "LOGIN", "LOGIN_ERROR", "LOGOUT", "LOGOUT_ERROR", "RESET_PASSWORD", "RESET_PASSWORD_ERROR",
@@ -212,7 +213,7 @@ async function reconcileRealmPresentation(token, realm) {
         "UPDATE_TOTP", "UPDATE_TOTP_ERROR", "REMOVE_TOTP", "REMOVE_TOTP_ERROR",
       ],
       eventsExpiration: 2_592_000,
-      smtpServer: recoveryEnabled ? { ...smtp, auth: "true", starttls: "true", ssl: "false" } : {},
+      smtpServer: realmSmtpEnabled ? { ...smtp, auth: "true", starttls: "true", ssl: "false" } : {},
     }),
     signal: AbortSignal.timeout(10_000),
   });
