@@ -191,6 +191,7 @@ The target set is the primitives in `app/design-system/primitives.tsx` and `prim
 
 - **Do** write all copy through `lib/i18n/messages/{en,ar}`; both catalogues keep the same keys (enforced by the `DictionaryFor` type and `tests/i18n-foundation.test.mjs`).
 - **Do** write operator language: what happened and what to do next. **Don't** show internal or provider names (Zammad, WAHA, GOWS, Keycloak), raw ids, raw JSON, stack traces, HTTP codes or test words (#186).
+- **Do** show an API error as catalogue text: `operatorFailureMessage` or `apiError` maps its code, with a translated fallback for unknown codes. **Don't** render or rethrow the API's own `error`, `message` or `safe_error` text, which is English only (#358, `tests/api-boundary-safety.test.mjs`).
 - **Do** name a provider on a staff screen (the platform console) only where it labels that provider's figure, such as its capacity or usage counter. **Don't** name internal components there either: no control API, database identities or worker internals (#287).
 - **Do** keep a visible keyboard focus on every interactive element in both themes and in forced colors. **Don't** remove an `outline` without an equivalent that survives forced colors.
 - **Do** keep touch targets at least 44 px on coarse pointers: `@media (any-pointer: coarse)` sets a 44 px minimum on buttons, inputs, selects and text areas; keep that for new controls.
