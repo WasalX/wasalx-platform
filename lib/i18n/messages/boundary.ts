@@ -28,9 +28,9 @@ const englishBoundaryMessages: BoundaryMessages = {
   "tenant.boundary.error.heading": "Workspace temporarily unavailable",
   "tenant.boundary.error.description": "WasalX could not load this workspace. No change was reported as successful. Try again, or sign in again if the issue continues.",
   "tenant.session.signIn": "Sign in again",
-  "platform.error.eyebrow": "PLATFORM DATA UNAVAILABLE",
-  "platform.error.heading": "The control plane could not load safely.",
-  "platform.error.description": "No operation was reported as successful. Check the control API and its least-privilege database identities, then retry this view.",
+  "platform.error.eyebrow": "Platform data unavailable",
+  "platform.error.heading": "The platform console could not load.",
+  "platform.error.description": "No change was reported as successful. Try again, or sign in again if the problem continues.",
   "platform.error.retry": "Retry",
   "platform.error.signInAgain": "Sign in again",
 };
@@ -44,10 +44,10 @@ const arabicBoundaryMessages: BoundaryMessages = {
   "tenant.boundary.error.description": "تعذّر على WasalX تحميل مساحة العمل هذه. لم يُسجّل أي تغيير على أنه ناجح. حاول مجددًا، أو سجّل الدخول من جديد إذا استمرت المشكلة.",
   "tenant.session.signIn": "تسجيل الدخول مجددًا",
   "platform.error.eyebrow": "بيانات المنصة غير متاحة",
-  "platform.error.heading": "تعذر تحميل مستوى التحكم بأمان.",
-  "platform.error.description": "لم تُسجّل أي عملية على أنها ناجحة. تحقق من واجهة برمجة تطبيقات التحكم وهويات قاعدة البيانات محدودة الصلاحيات، ثم أعد المحاولة.",
+  "platform.error.heading": "تعذّر تحميل وحدة تحكم المنصة.",
+  "platform.error.description": "لم يُسجّل أي تغيير على أنه ناجح. أعد المحاولة، أو سجّل الدخول من جديد إذا استمرت المشكلة.",
   "platform.error.retry": "إعادة المحاولة",
-  "platform.error.signInAgain": "تسجيل الدخول مجدداً",
+  "platform.error.signInAgain": "تسجيل الدخول مجددًا",
 };
 
 export function getBoundaryMessages(locale: Locale): BoundaryMessages {

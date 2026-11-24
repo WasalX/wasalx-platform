@@ -106,6 +106,8 @@ Measure the latest 150 first-attempt PR runs from GitHub Actions timestamps. Spl
 | CI cost | Zero. Changes that would incur charges require owner approval. |
 | Portal page budgets | The page budgets in [DESIGN.md](DESIGN.md#speed): `/app` first-load JavaScript, LCP and INP. Misses become board items. |
 
+In the daily Delivery check, report p50 and p95 changed lines across the last 100 merged PRs per repository. Exclude files marked `linguist-generated`.
+
 Keep these performance targets independent of the merge result. Address misses through the board while preserving the required checks.
 
 ## Deviations
