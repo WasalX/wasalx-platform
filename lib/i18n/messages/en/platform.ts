@@ -170,6 +170,7 @@ export const englishPlatformMessages = {
   "platform.tenants.tableLabel": "Workspace operations table",
   "platform.tenants.scrollHint": "Scroll horizontally to review every workspace field and action.",
   "platform.tenants.attempts": "Attempt {attempts} of {maximum}",
+  "platform.tenants.operationFailed": "The latest step reported an error.",
   "platform.zammad.notReady": "Not ready",
   "platform.zammad.pinned": "Pinned during provisioning",
   "platform.workers.title": "WAHA worker capacity",
