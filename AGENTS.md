@@ -6,7 +6,7 @@
 - The private [project board](https://github.com/orgs/WasalX/projects/1) has the pinned **Project brief**.
 - The GitHub environments are `dev`, `stg`, and `prod`. See [environment use and data rules](DELIVERY.md#environments).
 - Milestones: v0.1.0 (current) and v0.2.0 (next). Dates and scope are on the [repo milestones](https://github.com/WasalX/wasalx-platform/milestones).
-- Lead threads are WasalX Master, WasalX Delivery, and WasalX Design.
+- Lead threads are WasalX Master, WasalX Delivery, WasalX QA, and WasalX Design.
 - UI project: yes
 - Other repos: WasalX/wasalx-zammad-addon
 - [Delivery rules](DELIVERY.md) define how changes ship.
