@@ -22,7 +22,7 @@ async function expectMetaSignupLayout(signup: Locator, viewport: "desktop" | "ph
       // Measure one ch with the paragraph's actual font, including its fallback for the zero glyph.
       const ruler = document.createElement("span");
       ruler.style.cssText = "position:absolute;inline-size:1ch;visibility:hidden";
-      paragraph.append(ruler);
+      paragraph.appendChild(ruler);
       const ch = ruler.getBoundingClientRect().width;
       ruler.remove();
       const { width, height } = paragraph.getBoundingClientRect();
