@@ -2,6 +2,7 @@ import { expect, test, type Page, type Route, type TestInfo } from "@playwright/
 import AxeBuilder from "@axe-core/playwright";
 import { englishPlatformMessages } from "../../lib/i18n/messages/en/platform.ts";
 import { arabicPlatformMessages } from "../../lib/i18n/messages/ar/platform.ts";
+import { formatDateTime } from "../../lib/i18n/format.ts";
 import { createTranslator } from "../../lib/i18n/translate.ts";
 import type { MetaTransitionOperatorReview, MetaTransitionOperatorResult, MetaTransitionOperatorRequest, MetaTransitionOperatorAction } from "../../packages/core/src/meta-transition-operator-contract.ts";
 
@@ -88,13 +89,54 @@ test("operator records three explicit local reviews and independently selected m
   expect(h.writes[1]!.body.templateEvidenceSha256).toBe("c".repeat(64)); expect(h.writes[1]!.body.flowEvidenceSha256).toBe("e".repeat(64)); expect(Object.keys(h.writes[2]!.body).sort()).toEqual(["confirmed", "evidenceSha256", "expectedReviewSha256", "expectedRevision"]);
   // A distinct server-supplied managed plan is seeded for the separate grant form.
   await x.dialog().getByRole("button", { name: t("platform.actions.closeDialog"), exact: true }).click();
-  h.current = { ...review(), id: id(30), name: "Managed transition", revision: 10, requestedMode: "WASALX_MANAGED", arrangements: [{ id: id(20), label: "Approved arrangement", expiresAt: "2099-01-01T00:00:00Z" }] };
-  await x.open(false); await prepare(page, "PREREQUISITES");
-  await x.dialog().getByRole("combobox", { name: text("arrangement"), exact: true }).selectOption(id(20)); await x.dialog().getByLabel(text("receiver"), { exact: true }).fill("9"); await x.dialog().getByLabel(text("termsVersion"), { exact: true }).fill("2026.10"); await x.dialog().getByLabel(text("terms"), { exact: true }).fill("Approved target terms / الشروط المعتمدة");
+  const morning = { id: id(20), label: "Approved arrangement", expiresAt: "2099-01-01T00:00:00Z" };
+  const evening = { ...morning, id: id(21), expiresAt: "2099-01-01T12:00:00Z" };
+  h.current = { ...review(), id: id(30), name: "Managed transition", revision: 10, requestedMode: "WASALX_MANAGED", arrangements: [morning, evening] };
+  const dialog = x.dialog();
+  const arrangement = dialog.getByRole("combobox", { name: text("arrangement"), exact: true });
+  const expiry = dialog.locator("time");
+  for (const [theme, themeLabel] of [["light", "useLightLabel"], ["dark", "useDarkLabel"]] as const) {
+    await test.step(`Read closed arrangement expiry in ${theme} theme`, async () => {
+      const toggleTheme = page.getByRole("button", { name: t(`platform.theme.${themeLabel}`), exact: true });
+      if (await toggleTheme.count()) await toggleTheme.click();
+      await x.open(false);
+      await expect(page.locator(`.theme-${theme} dialog[open]`)).toBeVisible();
+      await prepare(page, "PREREQUISITES");
+      await expect(arrangement).toHaveValue("");
+      await expect(arrangement).toHaveJSProperty("required", true);
+      await expect(expiry).toHaveCount(0);
+      await dialog.getByRole("combobox", { name: text("sourcePayment"), exact: true }).focus();
+      await page.keyboard.press("Tab");
+      await expect(arrangement).toBeFocused();
+      for (const [option, period] of [[evening, locale === "ar" ? "م" : "PM"], [morning, locale === "ar" ? "ص" : "AM"]] as const) {
+        await arrangement.selectOption(option.id);
+        const formatted = formatDateTime(option.expiresAt, locale);
+        expect(formatted.endsWith(period)).toBe(true);
+        await expect(expiry).toHaveText(formatted);
+        await expiry.scrollIntoViewIfNeeded();
+        await expect(expiry).toBeInViewport({ ratio: 1 });
+        expect(await expiry.evaluate(element => {
+          const range = document.createRange();
+          range.selectNodeContents(element);
+          const { left, right } = element.parentElement!.getBoundingClientRect();
+          const fragments = Array.from(range.getClientRects()).filter(rect => rect.width > 0);
+          return fragments.length > 0 && fragments.every(rect => rect.left >= left - 1 && rect.right <= right + 1);
+        })).toBe(true);
+      }
+      await expect(arrangement).toBeInViewport({ ratio: 1 });
+      await screenshot(page, info, `arrangement-expiry-${theme}`);
+      if (theme === "light") {
+        await arrangement.selectOption("");
+        await expect(expiry).toHaveCount(0);
+        await dialog.getByRole("button", { name: t("platform.actions.closeDialog"), exact: true }).click();
+      }
+    });
+  }
+  await dialog.getByLabel(text("receiver"), { exact: true }).fill("9"); await dialog.getByLabel(text("termsVersion"), { exact: true }).fill("2026.10"); await dialog.getByLabel(text("terms"), { exact: true }).fill("Approved target terms / الشروط المعتمدة");
   await expect(page.locator("html")).toHaveAttribute("lang", locale);
   expect(await page.evaluate(() => navigator.language)).toBe(browserLocale);
 
-  const dialog = x.dialog(), reviewApproval = dialog.getByRole("button", { name: text("review"), exact: true });
+  const reviewApproval = dialog.getByRole("button", { name: text("review"), exact: true });
   const recordApproval = dialog.getByRole("button", { name: text("record"), exact: true });
   const termsConfirmation = dialog.getByRole("checkbox", { name: text("acceptTerms"), exact: true });
   const evidenceConfirmation = dialog.getByRole("checkbox", { name: text("confirmEvidence"), exact: true });
@@ -146,6 +188,7 @@ test("operator records three explicit local reviews and independently selected m
     const savedTerms = x.dialog().getByRole("textbox", { name: text("terms"), exact: true });
     await expect(savedTerms).toHaveAttribute("readonly", "");
     await expect(savedTerms).toHaveValue("Approved target terms / الشروط المعتمدة");
+    await expect(expiry).toHaveCount(0);
   });
   expect(new Set(h.writes.map(write => write.key)).size).toBe(4); expect(h.expected).toEqual([]); expect(h.errors).toEqual([]);
 });
