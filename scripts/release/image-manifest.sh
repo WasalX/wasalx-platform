@@ -79,6 +79,7 @@ download_nightly_image_manifest() {
     if [[ "$complete" == false ]]; then
       echo "Nightly publication skipped $commit: images-manifest is incomplete" >&2
       rm -- "$manifest" || return
+      rm -f -- "$directory/images-manifest-attempt.json" || return
       continue
     fi
 

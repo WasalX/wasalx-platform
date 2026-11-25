@@ -507,7 +507,10 @@ gh() {
       local commit=$READY images='{"zammad":{}}' pending='{}' complete=true
       [[ "$3" != 102 ]] || { commit=$INCOMPLETE; images='{}'; pending='{"zammad":{}}'; complete=false; }
       [[ "$INVALID" != true ]] || commit=$BASE
+      local downloaded_run=$3
       while [[ "$1" != --dir ]]; do shift; done
+      [[ ! -e "$2/images-manifest.json" && ! -e "$2/images-manifest-attempt.json" ]] || return 18
+      printf '%s\n' "$downloaded_run" > "$2/images-manifest-attempt.json"
       printf '{"schemaVersion":1,"repository":"%s","platform":"linux/amd64","commit":"%s","tree":"%s","images":%s,"pending":%s,"publicationComplete":%s}\n' \
         "$GITHUB_REPOSITORY" "$commit" "$(git rev-parse "$commit^{tree}")" "$images" "$pending" "$complete" > "$2/images-manifest.json"
       ;;
@@ -529,6 +532,8 @@ gh() {
   const bash = process.platform === "win32" ? "C:/Program Files/Git/bin/bash.exe" : "bash";
   for (const { ready, selected, incomplete = "", expired = "", noJob = "", lookupError = "", invalid = false,
     exact = false, lookups, status = selected ? 0 : 1, reason } of cases) {
+    await rm(join(directory, "wasalx-nightly", "images-manifest.json"), { force: true });
+    await rm(join(directory, "wasalx-nightly", "images-manifest-attempt.json"), { force: true });
     await writeFile(join(directory, "lookups"), "");
     await writeFile(join(directory, "publication-output"), "");
     await writeFile(join(directory, "publication-summary"), "");
@@ -554,6 +559,7 @@ gh() {
     if (selected) {
       const manifest = join(directory, "wasalx-nightly", "images-manifest.json");
       assert.equal(JSON.parse(await readFile(manifest, "utf8")).commit, selected);
+      assert.equal((await readFile(join(directory, "wasalx-nightly", "images-manifest-attempt.json"), "utf8")).trim(), "101");
     }
     assert.deepEqual((await readFile(join(directory, "lookups"), "utf8")).trim().split(/\r?\n/u), lookups);
   }
