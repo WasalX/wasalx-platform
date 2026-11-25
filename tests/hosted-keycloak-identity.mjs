@@ -98,11 +98,11 @@ try {
   callback.listen(4173, "127.0.0.1");
   await once(callback, "listening");
 
-  phase = "Keycloak startup";
+  phase = "Keycloak container launch";
   const mount = (source, target) => ["--mount", "type=bind,source=" + resolve(source) + ",target=" + target + ",readonly"];
   const theme = "/opt/keycloak/themes/wasalx";
-  containerId = await docker("run", "--detach", "--init", "--rm", "--name", container,
-    "--log-driver", "none", "--publish", "127.0.0.1::8080",
+  containerId = await docker("run", "--detach", "--init", "--name", container,
+    "--log-driver", "local", "--publish", "127.0.0.1::8080",
     "--env", "WASALX_TEST_EMAIL_RECIPIENT_ALLOWLIST=[]",
     "--env", "WASALX_KEYCLOAK_PASSWORD_RESET_ENABLED=true",
     "--env", "WASALX_PORTAL_PUBLIC_ORIGIN=" + callbackOrigin,
@@ -113,10 +113,12 @@ try {
     imageId, "start-dev", "--db=dev-mem", "--import-realm",
     "--spi-email-sender--provider=wasalx-fenced", "--spi-email-template--provider=wasalx-fenced");
   assert.match(containerId, /^[0-9a-f]{64}$/u);
+  phase = "Keycloak loopback port";
   const published = await docker("port", containerId, "8080/tcp");
   assert.match(published, /^127\.0\.0\.1:[0-9]+$/u);
   const origin = "http://" + published;
   const issuer = origin + "/realms/" + realmName;
+  phase = "Keycloak realm readiness";
   const deadline = Date.now() + 90_000;
   let discovered;
   while (Date.now() < deadline) {
@@ -138,6 +140,22 @@ try {
     WASALX_AUTH_TEST_FIXTURES: fixturesPath, WASALX_AUTH_TEST_BROWSER_PATH: chromium.executablePath() });
 } catch (error) {
   console.error("Identity browser job failed during " + phase + " (" + error.name + ")");
+  if (containerId && phase !== "registered cases") {
+    const state = await docker("inspect", "--format", "{{.State.Status}} {{.State.ExitCode}}", containerId).catch(() => "");
+    if (/^(?:created|running|exited|dead) [0-9]+$/u.test(state)) console.error("Keycloak container state: " + state);
+    const logs = await execute("docker", ["logs", "--tail", "160", containerId]).catch(() => ({ stdout: "", stderr: "" }));
+    const privateLog = logs.stdout + logs.stderr;
+    const diagnostics = [
+      [/Failed to import|failed to import|Error while importing/iu, "realm-import"],
+      [/AccessDeniedException|Permission denied/iu, "filesystem-permissions"],
+      [/BindException|Address already in use/iu, "address-in-use"],
+      [/Unable to start HTTP server|Failed to start server/iu, "server-start"],
+      [/Unrecognized option|Unknown option/iu, "unsupported-option"],
+    ];
+    const reported = diagnostics.filter(([pattern]) => pattern.test(privateLog)).map(([, label]) => label);
+    const classes = [...new Set(privateLog.match(/\b(?:java|org\.keycloak|io\.quarkus)\.[a-z.]+\.[A-Z][A-Za-z]+(?:Exception|Error)\b/gu))];
+    console.error(JSON.stringify({ diagnostics: reported, exceptionClasses: classes }));
+  }
   process.exitCode = 1;
 } finally {
   if (callback.listening) {
