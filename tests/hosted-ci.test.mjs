@@ -940,11 +940,18 @@ test("CI gate requires each event's jobs and rejects unplanned skips, failures, 
     INSTALLER_PORTAL_NEEDED: "", INSTALLER_PORTAL: "skipped" };
   const dispatch = { ...push, EVENT: "workflow_dispatch", INFRA: "skipped", PRIVACY: "skipped" };
 
+  const operatorOnly = { ...pr, KEYCLOAK_IDENTITY_NEEDED: "false", KEYCLOAK_IDENTITY: "skipped" };
+  const keycloakOnly = { ...unselected, KEYCLOAK_IDENTITY_NEEDED: "true", KEYCLOAK_IDENTITY: "success" };
+
   for (const [lane, result, override, expected] of [
     ["PR with selected jobs", pr, {}, 0],
     ["PR with unselected jobs", unselected, {}, 0],
-    ["PR with Keycloak unselected and operator selected", pr, { KEYCLOAK_IDENTITY_NEEDED: "false", KEYCLOAK_IDENTITY: "skipped" }, 0],
-    ["PR with operator unselected and Keycloak selected", unselected, { KEYCLOAK_IDENTITY_NEEDED: "true", KEYCLOAK_IDENTITY: "success" }, 0],
+    ["PR with Keycloak unselected and operator selected", operatorOnly, {}, 0],
+    ["PR with Keycloak unselected and operator failing", operatorOnly, { PLATFORM_OPERATOR_E2E: "failure" }, 1],
+    ["PR with Keycloak unselected and operator result missing", operatorOnly, { PLATFORM_OPERATOR_E2E: "" }, 1],
+    ["PR with operator unselected and Keycloak selected", keycloakOnly, {}, 0],
+    ["PR with operator unselected and Keycloak failing", keycloakOnly, { KEYCLOAK_IDENTITY: "failure" }, 1],
+    ["PR with operator unselected and Keycloak result missing", keycloakOnly, { KEYCLOAK_IDENTITY: "" }, 1],
     ["PR with a failed signed-in operator shard", pr, { PLATFORM_OPERATOR_E2E: "failure" }, 1],
     ["PR with selected signed-in operator skipped", pr, { PLATFORM_OPERATOR_E2E: "skipped" }, 1],
     ["PR with a failed Keycloak identity job", pr, { KEYCLOAK_IDENTITY: "failure" }, 1],
