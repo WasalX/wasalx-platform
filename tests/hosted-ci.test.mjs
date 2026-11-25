@@ -456,7 +456,7 @@ test("nightly MinIO mirrors retain the full installer content digests", async ()
   }
 });
 
-test("nightly selects the newest complete publication within five first-parent commits and requires an exact publication on tags", async t => {
+test("nightly requires the exact main publication for qualification and labels PR image fixtures", async t => {
   const directory = await mkdtemp(join(tmpdir(), "nightly-publication-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const options = { cwd: directory, encoding: "utf8", windowsHide: true };
@@ -471,10 +471,11 @@ test("nightly selects the newest complete publication within five first-parent c
   const parent = git("rev-parse", "HEAD^1");
   const side = git("commit-tree", tree, "-p", parent, "-m", "side branch");
   const base = git("commit-tree", tree, "-p", parent, "-p", side, "-m", "base merge");
+  const prHead = git("commit-tree", tree, "-p", parent, "-m", "PR head");
+  const prMerge = git("commit-tree", tree, "-p", base, "-p", prHead, "-m", "PR merge");
   const commits = git("rev-list", "--first-parent", base).split(/\r?\n/u);
   const tag = "v0.0.0-rc.1";
   git("tag", "-a", tag, base, "-m", "fixture tag");
-  git("checkout", "--quiet", "--detach", base);
   git("remote", "add", "origin", ".");
   const { jobs } = parse(await read(".github/workflows/nightly-install.yml"));
   const publication = jobs["nightly-install"].steps.find(step => step.id === "publication");
@@ -506,7 +507,7 @@ gh() {
     'run download')
       local commit=$READY images='{"zammad":{}}' pending='{}' complete=true
       [[ "$3" != 102 ]] || { commit=$INCOMPLETE; images='{}'; pending='{"zammad":{}}'; complete=false; }
-      [[ "$INVALID" != true ]] || commit=$BASE
+      [[ "$INVALID" != true ]] || commit=$SIDE
       while [[ "$1" != --dir ]]; do shift; done
       printf '{"schemaVersion":1,"repository":"%s","platform":"linux/amd64","commit":"%s","tree":"%s","images":%s,"pending":%s,"publicationComplete":%s}\n' \
         "$GITHUB_REPOSITORY" "$commit" "$(git rev-parse "$commit^{tree}")" "$images" "$pending" "$complete" > "$2/images-manifest.json"
@@ -515,42 +516,55 @@ gh() {
   esac
 }
 `;
+  const fixture = commit => `PR signed-image fixture uses main publication ${commit} (run 101, PR base ${base}).`;
+  const fallback = `${fixture(commits[4])} The PR base has no complete green publication.`;
+  const blocked = reason => `BLOCKED: Exact main publication for ${base} is unavailable (${reason}).`;
   const cases = [
-    { ready: base, selected: base, lookups: commits.slice(0, 1), reason: "requested base has a complete publication" },
+    { ready: base, selected: base, lookups: [base], summary: fixture(base) },
     { ready: commits[4], incomplete: commits[1], expired: commits[2], noJob: commits[3],
-      selected: commits[4], lookups: commits.slice(0, 5) },
+      selected: commits[4], lookups: commits.slice(0, 5), summary: fallback, warning: fallback },
     { ready: commits[5], lookups: commits.slice(0, 5), reason: "No complete green main publication" },
     { ready: side, lookups: commits.slice(0, 5), reason: "No complete green main publication" },
     { ready: commits[1], lookupError: base, lookups: commits.slice(0, 1), status: 17 },
     { ready: commits[1], invalid: true, lookups: commits.slice(0, 2), status: 5, reason: "Invalid nightly publication manifest" },
-    { ready: base, exact: true, selected: base, lookups: commits.slice(0, 1) },
-    { ready: commits[1], exact: true, lookups: commits.slice(0, 1), reason: "No green main CI push run for the commit" },
+    ...["schedule", "workflow_dispatch"].flatMap(event => [
+      { event, ready: base, selected: base, lookups: [base], summary: `Exact main publication ${base} is complete (run 101).` },
+      { event, ready: commits[1], lookups: [base], summary: blocked("no green main CI push run") },
+      { event, ready: commits[1], incomplete: base, lookups: [base], summary: blocked("images-manifest is incomplete") },
+    ]),
+    { event: "schedule", ready: commits[1], expired: base, lookups: [base], summary: blocked("no available images-manifest artifact") },
+    { event: "schedule", ready: commits[1], noJob: base, lookups: [base], summary: blocked("no successful Image digest manifest job") },
+    { event: "workflow_dispatch", ready: base, invalid: true, lookups: [base], status: 5, reason: "Invalid nightly publication manifest" },
+    { event: "push", ready: base, selected: base, lookups: [base] },
+    { event: "push", ready: commits[1], lookups: [base], reason: "No green main CI push run for the commit" },
   ];
   const bash = process.platform === "win32" ? "C:/Program Files/Git/bin/bash.exe" : "bash";
   for (const { ready, selected, incomplete = "", expired = "", noJob = "", lookupError = "", invalid = false,
-    exact = false, lookups, status = selected ? 0 : 1, reason } of cases) {
+    event = "pull_request", lookups, status = selected ? 0 : 1, reason, summary = "", warning } of cases) {
+    const head = event === "pull_request" ? prMerge : base;
+    const tagPush = event === "push";
+    git("checkout", "--quiet", "--detach", head);
+    await rm(join(directory, "wasalx-nightly"), { recursive: true, force: true });
     await writeFile(join(directory, "lookups"), "");
     await writeFile(join(directory, "publication-output"), "");
     await writeFile(join(directory, "publication-summary"), "");
     const result = spawnSync(bash, ["--noprofile", "--norc", "-euo", "pipefail", "-c", ghFixture + publication.run], {
       ...options, timeout: 10_000, env: {
-        ...process.env, GITHUB_REPOSITORY: "fixture/nightly", BASE: base, READY: ready, INCOMPLETE: incomplete,
+        ...process.env, GITHUB_REPOSITORY: "fixture/nightly", BASE: base, SIDE: side, READY: ready, INCOMPLETE: incomplete,
         EXPIRED: expired, NO_JOB: noJob, LOOKUP_ERROR: lookupError, INVALID: String(invalid),
-        GITHUB_EVENT_NAME: exact ? "push" : "schedule", GITHUB_REF_TYPE: exact ? "tag" : "branch",
-        GITHUB_REF: exact ? `refs/tags/${tag}` : "refs/heads/main",
-        GITHUB_SHA: base, GITHUB_OUTPUT: "publication-output", GITHUB_STEP_SUMMARY: "publication-summary", RUNNER_TEMP: ".",
+        GITHUB_EVENT_NAME: event, GITHUB_REF_TYPE: tagPush ? "tag" : "branch",
+        GITHUB_REF: tagPush ? `refs/tags/${tag}` : event === "pull_request" ? "refs/pull/1/merge" : "refs/heads/main",
+        GITHUB_SHA: head, GITHUB_OUTPUT: "publication-output", GITHUB_STEP_SUMMARY: "publication-summary", RUNNER_TEMP: ".",
       },
     });
     assert.ifError(result.error);
-    assert.equal(result.status, status, result.stdout + result.stderr);
+    assert.equal(result.status, status, `${event}\n${result.stdout}${result.stderr}`);
     assert.equal((await readFile(join(directory, "publication-output"), "utf8")).trim(), selected ? `commit=${selected}` : "");
     if (reason) assert.ok((result.stdout + result.stderr).includes(reason), result.stderr);
-    const warning = selected && selected !== base
-      ? `Nightly images come from ${selected} (run 101) because requested base ${base} has no complete green publication.`
-      : "";
     const annotations = result.stderr.split(/\r?\n/u).filter(line => line.startsWith("::warning::"));
     assert.deepEqual(annotations, warning ? [`::warning::${warning}`] : []);
-    assert.equal((await readFile(join(directory, "publication-summary"), "utf8")).trim(), warning);
+    assert.equal((await readFile(join(directory, "publication-summary"), "utf8")).trim(), summary);
+    if (summary.startsWith("BLOCKED")) assert.ok(result.stderr.includes(`::error::${summary}`), result.stderr);
     if (selected) {
       const manifest = join(directory, "wasalx-nightly", "images-manifest.json");
       assert.equal(JSON.parse(await readFile(manifest, "utf8")).commit, selected);

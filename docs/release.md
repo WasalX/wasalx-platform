@@ -35,25 +35,33 @@ Before requesting `prod` approval, the release workflow checks for a successful,
 published RC for the exact commit and a successful `ci.yml` run from that
 commit's push to `main`.
 
-Nightly installer rehearsals use a PR's checked-out merge tree for installer
-scripts and configuration, with published images from the newest complete
-green `main` publication in the PR base's first five first-parent commits
-(including the base). Scheduled and manual runs start at their checked-out
-`main` SHA and use its publication when complete. The run logs the image
-source separately from the installer tree and fails if the bounded search
-finds no eligible publication. When the search selects an older publication,
-the workflow warning and job summary show the requested base, the selected
-commit, and the publishing run. A failed pull verification or rehearsal logs
-the failing command, exit code, and a redacted reason. The diagnostics artifact
-keeps phase timings and installer control messages. Raw registry responses,
-credentials, and Compose output stay out of the artifact.
+Live-provider qualification with real WhatsApp or Meta services and real
+customers is a separate milestone that requires the owner's approval for the
+paid provider accounts and access it needs. A stable
+release proves the platform end to end in its own environments.
+
+## Nightly installer evidence
+
+Scheduled runs and manual runs from `main` require a complete, green image
+publication for the workflow's exact `main` commit. A missing or incomplete
+publication fails qualification and reports `BLOCKED` for that commit in the
+job summary. RC tag runs require the publication for the commit the tag resolves to.
+
+PR installer rehearsals use the PR's checked-out merge tree for installer
+scripts and configuration. The rehearsal and PR pull-tooling check use a signed
+image fixture from the newest complete, green `main` publication in the PR
+base's first five first-parent commits, including the base. The job summary
+labels the fixture and records the PR base, image commit, and publishing run.
+Selection of an older publication also emits a warning. The run logs the image
+source and installer tree and fails if the bounded search finds no eligible
+publication.
+
+A failed pull verification or rehearsal logs the failing command, exit code,
+and a redacted reason. The diagnostics artifact keeps phase timings and
+installer control messages. Raw registry responses, credentials, and Compose
+output stay out of the artifact.
 The rehearsal verifies that Docker can pull the pinned registry image before
 blocking egress, then requires a TCP rejection when Docker pulls the same
 digest again. The blocked-egress receipt records that rejection. The census
 requires the observed inventory and rerendered hashes to cover the active
 services in the rehearsal's resolved Compose model.
-
-Live-provider qualification with real WhatsApp or Meta services and real
-customers is a separate milestone that requires the owner's approval for the
-paid provider accounts and access it needs. A stable
-release proves the platform end to end in its own environments.
