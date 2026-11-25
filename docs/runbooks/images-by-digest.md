@@ -8,8 +8,9 @@ builds, which run without registry login, package writes or OIDC.
 On a push to `main`, `ci` calls `release` in
 `.github/workflows/branch-image.yml` to build, inspect, publish, sign and
 attest the full catalog. Package writes are limited to the publish and alias
-jobs. OIDC is limited to the publish lanes. Admission to the DEV environment
-requires a successful `ci` run on `main` with the `images-manifest` artifact.
+jobs. OIDC is limited to the publish lanes. DEV admission uses a successful
+`ci` push run and its complete `images-manifest` for the exact commit.
+The manifest job summary records whether immutable publication is complete.
 
 The publish jobs on `main` export one GHCR cache tag per heavy
 image, without importing layers. PR and merge-queue builds import those
@@ -17,14 +18,25 @@ layers anonymously and run the same image inspection. The cache package
 must be public for anonymous cache hits. The first publish creates the
 package and seeds the cache. Check the anonymous access before claiming a
 warm-cache timing. Cosign produces the signature and SLSA attestation.
-Exact-SHA image pushes, signing, and attestation allow up to three attempts.
+The [registry retry policy](../../scripts/release/image_registry_retry.py)
+allows at most three attempts for recognized transient HTTP and network
+failures or a registry command deadline. Build, authorization, signature,
+provenance and digest errors fail on the first attempt. Unclassified failures
+also fail immediately. Release tool and infrastructure downloads use curl's
+standard transient retry set with a time budget. Verification failures stop
+before the downloaded bytes are used.
 
 Each package is `ghcr.io/wasalx/<image>`, tagged with the full public commit SHA.
-Each main commit publishes independently. After its manifest is uploaded, a
-serialized job advances each `main` discovery alias only when the commit
-descends from the revision on the current alias. The job summary records skips
-when the revision or ancestry is unknown or the update would move backwards.
-Exact-SHA tags and manifest receipts remain available.
+Each main commit publishes independently. The [main image aliases workflow](../../.github/workflows/main-image-aliases.yml)
+downloads the triggering successful CI run's manifest. Its serialized job
+advances each `main` discovery alias only when the commit descends from the
+revision on the current alias. The job summary identifies the source commit,
+CI run and attempt. It records advanced and verified aliases, aliases kept at
+the expected digest, and skipped moves when the revision or ancestry is unknown
+or the update would move backwards. A registry failure or digest mismatch fails
+the alias workflow. Earlier moves may already have landed when an update fails.
+The CI result, exact-SHA tags and manifest receipts retain their publication
+outcomes independently of the alias run.
 Resolve the alias once, then use only `@sha256:<manifest digest>`.
 The `images-manifest` artifact requires one receipt for every matrix row, all
 bound to the same commit and tree. When the plan marks both add-on images

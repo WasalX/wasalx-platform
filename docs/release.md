@@ -34,6 +34,9 @@ criteria below.
 Before requesting `prod` approval, the release workflow checks for a successful,
 published RC for the exact commit and a successful `ci.yml` run from that
 commit's push to `main`.
+The [image publication runbook](runbooks/images-by-digest.md) describes the
+independent `:main` discovery alias workflow. Release admission uses the
+exact commit's immutable publication and CI evidence.
 
 Nightly installer rehearsals use a PR's checked-out merge tree for installer
 scripts and configuration, with published images from the newest complete

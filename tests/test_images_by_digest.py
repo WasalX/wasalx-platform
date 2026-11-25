@@ -1,5 +1,5 @@
 from unittest import mock
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 import subprocess
 import os
 import copy
@@ -26,6 +26,17 @@ with patch.object(sys, "path", [str(RELEASE), *sys.path]):
     alias_spec = importlib.util.spec_from_file_location("aliases", RELEASE / "advance-main-image-aliases.py")
     aliases = importlib.util.module_from_spec(alias_spec)
     alias_spec.loader.exec_module(aliases)
+
+
+def alias_environment(directory, commit):
+    path = Path(directory) / "workflow-event.json"
+    event = {"action": "completed", "workflow_run": {"path": ".github/workflows/ci.yml",
+             "head_repository": {"full_name": images.REPOSITORY}, "event": "push",
+             "head_branch": "main", "head_sha": commit, "conclusion": "success"}}
+    images.write(path, event)
+    return {"GITHUB_EVENT_NAME": "workflow_run", "GITHUB_REF": "refs/heads/main",
+            "GITHUB_REPOSITORY": images.REPOSITORY, "GITHUB_SHA": "d" * 40,
+            "GITHUB_EVENT_PATH": str(path), "GITHUB_STEP_SUMMARY": str(Path(directory) / "summary.md")}
 
 
 class ImagePublicationTests(unittest.TestCase):
@@ -131,6 +142,7 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
             if args[:4] == ["git", "-c", "core.autocrlf=false", "archive"]:
                 with tarfile.open(args[5].removeprefix("--output="), "w") as archive:
                     archive.add(ROOT / row["dockerfile"], arcname=row["dockerfile"])
+            return subprocess.CompletedProcess(args, 0)
 
         for image, contact_email in [("portal", " synthetic-contact "), ("portal", ""),
                                      ("secret-sidecar", " synthetic-contact ")]:
@@ -148,7 +160,7 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
                 git.assert_called_once_with("git", "log", "-1", "--format=%ct", commit, cwd=ROOT)
                 args = execute.call_args.args[0]
                 build_args = [value for flag, value in zip(args, args[1:]) if flag == "--build-arg"]
-                self.assertEqual(args[:3], ["docker", "buildx", "build"])
+                self.assertEqual(args[:3], ("docker", "buildx", "build"))
                 self.assertEqual(args[args.index("--output") + 1], "type=docker,rewrite-timestamp=true")
                 self.assertIn("SOURCE_DATE_EPOCH=" + epoch, build_args)
                 self.assertEqual([arg for arg in build_args if arg.startswith("PUBLIC_CONTACT_EMAIL")],
@@ -473,24 +485,50 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
                     images.cache_options("portal", "write")
 
     def test_docker_pull_retries_only_the_pull(self):
-        failure = subprocess.CalledProcessError(1, "docker pull")
-        with mock.patch.object(images, "run", side_effect=[failure, failure, ""]) as run:
-            with mock.patch.object(images.time, "sleep"):
-                images.pull("base")
-            self.assertEqual(run.call_args_list, [mock.call("docker", "pull", "--platform", "linux/amd64", "base")] * 3)
-        with mock.patch.object(images, "run", side_effect=failure) as run:
-            with mock.patch.object(images.time, "sleep"), self.assertRaises(subprocess.CalledProcessError):
-                images.pull("base")
-            self.assertEqual(run.call_count, 3)
+        command = ("docker", "pull", "--platform", "linux/amd64", "base")
+        failure = subprocess.CalledProcessError(1, command, stderr=b"received unexpected HTTP status: 503 Service Unavailable")
+        with (patch.object(subprocess, "run", side_effect=failure) as run,
+              patch("time.sleep") as sleep, redirect_stderr(io.StringIO()), self.assertRaises(subprocess.CalledProcessError)):
+            images.pull("base")
+        self.assertEqual([call.args[0] for call in run.call_args_list], [command] * 3)
+        self.assertEqual(sleep.call_args_list, [mock.call(1), mock.call(2)])
 
-    def test_publication_retry_succeeds_after_two_command_failures(self):
+    def test_registry_transport_recovers_without_changing_command_or_output(self):
         command = ("docker", "push", "image")
-        failure = subprocess.CalledProcessError(1, command)
-        with patch.object(images, "run", side_effect=[failure, failure, "published"]) as run, \
-                patch.object(images.time, "sleep") as sleep:
-            self.assertEqual(images.run_retry(*command), "published")
-        self.assertEqual(run.call_args_list, [mock.call(*command)] * 3)
+        failures = [
+            b"unexpected status from HEAD request to https://registry.example.test/v2/images: 503 Service Unavailable",
+            b'Get "https://registry.example.test/v2/": read tcp 127.0.0.1:443: read: connection reset by peer',
+        ]
+        results = [subprocess.CalledProcessError(1, command, stderr=reason) for reason in failures]
+        results.append(subprocess.CompletedProcess(command, 0, stdout=b"published"))
+        with (patch.object(subprocess, "run", side_effect=results) as run,
+              patch("time.sleep") as sleep, redirect_stderr(io.StringIO()) as logs):
+            self.assertEqual(images.registry_output(*command), b"published")
+        self.assertEqual([call.args[0] for call in run.call_args_list], [command] * 3)
         self.assertEqual(sleep.call_args_list, [mock.call(10), mock.call(20)])
+        self.assertEqual(logs.getvalue().count("Transient registry transport failure"), 2)
+
+    def test_registry_failures_without_a_transient_cause_stop_immediately(self):
+        cases = [
+            (("docker", "buildx", "build"), b"unexpected HTTP status: 503\nERROR: failed to solve: exit code: 1"),
+            (("docker", "push"), b"unauthorized: unexpected HTTP status: 503"),
+            (("docker", "push"), b"unexpected HTTP status: 401\nproxy body: unexpected HTTP status: 503"),
+            (("docker", "push"), b"unexpected HTTP status: 401 Unauthorized"),
+            (("cosign", "sign"), b"error: certificate identity mismatch"),
+            (("cosign", "verify"), b"error: no matching signatures"),
+            (("cosign", "attest"), b"error: invalid provenance"),
+            (("cosign", "verify-attestation"), b"error: no matching attestations"),
+            (("docker", "pull"), b"error: digest mismatch"),
+            (("docker", "pull"), b"x509: certificate signed by unknown authority"),
+            (("docker", "pull"), b""),
+        ]
+        for command, reason in cases:
+            failure = subprocess.CalledProcessError(1, command, stderr=reason)
+            with (self.subTest(command=command, reason=reason), patch.object(subprocess, "run", side_effect=failure) as run,
+                  patch("time.sleep") as sleep, redirect_stderr(io.StringIO()), self.assertRaises(subprocess.CalledProcessError)):
+                images.registry_output(*command)
+            run.assert_called_once()
+            sleep.assert_not_called()
 
     def test_publication_pushes_only_the_commit_tag_and_uses_the_signing_identity(self):
         commit, tree, digest = "a" * 40, "b" * 40, "sha256:" + "1" * 64
@@ -509,7 +547,8 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
             with self.subTest(image=image), tempfile.TemporaryDirectory() as directory, \
                     patch.dict(os.environ, env, clear=True), \
                     patch.object(images, "coordinates", return_value=(commit, tree)), \
-                    patch.object(images, "run", side_effect=[f"digest: {digest}", manifest, "", "", "", ""]) as run, \
+                    patch.object(images, "registry_output", side_effect=[f"digest: {digest}".encode(), manifest,
+                                                                         b"", b"", b"", b""]) as run, \
                     patch.object(images, "pull"), patch.object(images, "inspect_image", return_value=inspection):
                 path = Path(directory) / "receipt.json"
                 if image == "portal":
@@ -560,38 +599,34 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
             older, newer = commit("older"), commit("newer")
             current = older
 
-            def registry_read(command, **kwargs):
-                self.assertEqual(command[:4], ["docker", "buildx", "imagetools", "inspect"])
+            def registry(*command, **kwargs):
+                nonlocal current
+                self.assertEqual(command[:3], ("docker", "buildx", "imagetools"))
+                if command[3] == "create":
+                    self.assertEqual(command[4:], ("--prefer-index=false", "--tag", alias, reference))
+                    current = newer
+                    return None
+                self.assertEqual(command[3], "inspect")
                 self.assertEqual(command[-1], alias)
                 if command[4] == "--raw":
                     return raw
-                self.assertEqual(command[4:-1], ["--format", "{{json .Image.Config.Labels}}"])
+                self.assertEqual(command[4:-1], ("--format", "{{json .Image.Config.Labels}}"))
                 return json.dumps({"org.opencontainers.image.revision": current}).encode()
-
-            def git_or_push(command, **kwargs):
-                nonlocal current
-                if command[0] == "git":
-                    return git_run(command, cwd=directory, **kwargs)
-                self.assertEqual(command, ["docker", "buildx", "imagetools", "create", "--prefer-index=false",
-                                           "--tag", alias, reference])
-                current = newer
 
             manifest = Path(directory) / "images-manifest.json"
             summary = Path(directory) / "summary.md"
-            env = {"GITHUB_EVENT_NAME": "push", "GITHUB_REF": "refs/heads/main", "GITHUB_REPOSITORY": images.REPOSITORY,
-                   "GITHUB_STEP_SUMMARY": str(summary)}
-            with patch.object(subprocess, "check_output", side_effect=registry_read), \
-                    patch.object(subprocess, "run", side_effect=git_or_push) as run, \
+            with patch.object(aliases, "registry_output", side_effect=registry) as registry_calls, \
+                    patch.object(subprocess, "run", side_effect=lambda command, **kw: git_run(command, cwd=directory, **kw)), \
                     redirect_stdout(io.StringIO()) as stdout:
                 for candidate, expected in ((newer, newer), (newer, newer), (older, newer), (older, None)):
                     if expected is None:
                         current = None
                     images.write(manifest, {"commit": candidate, "images": {"portal": {
                         "commit": candidate, "digest": digest, "verified": True}}})
-                    with patch.dict(os.environ, {**env, "GITHUB_SHA": candidate}):
+                    with patch.dict(os.environ, alias_environment(directory, candidate)):
                         aliases.advance_main_aliases(manifest)
                     self.assertEqual(current, expected)
-                self.assertEqual(sum(call.args[0][0] == "docker" for call in run.call_args_list), 1)
+                self.assertEqual(sum(call.args[3] == "create" for call in registry_calls.call_args_list), 1)
             messages = summary.read_text(encoding="utf-8")
             self.assertIn(f"Advanced `{alias}` from `{older}` to `{newer}`", messages)
             self.assertIn(f"Kept `{alias}` at `{newer}`.", messages)
@@ -608,50 +643,69 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
         alias = "ghcr.io/wasalx/portal:main"
         reference = "ghcr.io/wasalx/portal@" + images.sha256(raw)
         commit, older = "a" * 40, "b" * 40
-        create = ["docker", "buildx", "imagetools", "create", "--prefer-index=false", "--tag", alias, reference]
-        inspect = ["docker", "buildx", "imagetools", "inspect", "--raw", alias]
+        create = ("docker", "buildx", "imagetools", "create", "--prefer-index=false", "--tag", alias, reference)
+        inspect = ("docker", "buildx", "imagetools", "inspect", "--raw", alias)
         ancestry = ["git", "merge-base", "--is-ancestor", older, commit]
         labels = json.dumps({"org.opencontainers.image.revision": older}).encode()
+        unavailable = b"unexpected status code: 503 Service Unavailable"
         with (patch.object(subprocess, "run", side_effect=[
-                  subprocess.CompletedProcess(ancestry, 0), subprocess.CalledProcessError(1, create),
-                  subprocess.TimeoutExpired(create, 60), subprocess.CompletedProcess(create, 0)]) as run,
-              patch.object(subprocess, "check_output", side_effect=[
-                  labels, subprocess.TimeoutExpired(inspect, 20), subprocess.CalledProcessError(1, inspect), raw]) as read,
-              patch("time.sleep") as sleep):
+                  subprocess.CompletedProcess([], 0, stdout=labels),
+                  subprocess.CompletedProcess(ancestry, 0), subprocess.CalledProcessError(1, create, stderr=unavailable),
+                  subprocess.TimeoutExpired(create, 60), subprocess.CompletedProcess(create, 0),
+                  subprocess.TimeoutExpired(inspect, 20), subprocess.CalledProcessError(1, inspect, stderr=unavailable),
+                  subprocess.CompletedProcess(inspect, 0, stdout=raw)]) as run,
+              patch("time.sleep") as sleep, redirect_stderr(io.StringIO())):
             message, skipped = aliases.advance_alias(reference, commit)
         self.assertTrue(message.startswith("Advanced "))
         self.assertFalse(skipped)
-        self.assertEqual(run.call_args_list, [mock.call(ancestry, stderr=subprocess.DEVNULL, timeout=10)]
-                         + [mock.call(create, check=True, timeout=60)] * 3)
-        self.assertEqual(read.call_args_list[1:], [mock.call(inspect, timeout=20)] * 3)
+        self.assertEqual(run.call_args_list[1:], [mock.call(ancestry, stderr=subprocess.DEVNULL, timeout=10)]
+                         + [mock.call(create, check=True, stdout=None, stderr=subprocess.PIPE, timeout=60)] * 3
+                         + [mock.call(inspect, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=20)] * 3)
         self.assertEqual(sleep.call_args_list, [mock.call(10), mock.call(20)] * 2)
 
     def test_main_alias_fails_after_three_registry_attempts(self):
-        labels = json.dumps({"org.opencontainers.image.revision": "b" * 40}).encode()
+        labels = subprocess.CompletedProcess([], 0, stdout=b'{"org.opencontainers.image.revision":"' + b"b" * 40 + b'"}')
         reference = "ghcr.io/wasalx/portal@" + images.sha256(b"manifest")
-        failure = subprocess.CalledProcessError(1, "imagetools")
+        failure = subprocess.CalledProcessError(1, "imagetools", stderr=b"unexpected status code: 502 Bad Gateway")
         ancestry = subprocess.CompletedProcess("git merge-base", 0)
-        for stage, run_results, read_results, calls in (
-            ("create", [ancestry, failure, failure, failure], [labels], (4, 1)),
-            ("inspect", [ancestry, None], [labels, failure, failure, failure], (2, 4)),
-        ):
+        for stage, prefix in (("lookup", []), ("create", [labels, ancestry]),
+                              ("inspect", [labels, ancestry, subprocess.CompletedProcess([], 0)])):
             with self.subTest(stage=stage):
-                with (patch.object(subprocess, "run", side_effect=run_results) as run,
-                      patch.object(subprocess, "check_output", side_effect=read_results) as read,
-                      patch("time.sleep") as sleep, self.assertRaises(subprocess.CalledProcessError)):
+                with (patch.object(subprocess, "run", side_effect=prefix + [failure] * 3) as run,
+                      patch("time.sleep") as sleep, redirect_stderr(io.StringIO()), self.assertRaises(subprocess.CalledProcessError)):
                     aliases.advance_alias(reference, "a" * 40)
-                self.assertEqual((run.call_count, read.call_count), calls)
+                self.assertEqual(run.call_count, len(prefix) + 3)
                 self.assertEqual(sleep.call_args_list, [mock.call(10), mock.call(20)])
 
     def test_main_alias_digest_mismatch_fails_without_retry(self):
-        labels = json.dumps({"org.opencontainers.image.revision": "b" * 40}).encode()
         reference = "ghcr.io/wasalx/portal@" + images.sha256(b"manifest")
-        with (patch.object(subprocess, "run", return_value=subprocess.CompletedProcess([], 0)) as run,
-              patch.object(subprocess, "check_output", side_effect=[labels, b"wrong"]) as read,
-              patch("time.sleep") as sleep, self.assertRaisesRegex(ValueError, "alias digest mismatch")):
-            aliases.advance_alias(reference, "a" * 40)
-        self.assertEqual((run.call_count, read.call_count), (2, 2))
-        sleep.assert_not_called()
+        commit = "a" * 40
+        for current in ("b" * 40, commit):
+            labels = json.dumps({"org.opencontainers.image.revision": current}).encode()
+            responses = [labels, b"wrong"] if current == commit else [labels, None, b"wrong"]
+            with (self.subTest(current=current),
+                  patch.object(subprocess, "run", return_value=subprocess.CompletedProcess([], 0)) as run,
+                  patch.object(aliases, "registry_output", side_effect=responses) as registry,
+                  self.assertRaisesRegex(ValueError, "alias digest mismatch")):
+                aliases.advance_alias(reference, commit)
+            self.assertEqual(run.call_count, int(current != commit))
+            self.assertEqual(registry.call_count, len(responses))
+
+    def test_alias_lookup_skips_missing_alias_and_fails_fast_on_denied_access(self):
+        reference = "ghcr.io/wasalx/portal@" + images.sha256(b"manifest")
+        for diagnostic in (b"ERROR: ghcr.io/wasalx/portal:main: not found", b"denied: unauthorized"):
+            failure = subprocess.CalledProcessError(1, "imagetools", stderr=diagnostic)
+            with (self.subTest(diagnostic=diagnostic), patch.object(subprocess, "run", side_effect=failure) as run,
+                  patch("time.sleep") as sleep, redirect_stderr(io.StringIO())):
+                if diagnostic.endswith(b"not found"):
+                    message, skipped = aliases.advance_alias(reference, "a" * 40)
+                    self.assertTrue(skipped)
+                    self.assertIn("current revision could not be determined", message)
+                else:
+                    with self.assertRaises(subprocess.CalledProcessError):
+                        aliases.advance_alias(reference, "a" * 40)
+                run.assert_called_once()
+                sleep.assert_not_called()
 
     def test_main_alias_warns_when_git_ancestry_is_unknown(self):
         commit, older = "a" * 40, "b" * 40
@@ -661,9 +715,8 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
             manifest = Path(directory) / "manifest.json"
             summary = Path(directory) / "summary.md"
             images.write(manifest, {"commit": commit, "images": {"portal": row}})
-            env = {"GITHUB_EVENT_NAME": "push", "GITHUB_REF": "refs/heads/main",
-                   "GITHUB_REPOSITORY": images.REPOSITORY, "GITHUB_SHA": commit, "GITHUB_STEP_SUMMARY": str(summary)}
-            with (patch.dict(os.environ, env), patch.object(subprocess, "check_output", return_value=labels) as read,
+            env = alias_environment(directory, commit)
+            with (patch.dict(os.environ, env), patch.object(aliases, "registry_output", return_value=labels) as read,
                   patch.object(subprocess, "run", return_value=subprocess.CompletedProcess([], 128)) as run,
                   redirect_stdout(io.StringIO()) as stdout):
                 aliases.advance_main_aliases(manifest)
@@ -680,20 +733,27 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
         with tempfile.TemporaryDirectory() as directory:
             manifest = Path(directory) / "manifest.json"
             summary = Path(directory) / "summary.md"
-            env = {"GITHUB_EVENT_NAME": "push", "GITHUB_REF": "refs/heads/main",
-                   "GITHUB_REPOSITORY": images.REPOSITORY, "GITHUB_SHA": commit, "GITHUB_STEP_SUMMARY": str(summary)}
+            env = alias_environment(directory, commit)
+            event_path = Path(env["GITHUB_EVENT_PATH"])
+            event = json.loads(event_path.read_bytes())
             with patch.dict(os.environ, env), patch.object(aliases, "advance_alias") as advance:
                 for key, value in (("GITHUB_EVENT_NAME", "pull_request"), ("GITHUB_REF", "refs/heads/feature"),
                                    ("GITHUB_REPOSITORY", "example/fork")):
                     with (self.subTest(guard=key), patch.dict(os.environ, {key: value}),
-                          self.assertRaisesRegex(ValueError, "require a main push")):
+                          self.assertRaisesRegex(ValueError, "require a completed main CI push")):
+                        aliases.advance_main_aliases(manifest)
+                for key, value in (("conclusion", "failure"), ("event", "pull_request"), ("head_branch", "feature"),
+                                   ("path", ".github/workflows/other.yml"), ("head_repository", {"full_name": "example/fork"})):
+                    images.write(event_path, {**event, "workflow_run": {**event["workflow_run"], key: value}})
+                    with self.subTest(key=key), self.assertRaisesRegex(ValueError, "require a completed main CI push"):
                         aliases.advance_main_aliases(manifest)
                 for candidate, sha in (("b" * 40, commit), ("main", "main")):
                     images.write(manifest, {"commit": candidate, "images": {"portal": row}})
+                    images.write(event_path, {**event, "workflow_run": {**event["workflow_run"], "head_sha": sha}})
                     with (self.subTest(guard="manifest commit", candidate=candidate),
-                          patch.dict(os.environ, {"GITHUB_SHA": sha}),
                           self.assertRaisesRegex(ValueError, "manifest does not match")):
                         aliases.advance_main_aliases(manifest)
+                images.write(event_path, event)
                 for image, overrides in (("bad/image", {}), ("worker", {"verified": False}),
                                          ("worker", {"digest": "main"}), ("worker", {"commit": "b" * 40})):
                     images.write(manifest, {"commit": commit, "images": {"portal": row, image: {**row, **overrides}}})
@@ -701,6 +761,26 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
                         aliases.advance_main_aliases(manifest)
                 advance.assert_not_called()
             self.assertFalse(summary.exists())
+
+    def test_failed_alias_is_recorded_without_changing_immutable_publication_receipt(self):
+        commit = "a" * 40
+        row = {"commit": commit, "digest": images.sha256(b"manifest"), "verified": True}
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = Path(directory) / "manifest.json"
+            summary = Path(directory) / "summary.md"
+            images.write(manifest, {"commit": commit, "publicationComplete": True,
+                                    "images": {"portal": row, "worker": row, "remaining": row}})
+            artifact = manifest.read_bytes()
+            failure = subprocess.CalledProcessError(1, "imagetools", stderr=b"error: unauthorized")
+            with (patch.dict(os.environ, alias_environment(directory, commit)), redirect_stdout(io.StringIO()) as logs,
+                  patch.object(aliases, "advance_alias", side_effect=[("Advanced portal.", False), failure]) as advance,
+                  self.assertRaises(subprocess.CalledProcessError)):
+                aliases.advance_main_aliases(manifest)
+            self.assertEqual(advance.call_count, 2)
+            self.assertEqual(manifest.read_bytes(), artifact)
+            self.assertIn("::error::Failed to verify", logs.getvalue())
+            self.assertIn("Advanced portal.", summary.read_text(encoding="utf-8"))
+            self.assertIn("Failed to verify `ghcr.io/wasalx/worker:main`", summary.read_text(encoding="utf-8"))
 
     def test_release_verifies_every_digest_against_the_tagged_commit(self):
         commit, tree = "a" * 40, "b" * 40
@@ -715,7 +795,7 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
         with tempfile.TemporaryDirectory() as directory, \
                 patch.object(images, "coordinates", return_value=(commit, tree)), \
                 patch.object(images.subprocess, "check_output", return_value=raw) as inspect, \
-                patch.object(images, "run_retry") as cosign:
+                patch.object(images, "registry_output") as cosign:
             path = Path(directory) / "images-manifest.json"
             path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8", newline="\n")
             images.verify_publication(path)
@@ -744,13 +824,17 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
 
     def test_workflow_restricts_package_writes_to_publish_and_aliases_and_oidc_to_publish(self):
         text = (ROOT / ".github/workflows/branch-image.yml").read_text()
+        alias_workflow = (ROOT / ".github/workflows/main-image-aliases.yml").read_text()
         self.assertEqual(text.count("driver-opts: image=moby/buildkit:v0.26.3"), 1)
-        self.assertNotIn("pull_request_target", text)
-        self.assertEqual(text.count("packages: write"), 2)
+        self.assertNotIn("pull_request_target", text + alias_workflow)
+        self.assertEqual(text.count("packages: write"), 1)
+        self.assertEqual(alias_workflow.count("packages: write"), 1)
         self.assertEqual(text.count("id-token: write"), 1)
-        self.assertNotIn("attestations: write", text)
+        self.assertNotIn("id-token: write", alias_workflow)
+        self.assertNotIn("attestations: write", text + alias_workflow)
         jobs = re.split(r"(?m)^  (\w+):\n", text.split("jobs:\n", 1)[1])
         bodies = dict(zip(jobs[1::2], jobs[2::2]))
+        bodies["aliases"] = alias_workflow.split("jobs:\n", 1)[1]
         for name, body in bodies.items():
             self.assertIn("runs-on: ubuntu-24.04", body)
             self.assertIn("HOSTED_KIND: ${{ runner.environment }}", body)
@@ -768,7 +852,7 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
         self.assertNotIn("url:", text)
         allowed = {"actions/checkout", "actions/setup-node", "actions/upload-artifact", "actions/download-artifact",
                    "docker/setup-buildx-action", "docker/login-action", "sigstore/cosign-installer"}
-        actions = re.findall(r"uses: (\S+)", text)
+        actions = re.findall(r"uses: (\S+)", text + alias_workflow)
         cosign_action = "./.github/actions/cosign"
         self.assertEqual(actions.count(cosign_action), 1)
         actions.remove(cosign_action)
