@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync, writeFileSync } from "node:fs";
 import AxeBuilder from "@axe-core/playwright";
-import { expect, test } from "@playwright/test";
+import { expect, test, type Locator } from "@playwright/test";
 import { languageTag, supportedLocales, textDirection } from "../../lib/i18n/locales.ts";
 import { englishTenantMessages as en } from "../../lib/i18n/messages/en/tenant.ts";
 import { arabicTenantMessages as ar } from "../../lib/i18n/messages/ar/tenant.ts";
@@ -14,6 +14,48 @@ const stories = Object.entries(entries).filter(([, entry]) => entry.type === "st
 assert(stories.length > 0, "Storybook's static index contains no stories");
 
 const wcagTags = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"];
+
+async function expectMetaSignupLayout(signup: Locator, viewport: "desktop" | "phone", readinessCount = 0) {
+  const layout = await signup.evaluate(async section => {
+    await document.fonts.ready;
+    const prose = [...section.querySelectorAll("p")].map(paragraph => {
+      // Measure one ch with the paragraph's actual font, including its fallback for the zero glyph.
+      const ruler = document.createElement("span");
+      ruler.style.cssText = "position:absolute;inline-size:1ch;visibility:hidden";
+      paragraph.append(ruler);
+      const ch = ruler.getBoundingClientRect().width;
+      ruler.remove();
+      const { width, height } = paragraph.getBoundingClientRect();
+      return { measure: width / ch, wraps: height > Number.parseFloat(getComputedStyle(paragraph).lineHeight) + 1 };
+    });
+    const pairs = [...section.querySelectorAll("dl > div")].map(row => {
+      const label = row.querySelector("dt")!.getBoundingClientRect();
+      const value = row.querySelector("dd")!.getBoundingClientRect();
+      const { direction, columnGap } = getComputedStyle(row);
+      const gap = direction === "rtl" ? label.left - value.right : value.left - label.right;
+      return { gap, expectedGap: Number.parseFloat(columnGap), verticalOffset: Math.abs(label.top - value.top) };
+    });
+    return {
+      prose, pairs,
+      overflow: [document.documentElement, section, ...section.querySelectorAll("p, dl, dt, dd")]
+        .some(element => element.scrollWidth > element.clientWidth + 1),
+    };
+  });
+  expect(layout.overflow).toBe(false);
+  expect(layout.prose.length).toBeGreaterThan(0);
+  expect(layout.pairs).toHaveLength(readinessCount);
+  for (const { measure } of layout.prose) expect(measure).toBeLessThanOrEqual(65);
+
+  if (viewport === "phone") {
+    expect(layout.prose.some(({ wraps }) => wraps)).toBe(true);
+  } else {
+    for (const { measure } of layout.prose) expect(measure).toBeGreaterThanOrEqual(45);
+    for (const { gap, expectedGap, verticalOffset } of layout.pairs) {
+      expect(Math.abs(gap - expectedGap)).toBeLessThanOrEqual(1);
+      expect(verticalOffset).toBeLessThanOrEqual(1);
+    }
+  }
+}
 
 for (const theme of ["light", "dark"] as const) {
   for (const locale of supportedLocales) {
@@ -77,13 +119,23 @@ for (const theme of ["light", "dark"] as const) {
         await expect(content).toHaveAttribute("lang", locale);
         await expect(content).toHaveAttribute("dir", textDirection(locale));
         const signup = content.getByRole("region", { name: messages["tenant.metaSignup.title"], exact: true });
-        const screenshot = () => page.screenshot({ fullPage: true, animations: "disabled", caret: "hide", scale: "css" });
+        const screenshot = async (state: "ready" | "recovery") => {
+          const readinessCount = state === "recovery" ? 5 : 0;
+          const options = { fullPage: true, animations: "disabled", caret: "hide", scale: "css" } as const;
+          await expectMetaSignupLayout(signup, "desktop", readinessCount);
+          const desktop = await page.screenshot(options);
+          await page.setViewportSize({ width: 390, height: 844 });
+          await expectMetaSignupLayout(signup, "phone", readinessCount);
+          await page.screenshot({ ...options, path: testInfo.outputPath(`meta-signup-layout-${state}-phone-${theme}-${locale}.png`) });
+          await page.setViewportSize({ width: 1440, height: 1000 });
+          return desktop;
+        };
 
         await signup.getByRole("button", { name: messages["tenant.metaSignup.prepare"], exact: true }).click();
         const connect = signup.getByRole("button", { name: messages["tenant.metaSignup.connect"], exact: true });
         await expect(connect).toBeEnabled();
         await expect(connect).toBeInViewport();
-        const ready = await screenshot();
+        const ready = await screenshot("ready");
 
         await connect.click();
         await expect(signup.getByText(messages["tenant.metaSignup.status.OUTCOME_UNKNOWN"], { exact: true })).toBeVisible();
@@ -91,7 +143,7 @@ for (const theme of ["light", "dark"] as const) {
         const discover = signup.getByRole("button", { name: messages["tenant.metaSignup.discover"], exact: true });
         await expect(discover).toBeEnabled();
         await expect(discover).toBeInViewport();
-        const recoverable = await screenshot();
+        const recoverable = await screenshot("recovery");
 
         await discover.click();
         await expect(signup.getByText(messages["tenant.metaSignup.status.NUMBER_REQUIRED"], { exact: true })).toBeVisible();
@@ -186,6 +238,7 @@ for (const theme of ["light", "dark"] as const) {
           caret: "hide",
           scale: "css",
         });
+        await expectMetaSignupLayout(content.getByRole("region", { name: (locale === "ar" ? ar : en)["tenant.metaSignup.title"], exact: true }), viewport);
       };
 
       await page.getByRole("button", { name: en["tenant.metaSignup.prepare"], exact: true }).click();
