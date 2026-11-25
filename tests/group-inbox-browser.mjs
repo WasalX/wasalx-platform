@@ -551,7 +551,8 @@ try {
         await page.keyboard.press("Tab");
         await expect(groupsMode).toBeFocused();
         await expect(groupsMode).toHaveAttribute("aria-pressed", "true");
-        await expect(groupsMode).toHaveCSS("display", "inline-flex");
+        await expect(groupsMode).toHaveCSS("display", "flex");
+        await expect(groupsMode).toHaveCSS("align-items", "center");
         await expect(groupsMode).toHaveCSS("outline-width", "2px");
         await expect(groupsMode).toHaveCSS("outline-style", "solid");
         await page.screenshot({ path: `${output}/group-${locale}-${theme}-${name}.png`, fullPage: true });
