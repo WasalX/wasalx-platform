@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Exercise the rendered packet in a network-isolated Linux container."""
 
+from contextlib import redirect_stdout
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -12,7 +14,10 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
+from unittest import mock
+from uuid import uuid4
 
 
 HERE = Path(__file__).resolve().parent
@@ -20,6 +25,16 @@ FIXTURES = HERE / "fixtures"
 IDENTITY = FIXTURES / "identity.example.json"
 IMAGE = "node:24.22.1-bookworm@sha256:d862bb5d082c5ae0210ac07e8c0344cb8cf7bef6d78e9b8c50c179da923108ea"
 SANDBOX_HOSTNAME = "sandbox.example.test"
+SANDBOX_TIMEOUT = 120
+CLEANUP_TIMEOUT = 20
+CHILD_CHECKPOINTS = {
+    f"DEV_DRYRUN_CHECKPOINT {phase}".encode("ascii"): phase
+    for phase in (
+        "suite-started", "golden-render", "dispatch-render", "dispatch-invoke",
+        "guest-prepare", "guest-render", "guest-receive", "guest-readability", "guest-receive-repeat",
+        "guest-probe", "guest-probe-timeout", "guest-lock", "suite-passed", "suite-failed",
+    )
+}
 NATIVE_READABILITY = """
 import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
@@ -35,6 +50,10 @@ await assertRepositoryBindMountsReadable({
 def check(condition, message):
     if not condition:
         raise RuntimeError(message)
+
+
+def checkpoint(phase):
+    print(f"DEV_DRYRUN_CHECKPOINT {phase}", flush=True)
 
 
 def run(*args, **options):
@@ -102,7 +121,9 @@ def exercise_dispatch(source):
             f"{identity['guest_user']}@{identity['guest_address']}", "hostname",
         ]
         commands, env = fakes(work, {"ssh": ssh, "hostname": identity["expected_hostname"]})
+        checkpoint("dispatch-render")
         packet = render_packet(source, work, tag, "1" * 40, "2" * 40, "3" * 64)
+        checkpoint("dispatch-invoke")
         result = entry(packet, "dispatch", env)
         check(result.returncode == 0, result.stderr)
         check((commands / "calls.jsonl").read_text().splitlines() == [json.dumps(["ssh", *ssh])],
@@ -110,6 +131,7 @@ def exercise_dispatch(source):
 
 
 def exercise_guest(source):
+    checkpoint("guest-prepare")
     os.umask(0o077)
     identity = json.loads(IDENTITY.read_bytes())
     tag = "20000101-fixture"
@@ -159,10 +181,13 @@ def exercise_guest(source):
             "native_probe": str(FIXTURES / "native-probe.mjs"),
             "probe_env": {"HOME": identity["probe_home"], "LC_ALL": "C", "GIT_OPTIONAL_LOCKS": "0"},
         })
+        checkpoint("guest-render")
         packet = render_packet(source, work, tag, commit, tree, digest(original.read_bytes()))
         try:
+            checkpoint("guest-receive")
             result = entry(packet, "receive", env)
             check(result.returncode == 0, result.stderr)
+            checkpoint("guest-readability")
             result = subprocess.run(
                 [real_node, "--input-type=module", "-e", NATIVE_READABILITY, "readability-fixture",
                  HERE.parent / "release/installer-stages.mjs", original],
@@ -172,17 +197,20 @@ def exercise_guest(source):
             for child in ("", "inputs", "inputs/bin", "inputs/trust", "inputs/hosted", "private"):
                 mode = (support / child).stat().st_mode
                 check(stat.S_ISDIR(mode) and stat.S_IMODE(mode) == 0o700, f"guest support path is not private: {child}")
+            checkpoint("guest-receive-repeat")
             result = entry(packet, "receive", env)
             check(result.returncode != 0 and "FileExistsError" in result.stderr, "guest support is not exclusive")
             check(stat.S_IMODE((repo / "mounts/payload.txt").stat().st_mode) == 0o644, "checkout data mode changed")
             check(stat.S_IMODE((repo / "mounts/entry.sh").stat().st_mode) == 0o755, "checkout executable mode changed")
 
+            checkpoint("guest-probe")
             result = entry(packet, "probe", env)
             check(result.returncode == 0, "probe rejected the installed environment model\n" + result.stderr)
             check(receipt.read_bytes() == b'{"captured": true}\n', "native capture receipt missing")
             check(stat.S_IMODE(receipt.stat().st_mode) == 0o600, "native capture receipt is not private")
             check(original.read_bytes() == b"MODEL=synthetic\n", "installed environment changed")
             (commands / "hang").touch()
+            checkpoint("guest-probe-timeout")
             result = entry(packet, "probe", env)
             check(result.returncode != 0, "unbounded probe returned success")
 
@@ -194,6 +222,7 @@ def exercise_guest(source):
             owner = calls[-1][1]
             lock_config = HERE.parent / "release/compose-stage-config.json"
             lock_path = json.loads(lock_config.read_bytes())["lockPath"]
+            checkpoint("guest-lock")
             lock = subprocess.run(["flock", "--wait", "1", lock_path, "true"], timeout=3)
             if lock.returncode:
                 os.kill(owner, signal.SIGKILL)
@@ -208,7 +237,7 @@ def exercise_guest(source):
 def exercise_result(stage, source):
     return subprocess.run(
         [sys.executable, "-I", "-B", __file__, f"--exercise-{stage}", source],
-        capture_output=True, text=True, timeout=50,
+        stderr=subprocess.PIPE, text=True, timeout=50,
     )
 
 
@@ -231,6 +260,7 @@ def assert_mutations(test, stage, mutations):
 
 class DispatchTest(unittest.TestCase):
     def test_golden_and_fixed_identity(self):
+        checkpoint("golden-render")
         with tempfile.TemporaryDirectory() as work:
             first, second = Path(work) / "one", Path(work) / "two"
             run_values = [
@@ -290,25 +320,184 @@ class GuestTest(unittest.TestCase):
         ))
 
 
-def container():
-    identity = json.loads(IDENTITY.read_bytes())
-    for hostname, suite in [(SANDBOX_HOSTNAME, "DispatchTest"), (identity["expected_hostname"], "GuestTest")]:
-        subprocess.run([
-            "docker", "run", "--rm", "--init", "--network", "none", "--read-only",
+def sandbox_log(suite, message):
+    print(f"DEV dry-run {suite}: {message}", flush=True)
+
+
+def report_checkpoints(suite, output):
+    phases = [CHILD_CHECKPOINTS[line] for line in (output or b"").splitlines() if line in CHILD_CHECKPOINTS]
+    sandbox_log(suite, "child " + (" ".join(phases[-12:]) if phases else "no checkpoint"))
+
+
+def docker_phase(suite, phase, deadline, *args):
+    started = time.monotonic()
+    sandbox_log(suite, f"{phase} started")
+    outcome = "error"
+    try:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise subprocess.TimeoutExpired(args, 0)
+        result = subprocess.run(
+            ["docker", *args], timeout=remaining,
+            stdout=subprocess.PIPE if phase == "start-attach" else subprocess.DEVNULL,
+            stderr=subprocess.PIPE if phase == "cleanup" else subprocess.DEVNULL,
+        )
+        if phase == "start-attach":
+            report_checkpoints(suite, result.stdout)
+        outcome = f"exit={result.returncode}"
+        return result
+    except subprocess.TimeoutExpired as error:
+        if phase == "start-attach":
+            report_checkpoints(suite, error.output)
+        outcome = "deadline exceeded"
+        raise RuntimeError(f"{suite}: {phase} deadline exceeded") from None
+    except OSError:
+        raise RuntimeError(f"{suite}: {phase} could not run Docker") from None
+    finally:
+        sandbox_log(suite, f"{phase} {outcome} elapsed_ms={int((time.monotonic() - started) * 1000)}")
+
+
+def sandbox(hostname, suite):
+    deadline = time.monotonic() + SANDBOX_TIMEOUT
+    image = docker_phase(suite, "image-check", deadline, "image", "inspect", IMAGE)
+    if image.returncode:
+        pull = docker_phase(suite, "pull", deadline, "pull", IMAGE)
+        check(pull.returncode == 0, f"{suite}: pull failed")
+
+    name = f"wasalx-dev-dryrun-{uuid4().hex}"
+    removed = False
+    try:
+        create = docker_phase(
+            suite, "create", deadline, "create", "--name", name, "--pull", "never",
+            "--rm", "--init", "--network", "none", "--read-only",
             "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--user", "65534:65534",
             "--hostname", hostname, "--tmpfs", "/tmp:rw,exec,mode=1777",
             "--tmpfs", "/home:rw,uid=65534,gid=65534,mode=0700",
             "--mount", f"type=bind,source={HERE.parent},target=/fixture/scripts,readonly",
             IMAGE, "python3", "-I", "-B", "/fixture/scripts/dev-install/test_dryrun.py", suite,
-        ], check=True, timeout=120)
+        )
+        check(create.returncode == 0, f"{suite}: create failed")
+        start = docker_phase(suite, "start-attach", deadline, "start", "--attach", name)
+        check(start.returncode == 0, f"{suite}: start-attach failed")
+        # Attached start with --rm waits for the daemon's removal result.
+        removed = True
+        sandbox_log(suite, "cleanup auto-removed")
+    finally:
+        if not removed:
+            try:
+                cleanup = docker_phase(
+                    suite, "cleanup", time.monotonic() + CLEANUP_TIMEOUT, "rm", "--force", "--volumes", name,
+                )
+                if cleanup.returncode == 0:
+                    sandbox_log(suite, "cleanup removed")
+                elif cleanup.stderr.strip() == f"Error response from daemon: No such container: {name}".encode():
+                    sandbox_log(suite, "cleanup container absent")
+                else:
+                    sandbox_log(suite, "cleanup failed")
+            except RuntimeError:
+                sandbox_log(suite, "cleanup unconfirmed")
+
+
+class SandboxTest(unittest.TestCase):
+    def test_cold_image_and_attached_start_share_the_deadline(self):
+        elapsed = 0
+        output = io.StringIO()
+        phases = iter(((1, 1), (82, 0), (5, 0), (4, 0)))
+
+        def run_docker(args, **options):
+            nonlocal elapsed
+            duration, status = next(phases)
+            elapsed += duration
+            return subprocess.CompletedProcess(args, status, stdout=b"DEV_DRYRUN_CHECKPOINT suite-passed\n")
+
+        with (
+            redirect_stdout(output),
+            mock.patch.object(time, "monotonic", side_effect=lambda: elapsed),
+            mock.patch.object(subprocess, "run", side_effect=run_docker) as docker,
+        ):
+            sandbox(SANDBOX_HOSTNAME, "DispatchTest")
+        inspect, pull, create, start = docker.call_args_list
+        self.assertEqual([call.kwargs["timeout"] for call in docker.call_args_list], [120, 119, 37, 32])
+        self.assertEqual(inspect.args[0], ["docker", "image", "inspect", IMAGE])
+        self.assertEqual(pull.args[0], ["docker", "pull", IMAGE])
+        create_args = create.args[0]
+        name = create_args[3]
+        self.assertEqual(create_args[:3], ["docker", "create", "--name"])
+        self.assertEqual(create_args[4:], [
+            "--pull", "never", "--rm", "--init", "--network", "none", "--read-only",
+            "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--user", "65534:65534",
+            "--hostname", SANDBOX_HOSTNAME, "--tmpfs", "/tmp:rw,exec,mode=1777",
+            "--tmpfs", "/home:rw,uid=65534,gid=65534,mode=0700",
+            "--mount", f"type=bind,source={HERE.parent},target=/fixture/scripts,readonly",
+            IMAGE, "python3", "-I", "-B", "/fixture/scripts/dev-install/test_dryrun.py", "DispatchTest",
+        ])
+        self.assertEqual(start.args[0], ["docker", "start", "--attach", name])
+        self.assertIn("child suite-passed", output.getvalue())
+        self.assertIn("cleanup auto-removed", output.getvalue())
+
+    def test_create_or_attach_timeout_attempts_owned_cleanup_with_safe_output(self):
+        for phase in ("create", "start-attach"):
+            with self.subTest(phase=phase):
+                timeout = subprocess.TimeoutExpired(
+                    ["docker", "raw-command-marker"], SANDBOX_TIMEOUT,
+                    output=b"DEV_DRYRUN_CHECKPOINT dispatch-invoke\nDEV_DRYRUN_CHECKPOINT raw-output-marker\n",
+                )
+                results = [mock.Mock(returncode=0)]  # Local image hit.
+                if phase == "start-attach":
+                    results.append(mock.Mock(returncode=0))
+                results.extend((timeout, mock.Mock(returncode=0)))
+                output = io.StringIO()
+                with (
+                    redirect_stdout(output),
+                    mock.patch.object(time, "monotonic", return_value=1),
+                    mock.patch.object(subprocess, "run", side_effect=results) as docker,
+                ):
+                    with self.assertRaisesRegex(RuntimeError, f"DispatchTest: {phase} deadline exceeded"):
+                        sandbox(SANDBOX_HOSTNAME, "DispatchTest")
+                name = docker.call_args_list[1].args[0][3]
+                self.assertEqual(docker.call_args.args[0], ["docker", "rm", "--force", "--volumes", name])
+                self.assertEqual(docker.call_args.kwargs["timeout"], CLEANUP_TIMEOUT)
+                self.assertIn("cleanup removed", output.getvalue())
+                self.assertNotIn("raw-", output.getvalue())
+                if phase == "start-attach":
+                    self.assertIn("child dispatch-invoke", output.getvalue())
+
+    def test_failed_suite_remains_failed_if_cleanup_times_out(self):
+        output = io.StringIO()
+        results = [
+            mock.Mock(returncode=0), mock.Mock(returncode=0),
+            mock.Mock(returncode=1, stdout=b"DEV_DRYRUN_CHECKPOINT suite-failed\n"),
+            subprocess.TimeoutExpired(["docker", "rm"], CLEANUP_TIMEOUT),
+        ]
+        with redirect_stdout(output), mock.patch.object(subprocess, "run", side_effect=results):
+            with self.assertRaisesRegex(RuntimeError, "DispatchTest: start-attach failed"):
+                sandbox(SANDBOX_HOSTNAME, "DispatchTest")
+        self.assertIn("child suite-failed", output.getvalue())
+        self.assertIn("cleanup deadline exceeded", output.getvalue())
+
+
+def container():
+    identity = json.loads(IDENTITY.read_bytes())
+    sandbox(SANDBOX_HOSTNAME, "DispatchTest")
+    sandbox(identity["expected_hostname"], "GuestTest")
 
 
 if __name__ == "__main__":
     if sys.argv[1:] == ["--container"]:
-        container()
+        if not unittest.main(argv=[sys.argv[0], "SandboxTest"], verbosity=2, exit=False).result.wasSuccessful():
+            sys.exit(1)
+        try:
+            container()
+        except RuntimeError as error:
+            sys.exit(str(error))
     elif len(sys.argv) == 3 and sys.argv[1] == "--exercise-dispatch":
         exercise_dispatch(Path(sys.argv[2]))
     elif len(sys.argv) == 3 and sys.argv[1] == "--exercise-guest":
         exercise_guest(Path(sys.argv[2]))
+    elif sys.argv[1:] in (["DispatchTest"], ["GuestTest"]):
+        checkpoint("suite-started")
+        result = unittest.main(verbosity=2, exit=False).result
+        checkpoint("suite-passed" if result.wasSuccessful() else "suite-failed")
+        sys.exit(not result.wasSuccessful())
     else:
         unittest.main(verbosity=2)
