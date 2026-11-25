@@ -22,6 +22,7 @@ ROOT = Path(__file__).resolve().parents[2]
 REPOSITORY = "WasalX/wasalx-platform"
 SOURCE = "https://github.com/" + REPOSITORY
 MAIN_PUBLISHER = SOURCE + "/.github/workflows/branch-image.yml@refs/heads/main"
+CATALOG_PATH = "scripts/release/product-images.json"
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 SHA = re.compile(r"[0-9a-f]{40}")
 ADDON_STAGED = ("zammad-package/", "build/zammad/", "build/addon-licenses/", "tests/fixtures/")
@@ -29,7 +30,7 @@ RERUN_ALL = {
     "scripts/release/images-by-digest.py",  # Selects, builds, and inspects images.
     "scripts/release/image_registry_retry.py",  # Shared by image builds and publishing.
     ".github/workflows/ci.yml",  # Configures the PR image build jobs and their inputs.
-    "scripts/release/product-images.json",  # Supplies the Dockerfile and image matrix.
+    CATALOG_PATH,  # Supplies the Dockerfile and image matrix.
     "zammad-addon.json",  # Pins the public add-on source passed to image builds.
 }
 CACHED_IMAGES = {
@@ -83,15 +84,19 @@ def sha256(raw):
     return "sha256:" + hashlib.sha256(raw).hexdigest()
 
 
-def catalog():
-    rows = json.loads((ROOT / "scripts/release/product-images.json").read_text())
-    require(len(rows) == 21 and len({r["image"] for r in rows}) == 21, "Invalid image catalog")
+def catalog(*, commit=None):
+    raw = (ROOT / CATALOG_PATH).read_text() if commit is None else run("git", "show", f"{commit}:{CATALOG_PATH}", cwd=ROOT)
+    rows = json.loads(raw)
+    require(rows and len({r["image"] for r in rows}) == len(rows), "Invalid image catalog")
+    if commit is None:
+        require(len(rows) == 21, "Invalid image catalog")
     for row in rows:
         require(re.fullmatch(r"[a-z]+(?:-[a-z]+)*", row["image"]), "Invalid image name")
-        require(row["dockerfile"] == ("infra/docker/Dockerfile.zammad" if row["image"] == "zammad"
-                                    else "Dockerfile." + row["image"]), "Invalid Dockerfile")
-        require((ROOT / row["dockerfile"]).is_file(), "Missing Dockerfile")
         require(type(row.get("stagesAddon", False)) is bool, "Invalid add-on staging flag")
+        if commit is None:
+            require(row["dockerfile"] == ("infra/docker/Dockerfile.zammad" if row["image"] == "zammad"
+                                        else "Dockerfile." + row["image"]), "Invalid Dockerfile")
+            require((ROOT / row["dockerfile"]).is_file(), "Missing Dockerfile")
     return rows
 
 
@@ -608,10 +613,11 @@ def publish(receipt_path):
     write(receipt_path, receipt)
 
 
-def assemble(records):
-    rows = catalog()
+def assemble(records, *, rows=None):
+    rows = catalog() if rows is None else rows
+    expected = {row["image"] for row in rows}
     addons = addon_images(rows)
-    require(len(records) == 21 and {r["image"] for r in records} == {r["image"] for r in rows},
+    require(expected and len(records) == len(rows) == len(expected) and {r["image"] for r in records} == expected,
             "Complete unique image receipts required")
     require(len({(r["commit"], r["tree"]) for r in records}) == 1, "Mixed source identities")
     published, pending_images = {}, {}
@@ -632,6 +638,11 @@ def assemble(records):
             "pending": dict(sorted(pending_images.items()))}
 
 
+def require_main_published_rows(rows):
+    require(all(row.get("status") == "published" and row.get("workflow") == MAIN_PUBLISHER for row in rows),
+            "Main workflow publication required for every image")
+
+
 def verify_publication(manifest_path):
     commit, tree = coordinates()
     raw = Path(manifest_path).read_bytes()
@@ -641,8 +652,7 @@ def verify_publication(manifest_path):
     require(assembled["publicationComplete"] and raw == (json.dumps(assembled, indent=2) + "\n").encode(),
             "Complete, unmodified publication manifest required")
     require((manifest["commit"], manifest["tree"]) == (commit, tree), "Publication source differs from tagged source")
-    require(all(row["status"] == "published" and row["workflow"] == MAIN_PUBLISHER for row in rows),
-            "Main workflow publication required for every image")
+    require_main_published_rows(rows)
     for row in rows:
         reference = row["pullReference"]
         registry_manifest = subprocess.check_output(["docker", "buildx", "imagetools", "inspect", "--raw", reference])

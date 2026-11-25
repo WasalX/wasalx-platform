@@ -124,10 +124,18 @@ jobs:
           merge-multiple: true
       - name: Require complete published/pending receipts from one source tree
         run: python3 scripts/release/images-by-digest.py assemble --records records --output images-manifest.json
+      - name: Bind manifest bytes to this publishing attempt
+        run: |
+          checksum=$(sha256sum images-manifest.json)
+          jq -n --arg runId "$GITHUB_RUN_ID" --arg runAttempt "$GITHUB_RUN_ATTEMPT" \
+            --arg manifestSha256 "sha256:${checksum%% *}" \
+            '{ $runId, $runAttempt, $manifestSha256 }' > images-manifest-attempt.json
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: images-manifest
-          path: images-manifest.json
+          path: |
+            images-manifest.json
+            images-manifest-attempt.json
           if-no-files-found: error
           overwrite: true
       - id: complete

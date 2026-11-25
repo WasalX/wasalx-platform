@@ -28,9 +28,17 @@ before the downloaded bytes are used.
 
 Each package is `ghcr.io/wasalx/<image>`, tagged with the full public commit SHA.
 Each main commit publishes independently. The [main image aliases workflow](../../.github/workflows/main-image-aliases.yml)
-downloads the triggering successful CI run's manifest. Its serialized job
-advances each `main` discovery alias only when the commit descends from the
-revision on the current alias. The job summary identifies the source commit,
+resolves the triggering successful CI run's manifest by immutable artifact ID.
+The artifact includes `images-manifest-attempt.json`, which records the producing
+run ID, attempt and SHA-256 of the unchanged `images-manifest.json` bytes. The
+alias job validates that binding and checks the receipt against the triggering
+commit's actual tree and historical image catalog before registry login. A
+reassembled manifest may use earlier published image receipts from the same
+run. If a later successful attempt reuses the entire earlier manifest, the job
+reports `HELD_PRIOR_ATTEMPT` and leaves the aliases alone. A missing binding or
+a manifest from a newer attempt fails the alias job before registry access.
+The serialized job advances each `main` discovery alias only when the commit
+descends from the revision on the current alias. The job summary identifies the source commit,
 CI run and attempt. It records advanced and verified aliases, aliases kept at
 the expected digest, and skipped moves when the revision or ancestry is unknown
 or the update would move backwards. A registry failure or digest mismatch fails

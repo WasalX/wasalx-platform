@@ -28,15 +28,40 @@ with patch.object(sys, "path", [str(RELEASE), *sys.path]):
     alias_spec.loader.exec_module(aliases)
 
 
-def alias_environment(directory, commit):
+def alias_environment(directory, commit, *, attempt=2):
     path = Path(directory) / "workflow-event.json"
     event = {"action": "completed", "workflow_run": {"path": ".github/workflows/ci.yml",
              "head_repository": {"full_name": images.REPOSITORY}, "event": "push",
-             "head_branch": "main", "head_sha": commit, "conclusion": "success"}}
+             "head_branch": "main", "head_sha": commit, "conclusion": "success", "id": 123,
+             "run_attempt": attempt}}
     images.write(path, event)
     return {"GITHUB_EVENT_NAME": "workflow_run", "GITHUB_REF": "refs/heads/main",
             "GITHUB_REPOSITORY": images.REPOSITORY, "GITHUB_SHA": "d" * 40,
-            "GITHUB_EVENT_PATH": str(path), "GITHUB_STEP_SUMMARY": str(Path(directory) / "summary.md")}
+            "GITHUB_EVENT_PATH": str(path), "GITHUB_STEP_SUMMARY": str(Path(directory) / "summary.md"),
+            "GITHUB_OUTPUT": str(Path(directory) / "output")}
+
+
+def alias_manifest(commit, tree, catalog, *, digest=None, pending=()):
+    digest = digest or images.sha256(b"manifest")
+    receipts = []
+    for entry in catalog:
+        image = entry["image"]
+        row = {"image": image, "commit": commit, "tree": tree, "platform": "linux/amd64"}
+        if image in pending:
+            row["status"] = "pending add-on source"
+        else:
+            row.update(status="published", verified=True, digest=digest, configDigest=images.sha256(b"config"),
+                       pullReference=f"ghcr.io/wasalx/{image}@{digest}", workflow=images.MAIN_PUBLISHER,
+                       workflowSha=commit, runId="123", runAttempt="1")
+        receipts.append(row)
+    return images.assemble(receipts, rows=catalog)
+
+
+def write_alias_manifest(path, manifest, *, attempt="2", **binding):
+    raw = (json.dumps(manifest, indent=2) + "\n").encode()
+    path.write_bytes(raw)
+    images.write(path.with_name("images-manifest-attempt.json"),
+                 {"runId": "123", "runAttempt": attempt, "manifestSha256": images.sha256(raw), **binding})
 
 
 class ImagePublicationTests(unittest.TestCase):
@@ -589,6 +614,10 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
         git_run = subprocess.run
         with tempfile.TemporaryDirectory() as directory:
             git_run(["git", "init", "--quiet"], cwd=directory, check=True)
+            catalog = [{"image": "portal"}]
+            catalog_path = Path(directory) / images.CATALOG_PATH
+            images.write(catalog_path, catalog)
+            git_run(["git", "add", images.CATALOG_PATH], cwd=directory, check=True)
 
             def commit(message):
                 git_run(["git", "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "-c",
@@ -597,6 +626,9 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
                 return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=directory, text=True).strip()
 
             older, newer = commit("older"), commit("newer")
+            images.write(catalog_path, [{"image": "another-image"}])
+            git_run(["git", "add", images.CATALOG_PATH], cwd=directory, check=True)
+            commit("catalog changed on main")
             current = older
 
             def registry(*command, **kwargs):
@@ -615,14 +647,15 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
 
             manifest = Path(directory) / "images-manifest.json"
             summary = Path(directory) / "summary.md"
-            with patch.object(aliases, "registry_output", side_effect=registry) as registry_calls, \
-                    patch.object(subprocess, "run", side_effect=lambda command, **kw: git_run(command, cwd=directory, **kw)), \
+            with patch.object(aliases.images, "ROOT", Path(directory)), \
+                    patch.object(aliases, "registry_output", side_effect=registry) as registry_calls, \
+                    patch.object(subprocess, "run", side_effect=lambda command, **kw: git_run(command, **{"cwd": directory, **kw})), \
                     redirect_stdout(io.StringIO()) as stdout:
                 for candidate, expected in ((newer, newer), (newer, newer), (older, newer), (older, None)):
                     if expected is None:
                         current = None
-                    images.write(manifest, {"commit": candidate, "images": {"portal": {
-                        "commit": candidate, "digest": digest, "verified": True}}})
+                    tree = images.run("git", "rev-parse", f"{candidate}^{{tree}}", cwd=directory)
+                    write_alias_manifest(manifest, alias_manifest(candidate, tree, catalog, digest=digest))
                     with patch.dict(os.environ, alias_environment(directory, candidate)):
                         aliases.advance_main_aliases(manifest)
                     self.assertEqual(current, expected)
@@ -708,15 +741,17 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
                 sleep.assert_not_called()
 
     def test_main_alias_warns_when_git_ancestry_is_unknown(self):
-        commit, older = "a" * 40, "b" * 40
+        commit, older, tree = "a" * 40, "b" * 40, "c" * 40
         labels = json.dumps({"org.opencontainers.image.revision": older}).encode()
-        row = {"commit": commit, "digest": images.sha256(b"manifest"), "verified": True}
+        catalog = [{"image": "portal"}]
         with tempfile.TemporaryDirectory() as directory:
             manifest = Path(directory) / "manifest.json"
             summary = Path(directory) / "summary.md"
-            images.write(manifest, {"commit": commit, "images": {"portal": row}})
+            write_alias_manifest(manifest, alias_manifest(commit, tree, catalog))
             env = alias_environment(directory, commit)
             with (patch.dict(os.environ, env), patch.object(aliases, "registry_output", return_value=labels) as read,
+                  patch.object(aliases.images, "run", return_value=tree),
+                  patch.object(aliases.images, "catalog", return_value=catalog),
                   patch.object(subprocess, "run", return_value=subprocess.CompletedProcess([], 128)) as run,
                   redirect_stdout(io.StringIO()) as stdout):
                 aliases.advance_main_aliases(manifest)
@@ -727,9 +762,8 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
             self.assertEqual(stdout.getvalue(), f"::warning::{message}\n")
             self.assertEqual(summary.read_text(encoding="utf-8"), f"- {message}\n")
 
-    def test_main_alias_environment_and_manifest_guards_prevent_registry_access(self):
+    def test_main_alias_event_guards_prevent_registry_access(self):
         commit = "a" * 40
-        row = {"commit": commit, "digest": images.sha256(b"manifest"), "verified": True}
         with tempfile.TemporaryDirectory() as directory:
             manifest = Path(directory) / "manifest.json"
             summary = Path(directory) / "summary.md"
@@ -747,32 +781,100 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
                     images.write(event_path, {**event, "workflow_run": {**event["workflow_run"], key: value}})
                     with self.subTest(key=key), self.assertRaisesRegex(ValueError, "require a completed main CI push"):
                         aliases.advance_main_aliases(manifest)
-                for candidate, sha in (("b" * 40, commit), ("main", "main")):
-                    images.write(manifest, {"commit": candidate, "images": {"portal": row}})
-                    images.write(event_path, {**event, "workflow_run": {**event["workflow_run"], "head_sha": sha}})
-                    with (self.subTest(guard="manifest commit", candidate=candidate),
-                          self.assertRaisesRegex(ValueError, "manifest does not match")):
-                        aliases.advance_main_aliases(manifest)
-                images.write(event_path, event)
-                for image, overrides in (("bad/image", {}), ("worker", {"verified": False}),
-                                         ("worker", {"digest": "main"}), ("worker", {"commit": "b" * 40})):
-                    images.write(manifest, {"commit": commit, "images": {"portal": row, image: {**row, **overrides}}})
-                    with self.subTest(image=image, overrides=overrides), self.assertRaisesRegex(ValueError, "Verified publication digest"):
+                for key, value in (("head_sha", "main"), ("id", 0), ("run_attempt", "2")):
+                    images.write(event_path, {**event, "workflow_run": {**event["workflow_run"], key: value}})
+                    with self.subTest(key=key), self.assertRaisesRegex(ValueError, "Invalid triggering"):
                         aliases.advance_main_aliases(manifest)
                 advance.assert_not_called()
             self.assertFalse(summary.exists())
 
+    def test_main_alias_requires_a_complete_bound_publication_before_registry_access(self):
+        commit, tree = "a" * 40, "b" * 40
+        catalog = images.catalog()
+        complete = alias_manifest(commit, tree, catalog)
+        allowed_pending = alias_manifest(commit, tree, catalog, pending=images.addon_images(catalog))
+        with (tempfile.TemporaryDirectory() as directory, patch.object(aliases.images, "run", return_value=tree),
+              patch.object(aliases.images, "catalog", return_value=catalog) as historical_catalog,
+              patch.object(aliases, "advance_alias", return_value=("Verified alias.", False)) as advance,
+              redirect_stdout(io.StringIO()) as stdout):
+            path = Path(directory) / "images-manifest.json"
+            env = alias_environment(directory, commit)
+            with patch.dict(os.environ, env):
+                for binding, error in [({"attempt": "3"}, "later CI attempt"), ({"runId": "124"}, "triggering run"),
+                                       ({"manifestSha256": images.sha256(b"other bytes")}, "manifest bytes")]:
+                    with self.subTest(binding=binding), self.assertRaisesRegex(ValueError, error):
+                        write_alias_manifest(path, complete, **binding)
+                        aliases.advance_main_aliases(path)
+                write_alias_manifest(path, complete)
+                path.with_name("images-manifest-attempt.json").unlink()
+                with self.assertRaisesRegex(ValueError, "producing-attempt binding"):
+                    aliases.advance_main_aliases(path, validate_only=True)
+
+                for key, value in [("images", {}), ("images", {"portal": complete["images"]["portal"]}),
+                                   ("tree", "c" * 40), ("commit", "c" * 40), ("schemaVersion", 2),
+                                   ("repository", "example/other"), ("platform", "linux/arm64"),
+                                   ("publicationComplete", False)]:
+                    write_alias_manifest(path, {**complete, key: value})
+                    with self.subTest(key=key, value=value), self.assertRaises(ValueError):
+                        aliases.advance_main_aliases(path)
+
+                for key, value in [("tree", "c" * 40), ("platform", "linux/arm64"), ("verified", False),
+                                   ("digest", "main"), ("status", "built"), ("workflow", "other"),
+                                   ("workflowSha", "c" * 40), ("runId", "124"), ("runAttempt", "3")]:
+                    invalid = copy.deepcopy(complete)
+                    invalid["images"]["portal"][key] = value
+                    write_alias_manifest(path, invalid)
+                    with self.subTest(row_key=key), self.assertRaises(ValueError):
+                        aliases.advance_main_aliases(path)
+
+                for image in ("zammad", "portal"):
+                    invalid = copy.deepcopy(complete)
+                    row = invalid["images"].pop(image)
+                    invalid["pending"][image] = {key: row[key] for key in ("image", "commit", "tree", "platform")}
+                    invalid["pending"][image]["status"] = "pending add-on source"
+                    invalid["publicationComplete"] = False
+                    write_alias_manifest(path, invalid)
+                    with self.subTest(pending=image), self.assertRaises(ValueError):
+                        aliases.advance_main_aliases(path)
+                invalid = copy.deepcopy(allowed_pending)
+                invalid["pending"]["zammad"]["pullReference"] = complete["images"]["zammad"]["pullReference"]
+                write_alias_manifest(path, invalid)
+                with self.assertRaisesRegex(ValueError, "cannot contain publication claims"):
+                    aliases.advance_main_aliases(path, validate_only=True)
+                advance.assert_not_called()
+                self.assertFalse(Path(env["GITHUB_OUTPUT"]).exists())
+
+                write_alias_manifest(path, complete, attempt="1")
+                aliases.advance_main_aliases(path, validate_only=True)
+                aliases.advance_main_aliases(path)
+                self.assertEqual(Path(env["GITHUB_OUTPUT"]).read_text(), "ready=false\n")
+                self.assertIn("HELD_PRIOR_ATTEMPT: CI run 123 attempt 2 reused the manifest from attempt 1",
+                              stdout.getvalue())
+                advance.assert_not_called()
+
+                for manifest in (complete, allowed_pending):
+                    write_alias_manifest(path, manifest)
+                    aliases.advance_main_aliases(path, validate_only=True)
+                    self.assertTrue(Path(env["GITHUB_OUTPUT"]).read_text().endswith("ready=true\n"))
+                    advance.assert_not_called()
+                    aliases.advance_main_aliases(path)
+                    self.assertEqual(advance.call_args_list,
+                                     [mock.call(row["pullReference"], commit) for row in manifest["images"].values()])
+                    advance.reset_mock()
+            historical_catalog.assert_called_with(commit=commit)
+
     def test_failed_alias_is_recorded_without_changing_immutable_publication_receipt(self):
-        commit = "a" * 40
-        row = {"commit": commit, "digest": images.sha256(b"manifest"), "verified": True}
+        commit, tree = "a" * 40, "b" * 40
+        catalog = [{"image": image} for image in ("portal", "worker", "zammad")]
         with tempfile.TemporaryDirectory() as directory:
             manifest = Path(directory) / "manifest.json"
             summary = Path(directory) / "summary.md"
-            images.write(manifest, {"commit": commit, "publicationComplete": True,
-                                    "images": {"portal": row, "worker": row, "remaining": row}})
+            write_alias_manifest(manifest, alias_manifest(commit, tree, catalog))
             artifact = manifest.read_bytes()
             failure = subprocess.CalledProcessError(1, "imagetools", stderr=b"error: unauthorized")
             with (patch.dict(os.environ, alias_environment(directory, commit)), redirect_stdout(io.StringIO()) as logs,
+                  patch.object(aliases.images, "run", return_value=tree),
+                  patch.object(aliases.images, "catalog", return_value=catalog),
                   patch.object(aliases, "advance_alias", side_effect=[("Advanced portal.", False), failure]) as advance,
                   self.assertRaises(subprocess.CalledProcessError)):
                 aliases.advance_main_aliases(manifest)
