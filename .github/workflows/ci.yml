@@ -133,11 +133,54 @@ jobs:
         env:
           ACTIONLINT_URL: https://github.com/kjanat/actionlint/releases/download/v1.17.1/actionlint_1.17.1_linux_amd64.tar.gz
           ACTIONLINT_SHA256: 6bfe0f49f0e108b9b23732baf7de63bfa4d89174fa40f9cb98feb9676df3318f
+          SHELLCHECK_URL: https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.gz
+          SHELLCHECK_SHA256: b7af85e41cc99489dcc21d66c6d5f3685138f06d34651e6d34b42ec6d54fe6f6
+          PYFLAKES_URL: https://files.pythonhosted.org/packages/c2/2f/81d580a0fb83baeb066698975cb14a618bdbed7720678566f1b046a95fe8/pyflakes-3.4.0-py2.py3-none-any.whl
+          PYFLAKES_SHA256: f742a7dbd0d9cb9ea41e9a24a918996e8170c799fa528688d40dd582c8265f4f
         run: |
           scratch=$(mktemp -d)
+          trap 'rm -rf "$scratch"' EXIT
+          wheel="$scratch/${PYFLAKES_URL##*/}"
           bash scripts/release/fetch-verified-asset.sh "$ACTIONLINT_URL" "$scratch/actionlint.tar.gz" "$ACTIONLINT_SHA256"
+          bash scripts/release/fetch-verified-asset.sh "$SHELLCHECK_URL" "$scratch/shellcheck.tar.gz" "$SHELLCHECK_SHA256"
+          bash scripts/release/fetch-verified-asset.sh "$PYFLAKES_URL" "$wheel" "$PYFLAKES_SHA256"
           tar -xzf "$scratch/actionlint.tar.gz" -C "$scratch" actionlint
-          "$scratch/actionlint" -shellcheck= -pyflakes=
+          tar -xzf "$scratch/shellcheck.tar.gz" -C "$scratch" shellcheck-v0.11.0/shellcheck
+          python3 -m venv "$scratch/pyflakes-env"
+          "$scratch/pyflakes-env/bin/python" -m pip --isolated install --disable-pip-version-check --no-index --no-deps "$wheel"
+
+          shellcheck="$scratch/shellcheck-v0.11.0/shellcheck"
+          pyflakes="$scratch/pyflakes-env/bin/pyflakes"
+          "$scratch/actionlint" -version | grep -E '(^| )v?1\.17\.1$'
+          "$shellcheck" --version | grep -Fx 'version: 0.11.0'
+          "$pyflakes" --version | grep -E '^3\.4\.0 Python '
+          lint=("$scratch/actionlint" "-shellcheck=$shellcheck" "-pyflakes=$pyflakes")
+
+          # Keep the intentionally invalid scripts outside the real workflow inventory.
+          fixture="$scratch/embedded-diagnostics.yml"
+          cat > "$fixture" <<'YAML'
+          on: push
+          jobs:
+            diagnostics:
+              runs-on: ubuntu-24.04
+              steps:
+                - shell: bash
+                  run: echo $1
+                - shell: python
+                  run: print(missing_name)
+          YAML
+          status=0
+          "${lint[@]}" "$fixture" > "$scratch/diagnostics.log" 2>&1 || status=$?
+          cat "$scratch/diagnostics.log"
+          if [[ "$status" != 1 ]] ||
+            ! grep -qE 'SC2086:.*\[shellcheck\]$' "$scratch/diagnostics.log" ||
+            ! grep -qE "undefined name 'missing_name'.*\[pyflakes\]$" "$scratch/diagnostics.log"; then
+            echo '::error::Expected ShellCheck SC2086 and Pyflakes undefined-name diagnostics from actionlint'
+            exit 1
+          fi
+
+          "${lint[@]}"
+          echo 'Workflow lint passed with zero findings.'
 
   storybook:
     needs: changes
