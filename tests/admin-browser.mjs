@@ -15,8 +15,8 @@ const results = [];
 const escaped = text => text.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 const story = (surface, locale) => `${base}/iframe.html?id=product-administration--${surface === "teams" ? "support-teams" : surface === "settings" ? "mailbox-settings" : "mailbox-administration"}-${locale === "ar" ? "arabic" : "english"}`;
 
-async function setup(surface, locale, configure) {
-  const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+async function setup(surface, locale, configure, viewport = { width: 1440, height: 1000 }) {
+  const context = await browser.newContext({ viewport });
   const page = await context.newPage(), fixture = adminFixture();
   configure?.(fixture);
   await fixture.install(page);
@@ -143,6 +143,45 @@ async function quotaFailure(page, prefix, action) {
     Storage.prototype.setItem = function(key, value) { if (key.startsWith(prefix)) throw new DOMException("Synthetic quota", "QuotaExceededError"); return original.call(this, key, value); };
   }, prefix);
   try { await action(); } finally { await page.evaluate(() => window.restoreAdminStorage()); }
+}
+
+async function teamsListRecovery(locale) {
+  for (const [size, width, height] of [["desktop", 1440, 1000], ["mobile", 390, 844]]) {
+    const test = await setup("teams", locale, fixture => { fixture.control.failRead = "TEAM_LIST"; }, { width, height });
+    const { page, fixture, t, button } = test;
+    const empty = page.getByText(t("teamsAdmin.empty"), { exact: true });
+    const choose = page.getByText(t("teamsAdmin.choose"), { exact: true });
+    const team = page.getByRole("button", { name: /Synthetic customer support/u });
+    const capture = async state => {
+      await page.evaluate(() => document.fonts.ready);
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false);
+      await page.screenshot({ path: `${output}/teams-${locale}-list-${state}-${size}.png`, fullPage: true });
+    };
+    try {
+      await expect(page.getByRole("alert")).toHaveText(t("teamsAdmin.listFailed"));
+      await expect(button("common.actions.retry")).toBeEnabled();
+      await expect(button("teamsAdmin.createTeam")).toHaveCount(0);
+      await expect(empty).toHaveCount(0);
+      await expect(choose).toHaveCount(0);
+      await capture("failed");
+
+      await button("common.actions.retry").click();
+      await expect(team).toBeVisible();
+      await expect(choose).toBeVisible();
+      await expect(button("teamsAdmin.createTeam")).toBeEnabled();
+      await expect(page.getByRole("alert")).toHaveCount(0);
+      await expect(empty).toHaveCount(0);
+      await capture("retried-populated");
+
+      fixture.teams.length = 0;
+      await test.open();
+      await expect(empty).toBeVisible();
+      await expect(button("teamsAdmin.createTeam")).toBeEnabled();
+      await expect(team).toHaveCount(0);
+      await expect(button("common.actions.retry")).toHaveCount(0);
+      await capture("empty");
+    } finally { await test.context.close(); }
+  }
 }
 
 async function teamsJourney(locale) {
@@ -322,6 +361,7 @@ async function mailboxJourney(surface, locale) {
 
 try {
   for (const locale of ["en", "ar"]) {
+    await teamsListRecovery(locale);
     await teamsJourney(locale);
     for (const surface of ["settings", "administration"]) await mailboxJourney(surface, locale);
   }
