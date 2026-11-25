@@ -13,6 +13,7 @@ import { unitAddonSources, validateUnitAddonInputs } from "../scripts/fetch-zamm
 import { unitAllowlist, unitFiles } from "../scripts/test-unit.mjs";
 import { reportTimingsWithQuarantine, validateQuarantine } from "../scripts/hosted-ci-timing-reporter.mjs";
 import { parsePostgresShardArgs, postgresScenarioGroups, verifyPostgresReports } from "../scripts/postgres-scenario-registry.mjs";
+import { discoverBrowserCases } from "../scripts/release/browser-shards.mjs";
 
 const repository = fileURLToPath(new URL("../", import.meta.url));
 const read = file => readFile(join(repository, file), "utf8");
@@ -78,6 +79,26 @@ test("runner ownership recognizes a bare sudo interpreter", () => {
 function referencesFile(source, file) {
   return source.includes(`"${file}"`) || source.includes(`'${file}'`);
 }
+
+function hostedApplicationOwns(file, fixtureSpecs) {
+  if (file.endsWith("-operator.spec.ts")) return false;
+  return (file === "tests/e2e/arabic.spec.ts" || fixtureSpecs.get("en").has(file))
+    && (file === "tests/e2e/application.spec.ts" || fixtureSpecs.get("ar").has(file));
+}
+
+test("application ownership rejects a shared spec moved out of hosted fixture mode", () => {
+  const shared = "tests/e2e/meta-cost-statements.spec.ts";
+  const english = "tests/e2e/application.spec.ts";
+  const arabic = "tests/e2e/arabic.spec.ts";
+  const fixtureSpecs = new Map([["en", new Set([english, shared])], ["ar", new Set([arabic, shared])]]);
+  assert(hostedApplicationOwns(english, fixtureSpecs));
+  assert(hostedApplicationOwns(arabic, fixtureSpecs));
+  assert(hostedApplicationOwns(shared, fixtureSpecs));
+  fixtureSpecs.get("ar").delete(shared);
+  assert(!hostedApplicationOwns(shared, fixtureSpecs), "a shared spec must be selected in Arabic too");
+  fixtureSpecs.get("en").delete(shared);
+  assert(!hostedApplicationOwns(shared, fixtureSpecs), "a platform-only spec has no hosted fixture owner");
+});
 
 const tofuFile = file => /^infra\/terraform\/tests\/[^/]+\.tftest\.(?:hcl|json)$/u.test(file);
 const postgresFile = file => /^tests\/.*(?:-postgres(?:-check)?|-real-schema-check)\.mjs$/u.test(file);
@@ -147,6 +168,12 @@ test("tracked tests belong to a named CI runner or the test allowlist", async ()
     await Promise.all(["scripts/validate-infra.sh", "infra/docker/Dockerfile.zammad", "tests/zammad-image-browser-compat.test.mjs",
       "playwright.application.config.ts", "playwright.identity.config.ts", "playwright.storybook.config.ts",
       "tests/visual/inbox-synthetic.spec.ts", "scripts/storybook-visual-regression.mjs", "scripts/run-application-e2e.mjs"].map(read));
+  const fixtureSpecs = new Map(jobs["application-e2e"].strategy.matrix.locale.map(locale => {
+    const cases = discoverBrowserCases({ argv: ["pnpm", "test:e2e"], env: {
+      WASALX_E2E_LOCALES: locale, WASALX_E2E_ROLES: "tenant_owner", WASALX_E2E_PLATFORM_URL: "",
+    } });
+    return [locale, new Set(cases.filter(row => row.expectedStatus !== "skipped").map(row => posix.join("tests/e2e", row.file)))];
+  }));
   const runsTofu = /^\s+"\$\{TOFU\[@\]\}" -chdir=infra\/terraform test -no-color$/mu.test(validation)
     && /^run_terraform_tests$/mu.test(validation);
 
@@ -177,9 +204,11 @@ test("tracked tests belong to a named CI runner or the test allowlist", async ()
           && (referencesFile(zammadBrowser, file)
             || (posix.dirname(file) === "tests" && referencesFile(zammadBrowser, posix.basename(file))));
       case "application-e2e":
+        return runsFile(command, "scripts/run-application-e2e.mjs")
+          && referencesFile(applicationRunner, "playwright.application.config.ts")
+          && referencesFile(application, "./tests/e2e") && hostedApplicationOwns(file, fixtureSpecs);
       case "test:e2e":
-        return (runner === "test:e2e" || !file.endsWith("-operator.spec.ts"))
-          && runsFile(command, "scripts/run-application-e2e.mjs")
+        return runsFile(command, "scripts/run-application-e2e.mjs")
           && referencesFile(applicationRunner, "playwright.application.config.ts")
           && referencesFile(application, "./tests/e2e")
           && posix.dirname(file) === "tests/e2e" && referencesFile(application, posix.basename(file));
