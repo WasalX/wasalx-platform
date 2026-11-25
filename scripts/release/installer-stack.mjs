@@ -2,11 +2,12 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { arch, hostname, platform } from "node:os";
 import { isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { repositoryDigestMatches, writeRepositoryJson } from "../installer-evidence.mjs";
+import { assertLocalRegistry, localRegistryReference } from "./installer-hosted-images.mjs";
 
 const root = resolve(fileURLToPath(new URL("../../", import.meta.url)));
 const shaPattern = /^[0-9a-f]{40}$/u;
@@ -59,6 +60,27 @@ export function devHeldPrerequisites(model, activeServices) {
     model.services[dependent].depends_on?.[name]?.condition === "service_completed_successfully")])
     .filter(([, dependents]) => dependents.length && dependents.every((name) => devHeldServices.includes(name))));
 }
+export function devFreshHeldPlan(model, active) {
+  assert.ok(devHeldServices.every(name => active.includes(name)), "fresh DEV hold inventory is incomplete");
+  const prerequisites = devHeldPrerequisites(model, active);
+  const held = [...devHeldServices, ...Object.keys(prerequisites)].sort();
+  const start = active.filter(name => !held.includes(name));
+  assert.ok(start.length, "fresh held project has no startup targets");
+  for (const name of start) {
+    const service = model.services[name];
+    const dependencies = [
+      ...Object.keys(service.depends_on ?? {}),
+      ...(service.links ?? []).map(link => link.split(":")[0]),
+      ...(service.volumes_from ?? []).map(volume => volume.split(":")[0]),
+      ...[service.network_mode, service.ipc, service.pid].filter(value => value?.startsWith("service:")).map(value => value.slice(8)),
+    ];
+    for (const dependency of dependencies) {
+      assert.ok(!held.includes(dependency), `${name} depends on held service ${dependency}`);
+    }
+  }
+  return { held, start, prerequisites };
+}
+
 export function assertDevInstallPreimages(value, { candidateSha, candidateTree, project, machineIdSha256, activeServices, model }) {
   assert.equal(value?.kind, "dev-held-install-preimages");
   assert.equal(value.schemaVersion, 1);
@@ -139,16 +161,46 @@ export function assertInstallHostname() {
 }
 
 export const rehearsalComposeFile = "scripts/release/installer-nightly.compose.yaml";
+const sideBySideDev = /^wasalx-dev-[a-z0-9][a-z0-9-]*$/u;
+export const devFreshHeldFlag = "--dev-fresh-held";
+export const devSimulatorFlag = "--dev-simulator";
+const devGuestOnly = "fresh held and simulator options require a side-by-side DEV project";
+const devSimulatorSmokeOnly = "simulator smoke requires --dev-fresh-held";
+
+export function devGuestComposeFiles({ project, devFreshHeld, devSimulator, rehearsalMain, full = true }) {
+  if (!devFreshHeld && !devSimulator) return [];
+  const nonDev = [process.env.DEPLOY_ENVIRONMENT, process.env.WASALX_ENVIRONMENT]
+    .some(value => !["", "dev"].includes(value?.trim().toLowerCase() ?? ""));
+  assert.ok(full && sideBySideDev.test(project) && !rehearsalMain && !nonDev, devGuestOnly);
+  return devSimulator ? [rehearsalComposeFile, "scripts/release/installer-dev-simulator.compose.yaml"] : [];
+}
+
 export const devSkipPublicWebhookPreflightFlag = "--dev-skip-public-webhook-preflight";
 const devWebhookPreflightOnly = "public webhook preflight skip is DEV-only";
 
 export function devWebhookPreflightOverlay({ project, devSkipPublicWebhookPreflight, rehearsalMain, full = true }) {
   if (!devSkipPublicWebhookPreflight) return [];
-  const devProject = project === "wasalx-live" || /^wasalx-dev-[a-z0-9][a-z0-9-]*$/u.test(project);
+  const devProject = project === "wasalx-live" || sideBySideDev.test(project);
   const stgOrProd = [process.env.DEPLOY_ENVIRONMENT, process.env.WASALX_ENVIRONMENT]
     .some(value => /^(stg|staging|prod|production)$/iu.test(value?.trim() ?? ""));
   assert.ok(full && devProject && !rehearsalMain && !stgOrProd, devWebhookPreflightOnly);
   return ["scripts/release/installer-dev-skip-webhook.compose.yaml"];
+}
+
+export async function localRegistryOverlay({ registry, project, envFile, profiles, render }) {
+  assert.ok(!envFile.includes(","), "local registry env file path cannot contain a comma");
+  const model = render();
+  const services = Object.fromEntries(activeServiceNames(model, profiles).filter(name => !model.services[name].build)
+    .map(name => [name, { image: localRegistryReference(registry, model.services[name].image) }]));
+  assert.ok(Object.keys(services).length, "local registry requires pinned Compose dependencies");
+  const path = `${envFile}.${project}.registry.compose.json`;
+  const contents = `${JSON.stringify({ services })}\n`;
+  try { await writeFile(path, contents, { flag: "wx", mode: 0o600 }); }
+  catch (error) {
+    if (error.code !== "EEXIST") throw error;
+    assert.equal(await readFile(path, "utf8"), contents, "local registry overlay differs from the current Compose model");
+  }
+  return path;
 }
 
 export function rehearsalImageSource(project, commit, runGit) {
@@ -159,7 +211,10 @@ export function rehearsalImageSource(project, commit, runGit) {
     "rehearsal image source must be in the checkout's first-parent history");
   const tree = runGit(["rev-parse", `${commit}^{tree}`]);
   assert.match(tree, shaPattern, "rehearsal main tree is invalid");
-  return { commit, tree };
+  const sourceCatalog = JSON.parse(runGit(["show", `${commit}:release/installer-images.json`]));
+  const packageSha256 = sourceCatalog.tenantProvisioning?.package?.sha256;
+  assert.match(packageSha256 ?? "", /^[0-9a-f]{64}$/u, "rehearsal image source lacks a valid Zammad package pin");
+  return { commit, tree, packageSha256 };
 }
 
 // Explicit, nonsecret DEV origin admission. No arbitrary Env, URL path or proxy trust.
@@ -313,7 +368,32 @@ export function assertSmokePorts(compose) {
   }
 }
 
-export function projectStack({ compose, containers, imageInspections, catalog, candidateImages, candidateSha, candidateTree, imageSource, activeServices: selectedServices, repositoryRoot = root, fullCatalog = false, devPreimages = null }) {
+class FreshHoldStateError extends Error {}
+
+class StackVerificationError extends Error {
+  constructor(check, reason) {
+    super(reason);
+    this.check = check;
+  }
+}
+
+export function stackVerificationDiagnostic(error) {
+  if (error instanceof StackVerificationError) return `check=${error.check} reason=${error.message}`;
+
+  // Command arguments, parsed input and assertion operands can contain private data.
+  const location = error.stack?.match(/\n\s+at [^\r\n]*[\\/]scripts[\\/]release[\\/](installer-stack\.mjs:[0-9]+):[0-9]+/u)?.[1];
+  const check = location ?? "stack-verification";
+  const variable = ["WASALX_INSTALL_EXPECTED_HOSTNAME", "WASALX_DEV_REVIEW_ORIGIN_SUFFIX"].find((name) => error.message?.includes(name));
+  const reason = error instanceof FreshHoldStateError ? "fresh hold must be in the created state"
+    : [devWebhookPreflightOnly, devGuestOnly, devSimulatorSmokeOnly].find(message => error.message === message)
+      ?? (variable ? `check ${variable}`
+        : error instanceof SyntaxError ? "input could not be decoded"
+        : error.code === "ERR_ASSERTION" ? "stack assertion failed"
+        : "stack verification could not complete");
+  return `check=${check} reason=${reason}`;
+}
+
+export function projectStack({ compose, containers, imageInspections, catalog, candidateImages, candidateSha, candidateTree, imageSource, activeServices: selectedServices, repositoryRoot = root, fullCatalog = false, devPreimages = null, devFreshHeld = false }) {
   assert.match(candidateSha, shaPattern);
   assert.match(candidateTree, shaPattern);
   assert.ok(compose && typeof compose === "object" && !Array.isArray(compose), "Compose projection is invalid");
@@ -327,7 +407,8 @@ export function projectStack({ compose, containers, imageInspections, catalog, c
     candidateSha, candidateTree, project: devPreimages.project, machineIdSha256: devPreimages.machineIdSha256, activeServices, model: compose,
   });
   assertDevReviewAuthRows(devPreimages?.devReviewAuth, containers);
-  const held = new Set(devPreimages ? [...devHeldServices, ...Object.keys(devPreimages.heldPrerequisites ?? {})] : []);
+  const freshHold = devFreshHeld ? devFreshHeldPlan(compose, activeServices) : null;
+  const held = new Set(freshHold?.held ?? (devPreimages ? [...devHeldServices, ...Object.keys(devPreimages.heldPrerequisites ?? {})] : []));
   const preserved = new Set(devPreimages ? devPreservedServices : []);
   const imageByReference = new Map(imageInspections.map((image) => [image.reference, image.details]));
   assert.equal(imageByReference.size, imageInspections.length, "Docker image inspection references must be unique");
@@ -361,6 +442,10 @@ export function projectStack({ compose, containers, imageInspections, catalog, c
     const definition = services[container.service];
     assert.ok(definition, `unknown Compose service: ${container.service}`);
     assert.ok(container.Config && container.State, `Docker inspect failed for ${container.service}`);
+    const isHeld = held.has(container.service);
+    if (freshHold && isHeld && container.State.Status !== "created") {
+      throw new FreshHoldStateError(`${container.service} fresh hold must be in the created state`);
+    }
     const preservedOld = preserved.has(container.service);
     const configuredImageMatches = container.Config.Image === definition.image ||
       (container.Config.Image === container.Image && digestPattern.test(container.Image));
@@ -368,13 +453,13 @@ export function projectStack({ compose, containers, imageInspections, catalog, c
       devPreimages.services.find(({ service }) => service === container.service), `${container.service} preserved state changed`);
     else assert.ok(configuredImageMatches, `${container.service} is running another configured image`);
     const before = devPreimages?.services.find(({ service }) => service === container.service);
-    assert.equal(container.RestartCount, held.has(container.service) && container.Id === before?.id ? before.restartCount : 0,
+    assert.equal(container.RestartCount, isHeld && container.Id === before?.id ? before.restartCount : 0,
       `${container.service} restart history changed`);
     const oneShot = oneShotServices.includes(container.service);
     const configuredRestartPolicy = definition.restart ?? "no";
     const restartPolicy = container.HostConfig?.RestartPolicy?.Name || "no";
     assert.equal(restartPolicy, configuredRestartPolicy, `${container.service} runtime restart policy changed`);
-    if (!held.has(container.service) && ["waha-gows", "waha-noweb"].includes(container.service)) {
+    if (!isHeld && ["waha-gows", "waha-noweb"].includes(container.service)) {
       assert.equal(String(environmentObject(definition.environment).WAHA_WORKER_RESTART_SESSIONS ?? "").toLowerCase(), "true", `${container.service} must resume retained sessions after restart`);
       assert.equal(String(environmentObject(container.Config.Env).WAHA_WORKER_RESTART_SESSIONS ?? "").toLowerCase(), "true", `${container.service} runtime must resume retained sessions after restart`);
     }
@@ -383,12 +468,13 @@ export function projectStack({ compose, containers, imageInspections, catalog, c
     if (definition.healthcheck && definition.healthcheck.disable !== true) {
       assert.equal(healthcheckRequired, true, `${container.service} runtime healthcheck is disabled`);
     }
-    if (held.has(container.service)) {
+    if (isHeld) {
+      if (!freshHold) assert.ok(["created", "exited"].includes(container.State.Status), `${container.service} hold was started`);
       assert.equal(container.State.Running, false); assert.equal(container.State.Pid, 0);
-      assert.ok(["created", "exited"].includes(container.State.Status), `${container.service} hold was started`);
       assert.equal(container.State.Restarting ?? false, false);
       assert.equal(container.State.Paused, false); assert.equal(container.State.Dead, false);
-      if (!preservedOld && !oneShot) {
+      if (devFreshHeld && definition.read_only) assert.equal(container.HostConfig.ReadonlyRootfs, true);
+      if (devPreimages && !preservedOld && !oneShot) {
         const before = devPreimages.services.find(({ service }) => service === container.service);
         assert.equal(container.HostConfig.ReadonlyRootfs, true);
         assert.deepEqual(devContainerPreimage(container).mounts, before.mounts, "readonly worker mounts changed");
@@ -429,7 +515,7 @@ export function projectStack({ compose, containers, imageInspections, catalog, c
       service: container.service,
       ...(devPreimages ? { installation: preservedOld ? "PRESERVED_NOT_INSTALLED" : "CANDIDATE_INSTALLED" } : {}),
       state: container.State.Status,
-      health: oneShot || held.has(container.service) ? null : container.State.Health?.Status ?? null,
+      health: oneShot || isHeld ? null : container.State.Health?.Status ?? null,
       image: preservedOld ? container.Config.Image : definition.image,
       imageId: image.Id,
       restartCount: container.RestartCount,
@@ -448,8 +534,11 @@ export function projectStack({ compose, containers, imageInspections, catalog, c
     assert.equal(image.Config?.Labels?.["org.opencontainers.image.revision"], imageSource?.commit ?? candidateSha, `${candidateId} has another source revision`);
     assert.equal(image.Config?.Labels?.["io.wasalx.source.tree"], imageSource?.tree ?? candidateTree, `${candidateId} has another source tree`);
     if (candidateId === "zammad") {
-      assert.equal(image.Config?.Labels?.["com.wasalx.zammad.package.sha256"], catalog.tenantProvisioning.package.sha256,
-        "zammad has another WasalX package digest");
+      const expectedPackageSha256 = imageSource ? imageSource.packageSha256 : catalog.tenantProvisioning.package.sha256;
+      if (!/^[0-9a-f]{64}$/u.test(expectedPackageSha256 ?? "") ||
+          image.Config?.Labels?.["com.wasalx.zammad.package.sha256"] !== expectedPackageSha256) {
+        throw new StackVerificationError("zammad-package-digest", "image package digest differs from the source catalog pin");
+      }
     }
     addImage(image, { reference, candidateId });
   }
@@ -458,6 +547,7 @@ export function projectStack({ compose, containers, imageInspections, catalog, c
 
   return {
     ...(devPreimages ? { heldServices: [...held].sort(), heldPrerequisites: devPreimages.heldPrerequisites ?? {}, preservedServices: [...preserved].sort(), fullLiveAcceptance: false } : {}),
+    ...(freshHold ? { heldServices: freshHold.held, heldPrerequisites: freshHold.prerequisites, fullLiveAcceptance: false } : {}),
     oneShotServices,
     services: serviceInventory,
     images: [...inventory.values()].map((entry) => ({
@@ -483,7 +573,9 @@ function argumentsFrom(values) {
   let full = false;
   let devPreimagesFile; let devPreimagesSha256;
   let rehearsalMain;
+  let localRegistry;
   let devSkipPublicWebhookPreflight = false;
+  let devFreshHeld = false; let devSimulator = false;
   for (let index = 0; index < rest.length;) {
     const option = rest[index];
     if (option === "--full") {
@@ -495,6 +587,13 @@ function argumentsFrom(values) {
     if (option === devSkipPublicWebhookPreflightFlag) {
       assert.equal(devSkipPublicWebhookPreflight, false, `${option} can be provided only once`);
       devSkipPublicWebhookPreflight = true;
+      index += 1;
+      continue;
+    }
+    if (option === devFreshHeldFlag || option === devSimulatorFlag) {
+      assert.ok(option === devFreshHeldFlag ? !devFreshHeld : !devSimulator, `${option} can be provided only once`);
+      if (option === devFreshHeldFlag) devFreshHeld = true;
+      else devSimulator = true;
       index += 1;
       continue;
     }
@@ -519,6 +618,10 @@ function argumentsFrom(values) {
     } else if (option === "--env-file") {
       assert.equal(envFile, undefined, "--env-file can be provided only once");
       envFile = value;
+    } else if (option === "--local-registry") {
+      assert.equal(localRegistry, undefined);
+      assertLocalRegistry(value);
+      localRegistry = value;
     } else if (option === "--rehearsal-main") {
       assert.equal(rehearsalMain, undefined);
       rehearsalMain = value;
@@ -528,7 +631,7 @@ function argumentsFrom(values) {
     index += 2;
   }
   return { project, candidateImages, composeFiles, profiles, output, envFile, full, devPreimagesFile,
-    devPreimagesSha256, rehearsalMain, devSkipPublicWebhookPreflight };
+    devPreimagesSha256, rehearsalMain, localRegistry, devSkipPublicWebhookPreflight, devFreshHeld, devSimulator };
 }
 
 export async function verifyStack({ repositoryRoot: verificationRoot = root } = {}) {
@@ -537,6 +640,8 @@ export async function verifyStack({ repositoryRoot: verificationRoot = root } = 
   const candidateTree = process.env.WASALX_CANDIDATE_TREE;
   const parsed = argumentsFrom(process.argv.slice(2));
   const { project, candidateImages } = parsed;
+  const guestFiles = devGuestComposeFiles(parsed);
+  assert.ok(!parsed.devSimulator || parsed.devFreshHeld, devSimulatorSmokeOnly);
   const overlay = devWebhookPreflightOverlay(parsed);
   assert.match(candidateSha ?? "", shaPattern, "WASALX_CANDIDATE_SHA is required");
   assert.match(candidateTree ?? "", shaPattern, "WASALX_CANDIDATE_TREE is required");
@@ -548,15 +653,20 @@ export async function verifyStack({ repositoryRoot: verificationRoot = root } = 
   assert.ok(!parsed.rehearsalMain || (fullMode && !parsed.devPreimagesFile), "rehearsal requires the full synthetic stack");
   assert.ok(!parsed.devPreimagesFile || (fullMode && project === "wasalx-live" && JSON.stringify(profiles) === JSON.stringify(["full", "runtime-workers"])), "DEV preservation requires the exact existing DEV full profile");
   assert.equal(Boolean(parsed.devPreimagesFile), Boolean(parsed.devPreimagesSha256), "DEV preimage digest binding is required");
-  const evidenceName = parsed.rehearsalMain ? "nightly-stack" : parsed.devPreimagesFile ? "dev-held-stack" : fullMode ? "remote-full-stack" : "exact-stack";
+  const evidenceName = parsed.rehearsalMain ? "nightly-stack" : parsed.devPreimagesFile ? "dev-held-stack"
+    : parsed.devFreshHeld ? "dev-fresh-held-stack" : fullMode ? "remote-full-stack" : "exact-stack";
   const fullComposeFiles = ["compose.yaml", "compose.full.yaml", ...(parsed.rehearsalMain ? [rehearsalComposeFile] : [])];
   assert.ok((fullMode && JSON.stringify(requestedFiles) === JSON.stringify(fullComposeFiles) &&
     (JSON.stringify(profiles) === JSON.stringify(["full"]) || JSON.stringify(profiles) === JSON.stringify(["full", "runtime-workers"])) && isAbsolute(parsed.envFile ?? "")) ||
     (!fullMode && JSON.stringify(requestedFiles) === JSON.stringify(["compose.yaml", "compose.smoke.yaml"]) && profiles.length === 0 && parsed.envFile === undefined),
     "stack verification supports only the smoke overlay or the exact full profile");
-  const composeFiles = [...requestedFiles, ...overlay];
-  const outputPath = parsed.output ?? `output/release-evidence/${candidateSha}/${evidenceName}.json`;
-  assert.equal(outputPath, `output/release-evidence/${candidateSha}/${evidenceName}.json`,
+  assert.ok(!parsed.devFreshHeld || (!parsed.devPreimagesFile && JSON.stringify(profiles) === JSON.stringify(["full", "runtime-workers"])),
+    "fresh held smoke requires the full DEV runtime profile");
+  const composeFiles = [...requestedFiles, ...guestFiles, ...overlay];
+  const evidenceFile = parsed.devFreshHeld ? `${evidenceName}-${project}` : evidenceName;
+  const canonicalOutput = `output/release-evidence/${candidateSha}/${evidenceFile}.json`;
+  const outputPath = parsed.output ?? canonicalOutput;
+  assert.equal(outputPath, canonicalOutput,
     "stack verification output must be the candidate-scoped canonical path");
   const devPreimageBytes = parsed.devPreimagesFile ? await readFile(parsed.devPreimagesFile) : null;
   if (devPreimageBytes) assert.equal(createHash("sha256").update(devPreimageBytes).digest("hex"), parsed.devPreimagesSha256, "DEV preimage file changed");
@@ -588,6 +698,13 @@ export async function verifyStack({ repositoryRoot: verificationRoot = root } = 
     ...profiles.flatMap((profileName) => ["--profile", profileName]),
     "--project-name", project,
   ];
+  if (parsed.localRegistry) {
+    assert.ok(fullMode, "local registry requires the full stack");
+    const path = await localRegistryOverlay({ registry: parsed.localRegistry, project, envFile: parsed.envFile, profiles,
+      render: () => JSON.parse(run("docker", [...composeArguments, "config", "--no-interpolate", "--no-env-resolution", "--format", "json"])) });
+    composeFiles.push(path);
+    composeArguments.push("--file", path);
+  }
   run("docker", [...composeArguments, "config", "--quiet"]);
   const renderedCompose = run("docker", [
     ...composeArguments, "config", "--no-interpolate", "--no-env-resolution", "--format", "json",
@@ -622,7 +739,8 @@ export async function verifyStack({ repositoryRoot: verificationRoot = root } = 
   const catalog = JSON.parse(await readFile(resolve(root, "release/installer-images.json"), "utf8"));
   if (devPreimages) assertDevInstallPreimages(devPreimages, { candidateSha, candidateTree, project, activeServices, model: compose,
     machineIdSha256: createHash("sha256").update(await readFile("/etc/machine-id")).digest("hex") });
-  const projection = projectStack({ compose, containers, imageInspections, catalog, candidateImages, candidateSha, candidateTree, imageSource, activeServices, fullCatalog: fullMode, devPreimages, repositoryRoot: root });
+  const projection = projectStack({ compose, containers, imageInspections, catalog, candidateImages, candidateSha, candidateTree, imageSource,
+    activeServices, fullCatalog: fullMode, devPreimages, devFreshHeld: parsed.devFreshHeld, repositoryRoot: root });
   if (fullMode) {
     assert.deepEqual(projection.oneShotServices, expectedFullOneShots, "the exact full stack one-shot inventory changed");
     const portalEnvironment = environmentObject(compose.services?.portal?.environment);
@@ -646,15 +764,16 @@ export async function verifyStack({ repositoryRoot: verificationRoot = root } = 
   assert.equal(run("git", ["status", "--porcelain=v1", "--untracked-files=all"]), "", "candidate checkout changed during stack verification");
   const manifest = {
     schemaVersion: 1,
-    kind: imageSource ? "nightly-stack" : devPreimages ? "dev-held-stack" : "exact-stack",
+    kind: imageSource || devPreimages || parsed.devFreshHeld ? evidenceName : "exact-stack",
     candidateSha,
     candidateTree,
     clean: true,
     generatedAt: new Date().toISOString(),
     project,
-    stackProfile: imageSource ? "nightly" : devPreimages ? "dev-held" : fullMode ? "remote-full" : "docker-smoke",
+    stackProfile: imageSource ? "nightly" : devPreimages ? "dev-held" : parsed.devFreshHeld ? "dev-fresh-held" : fullMode ? "remote-full" : "docker-smoke",
     ...(imageSource ? { imageSource } : {}),
     ...(parsed.devSkipPublicWebhookPreflight ? { devSkipPublicWebhookPreflight: true } : {}),
+    ...(parsed.devSimulator ? { devSimulator: true } : {}),
     profiles,
     composeFiles: composeEvidence,
     renderedCompose: { bytes: Buffer.byteLength(renderedCompose), sha256: createHash("sha256").update(renderedCompose).digest("hex") },
@@ -678,10 +797,7 @@ export async function verifyStack({ repositoryRoot: verificationRoot = root } = 
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   verifyStack().catch((error) => {
-    // Parser and subprocess errors can contain private captured input.
-    const variable = ["WASALX_INSTALL_EXPECTED_HOSTNAME", "WASALX_DEV_REVIEW_ORIGIN_SUFFIX"].find((name) => error.message?.includes(name));
-    const reason = error.message === devWebhookPreflightOnly ? `: ${devWebhookPreflightOnly}` : variable ? `: check ${variable}` : "";
-    process.stderr.write(`exact stack verification failed${reason}\n`);
+    process.stderr.write(`exact stack verification reason: ${stackVerificationDiagnostic(error)}\n`);
     process.exitCode = 1;
   });
 }

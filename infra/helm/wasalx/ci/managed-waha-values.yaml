@@ -1,3 +1,6 @@
+connectorRetries:
+  botActionMaxAttempts: 13
+  botHandoffMaxAttempts: 3
 managedWaha:
   enabled: true
   allowedEgressCidrs:

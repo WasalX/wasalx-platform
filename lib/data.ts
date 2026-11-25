@@ -337,7 +337,7 @@ export async function getZammadRoutingCatalog() {
 
 export async function stopRetryingDelivery(id:string,body:unknown,idempotencyKey:string) {
   if(controlPlaneMode)return (await controlPlane()).stopRetryingDelivery(id,body,idempotencyKey);
-  throw Object.assign(new Error("Delivery recovery requires the control plane"),{status:503});
+  throw Object.assign(new Error("Delivery recovery requires the managed service"),{status:503});
 }
 
 export async function retryDelivery(id: string, actor: string, confirmOutcomeUnknown = false,idempotencyKey="") {
@@ -354,7 +354,7 @@ export async function retryDelivery(id: string, actor: string, confirmOutcomeUnk
 export async function getDeliveryDetail(id:string){
   if(fixtureMode)return(await fixture()).getDeliveryDetail(id);
   if(controlPlaneMode)return(await controlPlane()).getDeliveryDetail(id);
-  throw new Error("Delivery receipt timelines require the production control plane");
+  throw new Error("Delivery receipt timelines require the managed service");
 }
 
 export async function getDeliveryAgentDestination(id:string){
@@ -376,7 +376,7 @@ export async function revealDeliveryContent(id:string,actor:string){
 export async function getCases(input:{before?:string;limit?:number;ticket?:string}={}){
   if(fixtureMode)return(await fixture()).getCases(input);
   if(controlPlaneMode)return(await controlPlane()).getCases(input);
-  throw Object.assign(new Error("Case lifecycle administration requires the production control plane or fixture preview"),{status:503});
+  throw Object.assign(new Error("Case lifecycle administration requires the managed service or the preview workspace"),{status:503});
 }
 
 export async function getCaseAgentDestination(id:string){
@@ -387,31 +387,31 @@ export async function getCaseAgentDestination(id:string){
 export async function getGroups(input:{after?:string;limit?:number;query?:string;connectionId?:string}={}){
   if(fixtureMode){const rows=(await fixture()).getDashboardData().then(data=>data.groups);const query=input.query?.trim().toLocaleLowerCase();const groups=(await rows).filter(row=>(!query||`${row.name} ${row.zammad_group} ${row.rule_name}`.toLocaleLowerCase().includes(query))&&(!input.connectionId||String(row.connection_id)===input.connectionId));const start=input.after?groups.findIndex(row=>String(row.id)===input.after)+1:0;return groups.slice(Math.max(0,start),Math.max(0,start)+(input.limit??200));}
   if(controlPlaneMode)return(await controlPlane()).getGroups(input);
-  throw Object.assign(new Error("Group administration requires the production control plane or fixture preview"),{status:503});
+  throw Object.assign(new Error("Group administration requires the managed service or the preview workspace"),{status:503});
 }
 
 export async function detachCase(id:string,expectedVersion:number,actor:string,idempotencyKey:string){
   if(fixtureMode)return(await fixture()).detachCase(id,expectedVersion,actor,idempotencyKey);
   if(controlPlaneMode)return(await controlPlane()).detachCase(id,expectedVersion,idempotencyKey);
-  throw Object.assign(new Error("Case lifecycle administration requires the production control plane or fixture preview"),{status:503});
+  throw Object.assign(new Error("Case lifecycle administration requires the managed service or the preview workspace"),{status:503});
 }
 
 export async function getReviewItems(state?:string){
   if(fixtureMode)return(await fixture()).getReviewItems(state);
   if(controlPlaneMode)return(await controlPlane()).getReviewItems(state);
-  throw new Error("Operator review requires the production control plane");
+  throw new Error("Operator review requires the managed service");
 }
 
 export async function getReviewItem(id:string){
   if(fixtureMode)return(await fixture()).getReviewItem(id);
   if(controlPlaneMode)return(await controlPlane()).getReviewItem(id);
-  throw new Error("Operator review requires the production control plane");
+  throw new Error("Operator review requires the managed service");
 }
 
 export async function reviewAction(id:string,action:"resolve"|"discard"|"reprocess",input:Record<string,unknown>,idempotencyKey:string){
   if(fixtureMode)return(await fixture()).reviewAction(id,action,input);
   if(controlPlaneMode)return(await controlPlane()).reviewAction(id,action,input,idempotencyKey);
-  throw new Error("Operator review requires the production control plane");
+  throw new Error("Operator review requires the managed service");
 }
 
 export async function createRule(input: RuleCreateInput, actor: string, idempotencyKey: string) {
@@ -481,7 +481,7 @@ export async function simulateClientRouting(input:Record<string,unknown>){if(fix
 export async function getRuleSetReadiness(id:string){
   if(fixtureMode)return(await fixture()).getRuleSetReadiness(id);
   if(controlPlaneMode)return(await controlPlane()).getRuleSetReadiness(id);
-  throw Object.assign(new Error("Rule-set readiness requires the managed control plane"),{status:503});
+  throw Object.assign(new Error("Rule-set readiness requires the managed service"),{status:503});
 }
 
 export async function compareRuleSetVersions(leftId:string,rightId:string){
@@ -493,19 +493,19 @@ export async function compareRuleSetVersions(leftId:string,rightId:string){
 export async function activateRuleSetVersion(id:string,input:Record<string,unknown>,actor:string,idempotencyKey:string){
   if(fixtureMode)return(await fixture()).activateRuleSetVersion(id,input,actor);
   if(controlPlaneMode)return(await controlPlane()).activateRuleSetVersion(id,input,idempotencyKey);
-  throw Object.assign(new Error("Rule-set activation requires the managed control plane"),{status:503});
+  throw Object.assign(new Error("Rule-set activation requires the managed service"),{status:503});
 }
 
 export async function cloneRuleSetVersion(id:string,actor:string,idempotencyKey:string,input:Record<string,unknown>={}){
   if(fixtureMode)return(await fixture()).cloneRuleSetVersion(id,actor,idempotencyKey,input);
   if(controlPlaneMode)return(await controlPlane()).cloneRuleSetVersion(id,idempotencyKey,input);
-  throw Object.assign(new Error("Rule-set cloning requires the managed control plane"),{status:503});
+  throw Object.assign(new Error("Rule-set cloning requires the managed service"),{status:503});
 }
 
 export async function rollbackRuleSetVersion(id:string,input:Record<string,unknown>,actor:string,idempotencyKey:string){
   if(fixtureMode)return(await fixture()).rollbackRuleSetVersion(id,input,actor);
   if(controlPlaneMode)return(await controlPlane()).rollbackRuleSetVersion(id,input,idempotencyKey);
-  throw Object.assign(new Error("Rule-set rollback requires the managed control plane"),{status:503});
+  throw Object.assign(new Error("Rule-set rollback requires the managed service"),{status:503});
 }
 
 export async function createConnection(input:{provider:"WAHA"|"META";name:string;engine?:"GOWS"|"NOWEB";disclosureAccepted?:boolean;disclosureVersion?:string;accessToken?:string;phoneNumberId?:string;wabaId?:string;eligibilityAccepted?:boolean;eligibilityVersion?:string},actor:string,idempotencyKey?:string){
@@ -517,25 +517,25 @@ export async function createConnection(input:{provider:"WAHA"|"META";name:string
 export async function getWorkspaceSettings(){
   if(fixtureMode)return(await fixture()).getWorkspaceSettings();
   if(controlPlaneMode)return(await controlPlane()).getWorkspaceSettings();
-  throw Object.assign(new Error("Tenant administration requires the production control plane or fixture preview"),{status:503});
+  throw Object.assign(new Error("Tenant administration requires the managed service or the preview workspace"),{status:503});
 }
 
 export async function updateWorkspaceSettings(input:Record<string,unknown>,actor:string){
   if(fixtureMode)return(await fixture()).updateWorkspaceSettings(input,actor);
   if(controlPlaneMode)return(await controlPlane()).updateWorkspaceSettings(input);
-  throw Object.assign(new Error("Tenant administration requires the production control plane or fixture preview"),{status:503});
+  throw Object.assign(new Error("Tenant administration requires the managed service or the preview workspace"),{status:503});
 }
 
 export async function getTeamAccess(){
   if(fixtureMode)return(await fixture()).getTeamAccess();
   if(controlPlaneMode)return(await controlPlane()).getTeamAccess();
-  throw Object.assign(new Error("Team administration requires the production control plane or fixture preview"),{status:503});
+  throw Object.assign(new Error("Team administration requires the managed service or the preview workspace"),{status:503});
 }
 
 export async function workspaceAccess(input:Record<string,unknown>){
   if(controlPlaneMode)return(await controlPlane()).workspaceAccess(input);
   if(input.action==="status")return{enabled:false,available:false,members:[]};
-  throw Object.assign(new Error("Workspace account synchronization requires the managed control plane"),{status:503});
+  throw Object.assign(new Error("Workspace account synchronization requires the managed service"),{status:503});
 }
 
 export async function getSupportAccessRequests(){
@@ -547,7 +547,7 @@ export async function getSupportAccessRequests(){
 export async function decideSupportAccess(id:string,action:"approve"|"deny"|"revoke",input:Record<string,unknown>,actor:string){
   if(fixtureMode)return(await fixture()).decideSupportAccess(id,action,input,actor);
   if(controlPlaneMode)return(await controlPlane()).decideSupportAccess(id,action,input);
-  throw Object.assign(new Error("Support-access decisions require the managed control plane"),{status:503});
+  throw Object.assign(new Error("Support-access decisions require the managed service"),{status:503});
 }
 
 export async function exportAuditCsv(input:{from:string;to:string;limit:number}){
@@ -574,31 +574,31 @@ export async function getAuditEvents(cursor?:{createdAt:string;id:string},routin
 export async function inviteTeamMember(input:Record<string,unknown>,actor:string,idempotencyKey:string){
   if(fixtureMode)return(await fixture()).inviteTeamMember(input,actor);
   if(controlPlaneMode)return(await controlPlane()).inviteTeamMember(input,idempotencyKey);
-  throw Object.assign(new Error("Team administration requires the production control plane or fixture preview"),{status:503});
+  throw Object.assign(new Error("Team administration requires the managed service or the preview workspace"),{status:503});
 }
 
 export async function resendTeamInvitation(id:string,input:Record<string,unknown>,actor:string,idempotencyKey:string){
   if(fixtureMode)return(await fixture()).resendTeamInvitation(id,input,actor);
   if(controlPlaneMode)return(await controlPlane()).resendTeamInvitation(id,input,idempotencyKey);
-  throw Object.assign(new Error("Team administration requires the production control plane or fixture preview"),{status:503});
+  throw Object.assign(new Error("Team administration requires the managed service or the preview workspace"),{status:503});
 }
 
 export async function revokeTeamInvitation(id:string,expectedVersion:number,actor:string){
   if(fixtureMode)return(await fixture()).revokeTeamInvitation(id,expectedVersion,actor);
   if(controlPlaneMode)return(await controlPlane()).revokeTeamInvitation(id,expectedVersion);
-  throw Object.assign(new Error("Team administration requires the production control plane or fixture preview"),{status:503});
+  throw Object.assign(new Error("Team administration requires the managed service or the preview workspace"),{status:503});
 }
 
 export async function updateTeamMember(id:string,input:Record<string,unknown>,actor:string){
   if(fixtureMode)return(await fixture()).updateTeamMember(id,input,actor);
   if(controlPlaneMode)return(await controlPlane()).updateTeamMember(id,input);
-  throw Object.assign(new Error("Team administration requires the production control plane or fixture preview"),{status:503});
+  throw Object.assign(new Error("Team administration requires the managed service or the preview workspace"),{status:503});
 }
 
 export async function removeTeamMember(id:string,expectedVersion:number,actor:string){
   if(fixtureMode)return(await fixture()).removeTeamMember(id,expectedVersion,actor);
   if(controlPlaneMode)return(await controlPlane()).removeTeamMember(id,expectedVersion);
-  throw Object.assign(new Error("Team administration requires the production control plane or fixture preview"),{status:503});
+  throw Object.assign(new Error("Team administration requires the managed service or the preview workspace"),{status:503});
 }
 
 export async function acceptWahaEvent(connectionToken: string, eventId: string, eventType: string, payload: string) {

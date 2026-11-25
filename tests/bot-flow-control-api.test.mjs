@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { readTenantPortalSource } from "./helpers/tenant-portal-source.mjs";
 import {
   BotConversationEventPageError,
   BotConversationPageError,
@@ -16,6 +17,7 @@ import {
 } from "../lib/bot-conversations.ts";
 import { assignBotFlow as assignFixtureFlow, commandBotConversation as commandFixtureConversation, getBotAssignments as getFixtureAssignments, getBotConversationEvents as getFixtureConversationEvents, getBotConversations as getFixtureConversations, getBotFlows as getFixtureFlows, setBotAssignmentAttribution as setFixtureAttribution } from "../lib/fixture-data.ts";
 import { advanceBotFlow } from "../packages/core/src/bot-flow.ts";
+import { BotFlowsController } from "../services/control-api/dist/bot-flows.controller.js";
 import { BotFlowsService } from "../services/control-api/dist/bot-flows.service.js";
 import { can } from "../services/control-api/dist/rbac.js";
 import { RuleGovernanceService } from "../services/control-api/dist/rule-governance.service.js";
@@ -26,6 +28,72 @@ const userId = "10100000-0000-4000-8000-000000000001";
 const familyId = "41000000-0000-4000-8000-000000000001";
 const versionId = "42000000-0000-4000-8000-000000000001";
 const principal = { subject: "owner", userId, tenantId, email: "owner@example.invalid", displayName: "Owner", role: "tenant_owner", authenticatedAt: Math.floor(Date.now()/1000), authenticationMethods: ["mfa"] };
+test("bot lists continue through the old 200-row cap", async t => {
+  const records = Array.from({ length: 203 }, (_, index) => {
+    const id = "44000000-0000-4000-8000-" + String(index + 1).padStart(12, "0");
+    return { id, flow_version_id: id, action_key: "orders.lookup", kind: "HTTP_JSON",
+      endpoint_url: "https://example.test/lookup?token=fixture", headers: { "x-fixture": "value" } };
+  });
+  const selected = records.at(-1);
+  for (const [method, table] of [
+    ["list", "bot_flow_versions"], ["listActions", "bot_action_definitions"],
+    ["listActionRevisions", "bot_action_revisions"], ["listRouting", "client_routing_versions"],
+    ["listMediaAssets", "bot_media_assets"],
+  ]) {
+    await t.test(method, async () => {
+      const media = method === "listMediaAssets";
+      const revising = method === "listActionRevisions";
+      const redact = revising || method === "listActions";
+      let requestedIds = media ? [selected.id] : [];
+      let queries = 0;
+      const database = { rows: async (tenant, sql, values) => {
+        queries += 1;
+        assert.equal(tenant, tenantId);
+        assert.equal(values[0], tenantId);
+        assert.ok(sql.includes(table));
+        assert.match(sql, /LIMIT \$[34]/u);
+        if (revising) assert.equal(values[1], "orders.lookup");
+        if (media) assert.deepEqual(values[1], requestedIds);
+        const cursor = values.at(-2);
+        const available = requestedIds.length ? records.slice(0, -1) : records;
+        const position = cursor ? available.findIndex(row => row.id === cursor) + 1 : 0;
+        const rows = available.slice(position, position + values.at(-1));
+        if (!media) return rows;
+        const normal = rows.map(row => ({ ...row, pagination_requested: false }));
+        return cursor || !requestedIds.length ? normal : [...normal, { ...selected, pagination_requested: true }];
+      } };
+      const controller = new BotFlowsController(new BotFlowsService(database));
+      assert.equal(Reflect.getMetadata("wasalx:permission", controller[method]), "bot:read");
+      const request = { principal: redact ? { ...principal, role: "auditor" } : principal };
+      const headers = new Map();
+      const reply = { header: (name, value) => headers.set(name, value) };
+      const list = query => revising ? controller[method](request, "orders.lookup", query, reply)
+        : controller[method](request, { ...(media ? { id: selected.id } : {}), ...query }, reply);
+      const ids = rows => rows.map(row => row.id);
+      const first = await list({});
+      assert.deepEqual(ids(first), ids(media ? [...records.slice(0, 200), selected] : records.slice(0, 200)));
+      const cursor = headers.get("x-next-cursor");
+      assert.equal(cursor, records[199].id);
+      headers.clear();
+      const next = await list({ cursor });
+      assert.deepEqual(ids(next), ids(media ? records.slice(200, -1) : records.slice(200)));
+      assert.equal(headers.has("x-next-cursor"), false);
+      if (redact) {
+        assert.equal(next[0].endpoint_url, "https://example.test/lookup");
+        assert.deepEqual(next[0].headers, {});
+      }
+      if (media) assert.ok([...first, ...next].every(row => !("pagination_requested" in row)));
+
+      await assert.rejects(() => list({ cursor: "invalid" }), /cursor is invalid/);
+      await assert.rejects(() => list({ limit: ["2"] }), /Page limit/);
+      assert.equal(queries, 2);
+      requestedIds = [];
+      const direct = revising ? await controller[method](request, "orders.lookup") : await controller[method](request);
+      assert.deepEqual(ids(direct), ids(records.slice(0, 200)));
+    });
+  }
+});
+
 const definition = {
   schemaVersion: 1,
   name: "Support",
@@ -271,9 +339,17 @@ test("operator resume fails closed while the bot assignment is paused",async()=>
   await assert.rejects(()=>service.commandConversation(principal,conversationId,"resume-paused","request-paused",{action:"RESUME_BOT",expectedFencingToken:4}),/Activate the bot assignment/);
 });
 
-test("operator retry schedules the same retryable handoff without resetting attempts or changing ownership",async()=>{
+for (const configured of [undefined, "3"]) test(`operator retry respects the ${configured ? "configured" : "default"} handoff limit without resetting attempts or changing ownership`,async t=>{
+  const original = process.env.BOT_HANDOFF_MAX_ATTEMPTS;
+  t.after(() => {
+    if (original === undefined) delete process.env.BOT_HANDOFF_MAX_ATTEMPTS;
+    else process.env.BOT_HANDOFF_MAX_ATTEMPTS = original;
+  });
+  if (configured === undefined) delete process.env.BOT_HANDOFF_MAX_ATTEMPTS;
+  else process.env.BOT_HANDOFF_MAX_ATTEMPTS = configured;
+  const maxAttempts = configured === undefined ? 8 : Number(configured);
   const conversationId="47000000-0000-4000-8000-000000000001",handoffId="48000000-0000-4000-8000-000000000001";
-  const job={state:"FAILED_RETRYABLE",attempts:7};let operation,fence=4,updates=0,events=0,wakes=0;
+  const job={state:"FAILED_RETRYABLE",attempts:maxAttempts-1};let operation,fence=4,updates=0,events=0,wakes=0;
   const client={query:async(sql,values=[])=>{
     const barrier=emptyDirectCommandBarrier(sql,values,conversationId);if(barrier)return barrier;
     if(sql.includes("pg_advisory_xact_lock"))return{rows:[]};
@@ -281,8 +357,8 @@ test("operator retry schedules the same retryable handoff without resetting atte
     if(sql.includes("version.definition->>'start'"))return{rows:[{state:"HANDOFF_PENDING",fencing_token:fence,current_node_id:"handoff",handoff_id:handoffId,handoff_state:job.state}]};
     if(sql.includes("UPDATE bot_handoff_jobs")){
       assert.match(sql,/state='QUEUED',available_at=now\(\)/u);
-      assert.match(sql,/tenant_id=\$1 AND id=\$2 AND state='FAILED_RETRYABLE' AND attempts<8[\s\S]*lease_id IS NULL AND lease_expires_at IS NULL/u);
-      assert.doesNotMatch(sql,/SET[\s\S]*attempts\s*=/u);assert.deepEqual(values,[tenantId,handoffId]);
+      assert.match(sql,/tenant_id=\$1 AND id=\$2 AND state='FAILED_RETRYABLE' AND attempts<\$3[\s\S]*lease_id IS NULL AND lease_expires_at IS NULL/u);
+      assert.doesNotMatch(sql,/SET[\s\S]*attempts\s*=/u);assert.deepEqual(values,[tenantId,handoffId,maxAttempts]);
       job.state="QUEUED";updates++;return{rows:[],rowCount:1};
     }
     if(sql.includes("UPDATE bot_conversations")){assert.doesNotMatch(sql,/SET state|human_ownership_epoch|human_pause_started_at/u);fence++;return{rows:[],rowCount:1};}
@@ -297,7 +373,7 @@ test("operator retry schedules the same retryable handoff without resetting atte
   const result=await service.commandConversation(principal,conversationId,"retry-handoff","request",input);
   assert.deepEqual(result,{conversationId,state:"HANDOFF_PENDING",currentNodeId:"handoff",fencingToken:5,command:"RETRY_HANDOFF",duplicate:false});
   assert.deepEqual(await service.commandConversation(principal,conversationId,"retry-handoff","replay",input),{...result,duplicate:true});
-  assert.equal(job.attempts,7);assert.equal(updates,1);assert.equal(events,1);assert.equal(wakes,2);
+  assert.equal(job.attempts,maxAttempts-1);assert.equal(updates,1);assert.equal(events,1);assert.equal(wakes,2);
 });
 
 test("handoff retry fails closed on a stale fence, changed job, or exhausted attempts",async()=>{
@@ -313,7 +389,7 @@ test("handoff retry fails closed on a stale fence, changed job, or exhausted att
       const barrier=emptyDirectCommandBarrier(sql,values,conversationId);if(barrier)return barrier;
       const operation=emptyActionOperation(sql);if(operation)return operation;
       if(sql.includes("version.definition->>'start'"))return{rows:[{state:scenario.state,fencing_token:scenario.fence,current_node_id:"handoff",handoff_id:handoffId,handoff_state:scenario.handoffState}]};
-      if(sql.includes("UPDATE bot_handoff_jobs")){assert.equal(scenario.changed,true);assert.match(sql,/attempts<8/u);return{rows:[],rowCount:0};}
+      if(sql.includes("UPDATE bot_handoff_jobs")){assert.equal(scenario.changed,true);assert.match(sql,/attempts<\$3/u);return{rows:[],rowCount:0};}
       throw new Error(`Unexpected mutation after a rejected handoff retry: ${sql}`);
     }};
     const service=new BotFlowsService({withTenant:async(_tenant,callback)=>callback(client)},{wake:async()=>assert.fail("Rejected retry must not wake workers")});
@@ -538,11 +614,11 @@ test("active flows pin action behavior and read-only roles receive no secret met
   }};
   const service=new BotFlowsService({withTenant:async(_tenant,callback)=>callback(client),rows:async()=>[{id:existingId,kind:"NOTION_CREATE_PAGE",endpoint_url:"https://api.notion.com/v1/pages?workspace=northstar",http_method:"POST",auth_scheme:"BEARER",secret_reference:"secret://tenant/action",headers:{"x-safe":"value"}}]});
   await assert.rejects(()=>service.saveAction(principal,"request",{actionKey:"orders.lookup",name:"Lookup",kind:"HTTP_JSON",endpointUrl:"https://example.com/action",httpMethod:"POST",authScheme:"NONE",secretReference:null,headers:{},responseMapping:{},timeoutMs:5000,maxResponseBytes:2048,state:"ACTIVE",expectedRevision:2}),/pinned by an active flow/);
-  const visible=await service.listActions({...principal,role:"auditor"});
+  const {items:visible}=await service.listActions({...principal,role:"auditor"});
   assert.deepEqual(visible[0]?.headers,{});
   assert.equal(visible[0]?.secret_reference,null);
   assert.equal(visible[0]?.endpoint_url,"https://api.notion.com/v1/pages");
-  assert.equal((await service.listActions(principal))[0]?.endpoint_url,"https://api.notion.com/v1/pages?workspace=northstar");
+  assert.equal((await service.listActions(principal)).items[0]?.endpoint_url,"https://api.notion.com/v1/pages?workspace=northstar");
   assert.deepEqual(visible[0]?.capabilities,{invocation_surfaces:["DIRECT_FLOW","GROUP_COMMAND"],retry_semantics:"OUTCOME_UNKNOWN_ON_AMBIGUOUS_FAILURE"});
 });
 
@@ -698,7 +774,7 @@ test("plugin qualification refuses write-capable actions and advertises only act
     {action_key:"paused.get",kind:"HTTP_JSON",endpoint_url:"https://api.example.test/status",http_method:"GET",auth_scheme:"NONE",secret_reference:null,state:"PAUSED"},
   ]});
   await assert.rejects(()=>service.qualifyAction(principal,"unsafe.post","qualify-post","request-post",{expectedRevision:1,input:{}}),/Only replay-safe GET actions/);
-  assert.deepEqual((await service.listActions(principal)).map(row=>row.qualification_supported),[true,false,false]);
+  assert.deepEqual((await service.listActions(principal)).items.map(row=>row.qualification_supported),[true,false,false]);
 });
 
 test("action revision integrity migration pins behavior and fails closed at tenant and secret boundaries",async()=>{
@@ -898,7 +974,7 @@ test("direct media is tenant pinned, projected to Zammad, and claimed as provide
   assert.match(inbound,/bot_media_asset\.upload_failed[\s\S]*UPLOAD_REJECTED/);
   
   const service=await readFile(new URL("../services/control-api/src/bot-flows.service.ts",import.meta.url),"utf8");
-  assert.match(service,/requestedIds\.length>100[\s\S]*WITH requested AS[\s\S]*id=ANY\(\$2::uuid\[\]\)[\s\S]*recent AS[\s\S]*LIMIT 200[\s\S]*UNION ALL[\s\S]*DISTINCT ON \(id\)/);
+  assert.match(service,/requestedIds\.length\s*>\s*100[\s\S]*WITH requested AS[\s\S]*state=\x27READY\x27[\s\S]*id=ANY\(\$2::uuid\[\]\)[\s\S]*recent AS[\s\S]*state=\x27READY\x27[\s\S]*LIMIT \$4/u);
   assert.match(service,/validateMediaAssets\(client,principal\.tenantId,target\.flow_version_id[\s\S]*target\.provider,false\)/);
   assert.match(service,/\$3::boolean=false OR media\.expires_at>now\(\)/);
   assert.match(service,/pg_advisory_xact_lock[\s\S]*bot-media-upload:/);
@@ -1176,16 +1252,32 @@ test("execution history is tenant-bound, safely projected, paginated, and preser
   assert.equal(transactionCount,2);
 });
 
-test("legacy conversation requests retain the no-query array response",async()=>{
-  let values;
-  const database={rows:async(_tenant,_sql,input=[])=>{
-    values=input;
-    return[{id:"85000000-0000-4000-8000-000000000001",last_activity_at:new Date("2026-08-23T12:34:56.123Z"),pagination_activity_at:"2026-08-23T12:34:56.123456Z"}];
-  }};
-  const result=await new BotFlowsService(database).listConversations(principal);
-  assert.equal(Array.isArray(result),true);
-  assert.equal("pagination_activity_at" in result[0],false);
-  assert.deepEqual(values,[tenantId,null,null,200]);
+test("legacy conversation requests retain the no-query array and can continue past 200", async () => {
+  const at = "2026-08-23T12:34:56.123456Z";
+  const rows = Array.from({ length: 202 }, (_, index) => ({
+    id: "85000000-0000-4000-8000-" + String(202 - index).padStart(12, "0"),
+    last_activity_at: new Date(at), pagination_activity_at: at,
+  }));
+  const database = { rows: async (tenant, _sql, [, timestamp, boundary, fetchSize]) => {
+    assert.equal(tenant, tenantId);
+    assert.equal(timestamp, boundary ? at : null);
+    return rows.filter(row => !boundary || row.id < boundary).slice(0, fetchSize);
+  } };
+  const controller = new BotFlowsController(new BotFlowsService(database));
+  const headers = new Map();
+  const reply = { header: (name, value) => headers.set(name, value) };
+  const request = { principal };
+  assert.deepEqual((await controller.listConversations(request)).map(row => row.id), rows.slice(0, 200).map(row => row.id));
+  const first = await controller.listConversations(request, undefined, undefined, reply);
+  assert.ok(Array.isArray(first));
+  assert.deepEqual(first.map(row => row.id), rows.slice(0, 200).map(row => row.id));
+  const cursor = headers.get("x-next-cursor");
+  assert.ok(cursor);
+  const next = await controller.listConversations(request, cursor, "100", reply);
+  assert.deepEqual(next.items.map(row => row.id), rows.slice(200).map(row => row.id));
+  assert.equal(next.next_cursor, null);
+  assert.ok(!("pagination_activity_at" in first[0]));
+  await assert.rejects(() => controller.listConversations(request, cursor, ["100"], reply), /Conversation page limit is invalid/);
 });
 
 test("conversation head refresh updates retained rows, keeps the deep cursor, and sorts deterministically",()=>{
@@ -1275,7 +1367,7 @@ test("conversation pagination is propagated and exposes an accessible bilingual 
   const client=await readFile(new URL("../lib/control-plane-data.ts",import.meta.url),"utf8");
   const pagination=await readFile(new URL("../lib/bot-conversations.ts",import.meta.url),"utf8");
   const source=await readFile(new URL("../app/BotAutomation.tsx",import.meta.url),"utf8");
-  const shell=await readFile(new URL("../app/WasalXApp.tsx",import.meta.url),"utf8");
+  const shell=await readTenantPortalSource();
   const english=await readFile(new URL("../lib/i18n/messages/en/automation.ts",import.meta.url),"utf8");
   const arabic=await readFile(new URL("../lib/i18n/messages/ar/automation.ts",import.meta.url),"utf8");
   const migration=await readFile(new URL("../services/control-api/migrations/0098_bot_conversation_pagination.sql",import.meta.url),"utf8");
@@ -1346,7 +1438,7 @@ test("automation resolves native team names and links only exact friendly ticket
 test("automation ticket navigation preserves the canonical role permission and native-ID boundary", async () => {
   const [bot, shell] = await Promise.all([
     readFile(new URL("../app/BotAutomation.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../app/WasalXApp.tsx", import.meta.url), "utf8"),
+    readTenantPortalSource(),
   ]);
   assert.match(shell, /openTicket=\{!isPrivateDemo && can\(role, "ticket:read"\) \? ticket => navigate\("inbox", \{ ticket \}\) : undefined\}/u);
   assert.match(bot, /openTicket \? botConversationTicketNumber\(row\.zammad_ticket_number\) : null/u);

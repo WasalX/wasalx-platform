@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { readTenantPortalSource } from "./helpers/tenant-portal-source.mjs";
 
 import { arabicAutomationMessages } from "../lib/i18n/messages/ar/automation.ts";
 import { arabicCaseMessages } from "../lib/i18n/messages/ar/cases.ts";
@@ -95,7 +96,7 @@ test("operator failures and unknown states never expose raw internal copy", asyn
     readFile(new URL("../app/BotAutomation.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/ClientRouting.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/CaseLifecycle.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../app/WasalXApp.tsx", import.meta.url), "utf8"),
+    readTenantPortalSource(),
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
     readFile(new URL("../lib/operator-ui.ts", import.meta.url), "utf8"),
   ]);
@@ -201,7 +202,7 @@ test("workflow step labels disambiguate duplicate types and use each version's o
       const description = helpers.nodeDescription(nodes[0], locale, t, [], definition.nodes);
       assert.equal(description, t("bot.node.description.action", { action: helpers.isolate("approved.lookup"), success: helpers.isolate(alphaLabel), failure: helpers.isolate(betaLabel) }));
       const entrySummary = helpers.comparisonSettingValue("entryCommands", "", definition, locale, t);
-      assert.equal(entrySummary, `Sales → ${helpers.isolate(alphaLabel)} · ${t("bot.entry.enabled")}`);
+      assert.equal(entrySummary, `${helpers.isolate("Sales")} ${locale === "ar" ? "←" : "→"} ${helpers.isolate(alphaLabel)} · ${t("bot.entry.enabled")}`);
       assert.equal(helpers.comparisonSettingValue("start", definition.start, definition, locale, t), label(action, "action"));
       assert.equal(helpers.comparisonSettingValue("mainMenuNodeId", "", definition, locale, t).split(" · ")[0], label(menu, "choice"));
       assert.doesNotMatch(`${description} ${entrySummary}`, /machine_/u);

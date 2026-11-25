@@ -126,6 +126,19 @@ export function createWahaSimulation({additionalDiscoveryGroupIds=[],participant
         if(!Number.isSafeInteger(offset)||offset<0||!Number.isSafeInteger(limit)||limit<1||limit>100)return json(400,{error:'invalid-pagination'});
         return json(200,found.slice().reverse().slice(offset,offset+limit));
       }
+      if(req.method==='POST'&&['/api/sendSeen','/api/startTyping'].includes(url.pathname)){
+        const body=await readBody(req);
+        if(state!=='WORKING')return json(409,{error:'session-not-working'});
+        const read=url.pathname==='/api/sendSeen';
+        assert.deepEqual(Object.keys(body).sort(),read?['chatId','messageIds','session']:['chatId','session']);
+        assert.equal(body.session,session);assert(directChatIds.includes(body.chatId));
+        if(read){
+          assert(Array.isArray(body.messageIds)&&body.messageIds.length===1);
+          const id=body.messageIds[0];
+          assert(typeof id==='string'&&id.startsWith('false_'+body.chatId+'_'));
+        }
+        res.writeHead(201);res.end();return;
+      }
       if(req.method==='POST'&&['/api/sendText','/api/sendImage','/api/sendFile','/api/sendVideo','/api/sendVoice'].includes(url.pathname)) {
         let bytes=0,chunks=[];for await(const chunk of req){bytes+=chunk.length;if(bytes>(url.pathname==='/api/sendText'?65536:8*1024*1024))return json(413,{error:'too-large'});chunks.push(chunk);}
         const body=JSON.parse(Buffer.concat(chunks).toString('utf8'));

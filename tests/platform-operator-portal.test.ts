@@ -411,6 +411,11 @@ test("operator states, provisioning choices, metering totals, and session recove
   assert.doesNotMatch(componentSource, /<Status value="HEALTHY" label=\{t\("platform\.workers\.healthyRatio"/u);
   assert.match(componentSource, /overview\.metering_capture/);
   assert.match(componentSource, /monthCostSummary/);
+  // The overview month is the UTC calendar month (#263), so the label says so in both languages.
+  for (const key of ["platform.summary.monthCost", "platform.summary.monthCostUnpriced"] as const) {
+    assert.match(englishPlatformMessages[key], /this month \(UTC\)/u, key);
+    assert.match(arabicPlatformMessages[key], /هذا الشهر بتوقيت UTC/u, key);
+  }
   assert.match(componentSource, /name="name" required minLength=\{2\} maxLength=\{120\}/u);
   assert.match(componentSource, /name="displayName" required maxLength=\{120\}/u);
   assert.match(componentSource, /name="email" required type="email" maxLength=\{320\}/u);
@@ -464,7 +469,7 @@ test("operator shell remains operable on mobile and protects in-progress work", 
   assert.doesNotMatch(componentSource, /aria-current="page"/u);
   assert.match(cssSource, /\.sidebar\[data-mobile-navigation-open="false"\] \.navigation \{ display: none; \}/u);
   assert.match(cssSource, /\.navigation a \{ display: flex; min-height: 44px;/u);
-  assert.match(componentSource, /role="region"[\s\S]{0,320}tabIndex=\{0\}[\s\S]{0,160}platform\.tenants\.tableLabel/u);
+  assert.match(componentSource, /<ScrollRegion\s+className=\{styles\.tableScroll\}\s+aria-label=\{t\("platform\.tenants\.tableLabel"\)\}/u);
   assert.match(cssSource, /\.tableScroll:focus-visible/u);
   assert.match(cssSource, /@media \(pointer: coarse\)/u);
   assert.match(componentSource, /data-unsaved=\{dirty \|\| undefined\}/u);

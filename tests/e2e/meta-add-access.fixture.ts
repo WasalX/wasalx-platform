@@ -3,6 +3,7 @@ import { expect, type ConsoleMessage, type Page, type TestInfo } from "@playwrig
 import type { MetaSignupAttemptView } from "../../lib/meta-signup-contract";
 import { englishTenantMessages } from "../../lib/i18n/messages/en/tenant";
 import { arabicTenantMessages } from "../../lib/i18n/messages/ar/tenant";
+import { installRequestDeadlineClock } from "./request-deadline-clock.fixture";
 
 const expectedAddAccessFailures = new WeakMap<Page, { url: string; status: number }[]>();
 export function consumeExpectedAddAccessDenial(page: Page, message: ConsoleMessage) {
@@ -15,6 +16,7 @@ export function consumeExpectedAddAccessDenial(page: Page, message: ConsoleMessa
 
 /** Local mocked HTTP/SDK browser behavior. No real access grant, migration or provider action. */
 export async function metaAddAccessJourney(page: Page, locale: "en" | "ar", role: string, testInfo: TestInfo) {
+  const advancePastRequestDeadline = await installRequestDeadlineClock(page);
   const copy: Readonly<Record<string, string>> = locale === "ar" ? arabicTenantMessages : englishTenantMessages;
   const t = (key: string) => copy[key]!;
   const alpha = "12000000-0000-4000-8000-000000000091", prior = "12000000-0000-4000-8000-000000000092";
@@ -200,7 +202,10 @@ export async function metaAddAccessJourney(page: Page, locale: "en" | "ar", role
   delayLatest = true;
   await page.getByRole("radio", { name: t("tenant.metaSignup.addAccess.purpose.ADD_ACCESS"), exact: true }).check();
   await expect.poll(() => Boolean(pendingLatest.release)).toBe(true);
-  await expect(section().getByRole("alert")).toBeVisible({ timeout: 25_000 }); // The supplied lifecycle signal still has a deadline.
+  const deadlineAlert = section().getByRole("alert");
+  await expect(deadlineAlert).toHaveCount(0);
+  await advancePastRequestDeadline();
+  await expect(deadlineAlert).toBeVisible();
   await expect(section()).toHaveAttribute("aria-busy", "false");
   releasePendingLatest();
   await section().getByRole("button", { name: t("tenant.setup.actions.back"), exact: true }).click();

@@ -1,8 +1,9 @@
-import { timingSafeEqual } from "node:crypto";
-import { BadRequestException, Body, Controller, Get, Header, HttpCode, NotFoundException, Param, Post, Query, Req, ServiceUnavailableException, SetMetadata, UnauthorizedException } from "@nestjs/common";
+import { createHash, timingSafeEqual } from "node:crypto";
+import { BadRequestException, Body, Controller, Get, Header, HttpCode, NotFoundException, type OnModuleInit, Param, Post, Query, Req, ServiceUnavailableException, SetMetadata, UnauthorizedException } from "@nestjs/common";
 import { PUBLIC_ROUTE } from "./auth.guard.js";
 import { DatabaseService, type MetaLifecycleEventType, type MetaLifecycleRoute, type MetaRoutingRoute, type WebhookRoute } from "./database.service.js";
 import { admitMetaTemplateSafety } from "./meta-template-ingress.js";
+import { loadMetaWebhookApps, matchesMetaWebhookApp } from "./meta-webhook-apps.js";
 import { classifyMetaLifecycleValue, metaLifecycleAccountId, metaLifecyclePayloadSha256, normalizeMetaDisplayPhoneNumber } from "@wasalx/core/meta-account-relation";
 import { metaCoexistenceUnits } from "@wasalx/core/meta-coexistence";
 import type { CoexistenceIngressInput } from "./meta-coexistence-ingress.js";
@@ -26,22 +27,44 @@ const WAHA_EVENTS=new Set(["message","message.any","message.edited","message.rev
 
 @Controller("webhooks")
 @SetMetadata(PUBLIC_ROUTE,true)
-export class WebhookIngressController{
+export class WebhookIngressController implements OnModuleInit{
   private readonly testRecipients=parseWahaTestRecipientAllowlist(process.env.WASALX_TEST_RECIPIENT_ALLOWLIST);
+  private readonly defaultMetaAppId=process.env.META_APP_ID;
+  private readonly metaApps=loadMetaWebhookApps(process.env.META_WEBHOOK_APPS_FILE,this.defaultMetaAppId,process.env.META_APP_SECRET_REFERENCE);
   constructor(private readonly database:DatabaseService,private readonly secrets:WebhookSecretService,private readonly drains:TenantDrainService,private readonly routingConnectors?:RoutingConnectorsConfig,private readonly secretProvisioning?:SecretProvisioningService){}
+
+  async onModuleInit() {
+    if (!this.metaApps) return;
+    const app = this.selectMetaApp()!;
+    const configured = process.env.META_VERIFY_TOKEN;
+    if (!configured) throw new Error(`META_VERIFY_TOKEN is required for META_WEBHOOK_APPS_FILE app ${app.appId}`);
+
+    let registered: string;
+    try {
+      registered = await this.resolveMetaSecret(app.verifyTokenReference);
+    } catch {
+      throw new Error(`META_WEBHOOK_APPS_FILE app ${app.appId} verification token could not be resolved`);
+    }
+    // Fixed-size digests let the comparison run even when the token lengths differ.
+    const configuredDigest = createHash("sha256").update(configured, "utf16le").digest();
+    const registeredDigest = createHash("sha256").update(registered, "utf16le").digest();
+    if (!timingSafeEqual(configuredDigest, registeredDigest)) {
+      throw new Error(`META_WEBHOOK_APPS_FILE app ${app.appId} verification token must match META_VERIFY_TOKEN`);
+    }
+  }
 
   @Post("waha/:token")@HttpCode(202)
   async waha(@Param("token")token:string,@Req()request:RawWebhookRequest,@Body()body:Record<string,unknown>){
     if(!/^[A-Za-z0-9_-]{32,256}$/.test(token))rejectWaha("route",new NotFoundException("Webhook route was not found"));
     const routeKey=await sha256Hex(token);const route=await this.database.resolveWahaWebhookRoute(routeKey);
-    if(!route)rejectWaha("route",new NotFoundException("Webhook route was not found"));
+    if(!route||route.provider!=="WAHA")rejectWaha("route",new NotFoundException("Webhook route was not found"));
     const raw=rawBody(request);const algorithm=header(request,"x-webhook-hmac-algorithm");
     if(algorithm?.toLowerCase()!=="sha512")rejectWaha("algorithm",new UnauthorizedException("Unsupported webhook signature algorithm"));
     if(!isRecord(body))rejectWaha("event",new BadRequestException("Webhook structure is invalid"));
     const timestamp=header(request,"x-webhook-timestamp");
     if(typeof body.timestamp!=="number"||!Number.isSafeInteger(body.timestamp)||body.timestamp<=0||timestamp!==String(body.timestamp))
       rejectWaha("timestamp",new UnauthorizedException("Invalid webhook timestamp"));
-    const secret=await this.resolveSecret(route);const verification=await verifyProviderHmac({rawBody:raw,secret,provided:header(request,"x-webhook-hmac")??"",algorithm:"sha512",timestamp,requireTimestamp:true});
+    const secret=await this.resolveSecret(route.hmac_secret_reference,{kind:"waha-webhook",tenantId:route.tenant_id,connectionId:route.connection_id});const verification=await verifyProviderHmac({rawBody:raw,secret,provided:header(request,"x-webhook-hmac")??"",algorithm:"sha512",timestamp,requireTimestamp:true});
     if(!verification.valid)rejectWaha(verification.reason==="stale"?"stale":verification.reason==="timestamp"?"timestamp":"signature",new UnauthorizedException(verification.reason==="stale"?"Stale webhook request":verification.reason==="timestamp"?"Invalid webhook timestamp":"Invalid webhook signature"));
     const providerEventId=stringValue(body.id)??`body:${await sha256Hex(raw)}`;const eventType=stringValue(body.event);
     const providerSessionKey=boundedIdentifier(body.session,256);const providerEngine=body.engine===undefined?"GOWS":stringValue(body.engine)?.toUpperCase();const metadataConnectionId=stringValue(isRecord(body.metadata)?body.metadata.connectionId:undefined);
@@ -52,29 +75,35 @@ export class WebhookIngressController{
     const accepted=await this.database.acceptWebhookEvent(route,{providerEventId,eventType,payload:body,payloadSha256:await sha256Hex(raw),routeKey,providerSessionKey,providerEngine});recordWebhook("waha",accepted.duplicate?"duplicate":"accepted");if(!accepted.duplicate)await this.drains.wakeInbound(route.tenant_id);return{accepted:true,duplicate:accepted.duplicate,event_id:accepted.id}
   }
 
-  @Get("meta")
+  @Get(["meta","meta/apps/:appId"])
   @Header("Content-Type","text/plain; charset=utf-8")
   @Header("X-Content-Type-Options","nosniff")
-  verifyMeta(
+  async verifyMeta(
     @Query("hub.mode") mode: unknown = "",
     @Query("hub.verify_token") token: unknown = "",
     @Query("hub.challenge") challenge: unknown = "",
+    @Param("appId") requestedAppId?: string,
   ){
-    const expected=process.env.META_VERIFY_TOKEN;
-    if(!expected)throw new ServiceUnavailableException("Meta verification is unavailable");
+    const app=this.selectMetaApp(requestedAppId);
     if(!(typeof mode==="string"&&typeof token==="string"&&typeof challenge==="string")){
       throw new BadRequestException("Meta verification parameters are invalid");
     }
+    const expected=app?await this.resolveMetaSecret(app.verifyTokenReference):process.env.META_VERIFY_TOKEN;
+    if(!expected)throw new ServiceUnavailableException("Meta verification is unavailable");
     if(mode!=="subscribe"||!constantTimeEqual(token,expected)||!challenge)throw new UnauthorizedException("Meta verification failed");
     if(!/^-?[0-9]+$/u.test(challenge))throw new BadRequestException("Meta verification challenge is invalid");
     return challenge;
   }
 
-  @Post("meta")@HttpCode(200)
-  async meta(@Req()request:RawWebhookRequest,@Body()body:MetaBody){
-    const reference=process.env.META_APP_SECRET_REFERENCE;const appId=process.env.META_APP_ID;
+  @Post(["meta","meta/apps/:appId"])@HttpCode(200)
+  async meta(@Req()request:RawWebhookRequest,@Body()body:MetaBody,@Param("appId") requestedAppId?:string){
+    const app=this.selectMetaApp(requestedAppId);
+    const verifiedAppId=app?.appId;
+    const boundReference=app?.secretReference;
+    const reference=boundReference??process.env.META_APP_SECRET_REFERENCE;
+    const appId=verifiedAppId??process.env.META_APP_ID;
     if(!reference)throw new ServiceUnavailableException("Meta webhook verification is unavailable");
-    const raw=rawBody(request,META_WEBHOOK_MAX_BYTES);const secret=await this.resolveSecret({tenant_id:"",connection_id:"",provider:"META",hmac_secret_reference:reference});
+    const raw=rawBody(request,META_WEBHOOK_MAX_BYTES);const secret=await this.resolveMetaSecret(reference);
     const verification=await verifyProviderHmac({rawBody:raw,secret,provided:header(request,"x-hub-signature-256")??"",algorithm:"sha256"});if(!verification.valid)throw new UnauthorizedException("Invalid webhook signature");
     if(!isRecord(body))throw new BadRequestException("Meta webhook structure is invalid");
     if(this.testRecipients?.size===0)return{accepted:true,count:0,duplicates:0,unrouted:0};
@@ -82,7 +111,7 @@ export class WebhookIngressController{
     // independently attributable routing negatives have also been admitted.
     let templateSafety={accepted:0,duplicates:0,unrouted:0};
     let templateSafetyError:unknown;
-    try{templateSafety=await admitMetaTemplateSafety(this.database,body,appId)}catch(error){templateSafetyError=error}
+    try{templateSafety=await admitMetaTemplateSafety(this.database,body,appId,boundReference)}catch(error){templateSafetyError=error}
     if(!Array.isArray(body.entry)||!body.entry.length)throw new BadRequestException("Meta webhook contains no events");
     const plans:MetaPlan[]=[];
     const guardedNegatives:MetaPlan[]=[];
@@ -99,9 +128,9 @@ export class WebhookIngressController{
       };
       for(const plan of routingPlans){
         if(this.testRecipients!==undefined&&!["STANDBY_MESSAGE","CONTROL_TAKEN","UNRESOLVED_ROUTING"].includes(plan.input.evidence.category))continue;
-        await attempt(plan.route.tenant_id,()=>this.database.acceptMetaRoutingEvent(plan.route,plan.input));
+        await attempt(plan.route.tenant_id,()=>this.database.acceptMetaRoutingEvent(plan.route,plan.input,verifiedAppId));
       }
-      for(const plan of guardedNegatives)await attempt(plan.route.tenant_id,()=>plan.lifecycle?this.database.acceptMetaLifecycleEvent(plan.route as MetaLifecycleRoute,plan.input as never):this.database.acceptWebhookEvent(plan.route as WebhookRoute,plan.input as never));
+      for(const plan of guardedNegatives)await attempt(plan.route.tenant_id,()=>plan.lifecycle?this.database.acceptMetaLifecycleEvent(plan.route as MetaLifecycleRoute,plan.input as never,verifiedAppId):this.database.acceptWebhookEvent(plan.route as WebhookRoute,plan.input as never,verifiedAppId));
       return{tenants,acceptedCount,duplicateCount,errors};
     };
     try{
@@ -114,7 +143,7 @@ export class WebhookIngressController{
           if(!isRecord(change)||!isRecord(change.value))continue;
           try{
             if(change.field==="account_update"&&classifyLifecycle(change.value,appId??"").kind==="BLOCK"){
-              const negative=await this.metaLifecyclePlans(body.object,entry,change,appId);
+              const negative=await this.metaLifecyclePlans(body.object,entry,change,appId,boundReference);
               if(!negative.length)unroutedCount++;
               guardedNegatives.push(...negative);
             }
@@ -122,7 +151,7 @@ export class WebhookIngressController{
               if(body.object!=="whatsapp_business_account"||typeof entry.id!=="string"||!/^[0-9]{1,32}$/u.test(entry.id))throw new BadRequestException("Meta identity source is invalid");
               const externalKey=metaExternalKey(change.value);if(!externalKey){unroutedCount++;continue}
               const route=await this.database.resolveMetaWebhookRoute(externalKey)??await this.database.resolveMetaIdentityWebhookRoute(externalKey);
-              if(!route){unroutedCount++;continue}
+              if(!route||!matchesMetaWebhookApp(route,boundReference)){unroutedCount++;continue}
               // Ordinary expansion remains bounded below; this scan retains
               // attributable system holds even in an oversized ordinary batch.
               const identityValue={...change.value};delete identityValue.statuses;delete identityValue.errors;
@@ -156,14 +185,14 @@ export class WebhookIngressController{
             const m=isRecord(v.metadata)?v.metadata:{},r=isRecord(v.recipient)?v.recipient:{};
             const candidate=change.field==="standby"?m.phone_number_id:r.phone_number_id;
             const phone=typeof candidate==="string"&&/^[0-9]{1,32}$/u.test(candidate)?candidate:null;
-            const routes=await this.database.resolveMetaRoutingRoutes(entry.id,phone,appId,reference);
+            const routes=(await this.database.resolveMetaRoutingRoutes(entry.id,phone,appId,reference)).filter(route=>matchesMetaWebhookApp(route,boundReference));
             const hash=hashLifecycle({object:body.object,entry:[{id:entry.id,changes:[change]}]});
             for(const route of routes){const evidence:MetaRoutingEvidence={schemaVersion:1,category:"UNRESOLVED_ROUTING",accountId:entry.id,
               phoneNumberId:route.phone_number_id,observedAt:new Date().toISOString(),payloadSha256:hash};
               routingPlans.push({route,input:{providerEventId:`routing:${hash}`,eventType:"meta.routing.unresolved",payload:{redacted:true},payloadSha256:hash,evidence}})}
             if(!routes.length)unroutedCount++;continue;
           }
-          for(const unit of units){const routes=await this.database.resolveMetaRoutingRoutes(entry.id,unit.evidence.phoneNumberId,appId,reference);
+          for(const unit of units){const routes=(await this.database.resolveMetaRoutingRoutes(entry.id,unit.evidence.phoneNumberId,appId,reference)).filter(route=>matchesMetaWebhookApp(route,boundReference));
             if(routes.length>1){
               if(this.testRecipients===undefined)throw new BadRequestException("Meta routing source is ambiguous");
               for(const route of routes){const evidence={...unit.evidence};delete evidence.peer;routingPlans.push({route,input:{providerEventId:`routing:${evidence.payloadSha256}`,eventType:"meta.routing.unresolved",payload:{redacted:true},payloadSha256:evidence.payloadSha256,evidence:{...evidence,category:"UNRESOLVED_ROUTING"}}})}
@@ -206,7 +235,7 @@ export class WebhookIngressController{
             if(!unit){recordWebhook("meta","rejected","test_recipient_scope");continue}
             if(unit.messages.length!==original.messages.length||unit.contacts.length!==original.contacts.length)recordWebhook("meta","rejected","test_recipient_scope");
             const route = await this.database.resolveMetaWebhookRoute(unit.phoneId);
-            if (!route) { unroutedCount++; continue; }
+            if (!route || !matchesMetaWebhookApp(route, boundReference)) { unroutedCount++; continue; }
             coexistencePlans.push({ route, input: { unit, appId, sourceSha256: unit.sourceSha256 } });
           }
           continue;
@@ -218,7 +247,9 @@ export class WebhookIngressController{
             throw new BadRequestException("Business app data cannot use the live message field");
           }
           const externalKey=metaExternalKey(change.value);if(!externalKey){unroutedCount++;continue}
-          const ordinaryRoute=await this.database.resolveMetaWebhookRoute(externalKey);
+          const foundRoute=await this.database.resolveMetaWebhookRoute(externalKey);
+          if(foundRoute&&!matchesMetaWebhookApp(foundRoute,boundReference)){unroutedCount++;continue}
+          const ordinaryRoute=foundRoute;
           if(!ordinaryRoute&&!(Array.isArray(change.value.messages)&&change.value.messages.some(message=>isRecord(message)&&message.type==="system"&&!message.group_id))){unroutedCount++;continue}
           if(this.testRecipients!==undefined){
             const count=(Array.isArray(change.value.messages)?change.value.messages.filter(isRecord).length:0)
@@ -229,7 +260,7 @@ export class WebhookIngressController{
           const linkedStatuses=new Map<Record<string,unknown>,MetaTestRecipientLink>();
           if(this.testRecipients!==undefined&&ordinaryRoute&&Array.isArray(change.value.statuses))for(const status of change.value.statuses){
             if(!isRecord(status)||typeof status.recipient_user_id!=="string")continue;
-            const link=await this.database.metaTestStatusRecipientLink(ordinaryRoute,status);
+            const link=await this.database.metaTestStatusRecipientLink(ordinaryRoute,status,appId);
             if(link)linkedStatuses.set(status,link);
           }
           const scoped=metaTestWebhookUnits(this.testRecipients,change.value,Date.now(),status=>linkedStatuses.has(status));
@@ -242,7 +273,7 @@ export class WebhookIngressController{
             const payloadSha256=unit.eventType==="message.status"?metaStatusPayloadSha256(payload):await sha256Hex(JSON.stringify(payload));
             const identitySafety=unit.eventType==="messages"?metaDirectIdentityChangeEvidence(payload,payloadSha256):null;
             const route=ordinaryRoute??(identitySafety?await this.database.resolveMetaIdentityWebhookRoute(externalKey):null);
-            if(!route){unroutedCount++;continue}
+            if(!route||!matchesMetaWebhookApp(route,boundReference)){unroutedCount++;continue}
             if(unit.eventType!=="meta.error")assertMetaEventFresh(unit.value);
             let evidence:MetaRoutingEvidence|undefined;
             const messages=unit.value.messages;
@@ -263,7 +294,7 @@ export class WebhookIngressController{
         }
         if(change.field!=="account_update"){unroutedCount++;continue}
         if(this.testRecipients!==undefined&&classifyLifecycle(change.value,appId??"").kind==="BLOCK")continue; // safety pre-scan
-        const lifecycle=await this.metaLifecyclePlans(body.object,entry,change,appId);
+        const lifecycle=await this.metaLifecyclePlans(body.object,entry,change,appId,boundReference);
         if(!lifecycle.length)unroutedCount++;
         plans.push(...lifecycle);
       }
@@ -281,26 +312,26 @@ export class WebhookIngressController{
     // Commit negatives before any ordinary event can be dispatched, even in a mixed envelope.
     if(this.testRecipients!==undefined)for(const plan of routingPlans){
       if(["STANDBY_MESSAGE","CONTROL_TAKEN","UNRESOLVED_ROUTING"].includes(plan.input.evidence.category))continue;
-      const accepted=await this.database.acceptMetaRoutingEvent(plan.route,plan.input);
+      const accepted=await this.database.acceptMetaRoutingEvent(plan.route,plan.input,verifiedAppId);
       if(accepted.duplicate)duplicateCount++;else{acceptedCount++;tenants.add(plan.route.tenant_id)}
     }
-    for(const plan of plans){const accepted=plan.lifecycle?await this.database.acceptMetaLifecycleEvent(plan.route as MetaLifecycleRoute,plan.input as never):await this.database.acceptWebhookEvent(plan.route as WebhookRoute,plan.input as never);recordWebhook("meta",accepted.duplicate?"duplicate":"accepted");if(accepted.duplicate)duplicateCount++;else{acceptedCount++;tenants.add(plan.route.tenant_id)}}
+    for(const plan of plans){const accepted=plan.lifecycle?await this.database.acceptMetaLifecycleEvent(plan.route as MetaLifecycleRoute,plan.input as never,verifiedAppId):await this.database.acceptWebhookEvent(plan.route as WebhookRoute,plan.input as never,verifiedAppId);recordWebhook("meta",accepted.duplicate?"duplicate":"accepted");if(accepted.duplicate)duplicateCount++;else{acceptedCount++;tenants.add(plan.route.tenant_id)}}
     for (const plan of coexistencePlans) {
-      const accepted = await this.database.acceptMetaCoexistenceEvent(plan.route, plan.input);
+      const accepted = await this.database.acceptMetaCoexistenceEvent(plan.route, plan.input, verifiedAppId);
       if (accepted.duplicate) duplicateCount++; else { acceptedCount++; tenants.add(plan.route.tenant_id); }
     }
     for(const tenantId of tenants)await this.drains.wakeInbound(tenantId);
     return{accepted:true,count:acceptedCount,duplicates:duplicateCount,unrouted:unroutedCount};
   }
 
-  private async metaLifecyclePlans(object:unknown,entry:{id?:string;time?:number},change:{field?:string;value?:Record<string,unknown>},appId:string|undefined):Promise<MetaPlan[]>{
+  private async metaLifecyclePlans(object:unknown,entry:{id?:string;time?:number},change:{field?:string;value?:Record<string,unknown>},appId:string|undefined,appReference?:string):Promise<MetaPlan[]>{
         if(!isRecord(change.value))throw new BadRequestException("Meta lifecycle value is invalid");
         if(object!=="whatsapp_business_account")throw new BadRequestException("Meta lifecycle object is invalid");
         if(!appId||!/^[0-9]{5,32}$/.test(appId))throw new ServiceUnavailableException("Meta lifecycle verification is unavailable");
         const configuredAppId=appId;const classified=classifyLifecycle(change.value,configuredAppId);
         const isolatedEntry=metaLifecycleEntry(entry,{...change,value:metaTestLifecycleValue(this.testRecipients,change.value)});
         const display=change.value.phone_number===undefined?undefined:normalizeMetaDisplayPhoneNumber(change.value.phone_number);if(change.value.phone_number!==undefined&&!display)throw new BadRequestException("Meta lifecycle phone number is invalid");
-        const targetWaba=metaLifecycleWaba(entry,change.value);const routes=await this.database.resolveMetaLifecycleRoutes(targetWaba,configuredAppId);if(new Set(routes.map(route=>route.connection_id)).size!==routes.length)throw new BadRequestException("Meta lifecycle route is ambiguous");
+        const targetWaba=metaLifecycleWaba(entry,change.value);const routes=(await this.database.resolveMetaLifecycleRoutes(targetWaba,configuredAppId)).filter(route=>matchesMetaWebhookApp(route,appReference));if(new Set(routes.map(route=>route.connection_id)).size!==routes.length)throw new BadRequestException("Meta lifecycle route is ambiguous");
         if(!routes.length)return [];
         let selected=routes;let phoneScope:"ACCOUNT"|"EXACT_DISPLAY"|"UNRESOLVED_DISPLAY"="ACCOUNT";let effectiveKind=classified.kind;
         if(change.value.phone_number!==undefined){const matched=display?routes.filter(route=>route.display_phone_number===display):[];if(matched.length===1){selected=matched;phoneScope="EXACT_DISPLAY"}else{phoneScope="UNRESOLVED_DISPLAY";if(classified.kind==="RECOVERY")effectiveKind="OBSERVATION"}}
@@ -325,8 +356,16 @@ export class WebhookIngressController{
     if(!eventId||eventId.length>512)throw new BadRequestException("Webhook event ID is required");const accepted=await this.database.enqueueClientRoutingWebhook(route,await sha256Hex(`${route.kind}:${eventId}`));recordWebhook("unknown",accepted.duplicate?"duplicate":"accepted","routing");if(!accepted.duplicate)await this.drains.wakeRouting(route.tenant_id);return{accepted:true,duplicate:accepted.duplicate,event_id:accepted.job_id}
   }
 
-  private async resolveSecret(route:WebhookRoute){try{return await this.secrets.resolveHmac(route.hmac_secret_reference,route.provider==="META"?{kind:"exact",expectedReference:process.env.META_APP_SECRET_REFERENCE??""}:{kind:"waha-webhook",tenantId:route.tenant_id,connectionId:route.connection_id})}catch{throw new ServiceUnavailableException("Webhook verification is temporarily unavailable")}}
-  private async resolveRoutingSecret(reference:string,tenantId:string){try{return await this.secrets.resolveHmac(reference,{kind:"routing",tenantId})}catch{throw new ServiceUnavailableException("Webhook verification is temporarily unavailable")}}
+  private selectMetaApp(requestedAppId?: string) {
+    if (requestedAppId === undefined && !this.metaApps) return undefined;
+    const app = this.metaApps?.get(requestedAppId ?? this.defaultMetaAppId ?? "");
+    if (!app) throw new NotFoundException("Webhook route was not found");
+    return app;
+  }
+
+  private resolveMetaSecret(reference:string){return this.resolveSecret(reference,{kind:"exact",expectedReference:reference})}
+  private resolveRoutingSecret(reference:string,tenantId:string){return this.resolveSecret(reference,{kind:"routing",tenantId})}
+  private async resolveSecret(reference:string,owner:Parameters<WebhookSecretService["resolveHmac"]>[1]){try{return await this.secrets.resolveHmac(reference,owner)}catch{throw new ServiceUnavailableException("Webhook verification is temporarily unavailable")}}
 }
 
 function classifyLifecycle(value:unknown,appId:string){try{return classifyMetaLifecycleValue(value,appId)}catch{throw new BadRequestException("Meta lifecycle event is invalid")}}

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { readTenantPortalSource } from "./helpers/tenant-portal-source.mjs";
 import { BadRequestException } from "../services/control-api/node_modules/@nestjs/common/index.js";
 import { DeliveriesController } from "../services/control-api/dist/deliveries.controller.js";
 import { QuarantineController } from "../services/control-api/dist/quarantine.controller.js";
@@ -268,7 +269,7 @@ test("the internal Zammad retry endpoint enforces the same durable retry policy"
 
 test("portal requires a visible typed review path for unknown sends", async () => {
   const [portal, messages] = await Promise.all([
-    readFile(new URL("../app/WasalXApp.tsx", import.meta.url), "utf8"),
+    readTenantPortalSource(),
     readFile(new URL("../lib/i18n/messages/en/tenant.ts", import.meta.url), "utf8"),
   ]);
   assert.match(portal, /tenant\.deliveries\.actions\.reviewOutcome/);

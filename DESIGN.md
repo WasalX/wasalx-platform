@@ -17,9 +17,9 @@ colors:
   accent-strong: "#5141c8"
   accent-solid: "#6557d8"
   accent-solid-hover: "#5141c8"
-  success: "#167d53"
-  warning: "#a45e09"
-  danger: "#c64343"
+  success: "#14744d"
+  warning: "#965608"
+  danger: "#b73737"
   danger-solid: "#7b2a2a"
   on-solid: "#ffffff"
   provider-whatsapp-groups: "#16855a" # token --wx-color-provider-waha
@@ -50,6 +50,12 @@ typography:
     fontFamily: "Geist Mono, ui-monospace, Consolas, monospace"
     fontSize: "0.75rem"
     fontWeight: 400
+  display:
+    fontFamily: "Geist Sans, ui-sans-serif, system-ui, sans-serif"
+    fontSize: "3.75rem"
+    fontWeight: 750
+    lineHeight: 1.1
+    letterSpacing: "-0.04em"
   arabic:
     fontFamily: "Noto Sans Arabic, sans-serif"
 rounded:
@@ -125,12 +131,12 @@ One neutral zinc ramp, one violet accent, three status colors and two provider m
 - **Text / Muted / Subtle**: light `#18181b / #696970 / #6f6f76`; dark `#f3f3f5 / #92929d / #85858f`.
 
 ### Status and provider
-- **Success / Warning / Danger**: light `#167d53 / #a45e09 / #c64343`; dark `#45c58a / #f3ad4e / #f06b6b`. Status color is always paired with a word or an icon, never color alone. **Danger solid** (`--wx-color-danger-solid`, light `#7b2a2a`, dark `#954242`) is the fill behind white text on a destructive button.
-- **Provider marks**: WhatsApp groups green (`--wx-color-provider-waha`: `#16855a` light, `#22a06b` dark) and Meta blue (`--wx-color-provider-meta`, `#1769e0`). Use them only to identify a channel.
+- **Success / Warning / Danger**: light `#14744d / #965608 / #b73737`; dark `#45c58a / #f3ad4e / #f06b6b`. Each status badge keeps 4.5:1 text contrast on its 6% tint over every surface. Status color is always paired with a word or an icon, never color alone. **Danger solid** (`--wx-color-danger-solid`, light `#7b2a2a`, dark `#954242`) is the fill behind white text on a destructive button.
+- **Provider marks**: WhatsApp groups green (`--wx-color-provider-waha`: `#16855a` light, `#22a06b` dark) and Meta blue (`--wx-color-provider-meta`, `#1769e0`). Use them only to identify a channel; the public pages' WhatsApp icon uses the WhatsApp groups green.
 
 ### Named Rules
 **The One Accent Rule.** Violet is the only hue used for interaction. Any other color means status or provider.
-**The Token-Only Rule.** New code uses `var(--wx-color-*)` (or the legacy `--bg/--surface/--text/...` aliases). No hex, `rgb()` or named color outside `tokens.css`; tints are `color-mix()` of a token. `tests/design-system-governance.test.mjs` enforces this for `primitives.css` and `globals.css`.
+**The Token-Only Rule.** New code uses `var(--wx-color-*)` (or the legacy `--bg/--surface/--text/...` aliases). No hex, `rgb()` or named color outside `tokens.css`; tints are `color-mix()` of a token. `tests/design-system-governance.test.mjs` enforces this for every `app/**/*.css` file except `tokens.css`.
 **The AA Rule.** Text and solid-action pairs meet 4.5:1 in both themes; the governance test checks it.
 
 ## Typography
@@ -144,28 +150,29 @@ One neutral zinc ramp, one violet accent, three status colors and two provider m
 - **Title** (650, 14-16 px, -0.015em): panel and section heads.
 - **Body** (400, 13-14 px, line height 1.43; 1.6 for prose, max 45-65ch).
 - **Label / table** (550, 12 px): table headers, badges, field labels, buttons.
+- **Display** (750, `--wx-font-size-display` 60 px, -0.04em): the public-page hero only, fluid from 32 px.
 - **Mono** (12 px): only for values an operator may copy (codes, references). Never for raw ids or internal names.
 
-**The Scale Rule.** Use only the 7 size tokens; the governance test rejects a raw `px`/`rem` font size in `globals.css`.
+**The Scale Rule.** Use only the size tokens (the 7 steps, plus display for the public hero). A public heading may be fluid: `clamp(<token>, <token> + <n>vw, <token>)`. The governance test rejects any raw `px`/`rem` in a font size in any app stylesheet, also inside `clamp()`.
 
 ## Layout
 
-- **Shell:** a fixed start-side sidebar (`--wx-sidebar-width` 15rem) plus the content area (`--wx-content-max` 90rem). The workspace toolbar is 57 px (`globals.css`); `--wx-topbar-height` (3.5rem) is used by the platform console.
-- **At 760 px and below** (the shell breakpoint): the sidebar becomes a top bar with a menu toggle, the brand and system health are hidden, and the app shell is a block. Individual screens refine at other widths (for example 520 px and 480 px); new screens use 760 px unless their layout needs another.
-- **Spacing:** `--wx-space-1..16` (4 px base: 4, 8, 12, 16, 24, 32, 48, 64). New code uses only these.
+- **Shell:** a fixed start-side sidebar (`--wx-sidebar-width` 15rem) plus the content area (`--wx-content-max` 90rem). The workspace toolbar is at least 57 px and grows with its text, so it never overflows onto the sidebar (`globals.css`); `--wx-topbar-height` (3.5rem) is used by the platform console.
+- **At 760 px and below** (the shell breakpoint): the sidebar becomes a top bar with one grid (the workspace switcher on row 1, the menu toggle and profile on row 2, the navigation below), the brand and system health are hidden, and the app shell is a block. Individual screens refine at other widths (for example 520 px and 480 px); new screens use 760 px unless their layout needs another.
+- **Spacing:** `--wx-space-1..16` (4 px base: 4, 8, 12, 16, 24, 32, 48, 64). **The Spacing Rule.** `padding`, `margin`, `gap` and `inset` and their longhands use only a defined `var(--wx-space-*)` step, `0` or a 1 px hairline (`calc()`, `max()` and `clamp()` of these, `%`, `vw`, `env()` and `auto` are fine). A negative offset is `calc(-1 * var(--wx-space-*))`. There are no in-between steps: snap to the nearest one, and on a tie take the smaller unless that drops a 44 px or 24 px target. Width, height and `min-*` target sizes are not spacing. The governance test enforces this for every app stylesheet.
 - **Direction:** logical properties only (`inline-start/end`, `padding-inline`, `text-align: start`). Physical `left/right` is a defect. A known gap: `primitives.css` `.wx-data-panel th, td` use `text-align: left`; fix this before the primitive is used in the product.
 - **Tables:** 37 px headers, 57 px rows; wide tables sit in an `overflow-x: auto` wrapper and never scroll the whole page.
 
 ## Elevation & Depth
 
-Flat with tonal layering: page → surface → raised → selected, separated by 1 px borders. Only these two shadows give elevation; the governance test enforces this for `globals.css`. Rings without blur (`0 0 0 <width> <token color>`) are allowed for focus, status halos and 1 px edges:
+Flat with tonal layering: page → surface → raised → selected, separated by 1 px borders. Only these two shadows give elevation; the governance test enforces this for every app stylesheet. Rings without blur (`0 0 0 <width> <token color>`) are allowed for focus, status halos and 1 px edges:
 - **Control** (`0 1px 1px var(--wx-color-control-shadow)`): the resting button.
-- **Dialog** (`0 1.5rem 5rem var(--wx-color-shadow)`): dialogs and drawers only, over `--wx-color-overlay`.
+- **Dialog** (`0 1.5rem 5rem var(--wx-color-shadow)`): dialogs and drawers over `--wx-color-overlay`, and the public pages' inbox showcase window.
 In forced-colors mode, dialogs drop the shadow and use `CanvasText` borders.
 
 ## Shapes
 
-Three radii: control 6 px, panel 8 px, dialog 12 px (also the pill radius of status badges). Borders are 1 px; `border-strong` is for controls. Radii in `globals.css` use only these tokens (plus `0` and `50%` for circles). No thick one-side accent borders or inset side bars (detector `side-tab`); a selected row uses a full 1 px accent ring. The governance test checks both.
+Three radii: control 6 px, panel 8 px, dialog 12 px (also the pill radius of status badges). Borders are 1 px; `border-strong` is for controls. Radii in every app stylesheet use only these tokens (plus `0`, `inherit` and `50%` for circles). No thick one-side accent borders or inset side bars (detector `side-tab`); a selected row uses a full 1 px accent ring. The governance test checks both.
 
 ## Components
 
@@ -173,9 +180,10 @@ The target set is the primitives in `app/design-system/primitives.tsx` and `prim
 
 - **Button** (`Button` / `.wx-button`): 36 px high, 12 px/550, control radius. Variants: `secondary` (the default, raised), `primary` (solid violet), `danger` (danger text plus a tinted border). It has a loading spinner, `disabled` at 0.56 opacity, and focus as a 2 px violet `outline` with a 2 px offset. **Drift:** legacy `.button` is 34 px high, and legacy `.button.primary` is inverted text-on-background (near-black in light, white in dark), not violet. Follow the primitive.
 - **Status badge** (`StatusBadge` / `.wx-status`): pill, dot plus label, tones neutral/success/warning/danger.
-- **Operational state** (`OperationalState`): one panel for loading (skeleton), empty, partial, fatal and recovery states, with a title, one plain sentence and at most one action. Every data view must have all of these states. While a lazy part of a panel, drawer or dialog loads, it shows the compact `SectionLoading` state ("Loading this section…"); `WorkspaceLoading` is only for whole views.
+- **Operational state** (`OperationalState`): one panel for loading (skeleton), empty, partial, fatal and recovery states, with a title, one plain sentence and at most one action. Every data view must have all of these states. While a lazy part of a panel, drawer or dialog loads, it shows the compact `SectionLoading` state ("Loading this section…"); `WorkspaceLoading` is only for whole views. Both are a plain `role="status"` region without `aria-busy`, and a slot that always loads beside another uses `quiet` so the text is announced once, unless the other slot's code is already loaded. A skeleton loader puts `aria-busy="true"` on the skeleton and announces through one plain `role="status"` text inside it, never a busy live region.
 - **Data panel** (`DataPanel`): bordered panel with a header row and a table; sparse or dense density.
 - **Dialog** (`ModalDialog.tsx`): at most 520 px, dialog radius, dialog shadow, scroll inside, focus trapped, Escape closes.
+- **Scroll region** (`ScrollRegion` in `app/tenant-ui.tsx`): any area that scrolls on its own (wide table, drawer body, transcript) uses it; it requires a name (`aria-label` or `aria-labelledby`) and sets `role="region"` and `tabIndex={0}` so keyboard users can scroll it. `WideTable` wraps it.
 - **Toast**: bottom, inline-end, inverted colors, at most 520 px.
 - **Inputs**: 34-38 px, raised background, `border-strong`; focus = violet border, a 3 px `accent-wash` ring and the shared 2 px violet outline (`Highlight` in forced colors). A field inside a container with its own focus ring (the search box) hides its outline except in forced colors; a danger field uses a danger-colored outline.
 
@@ -183,6 +191,8 @@ The target set is the primitives in `app/design-system/primitives.tsx` and `prim
 
 - **Do** write all copy through `lib/i18n/messages/{en,ar}`; both catalogues keep the same keys (enforced by the `DictionaryFor` type and `tests/i18n-foundation.test.mjs`).
 - **Do** write operator language: what happened and what to do next. **Don't** show internal or provider names (Zammad, WAHA, GOWS, Keycloak), raw ids, raw JSON, stack traces, HTTP codes or test words (#186).
+- **Do** show an API error as catalogue text: `operatorFailureMessage` or `apiError` maps its code, with a translated fallback for unknown codes. **Don't** render or rethrow the API's own `error`, `message` or `safe_error` text, which is English only (#358, `tests/api-boundary-safety.test.mjs`).
+- **Do** name a provider on a staff screen (the platform console) only where it labels that provider's figure, such as its capacity or usage counter. **Don't** name internal components there either: no control API, database identities or worker internals (#287).
 - **Do** keep a visible keyboard focus on every interactive element in both themes and in forced colors. **Don't** remove an `outline` without an equivalent that survives forced colors.
 - **Do** keep touch targets at least 44 px on coarse pointers: `@media (any-pointer: coarse)` sets a 44 px minimum on buttons, inputs, selects and text areas; keep that for new controls.
 - **Do** respect `prefers-reduced-motion` (durations drop to 0, spinners and skeletons stop). Motion is 120-200 ms with the enter/exit eases.
@@ -195,6 +205,6 @@ Page budgets for the portal. A miss becomes a board item.
 
 | Measure | Budget | How it is measured |
 | --- | --- | --- |
-| `/app` first-load JavaScript | At most 250,000 B gzip (210,000 B brotli) | Union of the client entry's dependencies and the static dependencies of every client reference `/app` renders, read from the production build's asset manifest (`dist/server/__vite_rsc_assets_manifest.js`); gzip level 9, brotli quality 11 (Node zlib) (#183, #213, #220) |
+| `/app` first-load JavaScript | [Gzip and brotli byte limits](tests/app-first-load-js-budget.json) | Union of the client entry's dependencies and the static dependencies of every client reference `/app` renders, read from the production build's asset manifest (`dist/server/__vite_rsc_assets_manifest.js`); gzip level 9, brotli quality 11 (Node zlib); CI reports the measured bytes and enforces both limits in `tests/rendered-html.test.mjs` (#183, #213, #220) |
 | Largest Contentful Paint (LCP) | Under 2.5 s at p75 | On DEV, per screen |
 | Interaction to Next Paint (INP) | Under 200 ms at p75 | On DEV, per screen |

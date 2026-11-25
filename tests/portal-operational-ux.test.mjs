@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import ts from "typescript";
+import { readTenantPortalSource } from "./helpers/tenant-portal-source.mjs";
 
 const root = new URL("../", import.meta.url);
 const read = (path) => readFile(new URL(path, root), "utf8");
@@ -16,7 +17,7 @@ const assertLocalizedCopy = (source, dictionary, key, copy) => {
 test("operator data refreshes automatically while visible and preserves manual recovery", async () => {
   const [hook, shell, cases, bots, routing, dashboard, platform, english, arabic, operatorUi] = await Promise.all([
     read("app/use-visible-refresh.ts"),
-    read("app/WasalXApp.tsx"),
+    readTenantPortalSource(),
     read("app/CaseLifecycle.tsx"),
     read("app/BotAutomation.tsx"),
     read("app/ClientRouting.tsx"),
@@ -102,6 +103,13 @@ test("operator data refreshes automatically while visible and preserves manual r
   assert.doesNotMatch(cases, /\{t\("cases\.refresh"\)\}/u);
 });
 
+test("overview metric titles carry no empty info marks", async () => {
+  const [app, styles] = await Promise.all([read("app/WasalXApp.tsx"), read("app/globals.css")]);
+  assert.doesNotMatch(app, /className="info"/u, "an info mark without a description offers nothing");
+  assert.doesNotMatch(styles, /(?:^|\})\s*\.info\s*\{/mu, "the unused info mark style is removed");
+  assert.match(app, /<span>\s*\{t\("tenant\.overview\.workingConnections"\)\}\s*<\/span>/u);
+});
+
 test("visible refresh lets slow requests finish and recovers after cancellation and callback failure", async () => {
   const source = await read("app/use-visible-refresh.ts");
   const emitted = ts.transpileModule(source, {
@@ -164,7 +172,7 @@ test("visible refresh lets slow requests finish and recovers after cancellation 
 });
 
 test("group searches and routing qualification status fence superseded requests", async () => {
-  const [groups, routing] = await Promise.all([read("app/WasalXApp.tsx"), read("app/ClientRouting.tsx")]);
+  const [groups, routing] = await Promise.all([readTenantPortalSource(), read("app/ClientRouting.tsx")]);
   assert.match(groups, /const connectionIds = connections\.map/u);
   assert.match(groups, /!controller\.signal\.aborted && filterFence\.isCurrent\(request\)/u);
   assert.match(groups, /pageFence\.invalidate\(\);pageController\.current\?\.abort\(\)/u);
@@ -181,7 +189,7 @@ test("group searches and routing qualification status fence superseded requests"
 });
 
 test("a group page settling after a filter change cannot alter the new rows, errors, or loading state", async () => {
-  const source = await read("app/WasalXApp.tsx");
+  const source = await readTenantPortalSource();
   const ast = ts.createSourceFile("WasalXApp.tsx", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
   const groups = ast.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === "Groups");
   let pageLoader;
@@ -238,7 +246,7 @@ test("a group page settling after a filter change cannot alter the new rows, err
 
 test("stale tenant data is labeled without claiming an empty workspace", async () => {
   const [source, english, arabic] = await Promise.all([
-    read("app/WasalXApp.tsx"),
+    readTenantPortalSource(),
     read("lib/i18n/messages/en/tenant.ts"),
     read("lib/i18n/messages/ar/tenant.ts"),
   ]);
@@ -251,7 +259,7 @@ test("stale tenant data is labeled without claiming an empty workspace", async (
 
 test("primary navigation exposes bypass and current-page semantics", async () => {
   const [source, styles, messages] = await Promise.all([
-    read("app/WasalXApp.tsx"),
+    readTenantPortalSource(),
     read("app/globals.css"),
     read("lib/i18n/messages/en/tenant.ts"),
   ]);
@@ -260,12 +268,12 @@ test("primary navigation exposes bypass and current-page semantics", async () =>
   assert.match(source, /<main id="main-content" tabIndex=\{-1\} inert=\{mobileNavigationOpen\|\|undefined\}>/u);
   assert.match(source, /aria-current=\{view === id \? "page" : undefined\}/u);
   assert.match(styles, /\.skip-link:focus \{ transform:none; \}/u);
-  assert.match(styles, /\.audit-row small\{display:block;margin-block-start:3px\}/u);
+  assert.match(styles, /\.audit-row small\{display:block;margin-block-start:var\(--wx-space-1\)\}/u);
 });
 
 test("tenant shell fails closed on expiry and adapts its persisted sidebar without hiding navigation", async () => {
   const [source, styles, english, arabic] = await Promise.all([
-    read("app/WasalXApp.tsx"),
+    readTenantPortalSource(),
     read("app/globals.css"),
     read("lib/i18n/messages/en/tenant.ts"),
     read("lib/i18n/messages/ar/tenant.ts"),
@@ -296,7 +304,7 @@ test("tenant shell fails closed on expiry and adapts its persisted sidebar witho
 });
 
 test("operator attention stays deduplicated and diagnostics remain role restricted", async () => {
-  const [source, operatorUi] = await Promise.all([read("app/WasalXApp.tsx"), read("lib/operator-ui.ts")]);
+  const [source, operatorUi] = await Promise.all([readTenantPortalSource(), read("lib/operator-ui.ts")]);
   assert.match(source, /function unmatchedReviews\(data: DashboardData\)/u);
   assert.match(source, /\.\.\.unmatchedReviews\(data\)\.map/u);
   assert.match(source, /const attention=deliveryIssues\+reviewIssues\+connectionIssues/u);
@@ -345,7 +353,7 @@ test("operational BFF routes are authorized, bounded, and recover partial work",
 
 test("audit history loads every retained page and keeps system identifiers out of normal copy", async () => {
   const [source, english, arabic] = await Promise.all([
-    read("app/WasalXApp.tsx"),
+    readTenantPortalSource(),
     read("lib/i18n/messages/en/tenant.ts"),
     read("lib/i18n/messages/ar/tenant.ts"),
   ]);
@@ -539,7 +547,7 @@ test("rule comparison exposes every material field change and ignores snapshot-o
 
 test("portal UX has no dead operational controls and keeps sensitive content fail-closed", async () => {
   const [app, css, page, rulesRoute, messages] = await Promise.all([
-    read("app/WasalXApp.tsx"),
+    readTenantPortalSource(),
     read("app/globals.css"),
     read("app/app/page.tsx"),
     read("app/api/rules/route.ts"),
@@ -593,7 +601,7 @@ test("portal UX has no dead operational controls and keeps sensitive content fai
   assert.match(rulesRoute, /import type \{ TriggerRule \}/u);
   assert.doesNotMatch(rulesRoute, /compileRule|re2-wasm/u);
   assert.match(rulesRoute, /request\.headers\.get\("idempotency-key"\)/u);
-  assert.match(rulesRoute, /Advanced expression creation requires the Node control plane/u);
+  assert.match(rulesRoute, /Advanced expression creation requires the managed service/u);
 
   assert.match(app, /window\.history\[replace \? "replaceState" : "pushState"\]/u);
   assert.match(app, /useLayoutEffect\(\(\) => \{\s*const restore = \(event\?: PopStateEvent\) => \{/u);
@@ -632,7 +640,7 @@ test("portal UX has no dead operational controls and keeps sensitive content fai
   assert.match(app, /window\.matchMedia\("\(prefers-color-scheme: dark\)"\)/u);
   assert.match(app, /rememberBoundaryTheme\("tenant",next\)/u);
   assert.match(css, /@media\(max-width:760px\).*\.top-actions \.icon-button\{display:grid\}/su);
-  assert.match(css, /@media\(max-width:760px\).*\.workspace-switcher\{[^}]*grid-column:1;[^}]*grid-row:1;[^}]*min-width:0/u);
+  assert.match(css, /@media\(max-width:760px\).*\.workspace-switcher\{[^}]*grid-column:1\/-1;[^}]*grid-row:1;[^}]*min-width:0/u);
   assert.match(css, /@media\(max-width:760px\).*\.profile\{[^}]*grid-template-columns:auto auto/su);
   assert.match(css, /@media\(max-width:760px\).*\.profile-logout\{display:grid;width:44px;height:44px/su);
   assert.match(css, /@media\(max-width:760px\).*\.environment\{display:flex;/su);
@@ -653,7 +661,7 @@ test("portal UX has no dead operational controls and keeps sensitive content fai
   assert.match(app, /!isDuplicateIdentityRejection\(c\.action_reason\)/u);
   assert.match(app, /!isDuplicateIdentityRejection\(row\.action_reason\)/u);
   assert.match(css, /@media\(max-width:760px\).*\.top-actions>\.connect-number-action\{display:inline-grid;width:44px;min-width:44px;height:44px;min-height:44px;padding:0\}/su);
-  assert.match(css, /@media\(any-pointer:coarse\)\{:is\(button,input:where\(:not\(\[type="hidden"\]\):not\(\[type="checkbox"\]\):not\(\[type="radio"\]\)\),select,textarea[^}]*min-block-size:44px/u);
+  assert.match(css, /@media\(any-pointer:coarse\)\{:is\(button:not\(\.switch\),input:where\(:not\(\[type="hidden"\]\):not\(\[type="checkbox"\]\):not\(\[type="radio"\]\)\),select,textarea[^}]*min-block-size:44px/u);
   assert.match(css, /@media\(any-pointer:coarse\).*\.modal-head>button.*min-inline-size:44px/su);
   assert.match(css, /th,td,td small,\.status,[^\n]+font-size:var\(--wx-font-size-1\)/u);
   assert.doesNotMatch(css, /font-size:(?:9|10|11)px|font:(?:500|550|600|650) (?:9|10|11)px|font:9px/u);
@@ -662,7 +670,7 @@ test("portal UX has no dead operational controls and keeps sensitive content fai
 
 test("tenant dialogs share one keyboard-focus contract without weakening confirmations", async () => {
   const [app, modal, css, tokens, messages] = await Promise.all([
-    read("app/WasalXApp.tsx"),
+    readTenantPortalSource(),
     read("app/ModalDialog.tsx"),
     read("app/globals.css"),
     read("app/design-system/tokens.css"),
@@ -730,7 +738,7 @@ test("tenant dialogs share one keyboard-focus contract without weakening confirm
 
 test("tenant identity and provider visuals stay bidi-safe and token-driven", async () => {
   const [app, cases, css] = await Promise.all([
-    read("app/WasalXApp.tsx"),
+    readTenantPortalSource(),
     read("app/CaseLifecycle.tsx"),
     read("app/globals.css"),
   ]);
@@ -757,13 +765,18 @@ test("dense operational tables are contained inside their own mobile scrollers",
 });
 
 test("large tenant workspaces load only when their route is selected", async () => {
-  const source = await read("app/WasalXApp.tsx");
+  const [source, sharedUi] = await Promise.all([read("app/WasalXApp.tsx"), read("app/tenant-ui.tsx")]);
+  const portal = readTenantPortalSource();
   const viewModules = ["BotAutomation", "ClientRouting", "CaseLifecycle", "InboxWorkspace", "SupportTeams", "MailboxAdministration",
     "WorkspaceAccess", "NativeRoutingSync", "MetaCostUsage", "MetaSignup", "MetaNumberRelease", "MetaTemplatePreparation", "MetaLegacyMigration",
-    "MetaCoexistence", "MetaBillingDiagnostics", "MetaCustomerPaymentPolicy", "MetaRouting", "MetaSavedAccessActivation"];
+    "MetaCoexistence", "MetaBillingDiagnostics", "MetaCustomerPaymentPolicy", "MetaRouting", "MetaSavedAccessActivation",
+    "ConnectionDetail", "Groups", "TenantSettings", "Rules", "Deliveries", "Audit", "TeamAccess"];
   for (const moduleName of viewModules) {
-    assert.match(source, new RegExp(`lazy\\(async \\(\\) => \\([\\s\\S]*import\\(\\"\\./${moduleName}\\"\\)`));
-    assert.doesNotMatch(source, new RegExp(`^import [^;]* from "\\./${moduleName}";`, "mu"), `${moduleName} must stay out of the first-load bundle`);
+    assert.match(portal, new RegExp(`lazy\\(async \\(\\) => \\([\\s\\S]*import\\(\\"\\./${moduleName}\\"\\)`));
+    // The shell and its shared helpers are first-load; a static import there pulls the view back in.
+    for (const firstLoad of [source, sharedUi]) {
+      assert.doesNotMatch(firstLoad, new RegExp(`^import [^;]* from "\\./${moduleName}";`, "mu"), `${moduleName} must stay out of the first-load bundle`);
+    }
   }
   assert.doesNotMatch(source, /import \{ CaseLifecycle \} from "\.\/CaseLifecycle"/u);
   assert.doesNotMatch(source, /import \{ BotAutomation, PluginCatalog \} from "\.\/BotAutomation"/u);
@@ -772,7 +785,7 @@ test("large tenant workspaces load only when their route is selected", async () 
 
 test("shared shell stays truthful, bounded, and operable on mobile", async () => {
   const [source, css, messages] = await Promise.all([
-    read("app/WasalXApp.tsx"),
+    readTenantPortalSource(),
     read("app/globals.css"),
     read("lib/i18n/messages/en/tenant.ts"),
   ]);
@@ -807,7 +820,7 @@ test("shared shell stays truthful, bounded, and operable on mobile", async () =>
 });
 
 test("deliveries distinguish first use from an empty filter",async()=>{
-  const [source,messages]=await Promise.all([read("app/WasalXApp.tsx"),read("lib/i18n/messages/en/tenant.ts")]);
+  const [source,messages]=await Promise.all([readTenantPortalSource(),read("lib/i18n/messages/en/tenant.ts")]);
   assert.match(source,/filtered\.length \? <DeliveryTable[\s\S]*title=\{t\(rows\.length \? "tenant\.deliveries\.empty\.filteredTitle" : "tenant\.deliveries\.empty\.title"\)/u);
   assertDictionaryCopy(messages,"tenant.deliveries.empty.title","No message deliveries yet");
   assertDictionaryCopy(messages,"tenant.deliveries.empty.filteredTitle","No deliveries match this filter");
@@ -826,7 +839,7 @@ test("routing does not claim no active version while older pages remain",async()
 
 test("runtime modes and rule governance projections cannot masquerade as production", async () => {
   const [app, bridge, vite, backend, messages] = await Promise.all([
-    read("app/WasalXApp.tsx"),
+    readTenantPortalSource(),
     read("lib/control-plane-data.ts"),
     read("vite.config.ts"),
     read("lib/backend.ts"),
@@ -856,7 +869,7 @@ test("runtime modes and rule governance projections cannot masquerade as product
 });
 
 test("group commands are configured through the governed rule form without raw JSON",async()=>{
-  const [app,styles,en,ar]=await Promise.all([read("app/WasalXApp.tsx"),read("app/globals.css"),read("lib/i18n/messages/en/tenant.ts"),read("lib/i18n/messages/ar/tenant.ts")]);
+  const [app,styles,en,ar]=await Promise.all([readTenantPortalSource(),read("app/globals.css"),read("lib/i18n/messages/en/tenant.ts"),read("lib/i18n/messages/ar/tenant.ts")]);
   assert.match(app,/fetch\("\/api\/bot-flows\/actions",\{cache:"no-store"\}\)/u);
   assert.match(app,/groupCommand:\{actionId:form\.actionId,input:Object\.fromEntries/u);
   assert.match(app,/hasBotActionCapability\(row,"GROUP_COMMAND"\)/u);
@@ -871,7 +884,7 @@ test("group commands are configured through the governed rule form without raw J
 });
 
 test("plugins are a reusable workspace surface and direct flows expose a visual canvas",async()=>{
-  const [app,bots,canvas,styles,en,ar]=await Promise.all([read("app/WasalXApp.tsx"),read("app/BotAutomation.tsx"),read("app/WorkflowCanvas.tsx"),read("app/globals.css"),read("lib/i18n/messages/en/automation.ts"),read("lib/i18n/messages/ar/automation.ts")]);
+  const [app,bots,canvas,styles,en,ar]=await Promise.all([readTenantPortalSource(),read("app/BotAutomation.tsx"),read("app/WorkflowCanvas.tsx"),read("app/globals.css"),read("lib/i18n/messages/en/automation.ts"),read("lib/i18n/messages/ar/automation.ts")]);
   assert.match(app,/\["plugins", "tenant\.navigation\.plugins"/u);
   assert.match(app,/view === "plugins"[\s\S]*<PluginCatalog/u);
   assert.match(app,/view === "routing"[\s\S]*<ClientRouting/u);
@@ -901,7 +914,7 @@ test("plugins are a reusable workspace surface and direct flows expose a visual 
 
 test("Connections manages shared OAuth data-service bindings",async()=>{
   const [app,routing,visibleRefresh,bots,callback,enTenant,arTenant,enAutomation,arAutomation]=await Promise.all([
-    read("app/WasalXApp.tsx"),
+    readTenantPortalSource(),
     read("app/ClientRouting.tsx"),
     read("app/use-visible-refresh.ts"),
     read("app/BotAutomation.tsx"),
@@ -947,20 +960,64 @@ test("Connections manages shared OAuth data-service bindings",async()=>{
 });
 
 test("lazy slots in panels, drawers and dialogs use a compact, accurately labelled loading state", async () => {
-  const [source, english, arabic] = await Promise.all([
-    read("app/WasalXApp.tsx"),
+  const source = readTenantPortalSource();
+  const [english, arabic] = await Promise.all([
     read("lib/i18n/messages/en/tenant.ts"),
     read("lib/i18n/messages/ar/tenant.ts"),
   ]);
-  const views = ["BotAutomation", "PluginCatalog", "ClientRouting", "InboxWorkspace", "CaseLifecycle"];
-  const wrapped = (fallback) => [...source.matchAll(new RegExp(String.raw`<Suspense fallback=\{<${fallback} />\}>\s*(?:\{[^<]*)?<(\w+)`, "gu"))].map((match) => match[1]);
+  const views = ["Groups", "Rules", "BotAutomation", "PluginCatalog", "ClientRouting", "InboxWorkspace", "CaseLifecycle", "Deliveries", "TeamAccess", "Audit", "Settings"];
+  const wrapped = (fallback) => [...source.matchAll(new RegExp(String.raw`<Suspense fallback=\{<${fallback}(?: quiet=\{!metaSectionLoaded\})? />\}>\s*(?:\{[^<]*)?<(\w+)`, "gu"))].map((match) => match[1]);
   assert.deepEqual(wrapped("WorkspaceLoading"), views, "WorkspaceLoading is only for whole views");
   const slots = wrapped("SectionLoading");
   for (const slot of ["MetaCostUsage", "SupportTeams", "MailboxAdministration", "ConnectedDataServices", "MetaNumberRelease", "MetaTemplatePreparation", "MetaSignup", "NativeRoutingSync", "WorkspaceAccess"]) {
     assert.ok(slots.includes(slot), `${slot} must load with the compact SectionLoading state`);
   }
   assert.equal(slots.filter((slot) => slot === "MetaSignup").length, 2, "the reconnect section and the add-connection dialog both stay compact");
-  assert.match(source, /function SectionLoading\(\) \{[\s\S]*?className="review-loading compact" role="status" aria-live="polite" aria-busy="true"[\s\S]*?t\("tenant\.loading\.section"\)/u);
+  assert.match(source, /function SectionLoading\(\{ quiet = false \}: \{ quiet\?: boolean \}\) \{[\s\S]*?className="review-loading compact" role=\{quiet \? undefined : "status"\}>[\s\S]*?t\("tenant\.loading\.section"\)/u);
+  assert.match(source, /function WorkspaceLoading\(\) \{[\s\S]*?className="review-loading workspace-loading" role="status">[\s\S]*?t\("tenant\.loading\.workspace"\)/u);
+  for (const name of ["WorkspaceLoading", "SectionLoading"]) {
+    const body = source.slice(source.indexOf(`function ${name}(`), source.indexOf("\n}\n", source.indexOf(`function ${name}(`)));
+    assert.doesNotMatch(body, /aria-busy|aria-live/u, `${name} is one plain status region; busy hides its announcement`);
+  }
+  // A revoked Meta connection loads number release beside the Meta section; only the Meta section announces,
+  // unless the Meta section code is already cached and its slot does not suspend (#325).
+  assert.deepEqual([...source.matchAll(/<Suspense fallback=\{<SectionLoading quiet=\{!metaSectionLoaded\} \/>\}>\s*<(\w+)/gu)].map((match) => match[1]), ["MetaNumberRelease"]);
+  assert.match(source, /let metaSectionLoaded = false;\nconst MetaTemplatePreparation = lazy\(async \(\) => \{[^\n]*metaSectionLoaded = true;/u);
+  assert.match(source, /detail\.provider === "META" \? \(\s*<Suspense fallback=\{<SectionLoading \/>\}>\s*\{!sessionExpired \? <MetaTemplatePreparation/u);
+  // Skeleton loaders keep aria-busy on the skeleton and announce through one plain status inside it (#325).
+  const skeletons = [readTenantPortalSource(), ...await Promise.all(["app/BotAutomation.tsx", "app/ClientRouting.tsx", "app/CaseLifecycle.tsx", "app/NativeRoutingSync.tsx"].map(read))].join("\n");
+  assert.deepEqual([...skeletons.matchAll(/<\w+ [^>]*role="status"[^>]*>/gu)].map((match) => match[0]).filter((tag) => tag.includes("aria-busy")), [], "a live region is never busy");
+  const statuses = [...skeletons.matchAll(/<\w+ className="[^"]*" aria-busy="true"><p className="sr-only" role="status" aria-label=\{t\("([\w.]+)"\)\}>\{t\("\1"\)\}<\/p>/gu)].map((match) => match[1]);
+  assert.deepEqual(statuses, ["tenant.settings.loading", "tenant.privacy.loading", "tenant.privacy.detail.loading", "tenant.team.loading", "bot.flows.loadingDetail", "bot.conversations.loadingExecution", "plugins.loading", "bot.canvas.loading", "routing.detail.loading"]);
+  assert.match(skeletons, /className="panel bot-loading"\s+aria-busy="true"\s*>\s*<p className="sr-only" role="status" aria-label=\{t\("bot\.loading"\)\}>/u);
+  assert.match(skeletons, /className="panel bot-loading" aria-busy="true">\s*<p className="sr-only" role="status" aria-label=\{t\("routing\.loading"\)\}>\{t\("routing\.loading"\)\}<\/p>/u);
+  assert.match(skeletons, /className=\{styles\.skeleton\} aria-busy="true"><p className="sr-only" role="status" aria-label=\{t\("cases\.loading"\)\}>\{t\("cases\.loading"\)\}<\/p>/u);
+  assert.match(skeletons, /className="data-connections-loading" role="status">\{t\("routing\.integrations\.loading"\)\}/u);
+  assert.match(skeletons, /aria-labelledby=\{titleId\} aria-busy=\{loading \|\| busy\}>/u);
+  assert.match(skeletons, /<div role="status">\s*<b>\{t\(displayState \? `nativeRouting\.state/u);
+  // Release simulations wait for the busy container, never a busy live region (#338).
+  for (const simulation of ["simulation-remaining-quality", "simulation-shared-readonly", "simulation-routing-quality"]) {
+    const script = await read(`scripts/release/${simulation}.mjs`);
+    assert.doesNotMatch(script, /\[role=status\]\[aria-busy=true\]/u, `${simulation} waits for a busy live region`);
+    assert.match(script, /\[aria-busy=true\]:has\(> \[role=status\]\)/u, `${simulation} waits for the busy loader`);
+  }
   assert.match(english, /"tenant\.loading\.section": "Loading this section…"/u);
   assert.match(arabic, /"tenant\.loading\.section": "جارٍ تحميل هذا القسم…"/u);
+});
+
+test("decorative arrows follow the reading direction and stay hidden from screen readers", async () => {
+  const [styles, ...sources] = await Promise.all([
+    read("app/globals.css"),
+    readTenantPortalSource(),
+    read("app/BotAutomation.tsx"),
+    read("app/platform/MetaTransitionOperator.tsx"),
+  ]);
+  assert.match(styles, /\.reading-arrow\{display:inline-block;vertical-align:-\.125em\}\.reading-arrow svg\{display:block;inline-size:1em;block-size:1em\}\[dir="rtl"\] \.reading-arrow svg\{transform:scaleX\(-1\)\}/u);
+  for (const source of sources) {
+    // Arrows are the icon set's drawn arrow (#326), never a text character that changes with the font.
+    assert.doesNotMatch(source, /[\u2190\u2192]/u, "no text arrows");
+    const arrows = source.split('className="reading-arrow"').length - 1;
+    assert.ok(arrows > 0);
+    assert.equal(source.split('<span className="reading-arrow" aria-hidden="true"><MarketingIcon name="arrow" /></span>').length - 1, arrows, "every arrow is a mirrored, aria-hidden drawn reading-arrow");
+  }
 });

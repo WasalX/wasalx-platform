@@ -170,10 +170,10 @@ test("external routing create and activation require recent MFA before mutation"
 test("keeps read-only external routing definitions parseable without exposing secrets",async()=>{
   const external={...definition,sources:[...definition.sources,{id:"notion",name:"Notion",kind:"NOTION",syncMode:"WEBHOOK",secretReference:`secret://tenants/${tenantId}/routing/notion`,endpointUrl:"https://api.notion.com/v1/data_sources/d9824bdc-8445-4327-be8b-5b47500af6ce/query",fieldMapping:{}},{id:"crm",name:"CRM",kind:"HTTP_JSON",syncMode:"WEBHOOK",secretReference:`secret://tenants/${tenantId}/routing/crm`,endpointUrl:"https://crm.example/routes?tenant=northstar",fieldMapping:{}}]};
   const service=new BotFlowsService({rows:async()=>[{definition:external}]},null,null);
-  const [row]=await service.listRouting({...principal,role:"auditor"});
+  const {items:[row]}=await service.listRouting({...principal,role:"auditor"});
   assert.equal(row.definition.sources[1].secretReference,"secret://redacted/routing/configured");
   assert.equal(row.definition.sources[2].endpointUrl,"https://crm.example/routes");
-  assert.equal((await service.listRouting(principal))[0].definition.sources[2].endpointUrl,"https://crm.example/routes?tenant=northstar");
+  assert.equal((await service.listRouting(principal)).items[0].definition.sources[2].endpointUrl,"https://crm.example/routes?tenant=northstar");
   assert.equal(JSON.stringify(row).includes(tenantId),false);
 });
 

@@ -1,0 +1,19 @@
+services:
+  waha-gows:
+    image: node:22-bookworm-slim@sha256:e9f565d32859f0cbfb52125eafe8be39390f24dac302dc3cdf566e8ba3ab21ee
+    entrypoint: [node]
+    command: [/simulator/waha-simulation-server.mjs]
+    environment: !override
+      WAHA_API_KEY: ${WASALX_FULL_WAHA_API_KEY:?Set WASALX_FULL_WAHA_API_KEY}
+      WAHA_SIM_SESSION: ${WAHA_SIM_SESSION:?Set WAHA_SIM_SESSION}
+      WAHA_SIM_GROUP_ID: ${WAHA_SIM_GROUP_ID:?Set WAHA_SIM_GROUP_ID}
+      WAHA_SIM_PHONE: ${WAHA_SIM_PHONE:?Set WAHA_SIM_PHONE}
+      WAHA_SIM_VERSION: ${WAHA_SIM_VERSION:?Set WAHA_SIM_VERSION}
+    dns: !reset []
+    networks: !override [connectors]
+    read_only: true
+    user: "1000:1000"
+    volumes: !override
+      - ./scripts/contracts/waha-simulation-server.mjs:/simulator/waha-simulation-server.mjs:ro
+      - ./scripts/contracts/waha-simulation-control.mjs:/simulator/waha-simulation-control.mjs:ro
+      - ./scripts/contracts/waha-mutation-controls.mjs:/simulator/waha-mutation-controls.mjs:ro

@@ -32,7 +32,7 @@ test("probe census checks DEV holds, running nightly services, one-shots and col
     RestartCount: state === "held" ? 1 : 0, State: { Running: state === "resident", Status: state === "resident" ? "running" : state === "held" ? "created" : "exited",
       Pid: state === "resident" ? 10 : 0, ExitCode: 0, Paused: false, Dead: false, Health: { Status: "healthy" } } });
   const rows = names.map(name => row(name, [...devHeldServices, "held-init"].includes(name) ? "held" : oneShots.includes(name) ? "one-shot" : "resident"));
-  const census = (entries, held) => censusFailure(model, entries, held, names.length);
+  const census = (entries, held) => censusFailure(model, entries, held);
   assert.equal(census(rows), null);
   const update = (name, change) => rows.map(entry => entry.Config.Labels["com.docker.compose.service"] === name ? change(structuredClone(entry)) : entry);
   const held = devHeldServices[0];
@@ -45,4 +45,9 @@ test("probe census checks DEV holds, running nightly services, one-shots and col
   assert.deepEqual(census(rows.slice(1)), { field: "inventory" });
   const nightly = names.map(name => row(name, [...oneShots, "held-init"].includes(name) ? "one-shot" : "resident"));
   assert.equal(census(nightly, []), null);
+  services["new-worker"] = { profiles: ["full"] };
+  services["inactive-worker"] = { profiles: ["other"] };
+  assert.deepEqual(census(nightly, []), { field: "inventory" });
+  assert.deepEqual(census([...nightly, row("inactive-worker", "resident")], []), { field: "inventory" });
+  assert.equal(census([...nightly, row("new-worker", "resident")], []), null);
 });

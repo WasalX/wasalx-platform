@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import ts from "typescript";
+import { tenantPortalFiles } from "./helpers/tenant-portal-source.mjs";
 
 import { arabicMessages } from "../lib/i18n/messages/ar/index.ts";
 import { englishMessages } from "../lib/i18n/messages/en/index.ts";
@@ -9,7 +10,7 @@ import { englishMessages } from "../lib/i18n/messages/en/index.ts";
 const clientSurfaces = [
   "../app/MarketingInbox.tsx",
   "../app/page.tsx",
-  "../app/WasalXApp.tsx",
+  ...tenantPortalFiles.map((path) => `../${path}`),
   "../app/BotAutomation.tsx",
   "../app/ClientRouting.tsx",
   "../app/CaseLifecycle.tsx",
@@ -94,4 +95,13 @@ test("tenant-facing translations do not expose internal provider vocabulary", as
     .map((key) => `${key}: ${englishMessages[key]}`)
     .sort();
   assert.deepEqual(findings, [], `Internal vocabulary in tenant copy:\n${findings.join("\n")}`);
+});
+
+test("catalogues spell Arabic \"again\" one way and never name the control plane (#327)", () => {
+  const findings = [
+    ...Object.entries(arabicMessages).filter(([, message]) => /مجددا(?!\p{Script=Arabic})|مجدداً/u.test(message)).map(([key]) => `ar ${key}: write مجددًا`),
+    ...Object.entries(englishMessages).filter(([, message]) => /control plane/iu.test(message)).map(([key]) => `en ${key}: control plane`),
+    ...Object.entries(arabicMessages).filter(([, message]) => /مستوى (?:ال)?تحكم/u.test(message)).map(([key]) => `ar ${key}: control plane`),
+  ];
+  assert.deepEqual(findings, []);
 });

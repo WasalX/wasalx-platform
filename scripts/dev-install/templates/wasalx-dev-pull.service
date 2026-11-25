@@ -12,6 +12,7 @@ StateDirectoryMode=0700
 LoadCredential=pull-config:@INSTALL_DIR@/pull-config.json
 LoadCredential=receipt-key:@RECEIPT_KEY@
 ExecStart=/usr/bin/python3 -I -B @INSTALL_DIR@/pull-agent.py --config %d/pull-config --key %d/receipt-key
+StandardError=journal
 UMask=0077
 ProtectSystem=strict
 ProtectHome=yes

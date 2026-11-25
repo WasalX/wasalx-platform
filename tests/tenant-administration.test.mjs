@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { generateKeyPairSync, privateDecrypt, constants } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { readTenantPortalSource } from "./helpers/tenant-portal-source.mjs";
 import {
   BadRequestException,
   ConflictException,
@@ -13,7 +14,7 @@ import { InvitationTokenService } from "../services/control-api/dist/invitation-
 import { can } from "../services/control-api/dist/rbac.js";
 
 const migration = await readFile(new URL("../services/control-api/migrations/0019_tenant_administration.sql", import.meta.url), "utf8");
-const app = await readFile(new URL("../app/WasalXApp.tsx", import.meta.url), "utf8");
+const app = await readTenantPortalSource();
 const tenantMessages = await readFile(new URL("../lib/i18n/messages/en/tenant.ts", import.meta.url), "utf8");
 const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
 const settingsRoute = await readFile(new URL("../app/api/settings/route.ts", import.meta.url), "utf8");
@@ -237,6 +238,52 @@ test("verified unknown resend records the decision and queues exactly one replac
   assert.equal(result.delivery_error_code, null);
   assert.equal(audit[5].delivery_error_code, "EMAIL_PROVIDER_SMTP_OUTCOME_UNKNOWN");
   assert.equal(audit[6].unknown_delivery_confirmed, true);
+});
+
+test("team lists page independently past 200 and keep invitations restricted", async () => {
+  const tenant = ownerRequest.principal.tenantId;
+  const records = Object.fromEntries(["members", "invitations"].map((kind, stream) => [kind,
+    Array.from({ length: stream ? 202 : 200 }, (_, index) => ({
+      id: "30000000-0000-4000-8000-" + String(stream * 1000 + index).padStart(12, "0"),
+      user_id: "40000000-0000-4000-8000-" + String(index).padStart(12, "0"),
+      version: "1",
+    })),
+  ]));
+  let calls = 0;
+  const database = { rows: async (tenantId, sql, [, cursor, fetchSize]) => {
+    calls += 1;
+    assert.equal(tenantId, tenant);
+    assert.match(sql, /LIMIT \$3/u);
+    const kind = sql.includes("FROM tenant_invitations") ? "invitations" : "members";
+    const offset = cursor ? records[kind].findIndex(row => row.id === cursor) + 1 : 0;
+    return records[kind].slice(offset, offset + fetchSize);
+  } };
+  const controller = new TenantAdministrationController(database, {}, {});
+  const ids = items => items.map(row => row.id);
+  const first = await controller.team(ownerRequest);
+  assert.deepEqual(ids(first.members), ids(records.members));
+  assert.equal(first.members_next_cursor, null);
+  assert.deepEqual(ids(first.invitations), ids(records.invitations.slice(0, 200)));
+  assert.equal(first.invitations_next_cursor, records.invitations[199].id);
+
+  const next = await controller.team(ownerRequest, { invitation_cursor: first.invitations_next_cursor });
+  assert.deepEqual(next.members, []);
+  assert.deepEqual(ids(next.invitations), ids(records.invitations.slice(200)));
+  assert.equal(next.invitations_next_cursor, null);
+
+  const ownerAtTwo = await controller.team(ownerRequest, { limit: "2" });
+  const role = { ...ownerRequest, principal: { ...ownerRequest.principal, role: "supervisor" } };
+  const readOnly = await controller.team(role, { limit: "2", member_cursor: ownerAtTwo.members_next_cursor,
+    invitation_cursor: first.invitations_next_cursor });
+  assert.deepEqual(ids(readOnly.members), ids(records.members.slice(2, 4)));
+  assert.equal(readOnly.members_next_cursor, records.members[3].id);
+  assert.deepEqual(readOnly.invitations, []);
+  assert.equal(readOnly.invitations_next_cursor, null);
+
+  for (const query of [{ limit: "201" }, { member_cursor: "bad" }, { invitation_cursor: [first.invitations_next_cursor] }]) {
+    await assert.rejects(() => controller.team(ownerRequest, query), BadRequestException);
+  }
+  assert.equal(calls, 6);
 });
 
 test("team responses expose only normalized invitation delivery codes", async () => {

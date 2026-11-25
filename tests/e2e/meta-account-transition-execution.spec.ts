@@ -28,6 +28,7 @@ async function fixture(page:Page){
   const previewWrites:Array<{action:'create'|'cancel';body:Record<string,unknown>;key:string|null}>=[];
   let prepare:MetaTransitionPreviewPage['prepare']={accountRevision:1,bindingRevision:2};
   const expectedErrors:Array<{url:string;text:string}>=[];
+  const optionalAbortErrors:string[]=[],abortedRequests:string[]=[];
   let denied=false,delayRead=false,readStarted=false,releaseRead:(()=>void)|undefined;
   let handler:(route:Route,action:MetaTransitionExecutionAction,expectedRevision:number)=>Promise<void>=async(route,action,requestRevision)=>{
     value={...value,canRefresh:false,canCancel:false,execution:{...value.execution!,revision:requestRevision+1,state:action==='INITIATE'?'RESERVED':value.execution!.state,
@@ -41,7 +42,10 @@ async function fixture(page:Page){
   };
   page.on('pageerror',error=>pageErrors.push(error.message));
   page.on('console',message=>{if(message.type()!=='error')return;const index=expectedErrors.findIndex(item=>item.url===message.location().url&&item.text===message.text());
-    if(index>=0)expectedErrors.splice(index,1);else consoleErrors.push(message.text());});
+    if(index>=0){expectedErrors.splice(index,1);return;}
+    const abortIndex=message.text()==='Failed to load resource: net::ERR_FAILED'?optionalAbortErrors.indexOf(message.location().url):-1;
+    if(abortIndex>=0){optionalAbortErrors.splice(abortIndex,1);return;}
+    consoleErrors.push(message.text());});
   await page.route('**/api/connections/**',async route=>{
     const request=route.request(),url=new URL(request.url()),path=url.pathname,id=path.split('/')[3];
     if(path.includes('/meta/account-transitions')){
@@ -87,15 +91,17 @@ async function fixture(page:Page){
   });
   await installMetaRoutingReadFixture(page);
   const refresh=async()=>{await section(page).getByRole('button',{name:copy('checkStatus'),exact:true}).first().click();await expect(section(page).getByText(copy('loading'),{exact:true})).toHaveCount(0);};
-  return {writes,resolutions,previewWrites,pageErrors,consoleErrors,expectedErrors,refresh,get:()=>value,set:(next:MetaTransitionPreviewView)=>{value=next;},
+  return {writes,resolutions,previewWrites,pageErrors,consoleErrors,expectedErrors,abortedRequests,refresh,get:()=>value,set:(next:MetaTransitionPreviewView)=>{value=next;},
     setPrepare:(next:MetaTransitionPreviewPage['prepare'])=>{prepare=next;},
     setResolveHandler:(next:typeof resolveHandler)=>{resolveHandler=next;},
     setHandler:(next:typeof handler)=>{handler=next;},deny:()=>{denied=true;},delay:()=>{delayRead=true;readStarted=false;},readStarted:()=>readStarted,release:()=>{releaseRead?.();releaseRead=undefined;},
-    lost:(route:Route)=>{expectedErrors.push({url:route.request().url(),text:'Failed to load resource: net::ERR_FAILED'});return route.abort('failed');}};
+    lost:async(route:Route)=>{
+      const url=route.request().url();optionalAbortErrors.push(url);
+      await route.abort('failed');abortedRequests.push(url);
+    }};
 }
 
 test('Account change uses four deliberate actions and recovers the exact saved operation without replay',async({page},testInfo)=>{
-  test.skip(testInfo.project.name==='tablet-820');
   const f=await fixture(page);
   await page.goto(`/app?view=connections&connection=${connection}`);await expect(page.locator('[data-application-ready="true"]')).toBeVisible();
   await expect(section(page).getByRole('heading',{name:copy('execution.title'),exact:true})).toBeVisible();
@@ -145,8 +151,8 @@ test('Account change uses four deliberate actions and recovers the exact saved o
   expect(f.pageErrors).toEqual([]);expect(f.consoleErrors).toEqual([]);expect(f.expectedErrors).toEqual([]);
 });
 
-test('Account change holds malformed or uncorrelated results and clears inaccessible data without repeating effects',async({page},testInfo)=>{
-  test.skip(testInfo.project.name==='tablet-820'||!['tenant_owner','tenant_admin'].includes(role()));
+test('Account change holds malformed or uncorrelated results and clears inaccessible data without repeating effects',async({page})=>{
+  test.skip(!['tenant_owner','tenant_admin'].includes(role()));
   const f=await fixture(page);
   await page.goto(`/app?view=connections&connection=${connection}`);await expect(button(page,'initiate')).toBeEnabled();
   // Storage denial must stop dispatch before a provider action is reserved.
@@ -168,7 +174,7 @@ test('Account change holds malformed or uncorrelated results and clears inaccess
 });
 
 test('Managed account change requires acceptance of the exact target terms before confirmation',async({page},testInfo)=>{
-  test.skip(testInfo.project.name==='tablet-820'||!['tenant_owner','tenant_admin'].includes(role()));
+  test.skip(!['tenant_owner','tenant_admin'].includes(role()));
   const f=await fixture(page),documentText='Terms for the reviewed target account.\nشروط الحساب المستهدف. <approval is text>';
   f.set({...f.get(),requestedMode:'WASALX_MANAGED',execution:{...f.get().execution!,requestedMode:'WASALX_MANAGED',terms:null}});
   await page.goto(`/app?view=connections&connection=${connection}`);
@@ -196,8 +202,8 @@ test('Managed account change requires acceptance of the exact target terms befor
   expect(f.pageErrors).toEqual([]);expect(f.consoleErrors).toEqual([]);expect(f.expectedErrors).toEqual([]);
 });
 
-test('An unadmitted request is resolved with its original key without repeating a provider action',async({page},testInfo)=>{
-  test.skip(testInfo.project.name==='tablet-820'||!['tenant_owner','tenant_admin'].includes(role()));
+test('An unadmitted request is resolved with its original key without repeating a provider action',async({page})=>{
+  test.skip(!['tenant_owner','tenant_admin'].includes(role()));
   const f=await fixture(page);f.setHandler(async route=>{await f.lost(route);});
   await page.goto(`/app?view=connections&connection=${connection}`);await expect(button(page,'initiate')).toBeEnabled();
   page.once('dialog',dialog=>dialog.accept());await button(page,'initiate').click();await expect(section(page).getByText(copy('execution.heldRequest'),{exact:true})).toBeVisible();
@@ -214,6 +220,7 @@ test('An unadmitted request is resolved with its original key without repeating 
   expect(f.resolutions.every(value=>value.key===f.writes[0]!.key&&JSON.stringify(value.body)===JSON.stringify(f.writes[0]!.body))).toBe(true);
   expect(await page.evaluate(key=>sessionStorage.getItem(key),intentKey)).toBeNull();
   await page.reload();await expect(button(page,'initiate')).toBeEnabled();expect(f.resolutions).toHaveLength(2);expect(f.writes).toHaveLength(1);
+  expect(f.abortedRequests.map(url=>new URL(url).pathname.split('/').at(-1))).toEqual(['initiate','resolve']);
   expect(f.pageErrors).toEqual([]);expect(f.consoleErrors).toEqual([]);expect(f.expectedErrors).toEqual([]);
 });
 
@@ -238,7 +245,6 @@ test('Account change read deadlines and scope changes cannot restore stale actio
 
 
 test('Reserved account change cancellation follows current execution authority without provider work',async({page},testInfo)=>{
-  test.skip(testInfo.project.name==='tablet-820');
   const f=await fixture(page);
   f.set({...f.get(),revision:6,canRefresh:false,canCancel:false,execution:{...execution(),revision:6,state:'RESERVED',
     actions:{initiate:false,complete:false,observe:false,reconcile:false,cancel:true},history:[],pendingAction:null}});
@@ -265,7 +271,6 @@ test('Reserved account change cancellation follows current execution authority w
 });
 
 test('Reconciled account history allows a new preview only with current preparation and settled intent',async({page},testInfo)=>{
-  test.skip(testInfo.project.name==='tablet-820');
   const f=await fixture(page),history:MetaTransitionExecutionView['history']=[
     {stage:'INITIATE',outcome:'SUCCEEDED',attemptedAt:new Date(Date.now()-120_000).toISOString()},
     {stage:'COMPLETE',outcome:'SUCCEEDED',attemptedAt:new Date(Date.now()-60_000).toISOString()}];
@@ -355,14 +360,17 @@ async function readbackFixture(page:Page,f:Awaited<ReturnType<typeof fixture>>){
 // Four owner contexts: EN/AR desktop1440 and mobile390; one EN auditor negative.
 // Root selects these finite contexts using the existing application config.
 test('Account recovery renews exact source read access without replaying or approving migration',async({page},testInfo)=>{
- // Multiple reloads and recovery phases need a bounded scenario budget on shared CI runners.
- test.setTimeout(90_000);
-  test.skip(testInfo.project.name==='tablet-820');
+  await page.clock.install();
   const f=await fixture(page),r=await readbackFixture(page,f);
   const messages=(locale()==='ar'?arabicTenantMessages:englishTenantMessages) as Record<string,string>;
   const text=(key:string)=>messages[`tenant.metaSignup.${key}`]!;
   const setup=()=>page.locator('section[aria-labelledby="meta-signup-heading"]');
   const sb=(key:string)=>setup().getByRole('button',{name:text(key),exact:true});
+  const advanceRecoveryPoll=async()=>{
+    await expect(setup().getByText(text('checking'),{exact:true})).toBeVisible();
+    // The uncertain signup attempt polls after three seconds and reads on the next frame.
+    await page.clock.runFor(3_100);
+  };
   const open=async()=>{await section(page).getByRole('button',{name:copy('execution.renewal.open'),exact:true}).click();await expect(setup().getByRole('heading',{name:text('readback.title'),exact:true})).toBeVisible();};
   const visit=async()=>{await page.goto(`/app?view=connections&connection=${connection}`);await expect(section(page).getByRole('heading',{name:copy('execution.title'),exact:true})).toBeVisible();};
   f.set({...f.get(),canRefresh:false,canCancel:false,execution:{...f.get().execution!,state:'HELD',actions:{initiate:false,complete:false,observe:false,reconcile:false,cancel:false},
@@ -382,6 +390,7 @@ test('Account recovery renews exact source read access without replaying or appr
   await sb('readback.prepare').click();await page.reload();await open();
   await expect(setup().getByText(text('resumeAuthorization'),{exact:true})).toBeVisible();await expect(sb('connect')).toHaveCount(0);
   await sb('cancel').click();await sb('readback.prepare').click();await sb('connect').click();r.loseExchange();await r.callback('readback-code-once');
+  await advanceRecoveryPoll();
   await expect(setup().getByRole('radio').first()).toBeEnabled();expect(r.calls.filter(call=>call.path.endsWith('/exchange'))).toHaveLength(1);
   await page.reload();await open();await expect(setup().getByRole('radio').first()).toBeEnabled();expect(r.calls.filter(call=>call.path.endsWith('/exchange'))).toHaveLength(1);
   await expect(setup().locator('input[type="password"]')).toHaveCount(0);await expect(setup().getByRole('radio').nth(1)).toBeDisabled();
@@ -391,6 +400,7 @@ test('Account recovery renews exact source read access without replaying or appr
   f.set({...f.get(),execution:{...f.get().execution!,renewals:[{...f.get().execution!.renewals[0],canPrepare:true}]}});await f.refresh();
   await setup().getByRole('radio').first().check();r.loseSelect();await sb('readback.select').click();
   await expect.poll(()=>r.calls.filter(call=>call.path.endsWith('/select')).length).toBe(1);
+  await advanceRecoveryPoll();
   await expect(sb('readback.select')).toBeEnabled();await page.reload();await open();
   expect(r.calls.filter(call=>call.path.endsWith('/select'))).toHaveLength(1);await setup().getByRole('radio').first().check();
   await sb('readback.select').click();await expect(setup().getByText(text('readback.status.COMPLETED'),{exact:true})).toBeVisible();

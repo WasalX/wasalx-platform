@@ -67,7 +67,7 @@ prepare_verified_archive() {
     local pending_archive="$TOOLS_DIR/$filename.pending"
     local pending_checksum="$TOOLS_DIR/$filename.sha256.pending"
     if ! curl --proto '=https' --proto-redir '=https' --tlsv1.2 --http1.1 --fail --location --silent --show-error \
-      --retry 3 --retry-all-errors --retry-delay 2 --connect-timeout 20 --max-time 120 \
+      --retry 3 --retry-delay 2 --retry-max-time 120 --connect-timeout 20 --max-time 120 \
       --output "$pending_checksum" "$checksum_url"; then
       rm -f "$pending_archive" "$pending_checksum"
       return 1
@@ -115,7 +115,7 @@ prepare_pinned_provider() {
       local status=$?
       [[ "$status" == 1 && -n "$release_proxy" ]] || return "$status"
       curl --http1.1 --fail --location --silent --show-error \
-        --retry 3 --retry-all-errors --retry-delay 2 --connect-timeout 20 --max-time 120 \
+        --retry 3 --retry-delay 2 --retry-max-time 120 --connect-timeout 20 --max-time 120 \
         --output "$pending" "${release_proxy%/}/${release_url}"
     fi
     actual=$(shasum -a 256 "$pending" | awk '{print $1}')
@@ -178,7 +178,7 @@ prepare_pinned_archive() {
     local pending_archive="$TOOLS_DIR/$filename.pending"
     local pending_checksum="$TOOLS_DIR/$filename.sha256.pending"
     curl --proto '=https' --proto-redir '=https' --tlsv1.2 --http1.1 --fail --location --silent --show-error \
-      --retry 3 --retry-all-errors --retry-delay 2 --connect-timeout 20 --max-time 120 \
+      --retry 3 --retry-delay 2 --retry-max-time 120 --connect-timeout 20 --max-time 120 \
       --output "$pending_checksum" "$checksum_url"
     upstream=$(awk -v file="$filename" 'NF == 1 || $2 == file { print $1; exit }' "$pending_checksum")
     [[ "$upstream" == "$expected" ]] || {
@@ -388,11 +388,17 @@ expect_production_lint_failure empty-egress --set-json 'workerAllowedEgressCidrs
   --values infra/helm/wasalx/ci/managed-waha-values.yaml
 "$HELM" template wasalx infra/helm/wasalx --set observability.prometheusRule.enabled=true > "$TOOLS_DIR/rendered.yaml"
 ruby -e '
+require "uri"
 require "yaml"
 runbook = "docs/runbooks/alert-response.md"
 headings = File.read(runbook).scan(/^## ([a-zA-Z0-9 -]+)\r?$/).flatten.map { |title| title.downcase.tr(" ", "-") }.tally
-default_url = "https://github.com/WasalX/wasalx-platform/blob/main/#{runbook}"
-production_url = YAML.load_file(ARGV[3]).fetch("observability").fetch("prometheusRule").fetch("runbookBaseUrl").delete_suffix("/")
+default_url, production_url = ARGV.drop(3).map do |values|
+  YAML.load_file(values).fetch("observability").fetch("prometheusRule").fetch("runbookBaseUrl").delete_suffix("/")
+end
+page = URI(default_url)
+unless page.is_a?(URI::HTTPS) && page.host && page.path.end_with?("/blob/main/#{runbook}") && !page.query && !page.fragment
+  abort "Default alert runbook URL must point to the published runbook page"
+end
 rule_sets = { "Compose" => [YAML.load_file("infra/docker/full/prometheus/alerts.yaml"), default_url] }
 [
   ["Helm default", ARGV[0], "PrometheusRule", "wasalx-pilot-observability", default_url],
@@ -419,7 +425,7 @@ rule_sets.each do |label, (rules, expected_url)|
 end
 abort "Every distinct alert must have its own runbook anchor" unless anchors.values.uniq.size == anchors.size
 puts "Verified runbook anchors for #{anchors.size} alerts across #{rule_sets.keys.join(", ")}"
-' "$TOOLS_DIR/rendered.yaml" "$TOOLS_DIR/rendered-production.yaml" "$TOOLS_DIR/rendered-assisted-alpha.yaml" "$PRODUCTION_VALUES_FILE"
+' "$TOOLS_DIR/rendered.yaml" "$TOOLS_DIR/rendered-production.yaml" "$TOOLS_DIR/rendered-assisted-alpha.yaml" infra/helm/wasalx/values.yaml "$PRODUCTION_VALUES_FILE"
 ruby -e '
 require "yaml"
 require "uri"
