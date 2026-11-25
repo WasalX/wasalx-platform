@@ -128,7 +128,7 @@ jobs:
           changed=$(git -c core.quotePath=true diff --name-only --no-ext-diff --no-renames \
             "$PUBLICATION_COMMIT" HEAD -- services/control-api/migrations/)
           if [[ -n "$changed" ]]; then
-            printf 'Installer rehearsal skipped: PR changes migrations; main publication cannot represent them\n\n```\n%s\n```\n' \
+            printf "Installer rehearsal skipped: PR changes migrations; main publication cannot represent them\n\n\`\`\`\n%s\n\`\`\`\n" \
               "$changed" | tee -a "$GITHUB_STEP_SUMMARY"
             echo 'skip=true' >> "$GITHUB_OUTPUT"
           fi
