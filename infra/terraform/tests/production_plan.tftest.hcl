@@ -162,7 +162,7 @@ run "production_plan" {
   }
 
   assert {
-    condition     = kubernetes_namespace.wasalx.metadata[0].name == "${var.namespace}-${var.environment}"
+    condition     = kubernetes_namespace.wasalx.metadata[0].name == "release-fixture-production"
     error_message = "The production namespace must be explicit and environment-scoped."
   }
 
@@ -233,7 +233,7 @@ run "production_secret_adapter" {
   }
   assert {
     condition = (
-      kubernetes_namespace.secret_store[0].metadata[0].name == "${kubernetes_namespace.wasalx.metadata[0].name}-secrets" &&
+      kubernetes_namespace.secret_store[0].metadata[0].name == "release-fixture-production-secrets" &&
       kubernetes_role_v1.secret_adapter[0].metadata[0].namespace == kubernetes_namespace.secret_store[0].metadata[0].name &&
       toset(kubernetes_role_v1.secret_adapter[0].rule[0].verbs) == toset(["get", "create", "update", "delete"]) &&
       toset(kubernetes_role_v1.secret_adapter[0].rule[0].resources) == toset(["secrets"]) &&
