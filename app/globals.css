@@ -249,6 +249,8 @@ th,td,td small,.status,.timeline :where(p,small),.audit-note small,.support-layo
 @media(max-width:760px){.settings-nav{scroll-padding-inline:8px}.settings-nav button{width:auto;flex:0 0 auto}}
 
 /* Account-link review keeps identity guidance and consent readable in both directions. */
+.team-members-panel > .panel-heading { flex-wrap: wrap; }
+.team-members-panel > .panel-heading > .button { flex: none; max-inline-size: 100%; margin-inline-start: auto; }
 .team-members-panel .team-invites{margin:var(--wx-space-3) 0 0;padding:0;list-style:none}.team-members-panel .team-invite{display:flex;align-items:flex-start;justify-content:space-between;gap:var(--wx-space-3);padding:var(--wx-space-3) var(--wx-space-4);border-top:1px solid var(--border)}.team-members-panel .team-invite>div{display:flex;min-width:0;flex-direction:column;gap:var(--wx-space-1);overflow-wrap:anywhere}.team-members-panel .team-invite b{font-size:var(--wx-font-size-1)}.team-members-panel .team-invite p{margin:0;color:var(--muted);font-size:var(--wx-font-size-1);line-height:1.5}.team-members-panel .team-invite>button{flex:0 0 auto}.workspace-access-state{display:flex;flex-direction:column;align-items:flex-start;gap:var(--wx-space-2);margin:var(--wx-space-4) var(--wx-space-4) var(--wx-space-4);color:var(--muted);font-size:var(--wx-font-size-1);line-height:1.5}.workspace-access-state p{margin:0}.workspace-access-dialog small{display:block;margin-top:var(--wx-space-1);color:var(--muted)}
 @media(max-width:560px){.team-members-panel .team-invite{flex-direction:column}}
 .workspace-access-dialog>p,.workspace-access-dialog>ul{margin:var(--wx-space-4) var(--wx-space-4) 0;line-height:1.5;overflow-wrap:anywhere}
