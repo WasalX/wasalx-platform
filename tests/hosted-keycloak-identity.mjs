@@ -2,12 +2,13 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { once } from "node:events";
-import { lstat, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { chromium } from "@playwright/test";
+import { cleanupKeycloakIdentity } from "./support/hosted-keycloak-cleanup.mjs";
 
 const execute = promisify(execFile);
 const image = process.argv[2];
@@ -16,7 +17,7 @@ const container = image.replace("wasalx/ci-keycloak:", "wasalx-ci-keycloak-");
 const callbackOrigin = "http://127.0.0.1:4173";
 const realmName = "signin-review";
 const realmPath = "infra/docker/full/keycloak/wasalx-realm.json";
-const scratch = await mkdtemp(join(tmpdir(), "wasalx-identity-e2e-"));
+let scratch;
 let callbacks = 0;
 const callback = createServer((request, response) => {
   if (request.method !== "GET" || !new URL(request.url, callbackOrigin).searchParams.has("code")) {
@@ -53,13 +54,11 @@ async function runCases(env) {
   assert.equal(execution.code, undefined);
 }
 
-let imageId;
 let containerId;
 let phase = "image identity";
 try {
-  const [id, commit, tree] = (await docker("image", "inspect", "--format",
+  const [imageId, commit, tree] = (await docker("image", "inspect", "--format",
     '{{.Id}} {{index .Config.Labels "org.opencontainers.image.revision"}} {{index .Config.Labels "io.wasalx.source.tree"}}', image)).split(" ");
-  imageId = id;
   assert.match(imageId, /^sha256:[0-9a-f]{64}$/u);
   assert.equal(commit, process.env.GITHUB_SHA);
   assert.equal(tree, (await execute("git", ["rev-parse", "HEAD^{tree}"])).stdout.trim());
@@ -67,6 +66,7 @@ try {
   console.log(JSON.stringify({ commit, tree, imageId, realm: realmName, realmBlob }));
 
   phase = "realm fixtures";
+  scratch = await mkdtemp(join(tmpdir(), "wasalx-identity-e2e-"));
   const realm = JSON.parse(await readFile(realmPath, "utf8"));
   const client = realm.clients.find(entry => entry.clientId === "wasalx-portal");
   assert(client);
@@ -164,24 +164,11 @@ try {
   }
   process.exitCode = 1;
 } finally {
-  if (callback.listening) {
-    callback.close();
-    await once(callback, "close");
-  }
-  await rm(scratch, { recursive: true, force: true });
-  try {
-    const containerFilter = ["ps", "-aq", "--filter", "name=^/" + container + "$"];
-    if (await docker(...containerFilter)) await docker("rm", "-f", container);
-    assert.equal(await docker(...containerFilter), "");
-    assert.equal(callback.listening, false);
-    await assert.rejects(lstat(scratch), { code: "ENOENT" });
-    if (imageId) {
-      await docker("image", "rm", image);
-      assert.equal(await docker("image", "ls", "-q", image), "");
-    }
-    console.log("Cleanup verified: Keycloak container, fixture directory, loopback callback, and image tag removed");
-  } catch {
-    console.error("Identity fixture cleanup failed");
+  const failures = await cleanupKeycloakIdentity({ docker, image, container, callback, scratch });
+  if (failures.length) {
+    console.error("Identity fixture cleanup failed: " + failures.join(", "));
     process.exitCode = 1;
+  } else {
+    console.log("Cleanup verified: Keycloak container, fixture directory, loopback callback, and image tag removed");
   }
 }

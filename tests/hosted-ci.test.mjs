@@ -14,6 +14,7 @@ import { unitAllowlist, unitFiles } from "../scripts/test-unit.mjs";
 import { reportTimingsWithQuarantine, validateQuarantine } from "../scripts/hosted-ci-timing-reporter.mjs";
 import { parsePostgresShardArgs, postgresScenarioGroups, verifyPostgresReports } from "../scripts/postgres-scenario-registry.mjs";
 import { discoverBrowserCases } from "../scripts/release/browser-shards.mjs";
+import { cleanupKeycloakIdentity } from "./support/hosted-keycloak-cleanup.mjs";
 
 const repository = fileURLToPath(new URL("../", import.meta.url));
 const read = file => readFile(join(repository, file), "utf8");
@@ -802,6 +803,40 @@ test("Hosted Keycloak identity job builds the project image and requires the iso
   assert(gate.needs.includes("keycloak-identity"));
   assert.equal(gate.steps[0].env.KEYCLOAK_IDENTITY, "${{ needs.keycloak-identity.result }}");
   assert.equal(gate.steps[0].env.KEYCLOAK_IDENTITY_NEEDED, "${{ needs.changes.outputs.keycloak-identity }}");
+});
+
+test("Hosted Keycloak cleanup verifies the prebuilt tag and attempts other resources after a failure", async () => {
+  const image = "wasalx/ci-keycloak:1-1";
+  const container = "wasalx-ci-keycloak-1-1";
+  let tagged = true;
+  let imageChecks = 0;
+  const docker = async (...args) => {
+    if (args[0] === "ps") {
+      assert.deepEqual(args, ["ps", "-aq", "--filter", "name=^/" + container + "$"]);
+      return "owned-container";
+    }
+    if (args[0] === "rm") {
+      assert.deepEqual(args, ["rm", "-f", container]);
+      throw new Error("Container removal failed");
+    }
+    if (args[1] === "ls") {
+      assert.deepEqual(args, ["image", "ls", "-q", image]);
+      imageChecks++;
+      return tagged ? "owned-image" : "";
+    }
+    assert.deepEqual(args, ["image", "rm", image]);
+    tagged = false;
+  };
+  const failures = await cleanupKeycloakIdentity({
+    docker, image, container, callback: { listening: false }, scratch: "owned-fixtures",
+    removeScratch: async () => { throw new Error("Fixture removal failed"); },
+  });
+  assert.deepEqual(failures, ["container", "fixtures"]);
+  assert.equal(tagged, false);
+  assert.equal(imageChecks, 2);
+  assert.deepEqual(await cleanupKeycloakIdentity({
+    docker: async () => "", image, container, callback: { listening: false },
+  }), []);
 });
 
 test("Hosted browser jobs retain Playwright diagnostics on failure or cancellation", async () => {

@@ -96,6 +96,7 @@ jobs:
           if git diff --quiet --no-ext-diff --no-renames HEAD^1 HEAD -- \
             Dockerfile.foundation-keycloak infra/docker/full/keycloak/ scripts/release/patch-keycloak-jackson.py \
             app/fonts/ public/ tests/e2e/keycloak-signin.spec.ts tests/hosted-keycloak-identity.mjs \
+            tests/support/hosted-keycloak-cleanup.mjs \
             playwright.identity.config.ts package.json pnpm-lock.yaml pnpm-workspace.yaml patches/ .npmrc \
             .dockerignore .github/actions/ci-pnpm/ .github/workflows/ci.yml; then
             needed=false
