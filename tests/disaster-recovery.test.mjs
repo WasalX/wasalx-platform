@@ -330,7 +330,12 @@ function dockerDrill(directory) {
           const owner = args.find(arg => arg.startsWith("wasalx.io/rehearsal-id=")).split("=")[1];
           const name = args[args.indexOf("--name") + 1];
           assert.equal(name, `wasalx-dr-${owner.replaceAll("-", "")}`);
-          containers.set(ownedContainer, { owner, name, purpose: "dr-rehearsal" });
+          const container = { owner, name, purpose: "dr-rehearsal" };
+          if (fixture.failure === "start-timeout") {
+            fixture.lateContainer = container;
+            return { status: null, error: new Error("Docker request timed out") };
+          }
+          containers.set(ownedContainer, container);
           return fixture.failure === "start" ? { status: 1 } : output(`${ownedContainer}\n`);
         }
         if (command === "container" && first === "ls") {
@@ -344,6 +349,7 @@ function dockerDrill(directory) {
         if (command === "rm") {
           assert.deepEqual(args.slice(2), ["rm", "--force", "--volumes", ownedContainer]);
           if (fixture.failure === "remove") return { status: 1 };
+          if (fixture.failure === "remove-still-present") return output(ownedContainer);
           removed.push(ownedContainer);
           assert.ok(containers.delete(ownedContainer));
           return output(ownedContainer);
@@ -572,6 +578,30 @@ test("failed cleanup suppresses evidence, and stale recovery cannot remove anoth
   await assert.rejects(stat(pending), { code: "ENOENT" });
   await assert.rejects(recover(secondDrill), /does not match the pending drill/u);
   await assert.rejects(stat(args.at(-1)), { code: "ENOENT" });
+});
+
+test("a timed-out Docker start stays pending until the late target is removed", async t => {
+  const directory = await mkdtemp(join(tmpdir(), "wasalx-dr-late-target-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const args = await directRestoreArgs(directory, bindDump(manifest()));
+  const fixture = dockerDrill(directory);
+  fixture.failure = "start-timeout";
+  await assert.rejects(runPostgresRestore(args, fixture.options), /Could not confirm removal/u);
+  const recover = () => runPostgresRestore(["--cleanup-interrupted", fixture.lateContainer.owner], fixture.options);
+  await assert.rejects(recover(), /Could not confirm removal/u);
+  await assert.rejects(runPostgresRestore(args, fixture.options), /requires interrupted-drill cleanup/u);
+  await assert.rejects(stat(args.at(-1)), { code: "ENOENT" });
+
+  fixture.containers.set(ownedContainer, fixture.lateContainer);
+  fixture.failure = "remove-still-present";
+  await assert.rejects(recover(), /Could not confirm removal/u);
+  assert.ok(fixture.containers.has(ownedContainer));
+  assert.ok((await readFile(join(directory, "pending-drill"), "utf8")).endsWith(` ${ownedContainer}\n`));
+  fixture.failure = undefined;
+  await recover();
+  assert.deepEqual(fixture.removed, [ownedContainer]);
+  assert.deepEqual([...fixture.containers.keys()], [otherContainer]);
+  await assert.rejects(stat(join(directory, "pending-drill")), { code: "ENOENT" });
 });
 
 test("the quarterly systemd timer activates the one-shot restore service", async () => {

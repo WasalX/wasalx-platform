@@ -52,4 +52,4 @@ An interrupted drill or failed cleanup leaves a pending ownership record in the 
 node scripts/dr/rehearse-postgres-restore.mjs --cleanup-interrupted "$rehearsal_id"
 ```
 
-Recovery uses the same lock and refuses a stale UUID, a malformed record, or ambiguous container ownership. Escalate those failures to Delivery. Keep archive contents, identities, host paths and raw logs in private custody.
+Recovery uses the same lock and refuses a stale UUID, a malformed record, or ambiguous container ownership. If Docker creation was interrupted before the container ID was recorded, an empty inventory leaves the drill pending because the engine may still register the target. Recover the scoped target when it appears. If creation cannot be resolved, escalate to Delivery and Servers with the record intact. Keep archive contents, identities, host paths and raw logs in private custody.

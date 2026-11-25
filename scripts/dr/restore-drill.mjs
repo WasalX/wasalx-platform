@@ -32,12 +32,14 @@ async function withLock(action, {
   const fd = lock(join(state, "drill.lock"));
   try {
     const pending = join(state, "pending-drill");
-    const docker = (args, { timeout, environment = process.env } = {}) => spawn(
-      "docker", ["--host", "unix:///run/docker.sock", ...args], {
+    const docker = (args, { timeout, environment = process.env } = {}) => {
+      const result = spawn("docker", ["--host", "unix:///run/docker.sock", ...args], {
         encoding: "utf8", timeout, maxBuffer: 2 * 1_024 * 1_024,
         env: { ...environment, DOCKER_CONTEXT: undefined, DOCKER_HOST: undefined },
         stdio: ["ignore", "pipe", "pipe", fd],
       });
+      return result.error ? { ...result, status: null } : result;
+    };
     return await action({ pending, cache, docker });
   } finally {
     closeSync(fd);
@@ -50,9 +52,10 @@ async function readPending(path) {
     return null;
   });
   if (value === null) return null;
-  const match = new RegExp(`^(${drillIdPattern})(?: ([0-9a-f]{64}))?\\n$`, "u").exec(value);
+  const match = new RegExp(`^(${drillIdPattern})(?: (creating|[0-9a-f]{64}))?\\n$`, "u").exec(value);
   if (!match) throw new Error("Restore drill ownership record is invalid; operator action is required");
-  return { rehearsalId: match[1], containerId: match[2] };
+  const creating = match[2] === "creating";
+  return { rehearsalId: match[1], creating, containerId: creating ? undefined : match[2] };
 }
 
 function drillResources(rehearsalId, { cache, docker }) {
@@ -65,7 +68,9 @@ function findOwnedContainer({ rehearsalId, name, docker }, expectedId) {
   function list(filter) {
     const result = docker(["container", "ls", "--all", "--no-trunc", "--filter", filter, "--format", ownershipFormat],
       { timeout: 30_000 });
-    if (result.status !== 0) throw new Error("Could not verify restore container ownership");
+    if (result.status !== 0 || typeof result.stdout !== "string") {
+      throw new Error("Could not verify restore container ownership");
+    }
     return result.stdout.trim();
   }
   const row = list(`label=${rehearsalLabel}=${rehearsalId}`) || (expectedId && list(`id=${expectedId}`));
@@ -81,9 +86,17 @@ function findOwnedContainer({ rehearsalId, name, docker }, expectedId) {
 async function cleanup(drill, pending, { verifyContainer, requireContainer = false, removeScratch }) {
   if (verifyContainer) {
     const id = findOwnedContainer(drill, drill.containerId);
-    if ((requireContainer && !id) ||
-        (id && drill.docker(["rm", "--force", "--volumes", id], { timeout: 60_000 }).status !== 0)) {
+    if (requireContainer && !id) {
       throw new Error("Could not confirm removal of the disposable restore target");
+    }
+    if (id) {
+      if (!drill.containerId) {
+        await writeFile(pending, `${drill.rehearsalId} ${id}\n`, { flush: true });
+      }
+      const removed = drill.docker(["rm", "--force", "--volumes", id], { timeout: 60_000 });
+      if (removed.status !== 0 || findOwnedContainer(drill, id)) {
+        throw new Error("Could not confirm removal of the disposable restore target");
+      }
     }
   }
   if (removeScratch) await rm(drill.directory, { recursive: true, force: true });
@@ -103,6 +116,7 @@ export function runRestoreDrill(operation, publish, options) {
       drill.scratchCreated = true;
     };
     drill.startContainer = async (args, environment) => {
+      await writeFile(pending, `${drill.rehearsalId} creating\n`, { flush: true });
       drill.attempted = true;
       const result = drill.docker(args, { timeout: 180_000, environment });
       const id = result.stdout?.trim();
@@ -134,6 +148,10 @@ export function recoverRestoreDrill(rehearsalId, options) {
     const previous = await readPending(context.pending);
     if (!previous || previous.rehearsalId !== rehearsalId) throw new Error("Interrupted drill ID does not match the pending drill");
     const drill = { ...drillResources(rehearsalId, context), containerId: previous.containerId };
-    await cleanup(drill, context.pending, { verifyContainer: true, removeScratch: true });
+    await cleanup(drill, context.pending, {
+      verifyContainer: previous.creating || Boolean(previous.containerId),
+      requireContainer: previous.creating,
+      removeScratch: true,
+    });
   }, options);
 }
