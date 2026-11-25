@@ -3,6 +3,7 @@ import { Queue, Worker } from "bullmq";
 import { Redis } from "ioredis";
 import { Pool } from "pg";
 import { ServiceAuthenticationError, signServiceJwt, verifyServiceJwt } from "../../../packages/core/src/service-auth.js";
+import { DIRECT_TICKET_READ_SCOPE } from "../../../packages/core/src/delivery.js";
 import { MediaUploadAdmission, MediaValidationError } from "../../../packages/core/src/media.js";
 import { validatedRedisUrl } from "../../../packages/core/src/redis-security.js";
 import { ConnectionOperationProcessor } from "./connection-operation-processor.js";
@@ -144,7 +145,9 @@ let routingReady = false;
 
 const deliveryWorker = new Worker<DrainJob>(
   "wasalx-tenant-drain",
-  (job) => runDrainJob(job, "delivery", undefined, (tenantId,sourceEventIds) => processor.drainTenant(tenantId,sourceEventIds)),
+  (job) => job.name === "direct-ticket-read"
+    ? runDrainJob(job, "delivery", DIRECT_TICKET_READ_SCOPE, (tenantId, _events, read) => processor.readDirectTicket(tenantId, read!))
+    : runDrainJob(job, "delivery", undefined, (tenantId, sourceEventIds) => processor.drainTenant(tenantId, sourceEventIds)),
   {
     connection: redis,
     concurrency: Number(process.env.WORKER_CONCURRENCY ?? 10),
@@ -368,8 +371,8 @@ function logError(event: string, error: Error) {
 async function runDrainJob<T>(
   job: { data: DrainJob },
   workType: "delivery" | "inbound" | "connection" | "privacy" | "routing",
-  scope: "inbox:drain" | "connection:drain" | "privacy:drain" | "routing:drain" | undefined,
-  operation: (tenantId: string,sourceEventIds?:string[]) => Promise<T>,
+  scope: "inbox:drain" | "connection:drain" | "privacy:drain" | "routing:drain" | typeof DIRECT_TICKET_READ_SCOPE | undefined,
+  operation: (tenantId: string, sourceEventIds?: string[], read?: DrainJob["directTicketRead"]) => Promise<T>,
 ) {
   return withSpan(`worker.${workType}.drain`, {
     carrier: job.data.telemetry,
@@ -388,7 +391,7 @@ async function runDrainJob<T>(
       recordAuthorizationAnomaly("service_api", "worker_job_rejected");
       throw error;
     }
-    const result = await operation(input.tenantId,input.metaTransitionEventIds);
+    const result = await operation(input.tenantId, input.metaTransitionEventIds, input.directTicketRead);
     recordMetric("wasalx_worker_jobs_total", 1, { work_type: workType, result: "succeeded" });
     return result;
   });

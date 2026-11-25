@@ -16,3 +16,13 @@ export function boundedAttempts(value: string | undefined, key: string, maximum 
 export function botHandoffMaxAttemptsFromEnvironment(env: Record<string, string | undefined>): number {
   return boundedAttempts(env.BOT_HANDOFF_MAX_ATTEMPTS, "BOT_HANDOFF_MAX_ATTEMPTS", MAX_BOT_HANDOFF_ATTEMPTS);
 }
+export type DirectTicketRead = {
+  instanceId: string;
+  actorId: string;
+  ticketId: string;
+  connectionId: string;
+  customerId: string;
+  openedAt: number;
+};
+
+export const DIRECT_TICKET_READ_SCOPE = "delivery:ticket-read";

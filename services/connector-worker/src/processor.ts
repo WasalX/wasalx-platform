@@ -6,7 +6,7 @@ import {assertMetaLifecycleAccess} from "../../../packages/core/src/meta-account
 import {assertMetaCredentialProof} from "../../../packages/core/src/meta-account-relation.js";
 import {MetaDirectEffectNotAttempted,assertMetaDirectAccountProof,MetaDirectIdentityError,parseMetaDirectRecipientSnapshot} from "../../../packages/core/src/meta-direct-identity.js";
 import { renderNumberedChoices, renderOutboundText } from "../../../packages/core/src/outbound-text.js";
-import type { MessagingProviderAdapter } from "../../../packages/connectors/src/types.js";
+import type { AgentReplySignalInput, MessagingProviderAdapter } from "../../../packages/connectors/src/types.js";
 import { Buffer } from "node:buffer";
 import timers from "node:timers/promises";
 import { MetaGroupsAdapter, assertMetaTestOutboundAllowed } from "../../../packages/connectors/src/meta.js";
@@ -19,6 +19,7 @@ import {
   boundedAttempts,
   DEFAULT_MAX_ATTEMPTS,
   MAX_BOT_HANDOFF_ATTEMPTS,
+  type DirectTicketRead,
 } from "../../../packages/core/src/delivery.js";
 import { advanceBotFlow, parseBotFlow } from "../../../packages/core/src/bot-flow.js";
 import { ZammadClient, ZammadError } from "../../../packages/zammad/src/client.js";
@@ -276,6 +277,42 @@ export class DeliveryProcessor{
     recordDeliveryState(job.provider,result.state);
     return true;
   }
+  async readDirectTicket(tenantId: string, read: DirectTicketRead) {
+    const logContext = { tenantId, ticketId: read.ticketId, actorId: read.actorId };
+    const appId = this.providerConfig.metaAppId ?? "";
+    let provider: "waha" | "meta" | undefined;
+    try {
+      const source = await this.repository.admitDirectTicketRead(tenantId, read, appId);
+      if (!source) return;
+      provider = source.provider === "META" ? "meta" : "waha";
+      const reference = source.connectionSecretReference;
+      const secret = await this.secrets.resolve(reference, provider === "meta"
+        ? { kind: "meta-connection", tenantId, connectionId: read.connectionId }
+        : { kind: "exact", expectedReference: reference });
+      let adapter: MessagingProviderAdapter;
+      if (source.provider === "META") {
+        if (!secret.accessToken) throw new Error("Meta access token is missing");
+        const accessToken = secret.accessToken;
+        assertMetaCredentialProof(source.proof, { appId, accessToken });
+        adapter = new MetaGroupsAdapter({ accessToken, graphVersion: this.providerConfig.metaGraphVersion,
+          phoneNumberIdFor: () => source.sessionId });
+      } else {
+        if (!secret.apiKey || !source.providerBaseUrl) throw new Error("WAHA read transport is unavailable");
+        adapter = new WahaAdapter({ baseUrl: source.providerBaseUrl, apiKey: secret.apiKey, sessionFor: () => source.sessionId });
+      }
+      const expected = JSON.stringify(source);
+      await this.runAgentSignals(adapter, {
+        connectionId: read.connectionId, groupId: source.groupId, inboundMessageId: source.messageId,
+        metaDirectRecipient: source.recipient,
+      }, logContext, async () => {
+        const current = await this.repository.admitDirectTicketRead(tenantId, read, appId, source.id);
+        return current && JSON.stringify(current) === expected ? () => false : undefined;
+      }, true);
+    } catch (error) {
+      this.recordSignalFailure(provider, "read", logContext, error);
+    }
+  }
+
   private async signalAgentReply(
     job: DeliveryJob,
     leaseId: string,
@@ -283,54 +320,66 @@ export class DeliveryProcessor{
     input: Parameters<MessagingProviderAdapter["send"]>[0],
     replySending: () => boolean,
   ) {
-    const { traceparent, requestId } = currentTraceCarrier();
-    const record = (signal: string, result: string) =>
-      recordMetric("wasalx_agent_reply_signal_total", 1, { provider: job.provider, operation: signal, result });
-    const recordFailure = (signal: string, error: unknown) => {
-      record(signal, "failed");
-      recordStructuredLog("warn", "delivery.agent_reply_signal_failed", {
-        request_id: traceparent?.split("-")[1] ?? requestId,
-        tenant_id: job.tenantId, delivery_id: job.id, provider: job.provider,
-        signal, error_code: telemetryErrorCode(error),
-      });
-    };
+    const logContext = { tenantId: job.tenantId, deliveryId: job.id };
     try {
       const source = await this.repository.admitAgentReplySignal(job, leaseId);
       if (!source) return;
-      const operations = adapter.agentReplySignals?.({
+      await this.runAgentSignals(adapter, {
         connectionId: input.connectionId,
         groupId: input.groupId,
         metaDirectRecipient: input.metaDirectRecipient,
         inboundMessageId: source.messageId,
+      }, logContext, async () => {
+        const current = await this.repository.admitAgentReplySignal(job, leaseId, source.id);
+        return current ? () => current.canType && replySending() : undefined;
       });
-      if (!operations?.length) {
-        record("read-and-typing", "unsupported");
-        return;
-      }
-      await Promise.all(operations.map(async operation => {
-        for (let attempt = 1; attempt <= AGENT_REPLY_SIGNAL_MAX_ATTEMPTS; attempt++) {
-          try {
-            const current = await this.repository.admitAgentReplySignal(job, leaseId, source.id);
-            if (!current) {
-              record(operation.kind, "no-longer-eligible");
-              return;
-            }
-            const result = await operation.send(AbortSignal.timeout(AGENT_REPLY_SIGNAL_TIMEOUT_MS),
-              () => current.canType && replySending());
-            record(operation.kind, result);
-            return;
-          } catch (error) {
-            if (!(error instanceof ProviderError && error.retryable) || attempt === AGENT_REPLY_SIGNAL_MAX_ATTEMPTS) {
-              recordFailure(operation.kind, error);
-              return;
-            }
-            await timers.setTimeout(backoffMs(attempt));
-          }
-        }
-      }));
     } catch (error) {
-      recordFailure("read-and-typing", error);
+      this.recordSignalFailure(job.provider, "read-and-typing", logContext, error);
     }
+  }
+
+  private async runAgentSignals(adapter: MessagingProviderAdapter, input: AgentReplySignalInput,
+    logContext: { tenantId: string; deliveryId?: string; ticketId?: string; actorId?: string },
+    admit: () => Promise<(() => boolean) | undefined>, readOnly = false) {
+    const record = (signal: string, result: string) =>
+      recordMetric("wasalx_agent_reply_signal_total", 1, { provider: adapter.provider, operation: signal, result });
+    const operations = adapter.agentReplySignals?.(input).filter(operation => !readOnly || operation.kind !== "typing");
+    if (!operations?.length) {
+      record(readOnly ? "read" : "read-and-typing", "unsupported");
+      return;
+    }
+    await Promise.all(operations.map(async operation => {
+      for (let attempt = 1; attempt <= AGENT_REPLY_SIGNAL_MAX_ATTEMPTS; attempt++) {
+        try {
+          const canType = await admit();
+          if (!canType) {
+            record(operation.kind, "no-longer-eligible");
+            return;
+          }
+          const result = await operation.send(AbortSignal.timeout(AGENT_REPLY_SIGNAL_TIMEOUT_MS), canType);
+          record(operation.kind, result);
+          return;
+        } catch (error) {
+          const retryable = error instanceof ProviderError && error.retryable ||
+            error instanceof MetaDirectEffectNotAttempted && error.reason === "BUSY";
+          if (!retryable || attempt === AGENT_REPLY_SIGNAL_MAX_ATTEMPTS) {
+            this.recordSignalFailure(adapter.provider, operation.kind, logContext, error);
+            return;
+          }
+          await timers.setTimeout(backoffMs(attempt));
+        }
+      }
+    }));
+  }
+
+  private recordSignalFailure(provider: "waha" | "meta" | undefined, signal: string,
+    context: { tenantId: string; deliveryId?: string; ticketId?: string; actorId?: string }, error: unknown) {
+    const { traceparent, requestId } = currentTraceCarrier();
+    recordMetric("wasalx_agent_reply_signal_total", 1, { provider: provider ?? "unknown", operation: signal, result: "failed" });
+    recordStructuredLog("warn", "delivery.agent_reply_signal_failed", {
+      request_id: traceparent?.split("-")[1] ?? requestId, tenant_id: context.tenantId, delivery_id: context.deliveryId,
+      ticket_id: context.ticketId, actor_id: context.actorId, provider, signal, error_code: telemetryErrorCode(error),
+    });
   }
   private async runDirectCustomerClose(job:DirectCustomerCloseJob,leaseId:string){
     let attempted=job.state==='OUTCOME_UNKNOWN';let context:Awaited<ReturnType<ZammadClient['readDirectCustomerCloseContext']>>|undefined;

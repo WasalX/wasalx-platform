@@ -1,4 +1,6 @@
 import { recordWhatsAppMarketingRejection, whatsappMarketingOptedOut } from "./whatsapp-marketing-preferences.js";
+import type { DirectTicketRead } from "../../../packages/core/src/delivery.js";
+import type { MetaDirectRecipient } from "../../../packages/core/src/meta-direct-identity.js";
 import {reconsiderMetaIdentityTransitions} from "./meta-direct-identity.js";
 import { metaTestRecipientAdmission, resolveMetaTestRecipientLink } from "../../../packages/core/src/meta-test-recipient-link.js";
 import { parseWahaTestRecipientAllowlist } from "../../../packages/core/src/waha-test-recipient-scope.js";
@@ -26,6 +28,60 @@ type StatusRow={id:string;delivery_id:string;tenant_id:string;zammad_ticket_id:s
 type ConversationStateRow={keep_open_enabled:boolean;id:string;tenant_id:string;conversation_id:string;zammad_ticket_id:string;conversation_state:ConversationStateJob["state"];conversation_fencing_token:string|number;attempts:number;zammad_base_url:string;zammad_secret_reference:string};
 type BotActionRow={id:string;tenant_id:string;origin:"DIRECT_FLOW"|"QUALIFICATION";conversation_id:string|null;source_event_id:string|null;action_node_id:string;request_input:Record<string,string>;on_success_node_id:string;on_failure_node_id:string;attempts:number;fencing_token:string|number;execution_result_state:"SUCCEEDED"|"FAILED_TERMINAL"|null;execution_result_variables:Record<string,string>|null;execution_result_safe_error:string|null;action_key:string;kind:BotActionJob["kind"];endpoint_url:string;http_method:BotActionJob["httpMethod"];auth_scheme:BotActionJob["authScheme"];secret_reference:string|null;credential_available:boolean;headers:Record<string,string>;response_mapping:Record<string,string>;timeout_ms:number;max_response_bytes:number;flow_definition:unknown|null;conversation_variables:Record<string,string>|null;zammad_ticket_id:string|null;zammad_base_url:string|null;zammad_secret_reference:string|null;assignment_group_id:string|null;client_routing_version_id:string|null;client_route_status:string|null;client_id:string|null;client_route_matched_by:string|null;routing_definition:unknown|null};
 type BotHandoffRow={id:string;tenant_id:string;conversation_id:string;handoff_node_id:string;zammad_group_id:string;zammad_owner_id:string|null;priority:BotHandoffJob["priority"];attempts:number;fencing_token:string|number;zammad_ticket_id:string;zammad_base_url:string;zammad_secret_reference:string};
+
+type AgentInboundSignal = { id: string; messageId: string; canType: boolean };
+type TicketReadContext = AgentInboundSignal & {
+  eventId: string; conversationId: string; groupId: string; provider: "WAHA" | "META";
+  sessionId: string; providerSessionId: string; connectionSecretReference: string;
+  providerBaseUrl: string | null; wahaFence: string | null; proof: unknown;
+  metaPhone: string | null; metaBsuid: string | null;
+};
+
+const latestAgentInboundSql = `latest AS MATERIALIZED (
+  SELECT message.id, message.external_message_id AS "messageId", target."canType",
+    event.id AS "eventId",
+    CASE WHEN event.payload#>>'{entry,0,changes,0,value,messages,0,id}'=message.external_message_id
+      THEN event.payload#>>'{entry,0,changes,0,value,messages,0,from}' END AS "metaPhone",
+    CASE WHEN event.payload#>>'{entry,0,changes,0,value,messages,0,id}'=message.external_message_id
+      THEN event.payload#>>'{entry,0,changes,0,value,messages,0,from_user_id}' END AS "metaBsuid"
+  FROM signal_target target
+  JOIN message_links link ON link.tenant_id=target.tenant_id AND link.connection_id=target.connection_id
+    AND link.zammad_ticket_id=target.ticket_id AND link.direction='INBOUND'
+  JOIN normalized_messages message ON message.tenant_id=link.tenant_id AND message.connection_id=link.connection_id
+    AND message.external_message_id=link.external_message_id AND message.external_group_id=target.chat_id
+  JOIN event_inbox event ON event.tenant_id=message.tenant_id AND event.connection_id=message.connection_id
+    AND event.id=message.event_inbox_id AND event.provider=target.provider
+  WHERE NOT EXISTS (SELECT 1 FROM connection_operations op WHERE op.tenant_id=target.tenant_id
+    AND op.connection_id=target.connection_id AND op.operation_type IN ('PAUSE','DISCONNECT')
+    AND op.state IN ('STAGED','QUEUED','RUNNING','FAILED_RETRYABLE'))
+    AND message.created_at<=target.cutoff AND link.created_at<=target.cutoff
+    AND NOT message.from_me AND NOT message.from_api AND message.provider_metadata->'direct'='true'::jsonb
+    AND message.provider_metadata->>'input_type'<>'reaction' AND event.status='PROCESSED'
+    AND (target.provider='WAHA' OR event.meta_direct_asset=target.asset)
+    AND (target.waha_session IS NULL OR (event.payload->>'session'=target.waha_session AND event.received_at>=target.session_created_at))
+  ORDER BY message.provider_timestamp DESC, message.created_at DESC, message.id DESC LIMIT 1
+), eligible AS (
+  SELECT latest.* FROM latest
+  WHERE NOT EXISTS (SELECT 1 FROM privacy_job_targets target WHERE target.tenant_id=$1
+    AND target.target_type='NORMALIZED_MESSAGE' AND target.target_id=latest.id::text
+    AND target.state IN ('PENDING','EXTERNAL_COMPLETE','COMPLETE'))
+)`;
+
+async function admitSignalTenant(client: PoolClient, tenantId: string) {
+  const privacy = await client.query<{ allowed: boolean }>(
+    "SELECT pg_try_advisory_xact_lock_shared(hashtextextended('privacy:'||$1::text,0)) AS allowed", [tenantId],
+  );
+  if (privacy.rows[0]?.allowed !== true) return false;
+  return (await client.query<{ active: boolean }>(
+    "SELECT app.lock_current_active_tenant_for_event_admission() AS active",
+  )).rows[0]?.active === true;
+}
+
+async function claimAgentInbound(client: PoolClient, tenantId: string, sourceId: string) {
+  const claimed = await client.query(`UPDATE normalized_messages SET agent_reply_signal_claimed_at=clock_timestamp()
+    WHERE tenant_id=$1 AND id=$2 AND agent_reply_signal_claimed_at IS NULL RETURNING id`, [tenantId, sourceId]);
+  return claimed.rowCount === 1;
+}
 
 export class OutboxRepository{
   private readonly pool:Pool;
@@ -399,53 +455,30 @@ export class OutboxRepository{
   }
   async admitAgentReplySignal(job: DeliveryJob, leaseId: string, sourceId?: string) {
     return this.tenant(job.tenantId, async client => {
-      const privacy = await client.query<{ allowed: boolean }>(
-        "SELECT pg_try_advisory_xact_lock_shared(hashtextextended('privacy:'||$1::text,0)) AS allowed", [job.tenantId],
-      );
-      if (privacy.rows[0]?.allowed !== true) return;
-      if ((await client.query<{ active: boolean }>(
-        "SELECT app.lock_current_active_tenant_for_event_admission() AS active",
-      )).rows[0]?.active !== true) return;
-      const source = (await client.query<{ id: string; messageId: string; canType: boolean }>(`WITH latest AS MATERIALIZED (
-        SELECT message.id, message.external_message_id AS "messageId", delivery.state='SENDING' AS "canType"
+      if (!await admitSignalTenant(client, job.tenantId)) return;
+      const source = (await client.query<AgentInboundSignal>(`WITH signal_target AS (
+        SELECT delivery.tenant_id, delivery.connection_id, delivery.zammad_ticket_id AS ticket_id,
+          delivery.external_chat_id AS chat_id, delivery.created_at AS cutoff, connection.provider,
+          $5::jsonb AS asset, delivery.state='SENDING' AS "canType",
+          NULL::text AS waha_session, NULL::timestamptz AS session_created_at
         FROM delivery_outbox delivery
         JOIN connections connection ON connection.tenant_id=delivery.tenant_id AND connection.id=delivery.connection_id
-        JOIN message_links link ON link.tenant_id=delivery.tenant_id AND link.connection_id=delivery.connection_id
-          AND link.zammad_ticket_id=delivery.zammad_ticket_id AND link.direction='INBOUND'
-        JOIN normalized_messages message ON message.tenant_id=link.tenant_id AND message.connection_id=link.connection_id
-          AND message.external_message_id=link.external_message_id AND message.external_group_id=delivery.external_chat_id
-        JOIN event_inbox event ON event.tenant_id=message.tenant_id AND event.id=message.event_inbox_id
         WHERE delivery.tenant_id=$1 AND delivery.id=$2 AND delivery.attempts=$4
           AND delivery.direct_origin='HUMAN' AND delivery.delivery_origin='TICKET' AND delivery.batch_sequence=0
           AND ((delivery.state='SENDING' AND delivery.lease_id=$3 AND delivery.lease_expires_at>clock_timestamp())
             OR delivery.state IN ('SENT','DELIVERED','READ'))
           AND delivery.content_redacted_at IS NULL AND NOT app.delivery_has_active_privacy_target(delivery.id)
           AND connection.state='WORKING'
-          AND NOT EXISTS (SELECT 1 FROM connection_operations op WHERE op.tenant_id=delivery.tenant_id
-            AND op.connection_id=delivery.connection_id AND op.operation_type IN ('PAUSE','DISCONNECT')
-            AND op.state IN ('STAGED','QUEUED','RUNNING','FAILED_RETRYABLE'))
-          AND message.created_at<=delivery.created_at AND link.created_at<=delivery.created_at
-          AND NOT message.from_me AND NOT message.from_api AND message.provider_metadata->'direct'='true'::jsonb
-          AND message.provider_metadata->>'input_type'<>'reaction' AND event.status='PROCESSED'
-          AND (connection.provider='WAHA' OR event.meta_direct_asset=$5::jsonb)
-        ORDER BY message.provider_timestamp DESC, message.created_at DESC, message.id DESC LIMIT 1
-      ), eligible AS (
-        SELECT latest.* FROM latest
-        WHERE NOT EXISTS (SELECT 1 FROM privacy_job_targets target WHERE target.tenant_id=$1
-          AND target.target_type='NORMALIZED_MESSAGE' AND target.target_id=latest.id::text
-          AND target.state IN ('PENDING','EXTERNAL_COMPLETE','COMPLETE'))
-      )
-      ${sourceId
-        ? 'SELECT id, "messageId", "canType" FROM eligible WHERE id=$6'
-        : `UPDATE normalized_messages message SET agent_reply_signal_claimed_at=clock_timestamp()
-            FROM eligible WHERE message.tenant_id=$1 AND message.id=eligible.id AND message.agent_reply_signal_claimed_at IS NULL
-            RETURNING eligible.id, eligible."messageId", eligible."canType"`}`,
+      ), ${latestAgentInboundSql}
+      SELECT id, "messageId", "canType" FROM eligible`,
       [job.tenantId, job.id, leaseId, job.attempts, job.metaCredentialContext ? JSON.stringify({
         providerSessionId: job.metaCredentialContext.providerSessionId,
         phoneNumberId: job.metaCredentialContext.phoneNumberId,
         wabaId: job.metaCredentialContext.wabaId,
-      }) : null, ...(sourceId ? [sourceId] : [])])).rows[0];
-      if (!source || !sourceId) return source;
+      }) : null])).rows[0];
+      if (!source) return;
+      if (!sourceId) return await claimAgentInbound(client, job.tenantId, source.id) ? source : undefined;
+      if (source.id !== sourceId) return;
       if (job.provider === "meta") return await this.metaDeliveryContextCurrent(client, job, true, true) ? source : undefined;
       const assignment = await client.query(`SELECT 1 FROM provider_sessions session
         JOIN LATERAL app.current_waha_session_runtime(session.id) runtime ON true
@@ -464,6 +497,69 @@ export class OutboxRepository{
       throw error;
     });
   }
+  async admitDirectTicketRead(tenantId: string, read: DirectTicketRead, appId: string, sourceId?: string) {
+    return this.tenant(tenantId, async client => {
+      if (!await admitSignalTenant(client, tenantId)) return;
+      const source = (await client.query<TicketReadContext>(`WITH conversation_target AS MATERIALIZED (
+        SELECT conversation.tenant_id,conversation.id,conversation.connection_id,conversation.zammad_ticket_id,
+          conversation.external_chat_id,conversation.zammad_customer_id
+        FROM bot_conversations conversation
+        WHERE conversation.tenant_id=$1 AND conversation.zammad_ticket_id=$2 AND conversation.connection_id=$3
+          AND conversation.zammad_customer_id=$4
+        ORDER BY (conversation.state<>'RESOLVED') DESC, conversation.created_at DESC, conversation.id DESC LIMIT 1
+      ), signal_target AS MATERIALIZED (
+        SELECT conversation.tenant_id, conversation.id AS "conversationId", conversation.connection_id,
+          conversation.zammad_ticket_id AS ticket_id, conversation.external_chat_id AS chat_id,
+          to_timestamp($5::double precision/1000) AS cutoff, connection.provider, false AS "canType",
+          session.opaque_session_id AS "sessionId", session.id AS "providerSessionId",
+          CASE WHEN connection.provider='WAHA' THEN session.opaque_session_id END AS waha_session,
+          session.created_at AS session_created_at,
+          jsonb_build_object('providerSessionId',session.id::text,'phoneNumberId',session.opaque_session_id,
+            'wabaId',session.provider_state_data->>'wabaId') AS asset,
+          session.provider_state_data->'metaAccountProof' AS proof,
+          CASE WHEN connection.provider='WAHA' THEN runtime.secret_reference ELSE connection.secret_reference END AS "connectionSecretReference",
+          runtime.base_url AS "providerBaseUrl", session.assignment_fencing_token::text AS "wahaFence"
+        FROM conversation_target conversation
+        JOIN connections connection ON connection.tenant_id=conversation.tenant_id AND connection.id=conversation.connection_id
+        JOIN provider_sessions session ON session.tenant_id=connection.tenant_id AND session.connection_id=connection.id
+          AND session.ownership_state='ACTIVE' AND session.state='WORKING'
+        LEFT JOIN LATERAL app.current_waha_session_runtime(session.id) runtime
+          ON runtime.health_state='HEALTHY' AND runtime.lifecycle_state IN ('ACTIVE','DRAINING')
+          AND runtime.last_heartbeat_at>=now()-make_interval(secs=>runtime.heartbeat_ttl_seconds)
+          AND session.assignment_lease_expires_at>clock_timestamp()
+        WHERE connection.state='WORKING' AND (connection.provider='META' OR runtime.waha_worker_id IS NOT NULL)
+          AND EXISTS (SELECT 1 FROM zammad_instances instance
+            WHERE instance.tenant_id=conversation.tenant_id AND instance.id=$6 AND instance.state='WORKING')
+          AND NOT EXISTS (SELECT 1 FROM whatsapp_groups group_record WHERE group_record.tenant_id=conversation.tenant_id
+            AND group_record.connection_id=conversation.connection_id AND group_record.external_group_id=conversation.external_chat_id)
+          AND NOT EXISTS (SELECT 1 FROM privacy_jobs job WHERE job.tenant_id=conversation.tenant_id AND job.job_type='DELETE'
+            AND job.state IN ('QUEUED','RUNNING','FAILED_RETRYABLE'))
+          AND NOT EXISTS (SELECT 1 FROM privacy_job_targets target WHERE target.tenant_id=conversation.tenant_id
+            AND target.state IN ('PENDING','EXTERNAL_COMPLETE','COMPLETE')
+            AND ((target.target_type='ZAMMAD_TICKET' AND target.target_id=conversation.zammad_ticket_id)
+              OR (target.target_type='ZAMMAD_USER' AND target.target_id=conversation.zammad_customer_id::text)))
+          AND NOT app.has_applicable_privacy_hold('ZAMMAD_TICKET', conversation.zammad_ticket_id)
+          AND NOT app.has_applicable_privacy_hold('PARTICIPANT', conversation.external_chat_id)
+      ), ${latestAgentInboundSql}
+      SELECT eligible.*, target."conversationId", target.chat_id AS "groupId", target.provider, target."sessionId",
+        target."providerSessionId", target."connectionSecretReference", target."providerBaseUrl", target."wahaFence", target.proof
+      FROM eligible CROSS JOIN signal_target target WHERE (SELECT count(*) FROM signal_target)=1`,
+      [tenantId, read.ticketId, read.connectionId, read.customerId, read.openedAt, read.instanceId])).rows[0];
+      if (!source || (sourceId && source.id !== sourceId)) return;
+      let recipient: MetaDirectRecipient | undefined;
+      if (source.provider === "META") {
+        await assertMetaDirectEffectCurrent(client, { tenantId, appId, conversationId: source.conversationId,
+          connectionId: read.connectionId, ticketId: read.ticketId, sourceEventIds: [source.eventId] });
+        if (source.metaPhone) recipient = { kind: "PHONE", value: source.metaPhone };
+        else if (source.metaBsuid) recipient = { kind: "BSUID", value: source.metaBsuid };
+        else return;
+      }
+      if (!sourceId && !await claimAgentInbound(client, tenantId, source.id)) return;
+      const { metaPhone: _phone, metaBsuid: _bsuid, ...context } = source;
+      return { ...context, recipient };
+    });
+  }
+
   private async metaDeliveryContextCurrent(client:PoolClient,job:DeliveryJob,requireWorking=true,nonwaiting=false){
     const context=job.metaCredentialContext;
     if(!context)return false;

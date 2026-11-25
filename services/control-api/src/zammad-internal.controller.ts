@@ -170,6 +170,32 @@ export class ZammadInternalController{
       return emailRoutingAcknowledgementResult(receipt,false);
     });
   }
+  @Post("tickets/:ticketId/read-signal")
+  async readSignal(@Headers("authorization") authorization: string | undefined,
+    @Param("ticketId") ticketIdValue: string,
+    @Body() body: { connection_id?: string; group_id?: string; customer_id?: string; opened_at?: number },
+    @Req() request: ZammadServiceRequest) {
+    const claims = await this.claims(authorization, "zammad:ticket-read", request);
+    const groupId = String(positiveIdentifier(body?.group_id, "Native group ID"));
+    if (!claims.userId || !claims.groupIds.includes(groupId)) throw new UnauthorizedException("Native agent ticket access is required");
+    const ticketId = String(positiveIdentifier(ticketIdValue, "Ticket ID"));
+    const customerId = String(positiveIdentifier(body.customer_id, "Customer ID"));
+    const { connection_id: connectionId, opened_at: openedAt } = body;
+    const now = Date.now();
+    if (typeof connectionId !== "string" || !UUID.test(connectionId) || typeof openedAt !== "number" ||
+        !Number.isSafeInteger(openedAt) || openedAt < now - 120_000 || openedAt > now + 5_000) {
+      throw new BadRequestException("Direct ticket read context is invalid or expired");
+    }
+    const target = await this.database.rows<{ id: string }>(claims.tenantId, `SELECT id FROM bot_conversations
+      WHERE tenant_id=$1 AND connection_id=$2 AND zammad_ticket_id=$3 AND zammad_customer_id=$4 LIMIT 1`,
+    [claims.tenantId, connectionId, ticketId, customerId]);
+    if (!target[0]) throw new NotFoundException("Direct ticket was not found");
+    await this.drain.wakeDirectTicketRead(claims.tenantId, {
+      instanceId: claims.instanceId, actorId: claims.userId, ticketId, connectionId, customerId, openedAt,
+    });
+    return { queued: true };
+  }
+
   @Get("tickets/:ticketId/context")async ticketContext(@Headers("authorization")authorization:string|undefined,@Param("ticketId")ticketIdValue:string,@Req()request?:ZammadServiceRequest){
     const claims=await this.claims(authorization,"zammad:context",request);
     const ticketId=String(positiveIdentifier(ticketIdValue,"Ticket ID"));

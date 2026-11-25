@@ -40,6 +40,30 @@ async function serviceToken({ tenantId = tenantA, instanceId = instanceA, scope 
     .sign(new TextEncoder().encode(signingSecret));
 }
 
+test("direct-ticket read queues only a request-bound native agent's matching tenant and ticket", async t => {
+  t.mock.timers.enable({apis:["Date"],now:Date.parse("2026-11-25T15:00:00Z")});
+  const connectionId = "12000000-0000-4000-8000-000000000001";
+  const target = "/internal/v1/zammad/tickets/42/read-signal";
+  const body = { connection_id: connectionId, group_id: "4", customer_id: "31", opened_at: Date.now() };
+  const rawBody = Buffer.from(JSON.stringify(body));
+  const request = {method:"POST",url:target,rawBody};
+  const bound = {http_method:"POST",http_target:target,http_body_sha256:createHash("sha256").update(rawBody).digest("hex")};
+  const authorization = async overrides => `Bearer ${await serviceToken({scope:"zammad:ticket-read",
+    claims:{...bound,zammad_user_id:"17",zammad_group_ids:["4"]},...overrides})}`;
+  const queued = [];
+  const controller = new ZammadInternalController({
+    rows: async (tenant, sql, parameters) => sql.includes("zammad_instances") ? [{id:parameters[1]}]
+      : tenant === tenantA && parameters.slice(1).join() === [connectionId,"42","31"].join() ? [{id:"conversation"}] : [],
+  }, serviceAuth(), {wakeDirectTicketRead:async (...args)=>queued.push(args)});
+  await assert.rejects(controller.readSignal(await authorization({claims:bound}),"42",body,request),UnauthorizedException);
+  await assert.rejects(controller.readSignal(await authorization({claims:{...bound,zammad_user_id:"17",zammad_group_ids:["8"]}}),"42",body,request),UnauthorizedException);
+  await assert.rejects(controller.readSignal(await authorization({tenantId:tenantB,instanceId:instanceB,signingSecret:secretB}),"42",body,request),NotFoundException);
+  await assert.rejects(controller.readSignal(await authorization({}),"42",body,{...request,rawBody:Buffer.from("{}")}),UnauthorizedException);
+  assert.equal(queued.length,0);
+  assert.deepEqual(await controller.readSignal(await authorization({}),"42",body,request),{queued:true});
+  assert.deepEqual(queued,[[tenantA,{instanceId:instanceA,actorId:"17",ticketId:"42",connectionId,customerId:"31",openedAt:body.opened_at}]]);
+});
+
 test("Zammad agent assertions bind the exact request and carry a detached exact group set beyond 100 groups",async()=>{
   const groupIds=Array.from({length:101},(_,index)=>String(index+1));
   const groups=deflateSync(JSON.stringify(groupIds),{level:1}).toString("base64url");

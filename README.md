@@ -35,6 +35,10 @@ variable name in the error.
 
 ## Direct ticket replies
 
+Opening a direct ticket queues a read receipt for the latest eligible inbound
+message. The receipt shares the reply path's once-per-inbound claim and runs
+in the background without typing or provider-dependent rendering.
+
 The connector independently requests a read receipt for the latest eligible
 inbound message linked to the ticket when the reply was queued. It requests a
 typing indicator while the reply is still sending. Meta combines the signals

@@ -148,16 +148,20 @@ export async function verifyMetaPrimaryDelivery({admin,db,pool,controller,reques
     return operation(c);
    };
    const signalJob={...job,id:result.id,attempts:1,metaDirectRecipientSnapshot:result.meta_direct_recipient};
+   const read={instanceId:instance,actorId:'3',ticketId:ticket,customerId:String(customer),connectionId,
+    openedAt:new Date(result.created_at).getTime()+1000};
    assert.equal(await signalRepository.admitAgentReplySignal(signalJob,randomUUID()),undefined);
 
    await c.query('SAVEPOINT reply_signal_paused');
    await c.query("UPDATE connections SET state='PAUSED' WHERE tenant_id=$1 AND id=$2",[tenantId,connectionId]);
    assert.equal(await signalRepository.admitAgentReplySignal(signalJob,replyLease),undefined);
+   assert.equal(await signalRepository.admitDirectTicketRead(tenantId,read,appId),undefined);
    await c.query('ROLLBACK TO SAVEPOINT reply_signal_paused');
 
    await c.query('SAVEPOINT reply_signal_other_tenant');
    await c.query("SELECT set_config('app.tenant_id',$1,true)",[foreignTenant]);
    assert.equal(await signalRepository.admitAgentReplySignal({...signalJob,tenantId:foreignTenant},replyLease),undefined);
+   assert.equal(await signalRepository.admitDirectTicketRead(foreignTenant,read,appId),undefined);
    await c.query('ROLLBACK TO SAVEPOINT reply_signal_other_tenant');
 
    await c.query('SAVEPOINT reply_signal_privacy');
@@ -173,13 +177,24 @@ export async function verifyMetaPrimaryDelivery({admin,db,pool,controller,reques
     [privacyJobId,tenantId,connectionId,laterMessageId]);
    assert.equal(await signalRepository.admitAgentReplySignal(signalJob,replyLease),undefined,
     'A privacy target on the latest inbound prevents signaling an older inbound');
+   assert.equal(await signalRepository.admitDirectTicketRead(tenantId,read,appId),undefined);
    await c.query('ROLLBACK TO SAVEPOINT reply_signal_privacy');
+
+   await c.query('SAVEPOINT direct_open_wins');
+   const opened=await signalRepository.admitDirectTicketRead(tenantId,read,appId);
+   assert.equal(opened?.messageId,laterMessageId);
+   assert.equal(opened.canType,false);
+   assert.equal(await signalRepository.admitDirectTicketRead(tenantId,read,appId),undefined);
+   assert.equal(await signalRepository.admitAgentReplySignal(signalJob,replyLease),undefined);
+   assert.deepEqual(await signalRepository.admitDirectTicketRead(tenantId,read,appId,opened.id),opened);
+   await c.query('ROLLBACK TO SAVEPOINT direct_open_wins');
 
    const selected=await signalRepository.admitAgentReplySignal(signalJob,replyLease);
    assert.equal(selected?.messageId,laterMessageId);
    assert.equal(selected.canType,true);
    assert.deepEqual(await signalRepository.admitAgentReplySignal(signalJob,replyLease,selected.id),selected);
    assert.equal(await signalRepository.admitAgentReplySignal(signalJob,replyLease),undefined);
+   assert.equal(await signalRepository.admitDirectTicketRead(tenantId,read,appId),undefined);
    await c.query(`UPDATE delivery_outbox SET state='SENT',external_message_id='wamid.synthetic-reply',
      lease_id=NULL,lease_expires_at=NULL WHERE id=$1`,[result.id]);
    assert.deepEqual(await signalRepository.admitAgentReplySignal(signalJob,replyLease,selected.id),{...selected,canType:false});

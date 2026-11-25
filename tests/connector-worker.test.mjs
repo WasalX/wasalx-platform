@@ -207,6 +207,54 @@ test("when the reply completes first the worker only sends a read receipt", asyn
   await processor.drainTenant(agentReplyDelivery.tenantId);
   assert.deepEqual(requests, ["/api/sendText", "/api/sendSeen"]);
 });
+
+test("concurrent ticket opens and an overlapping reply dispatch only one standalone read", async t => {
+  const source = { ...agentReplyInbound, provider: "WAHA", groupId: agentReplyDelivery.groupId,
+    sessionId: "fixture", providerBaseUrl: "https://waha.example", connectionSecretReference: "secret://fixture" };
+  const read = { ticketId: "42", actorId: "17", connectionId: "c1" };
+  const requests = [], received = Promise.withResolvers(), finish = Promise.withResolvers();
+  let claimed = false;
+  const admit = sourceId => {
+    if (sourceId) return sourceId === source.id ? source : undefined;
+    if (claimed) return;
+    claimed = true;
+    return source;
+  };
+  t.mock.method(globalThis,"fetch",async url=>{
+    requests.push(url.pathname);
+    if(url.pathname==="/api/sendText")return Response.json({id:"synthetic-sent"});
+    received.resolve();
+    return finish.promise;
+  });
+  const processor = new DeliveryProcessor({
+    claimBotActions:async()=>[],claimDeliveries:async()=>[agentReplyDelivery],beginSend:async()=>true,
+    admitDirectTicketRead:async(_tenant,_read,_app,sourceId)=>admit(sourceId),
+    admitAgentReplySignal:async(_job,_lease,sourceId)=>admit(sourceId),
+    complete:async()=>{},claimStatuses:async()=>[],
+  },{resolve:async()=>({apiKey:"synthetic"})},{metaGraphVersion:"v24.0"});
+  const first = processor.readDirectTicket(agentReplyDelivery.tenantId,read);
+  await received.promise;
+  await Promise.all([processor.readDirectTicket(agentReplyDelivery.tenantId,read),processor.drainTenant(agentReplyDelivery.tenantId)]);
+  assert.deepEqual(requests,["/api/sendSeen","/api/sendText"]);
+  finish.resolve(new Response(null,{status:400}));
+  await first;
+  assert.deepEqual(requests,["/api/sendSeen","/api/sendText"]);
+});
+
+test("the delivery queue reads ticket-open identity only from a signed ticket-read assertion", async t => {
+  t.mock.timers.enable({apis:["Date"],now:Date.parse("2026-11-25T15:00:00Z")});
+  const tenantId = "10000000-0000-4000-8000-000000000001";
+  const read = { instanceId: "11000000-0000-4000-8000-000000000001", actorId: "17", ticketId: "42", customerId: "31",
+    connectionId: "12000000-0000-4000-8000-000000000001", openedAt: Date.now() };
+  const now = Math.floor(Date.now()/1000);
+  const scope = "delivery:ticket-read";
+  const token = await signServiceJwt({iss:"wasalx-control",aud:"wasalx-connector-worker",sub:"direct-ticket-read",
+    tenant_id:tenantId,instance_id:read.instanceId,scope,iat:now,exp:now+120,jti:"synthetic",direct_ticket_read:read},secret);
+  const input = {tenantId,token,directTicketRead:{...read,ticketId:"43"}};
+  assert.deepEqual((await verifyDrainJob(input,secret,scope)).directTicketRead,read);
+  await assert.rejects(verifyDrainJob(input,secret),ServiceAuthenticationError);
+  await assert.rejects(verifyDrainJob({...input,tenantId:read.instanceId},secret,scope),ServiceAuthenticationError);
+});
 test("tenant drain jobs require a signed, scoped, matching tenant context",async()=>{const now=Math.floor(Date.now()/1000);const token=await signServiceJwt({iss:"wasalx-control",aud:"wasalx-connector-worker",sub:"scheduler",tenant_id:"tenant-a",instance_id:"scheduler-1",scope:"delivery:drain",iat:now,exp:now+120,jti:crypto.randomUUID()},secret);assert.equal((await verifyDrainJob({tenantId:"tenant-a",token},secret)).tenantId,"tenant-a");await assert.rejects(()=>verifyDrainJob({tenantId:"tenant-b",token},secret),ServiceAuthenticationError);const inboxToken=await signServiceJwt({iss:"wasalx-control",aud:"wasalx-connector-worker",sub:"scheduler",tenant_id:"tenant-a",instance_id:"scheduler-1",scope:"inbox:drain",iat:now,exp:now+120,jti:crypto.randomUUID()},secret);assert.equal((await verifyDrainJob({tenantId:"tenant-a",token:inboxToken},secret,"inbox:drain")).tenantId,"tenant-a");await assert.rejects(()=>verifyDrainJob({tenantId:"tenant-a",token:inboxToken},secret),ServiceAuthenticationError)});
 
 test("delivery completion and Zammad status are independent durable stages",async()=>{const delivery={id:"d1",tenantId:"tenant-a",connectionId:"c1",groupBindingId:"b1",groupId:"g1",ticketId:"42",articleId:"9",text:"Resolved",contentType:"text/plain",idempotencyKey:"idem-1",attempts:1,provider:"waha",...wahaAssignment,sessionId:"s1",connectionSecretReference:"secret://connection",zammadBaseUrl:"https://zammad.example",zammadSecretReference:"secret://zammad"};const status={id:"s1",deliveryId:"d1",tenantId:"tenant-a",ticketId:"42",state:"SENT",externalMessageId:"wamid.1",attempts:1,zammadBaseUrl:"https://zammad.example",zammadSecretReference:"secret://zammad"};const calls=[];const repository={claimBotActions:async()=>[],claimDeliveries:async()=>[delivery],beginSend:async()=>{calls.push("delivery-begin")},complete:async()=>{calls.push("delivery-complete")},fail:async()=>{},outcomeUnknown:async()=>{},claimStatuses:async()=>[status],completeStatus:async()=>{calls.push("status-complete")},retryStatus:async()=>{},failStatus:async()=>{}};const originalFetch=globalThis.fetch;globalThis.fetch=async(input)=>{const url=String(input);if(url.includes("sendText"))return new Response(JSON.stringify({id:"wamid.1"}),{status:200});if(url.includes("/api/v1/tickets/42"))return new Response(JSON.stringify({id:42}),{status:200});throw new Error(`unexpected ${url}`)};try{const processor=new DeliveryProcessor(repository,{resolve:async reference=>reference.endsWith("connection")?{apiKey:"key"}:{token:"token"}},{wahaBaseUrl:"https://waha.example",metaGraphVersion:"v24.0"});assert.deepEqual(await processor.drainTenant("tenant-a"),{actions:0,deliveries:1,statuses:1});assert.deepEqual(calls,["delivery-begin","delivery-complete","status-complete"])}finally{globalThis.fetch=originalFetch}});
