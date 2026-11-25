@@ -2,8 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { formatNumber, formatPastRelativeTime } from "../lib/i18n/format";
-import { operatorFailureMessage, createLatestRequestFence, operatorResponseFailure } from "../lib/operator-ui";
-import type { UiErrorCode } from "../lib/ui-error";
+import { operatorFailure, operatorFailureMessage, createLatestRequestFence, operatorResponseFailure, type OperatorFailure } from "../lib/operator-ui";
 import { useI18n, useRelativeClock } from "./I18nProvider";
 import { ModalDialog } from "./ModalDialog";
 import { WideTable } from "./tenant-ui";
@@ -27,7 +26,6 @@ type CaseRow = {
   detached_at?: string | null;
   zammad_agent_available?: boolean;
 };
-type MutationError = { message: string; code: UiErrorCode | null };
 
 export function CaseLifecycle({
   canDetach,
@@ -53,7 +51,7 @@ export function CaseLifecycle({
   const [state, setState] = useState<"ALL" | CaseRow["state"]>("ALL");
   const [selected, setSelected] = useState<CaseRow | null>(null);
   const [operationKey, setOperationKey] = useState<string | null>(null);
-  const [mutationError, setMutationError] = useState<MutationError | null>(null);
+  const [mutationError, setMutationError] = useState<OperatorFailure | null>(null);
   const [pending, setPending] = useState(false);
   const pendingRef = useRef(false);
   const previousTargetTicket = useRef(normalizedTargetTicket);
@@ -154,7 +152,7 @@ export function CaseLifecycle({
       closeDetachAfterSuccess();
       await load(true);
     } catch (detachError) {
-      setMutationError(operatorMutationError(detachError, t("cases.errors.detach")));
+      setMutationError(operatorFailure(detachError, t("cases.errors.detach"), locale));
     } finally {
       pendingRef.current = false;
       setPending(false);
@@ -242,13 +240,3 @@ function relativeTime(value: string, locale: "en" | "ar", renderedAt: number, t:
 }
 
 function isolate(value: string) { return `\u2068${value}\u2069`; }
-
-function operatorMutationError(error: unknown, fallback: string): MutationError {
-  if (error instanceof Error && "code" in error) {
-    return {
-      message: error.message,
-      code: (error as Error & { code?: UiErrorCode }).code ?? null,
-    };
-  }
-  return { message: fallback, code: null };
-}
