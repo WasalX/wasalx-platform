@@ -529,7 +529,12 @@ test("local build prepares missing images and retains its label checks and build
 test("local build refuses image inspection failures before building or pulling", async t => {
   const f = await localBuildFixture(t);
   const [{ reference }] = f.context.plan;
+  const inspected = Config => JSON.stringify([{ Id: f.details[reference].Id, Config }]);
   const cases = [
+    ["subprocess error with valid stdout", { status: 0, error: new Error("ENOBUFS"), stdout: inspected(null) }, /subprocess failed/u],
+    ["malformed config", { status: 0, stdout: inspected([]) }, /invalid configuration/u],
+    ["malformed labels", { status: 0, stdout: inspected({ Labels: [] }) }, /invalid labels/u],
+    ["malformed label value", { status: 0, stdout: inspected({ Labels: { "fixture.label": 1 } }) }, /invalid labels/u],
     ["unavailable daemon", { status: 1, stdout: "[]\n", stderr: "Cannot connect to the Docker daemon\n" }, /Cannot connect/u],
     ["permission denied", { status: 1, stdout: "[]\n", stderr: "permission denied\n" }, /permission denied/u],
     ["mixed diagnostics", { status: 1, stdout: "[]\n", stderr: `permission denied\nError response from daemon: No such image: ${reference}\n` }, /permission denied/u],
@@ -552,6 +557,21 @@ test("local build refuses image inspection failures before building or pulling",
     assert.equal(manifest.state, "FAILED");
     assert.equal(manifest.images[0].state, "FAILED");
   });
+});
+
+test("local build reuses canonical images with matching labels", async t => {
+  const f = await localBuildFixture(t);
+  for (const image of f.context.plan) {
+    Object.assign(f.details[image.reference].Config.Labels, {
+      "io.wasalx.build.dockerfile": image.dockerfile,
+      "io.wasalx.build.context-sha256": f.context.buildContextSha256,
+    });
+  }
+  mockImageInspect(t, f, () => undefined);
+  assert.equal(await executeStage("build", f.context), 0);
+  const { manifest } = await readBoundArtifacts(f.context);
+  assert.ok(manifest.images.every(image => image.state === "REUSED"));
+  assert.ok(f.calls.every(({ args }) => args[0] !== "build"));
 });
 
 test("local build refuses a pinned dependency inspection failure without pulling", async t => {

@@ -428,7 +428,15 @@ export async function executeStage(action, context) {
     catch { assert.fail("docker image inspect returned malformed JSON"); }
     assert.ok(Array.isArray(images) && images.length === 1 && typeof images[0]?.Id === "string"
       && imageIdPattern.test(images[0].Id), "docker image inspect did not return exactly one valid image ID");
-    return images[0];
+    const [image] = images;
+    const { Config: config } = image;
+    const labels = config?.Labels;
+    assert.ok(config === null || config === undefined || (typeof config === "object" && !Array.isArray(config)),
+      "docker image inspect returned invalid configuration");
+    assert.ok(labels === null || labels === undefined || (typeof labels === "object" && !Array.isArray(labels)
+      && Object.values(labels).every(value => typeof value === "string")),
+    "docker image inspect returned invalid labels");
+    return image;
   };
   const dependencies = [...new Set(active.filter((name) => !model.services[name].build)
     .map((name) => model.services[name].image))];
@@ -727,6 +735,7 @@ export function run(command, arguments_, environment, inherit = false, input) {
     });
   }
   const result = spawnSync(command, arguments_, { cwd: repository, env: environment, encoding: "utf8", windowsHide: true });
+  assert.ok(!result.error, `${command} subprocess failed`);
   if (result.status !== 0) {
     const tail = commandStderrTail(result.stderr, environment);
     const message = tail ? `${command} failed: ${tail}` : `${command} failed`;
@@ -735,7 +744,7 @@ export function run(command, arguments_, environment, inherit = false, input) {
       assert.equal(result.status, 0, `docker pull ${ref} exit=${result.status ?? 1}: ${tail || "no Docker diagnostic"}`);
     }
     if (command === "docker" && arguments_[0] === "image" && arguments_[1] === "inspect" && arguments_.length === 3
-        && result.status === 1 && !result.error && result.stdout?.trim() === "[]") {
+        && result.status === 1 && result.stdout?.trim() === "[]") {
       const reference = arguments_[2];
       // Moby reports missing images using the familiar name and adds the default tag when omitted.
       let familiar = reference.replace(/^(?:docker\.io|index\.docker\.io)\//u, "").replace(/^library\/([^/]+)$/u, "$1");
