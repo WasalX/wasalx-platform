@@ -176,6 +176,7 @@ async function teamsListRecovery(locale) {
       fixture.teams.length = 0;
       await test.open();
       await expect(empty).toBeVisible();
+      await expect(choose).toHaveCount(0);
       await expect(button("teamsAdmin.createTeam")).toBeEnabled();
       await expect(team).toHaveCount(0);
       await expect(button("common.actions.retry")).toHaveCount(0);
