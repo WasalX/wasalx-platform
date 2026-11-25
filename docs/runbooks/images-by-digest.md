@@ -82,6 +82,9 @@ honesty or release approval. Sigstore verification failure means no admission.
 The optional `admit-hosted` stage admits already loaded images. It never pulls,
 loads, builds, replaces or starts a service. Keep the existing local
 `preflight -> build -> replace -> smoke` path for local builds.
+During image preparation, a confirmed missing image can trigger a candidate build
+or a pinned dependency pull. Docker access errors and invalid inspection output
+stop the stage. Correct the inspection failure before retrying.
 
 An exited, non-target container with Docker restart policy `no` can be retained
 in the replacement preimage even when its Compose hash differs. The private

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import childProcess, { spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -8,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import cosignPin from "../scripts/release/cosign-pin.json" with { type: "json" };
 import { assertLocalRegistry, hostedIssuer, localRegistryReference, verifyHostedImages } from "../scripts/release/installer-hosted-images.mjs";
 import { artifactPath, preimagePath, preserveReplacement, readBoundArtifacts, sha256 } from "../scripts/release/installer-artifacts.mjs";
-import { createCandidatePlan, executeStage } from "../scripts/release/installer-stages.mjs";
+import { createCandidatePlan, executeStage, run } from "../scripts/release/installer-stages.mjs";
 import { localRegistryOverlay } from "../scripts/release/installer-stack.mjs";
 
 const catalog = JSON.parse(await readFile(new URL("../release/installer-images.json", import.meta.url)));
@@ -474,17 +475,91 @@ test("hosted replacement refuses a missing receipt, a changed image ID and a dif
   await assert.rejects(readFile(join(context.directory, `replacement-started-${context.project}.json`)), { code: "ENOENT" });
 });
 
-test("local build retains its label checks and original build receipt", async t => {
+async function localBuildFixture(t) {
   const f = await fixture(t);
   delete f.context.hostedImages; delete f.context.hostedImagesSha256; delete f.context.hostedTrustedRoot;
   f.context.buildContext = Buffer.from("synthetic canonical archive"); f.context.buildContextSha256 = sha256(f.context.buildContext);
+  return f;
+}
+
+function mockImageInspect(t, f, response) {
+  t.mock.method(childProcess, "spawnSync", (name, args) => {
+    assert.equal(name, "docker");
+    assert.deepEqual(args.slice(0, 2), ["image", "inspect"]);
+    return response(args[2]) ?? { status: 0, stdout: JSON.stringify([f.details[args[2]]]) };
+  });
+  syncBuiltinESMExports();
+  const command = f.context.command;
+  f.context.command = (name, args, ...options) => args[0] === "image" && args[1] === "inspect"
+    ? run(name, args, ...options) : command(name, args, ...options);
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+}
+
+test("local build prepares missing images and retains its label checks and build receipt", async t => {
+  const f = await localBuildFixture(t);
+  const [{ reference }] = f.context.plan;
+  const digest = `sha256:${"d".repeat(64)}`;
+  const pinned = `docker.io/library/postgres:17@${digest}`;
+  f.context.model.services.dependency = { image: pinned };
+  const missing = ref => ({ status: 1, stdout: "[]\n", stderr: `Error response from daemon: No such image: ${ref}\n` });
+  let candidateInspections = 0;
+  mockImageInspect(t, f, ref => {
+    if (ref === reference && ++candidateInspections === 1) return missing(reference);
+    if (ref === pinned && !f.details[pinned]) return missing(`postgres:17@${digest}`);
+  });
+  const command = f.context.command, pulls = [];
+  f.context.command = (name, args, ...options) => {
+    if (name !== "docker" || args[0] !== "pull") return command(name, args, ...options);
+    pulls.push(args);
+    f.details[pinned] = { Id: digest };
+    return "";
+  };
   assert.equal(await executeStage("build", f.context), 0);
   const { manifest } = await readBoundArtifacts(f.context);
   assert.equal(manifest.kind, "compose-candidate-artifacts");
   assert.equal(manifest.buildContextAlgorithm, "sha256-git-archive-tar-v1");
   assert.ok(manifest.images.every(image => image.state === "BUILT"));
   assert.equal(f.calls.filter(({ name, args }) => name === "docker" && args[0] === "build").length, 21);
+  assert.deepEqual(pulls, [["pull", "--quiet", pinned]]);
   assert.ok(f.calls.every(({ name }) => name === "docker"));
   f.details[f.context.plan[0].reference].Config.Labels["io.wasalx.build.context-sha256"] = "changed";
   await assert.rejects(executeStage("replace", f.context), /requires the build stage/u);
+});
+
+test("local build refuses image inspection failures before building or pulling", async t => {
+  const f = await localBuildFixture(t);
+  const [{ reference }] = f.context.plan;
+  const cases = [
+    ["unavailable daemon", { status: 1, stdout: "[]\n", stderr: "Cannot connect to the Docker daemon\n" }, /Cannot connect/u],
+    ["permission denied", { status: 1, stdout: "[]\n", stderr: "permission denied\n" }, /permission denied/u],
+    ["mixed diagnostics", { status: 1, stdout: "[]\n", stderr: `permission denied\nError response from daemon: No such image: ${reference}\n` }, /permission denied/u],
+    ["missing different image", { status: 1, stdout: "[]\n", stderr: "Error response from daemon: No such image: other:latest\n" }, /No such image/u],
+    ["malformed JSON", { status: 0, stdout: "[invalid" }, /returned malformed JSON/u],
+    ["empty success", { status: 0, stdout: "[]" }, /one valid image ID/u],
+    ["invalid image ID", { status: 0, stdout: '[{"Id":"invalid"}]' }, /one valid image ID/u],
+  ];
+  const command = f.context.command;
+  for (const [scenario, response, reason] of cases) await t.test(scenario, async subtest => {
+    f.context.command = command;
+    f.calls.length = 0;
+    mockImageInspect(subtest, f, ref => {
+      assert.equal(ref, reference);
+      return response;
+    });
+    await assert.rejects(executeStage("build", f.context), reason);
+    assert.ok(f.calls.every(({ args }) => args[0] !== "build" && args[0] !== "pull"));
+    const { manifest } = await readBoundArtifacts(f.context, { allowPartial: true });
+    assert.equal(manifest.state, "FAILED");
+    assert.equal(manifest.images[0].state, "FAILED");
+  });
+});
+
+test("local build refuses a pinned dependency inspection failure without pulling", async t => {
+  const f = await localBuildFixture(t);
+  f.context.model.services.dependency = { image: dependency };
+  mockImageInspect(t, f, ref => {
+    if (ref === dependency) return { status: 1, stdout: "[]\n", stderr: "permission denied\n" };
+  });
+  await assert.rejects(executeStage("build", f.context), /permission denied/u);
+  assert.ok(f.calls.every(({ args }) => args[0] !== "pull"));
 });
