@@ -329,6 +329,10 @@ def report_checkpoints(suite, output):
     sandbox_log(suite, "child " + (" ".join(phases[-12:]) if phases else "no checkpoint"))
 
 
+class DockerPhaseTimeout(RuntimeError):
+    pass
+
+
 def docker_phase(suite, phase, deadline, *args):
     started = time.monotonic()
     sandbox_log(suite, f"{phase} started")
@@ -336,7 +340,8 @@ def docker_phase(suite, phase, deadline, *args):
     try:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            raise subprocess.TimeoutExpired(args, 0)
+            outcome = "deadline exceeded"
+            raise RuntimeError(f"{suite}: {phase} deadline exceeded")
         result = subprocess.run(
             ["docker", *args], timeout=remaining,
             stdout=subprocess.PIPE if phase == "start-attach" else subprocess.DEVNULL,
@@ -350,11 +355,33 @@ def docker_phase(suite, phase, deadline, *args):
         if phase == "start-attach":
             report_checkpoints(suite, error.output)
         outcome = "deadline exceeded"
-        raise RuntimeError(f"{suite}: {phase} deadline exceeded") from None
+        raise DockerPhaseTimeout(f"{suite}: {phase} deadline exceeded") from None
     except OSError:
         raise RuntimeError(f"{suite}: {phase} could not run Docker") from None
     finally:
         sandbox_log(suite, f"{phase} {outcome} elapsed_ms={int((time.monotonic() - started) * 1000)}")
+
+
+def cleanup_sandbox(suite, name, create_timed_out):
+    deadline = time.monotonic() + CLEANUP_TIMEOUT
+    absent = f"Error response from daemon: No such container: {name}".encode()
+    try:
+        while time.monotonic() < deadline:
+            cleanup = docker_phase(suite, "cleanup", deadline, "rm", "--force", "--volumes", name)
+            if cleanup.returncode == 0:
+                sandbox_log(suite, "cleanup removed")
+                return
+            if cleanup.stderr.strip() != absent:
+                sandbox_log(suite, "cleanup unconfirmed" if create_timed_out else "cleanup failed")
+                return
+            if not create_timed_out:
+                sandbox_log(suite, "cleanup container absent")
+                return
+            # The daemon may still register the name after the create client exits.
+            time.sleep(max(0, min(1, deadline - time.monotonic())))
+    except RuntimeError:
+        pass
+    sandbox_log(suite, "cleanup unconfirmed")
 
 
 def sandbox(hostname, suite):
@@ -365,6 +392,8 @@ def sandbox(hostname, suite):
         check(pull.returncode == 0, f"{suite}: pull failed")
 
     name = f"wasalx-dev-dryrun-{uuid4().hex}"
+    create = None
+    create_timed_out = False
     removed = False
     try:
         create = docker_phase(
@@ -382,20 +411,12 @@ def sandbox(hostname, suite):
         # Attached start with --rm waits for the daemon's removal result.
         removed = True
         sandbox_log(suite, "cleanup auto-removed")
+    except DockerPhaseTimeout:
+        create_timed_out = create is None
+        raise
     finally:
         if not removed:
-            try:
-                cleanup = docker_phase(
-                    suite, "cleanup", time.monotonic() + CLEANUP_TIMEOUT, "rm", "--force", "--volumes", name,
-                )
-                if cleanup.returncode == 0:
-                    sandbox_log(suite, "cleanup removed")
-                elif cleanup.stderr.strip() == f"Error response from daemon: No such container: {name}".encode():
-                    sandbox_log(suite, "cleanup container absent")
-                else:
-                    sandbox_log(suite, "cleanup failed")
-            except RuntimeError:
-                sandbox_log(suite, "cleanup unconfirmed")
+            cleanup_sandbox(suite, name, create_timed_out)
 
 
 class SandboxTest(unittest.TestCase):
@@ -474,6 +495,49 @@ class SandboxTest(unittest.TestCase):
                 sandbox(SANDBOX_HOSTNAME, "DispatchTest")
         self.assertIn("child suite-failed", output.getvalue())
         self.assertIn("cleanup deadline exceeded", output.getvalue())
+
+    def test_timed_out_create_checks_for_late_registration(self):
+        for appears in (True, False):
+            with self.subTest(appears=appears):
+                elapsed = 0
+                removals = 0
+                output = io.StringIO()
+
+                def sleep(seconds):
+                    nonlocal elapsed
+                    elapsed += seconds
+
+                def run_docker(args, **options):
+                    nonlocal removals
+                    if args[1] == "image":
+                        return subprocess.CompletedProcess(args, 0)
+                    if args[1] == "create":
+                        sleep(options["timeout"])
+                        raise subprocess.TimeoutExpired(args, options["timeout"])
+                    removals += 1
+                    if appears and removals == 2:
+                        return subprocess.CompletedProcess(args, 0)
+                    absent = f"Error response from daemon: No such container: {args[-1]}".encode()
+                    return subprocess.CompletedProcess(args, 1, stderr=absent)
+
+                with (
+                    redirect_stdout(output),
+                    mock.patch.object(time, "monotonic", side_effect=lambda: elapsed),
+                    mock.patch.object(time, "sleep", side_effect=sleep),
+                    mock.patch.object(subprocess, "run", side_effect=run_docker) as docker,
+                ):
+                    with self.assertRaisesRegex(RuntimeError, "DispatchTest: create deadline exceeded"):
+                        sandbox(SANDBOX_HOSTNAME, "DispatchTest")
+                _, create, *cleanup = docker.call_args_list
+                name = create.args[0][3]
+                self.assertTrue(all(call.args[0] == ["docker", "rm", "--force", "--volumes", name] for call in cleanup))
+                expected_attempts = 2 if appears else CLEANUP_TIMEOUT
+                self.assertEqual(
+                    [call.kwargs["timeout"] for call in cleanup],
+                    list(range(CLEANUP_TIMEOUT, CLEANUP_TIMEOUT - expected_attempts, -1)),
+                )
+                self.assertNotIn("cleanup container absent", output.getvalue())
+                self.assertIn("cleanup removed" if appears else "cleanup unconfirmed", output.getvalue())
 
 
 def container():

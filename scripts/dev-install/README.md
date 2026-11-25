@@ -6,7 +6,9 @@ The fixture runs the native bind-mount, hostname, and review-origin checks and e
 holding the native stage lock. SSH and Compose calls use recording fakes.
 For each container, the image check or pull, creation, and attached run share one 120-second deadline.
 The log reports Docker phase durations, a bounded list of fixture checkpoints, and the cleanup result.
-If creation or the attached run fails, a separate bounded removal targets the named fixture container.
+If creation or the attached run fails, a separate cleanup budget targets the named fixture container.
+After a create timeout, cleanup checks for late registration and reports an unconfirmed result
+if removal cannot be verified within that budget.
 
 The renderer takes an operator-owned identity file with the fields in
 `fixtures/identity.example.json`. Keep the real identity and rendered packet private.
