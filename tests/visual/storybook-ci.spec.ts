@@ -64,40 +64,63 @@ for (const theme of ["light", "dark"] as const) {
 }
 
 // Synthetic browser fixtures only; never live Meta acceptance.
-test("a locale change keeps the Meta signup authorization running", async ({ page }) => {
-  const errors: string[] = [];
-  page.on("pageerror", error => errors.push(error.message));
-  await page.clock.setFixedTime(new Date("2026-10-17T16:00:00Z"));
-  const sdk = { appId: "12345678", configId: "87654321", graphVersion: "v24.0" };
-  const view = { purpose: "NEW_NUMBER", attemptId: "44000000-0000-4000-8000-000000000001", revision: 1, status: "AWAITING_AUTHORIZATION",
-    nextAction: "AUTHORIZE", expiresAt: "2026-10-17T16:10:00Z", canCancel: true, canStartAgain: false, choices: [],
-    readiness: { authorization: "PENDING", number: "PENDING", subscription: "PENDING", messaging: "UNKNOWN",
-      payment: { requestedPayer: "CUSTOMER", status: "UNKNOWN", paymentMethodVerified: false } } };
-  let started = false;
-  const calls: string[] = [];
-  await page.route("https://connect.facebook.net/en_US/sdk.js", route => route.fulfill({ contentType: "text/javascript", body:
-    "window.metaSignupCallbacks=[];window.FB={init(){},login(callback){window.metaSignupCallbacks.push(callback);}};" }));
-  await page.route("**/api/connections/meta/signup/**", route => {
-    const path = new URL(route.request().url()).pathname.split("/signup/")[1];
-    calls.push(`${route.request().method()} ${path}`);
-    if (path === "capabilities") return route.fulfill({ json: { enabled: true, payerModes: ["CUSTOMER"], sdk } });
-    if (route.request().method() === "GET") return route.fulfill({ json: path === "attempts" ? { attempt: started ? view : null } : view });
-    if (path === "attempts") { started = true; return route.fulfill({ json: { ...view, challenge: "S".repeat(43), sdk } }); }
-    return route.fulfill({ json: view });
-  });
-  const globals = "a11y.manual:!true;auditTheme:light;auditLocale:en";
-  await page.goto(`/iframe.html?${new URLSearchParams({ id: "product-meta-signup--english", viewMode: "story", globals })}`);
-  await page.getByRole("button", { name: en["tenant.metaSignup.prepare"], exact: true }).click();
-  await page.getByRole("button", { name: en["tenant.metaSignup.connect"], exact: true }).click();
-  await expect(page.getByText(en["tenant.metaSignup.waiting"], { exact: true })).toBeVisible();
+for (const theme of ["light", "dark"] as const) {
+  for (const viewport of ["desktop", "phone"] as const) {
+    test(`a locale change keeps the Meta signup authorization running (${viewport}, ${theme})`, async ({ page }, testInfo) => {
+      const errors: string[] = [];
+      page.on("pageerror", error => errors.push(error.message));
+      if (viewport === "phone") await page.setViewportSize({ width: 390, height: 844 });
+      await page.emulateMedia({ colorScheme: theme, reducedMotion: "reduce" });
+      await page.clock.setFixedTime(new Date("2026-10-17T16:00:00Z"));
+      const sdk = { appId: "12345678", configId: "87654321", graphVersion: "v24.0" };
+      const view = { purpose: "NEW_NUMBER", attemptId: "44000000-0000-4000-8000-000000000001", revision: 1, status: "AWAITING_AUTHORIZATION",
+        nextAction: "AUTHORIZE", expiresAt: "2026-10-17T16:10:00Z", canCancel: true, canStartAgain: false, choices: [],
+        readiness: { authorization: "PENDING", number: "PENDING", subscription: "PENDING", messaging: "UNKNOWN",
+          payment: { requestedPayer: "CUSTOMER", status: "UNKNOWN", paymentMethodVerified: false } } };
+      let started = false;
+      const calls: string[] = [];
+      await page.route("https://connect.facebook.net/en_US/sdk.js", route => route.fulfill({ contentType: "text/javascript", body:
+        "window.metaSignupCallbacks=[];window.FB={init(){},login(callback){window.metaSignupCallbacks.push(callback);}};" }));
+      await page.route("**/api/connections/meta/signup/**", route => {
+        const path = new URL(route.request().url()).pathname.split("/signup/")[1];
+        calls.push(`${route.request().method()} ${path}`);
+        if (path === "capabilities") return route.fulfill({ json: { enabled: true, payerModes: ["CUSTOMER"], sdk } });
+        if (route.request().method() === "GET") return route.fulfill({ json: path === "attempts" ? { attempt: started ? view : null } : view });
+        if (path === "attempts") { started = true; return route.fulfill({ json: { ...view, challenge: "S".repeat(43), sdk } }); }
+        return route.fulfill({ json: view });
+      });
+      const globals = `a11y.manual:!true;auditTheme:${theme};auditLocale:en`;
+      await page.goto(`/iframe.html?${new URLSearchParams({ id: "product-meta-signup--english", viewMode: "story", globals })}`);
+      const canvas = page.locator("#storybook-root > .wx-story-canvas");
+      await expect(canvas).toHaveClass(new RegExp(`\\btheme-${theme}\\b`));
+      const capturePending = async (locale: "en" | "ar") => {
+        const content = canvas.getByRole("main");
+        await expect(content).toHaveAttribute("lang", locale);
+        await expect(content).toHaveAttribute("dir", textDirection(locale));
+        await page.screenshot({
+          path: testInfo.outputPath(`meta-signup-authorization-${viewport}-${theme}-${locale}.png`),
+          fullPage: true,
+          animations: "disabled",
+          caret: "hide",
+          scale: "css",
+        });
+      };
 
-  await page.getByRole("button", { name: "Synthetic locale change", exact: true }).click();
-  await expect(page.getByText(ar["tenant.metaSignup.waiting"], { exact: true })).toBeVisible();
-  // A restarted session would cancel the attempt, load again and fence the open popup callback.
-  expect([...calls].sort()).toEqual(["GET attempts", "GET capabilities", "POST attempts"]);
-  expect(await page.evaluate(() => (window as unknown as { metaSignupCallbacks: unknown[] }).metaSignupCallbacks.length)).toBe(1);
+      await page.getByRole("button", { name: en["tenant.metaSignup.prepare"], exact: true }).click();
+      await page.getByRole("button", { name: en["tenant.metaSignup.connect"], exact: true }).click();
+      await expect(page.getByText(en["tenant.metaSignup.waiting"], { exact: true })).toBeVisible();
+      await capturePending("en");
 
-  await page.evaluate(() => (window as unknown as { metaSignupCallbacks: ((value: unknown) => void)[] }).metaSignupCallbacks[0]!({ authResponse: { code: "synthetic-code-once" } }));
-  await expect.poll(() => calls.filter(call => call.endsWith("/exchange"))).toEqual([`POST attempts/${view.attemptId}/exchange`]);
-  expect(errors).toEqual([]);
-});
+      await page.getByRole("button", { name: "Synthetic locale change", exact: true }).click();
+      await expect(page.getByText(ar["tenant.metaSignup.waiting"], { exact: true })).toBeVisible();
+      // A restarted session would cancel the attempt, load again and fence the open popup callback.
+      expect([...calls].sort()).toEqual(["GET attempts", "GET capabilities", "POST attempts"]);
+      expect(await page.evaluate(() => (window as unknown as { metaSignupCallbacks: unknown[] }).metaSignupCallbacks.length)).toBe(1);
+      await capturePending("ar");
+
+      await page.evaluate(() => (window as unknown as { metaSignupCallbacks: ((value: unknown) => void)[] }).metaSignupCallbacks[0]!({ authResponse: { code: "synthetic-code-once" } }));
+      await expect.poll(() => calls.filter(call => call.endsWith("/exchange"))).toEqual([`POST attempts/${view.attemptId}/exchange`]);
+      expect(errors).toEqual([]);
+    });
+  }
+}
