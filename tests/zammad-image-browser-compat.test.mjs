@@ -257,7 +257,7 @@ volumes: { zammad-storage: {}, zammad-backup: {} }
 `;
 }
 
-test("package upgrade, route, and group workspace operate in the immutable Zammad image", { timeout: 1_800_000 }, async () => {
+test("package upgrade, route, and group workspace operate in the immutable Zammad image", { timeout: 1_800_000 }, async (t) => {
   const nativeCloseScenario = await readFile(join(process.cwd(), "tests", "native-close-rails-scenario.rb"), "utf8");
   const project = `wasalx-zammad-${randomUUID()}`;
   const admission = assertNativeCompatibilityProjectEmpty({ project,
@@ -1387,13 +1387,15 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
       `);
       return JSON.parse(raw.split('\n').find(line => line.startsWith('{')) ?? '');
     };
-    const submitReplyTicket = async (articleExpected) => {
+    const ticketUpdateOperation = /^ticketUpdate$/iu;
+    const submitReplyTicket = async (articleExpected, onResponse) => {
       const [response] = await Promise.all([
         page.waitForResponse(response => new URL(response.url()).pathname.endsWith('/graphql')
           && response.request().method() === 'POST'
-          && /^ticketUpdate$/iu.test(response.request().postDataJSON()?.operationName ?? ''), { timeout: 60_000 }),
+          && ticketUpdateOperation.test(response.request().postDataJSON()?.operationName ?? ''), { timeout: 60_000 }),
         page.getByRole('button', { name: 'Update', exact: true }).click(),
       ]);
+      onResponse?.();
       const data = await response.json();
       assert.equal(response.status(), 200); assert.ok(!data.errors?.length);
       assert.ok(!data.data?.ticketUpdate?.errors?.length); assert.ok(data.data?.ticketUpdate?.ticket);
@@ -1492,16 +1494,106 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
     const directBefore = await replySnapshot(state.directReplyTicketId, directBody);
     assert.equal(directBefore.state, 'open'); assert.equal(directBefore.rows.length, 0);
     const directMutations = [];
+    let traceDirectRequest;
     const recordDirectMutation = request => {
+      traceDirectRequest?.(request);
       if (new URL(request.url()).pathname.endsWith('/graphql') && request.method() === 'POST'
-        && /^ticketUpdate$/iu.test(request.postDataJSON()?.operationName ?? '')) {
+        && ticketUpdateOperation.test(request.postDataJSON()?.operationName ?? '')) {
         directMutations.push({ article: request.postDataJSON()?.variables?.input?.article != null });
       }
     };
     page.on('request', recordDirectMutation);
     try {
       await directBubble.hover(); await directAction.click(); await page.locator('[contenteditable="true"]').fill(directBody);
-      await replyState.click(); await page.getByRole('option', { name: /^closed$/iu }).click(); await submitReplyTicket(true);
+      const formTrace = await page.evaluateHandle(formId => {
+        const listeners = new AbortController();
+        const started = performance.now();
+        const events = [];
+        const form = () => document.getElementById(formId);
+        const fields = '#ticketEditAttributeForm, #ticketArticleReplyForm';
+        const invalid = '[aria-invalid="true"], [data-invalid="true"], [data-message-type="validation"]';
+        const validationMarked = () => Boolean(form()?.querySelector(invalid)
+          || [...document.querySelectorAll(fields)].some(root => root.querySelector(invalid)));
+        const record = (kind, values = {}, event) => {
+          if (events.length < 12) events.push({ kind, atMs: Math.round(performance.now() - started), values, event });
+        };
+        const options = { capture: true, passive: true, signal: listeners.signal };
+        let clicked = false;
+        document.addEventListener('click', event => {
+          const button = event.target.closest?.('button');
+          if (button?.textContent.trim() !== 'Update') return;
+          clicked = true;
+          record('update-click', { formPresent: Boolean(form()), associated: button.form?.id === formId, validationMarked: validationMarked() });
+        }, options);
+        document.addEventListener('submit', event => {
+          if (clicked) record('submit', { expectedForm: event.target.id === formId }, event);
+        }, options);
+        document.addEventListener('invalid', event => {
+          if (clicked && (event.target.form?.id === formId || event.target.closest(fields))) record('native-invalid');
+        }, options);
+        let sawValidationMark = false;
+        const validation = new MutationObserver(() => {
+          if (clicked && !sawValidationMark && validationMarked()) {
+            sawValidationMark = true;
+            record('validation-marked');
+          }
+        });
+        for (const root of [form(), ...document.querySelectorAll(fields)].filter(Boolean)) {
+          validation.observe(root, { subtree: true, childList: true, attributes: true,
+            attributeFilter: ['aria-invalid', 'data-invalid', 'data-message-type'] });
+        }
+        return () => {
+          listeners.abort(); validation.disconnect();
+          // FormKit normally prevents default navigation even for a successful AJAX save.
+          return { formPresent: Boolean(form()), validationMarked: validationMarked(), events: events.map(({ kind, atMs, values, event }) =>
+            ({ kind, atMs, ...values, ...(event && { defaultPrevented: event.defaultPrevented }) })) };
+        };
+      }, `form-ticket-edit-${directFixture.id}`);
+      const started = performance.now();
+      const elapsed = () => Math.round(performance.now() - started);
+      const requests = new Map();
+      const origin = new URL(zammadOrigin).origin;
+      let omittedRequests = 0;
+      let waiterMatched = false;
+      traceDirectRequest = request => {
+        const url = new URL(request.url());
+        const pathMatched = url.pathname.endsWith('/graphql');
+        if (!pathMatched && (url.origin !== origin || !['fetch', 'xhr'].includes(request.resourceType()))) return;
+        let payload;
+        try { payload = request.postDataJSON(); } catch { /* An unreadable body cannot match the operation. */ }
+        const operationMatched = ticketUpdateOperation.test(payload?.operationName ?? '');
+        const batchUpdate = Array.isArray(payload) && payload.find(entry => ticketUpdateOperation.test(entry?.operationName ?? ''));
+        if (!pathMatched && !operationMatched && !batchUpdate) return;
+        if (requests.size >= (operationMatched || batchUpdate ? 24 : 16)) { omittedRequests += 1; return; }
+        requests.set(request, { startedAtMs: elapsed(), pathMatched, methodMatched: request.method() === 'POST',
+          operationMatched, updateInBatch: Boolean(batchUpdate),
+          articlePresent: operationMatched || batchUpdate ? (batchUpdate || payload).variables?.input?.article != null : null });
+      };
+      const recordResponse = response => {
+        const record = requests.get(response.request());
+        if (record) Object.assign(record, { responseAtMs: elapsed(), httpStatus: response.status() });
+      };
+      const finishRequest = outcome => request => {
+        const record = requests.get(request);
+        if (record) Object.assign(record, { endedAtMs: elapsed(), outcome });
+      };
+      const recordFinished = finishRequest('finished');
+      const recordFailed = finishRequest('failed');
+      page.on('response', recordResponse);
+      page.on('requestfinished', recordFinished);
+      page.on('requestfailed', recordFailed);
+      try {
+        await replyState.click(); await page.getByRole('option', { name: /^closed$/iu }).click();
+        await submitReplyTicket(true, () => { waiterMatched = true; });
+      } finally {
+        traceDirectRequest = undefined;
+        page.off('response', recordResponse);
+        page.off('requestfinished', recordFinished);
+        page.off('requestfailed', recordFailed);
+        const form = await formTrace.evaluate(stop => stop()).catch(() => ({ unavailable: true }));
+        await formTrace.dispose().catch(() => {});
+        t.diagnostic(`native-direct-reply ${JSON.stringify({ form, waiterMatched, omittedRequests, requests: [...requests.values()] })}`);
+      }
       const directSaved = await replySnapshot(state.directReplyTicketId, directBody);
       assert.equal(directSaved.state, 'closed'); assert.equal(directSaved.rows.length, 1);
       assert.equal(directSaved.rows[0].matches, true);
