@@ -809,6 +809,8 @@ test("Hosted operator diagnostics retain only allowed step labels and bounded ob
     { type: "wasalx-operator:lostResponseStatus", description: "502" },
     { type: "wasalx-operator:lostResponseStatus", description: "503" },
     { type: "wasalx-operator:matchedLostResponseConsole", description: "0" },
+    { type: "wasalx-operator:checkedCostEffects", description: "64" },
+    { type: "wasalx-operator:checkedCostEffects", description: "101" },
     { type: "wasalx-operator:pendingExpectedConsole", description: "1" },
     { type: "wasalx-operator:unexpectedConsole", description: "0" },
     { type: "wasalx-operator:unexpectedConsole", description: "Raw console message" },
@@ -823,8 +825,10 @@ test("Hosted operator diagnostics retain only allowed step labels and bounded ob
     lastCompletedStep: completed.title,
     terminalStep: inFlight.title,
     observations: { authorityStatus: 403, lostResponseStatus: 502, matchedLostResponseConsole: 0,
-      pendingExpectedConsole: 1, unexpectedConsole: 0 },
+      checkedCostEffects: 64, pendingExpectedConsole: 1, unexpectedConsole: 0 },
   });
+  const cost = { title: "Select first-page cost effects", duration: -1 };
+  assert.equal(operatorCaseProgress({}, { steps: [cost] }).terminalStep, cost.title);
   assert.equal(operatorCaseProgress({}, {
     steps: [completed, { title: inFlight.title, duration: 2, error: { message: "Raw details" } }],
   }).terminalStep, inFlight.title);

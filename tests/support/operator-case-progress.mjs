@@ -4,6 +4,20 @@ const steps = new Set([
   "Open transition dialog",
   "Select transition plan",
   "Read transition review",
+  "Open cost management",
+  "Check cost reassessment navigation",
+  "Load cost tariff preview",
+  "Check cost preview keyboard",
+  "Audit cost preview",
+  "Save and activate cost tariff",
+  "Select first-page cost effects",
+  "Submit first-page cost reassessment",
+  "Reassess final cost effect with selector",
+  "Withdraw cost selector evidence",
+  "Select cost effects before refresh",
+  "Wait for changed cost heads",
+  "Reject stale cost reassessment",
+  "Audit final cost reassessment",
   "Select statement version",
   "Verify lost transition response",
   "Check transition console",
@@ -37,7 +51,8 @@ export function operatorCaseProgress(test, result) {
     const name = type.slice(metricPrefix.length);
     const value = Number(description);
     if (counts.has(name) || (name === "authorityStatus" && value === 403) ||
-        (name === "lostResponseStatus" && value === 502)) observations[name] = value;
+        (name === "lostResponseStatus" && value === 502) ||
+        (name === "checkedCostEffects" && value <= 100)) observations[name] = value;
   }
   return { lastCompletedStep, terminalStep, observations };
 }
