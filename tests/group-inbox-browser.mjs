@@ -191,7 +191,7 @@ await mkdir(output, { recursive: true });
 try {
   for (const locale of ["en", "ar"]) {
     const t = await translations(locale);
-    const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+    const context = await browser.newContext({ locale: locale === "ar" ? "en-US" : "ar-SA", viewport: { width: 1440, height: 1000 } });
     await instrumentation(context);
     const page = await context.newPage(), state = await fixture(page), pageErrors = [];
     await page.clock.install();
@@ -228,12 +228,17 @@ try {
 
     // A later upload failure must keep the file already acknowledged by the server.
     state.failUploadAt = state.uploadAttempts + 2;
-    await page.locator("#wx-group-files").setInputFiles([
+    await expect(page.locator("#wx-group-files")).toBeHidden();
+    await expect(button("attachments.choose")).toHaveAccessibleDescription(t("attachments.none"));
+    const [chooser] = await Promise.all([page.waitForEvent("filechooser"), button("attachments.choose").press("Space")]);
+    assert.equal(chooser.isMultiple(), true);
+    await chooser.setFiles([
       { name: "kept.txt", mimeType: "text/plain", buffer: Buffer.from("keep") },
       { name: "failed.txt", mimeType: "text/plain", buffer: Buffer.from("fail") },
     ]);
     await expect(group().getByRole("button", { name: t("groups.removeAttachment", { filename: "kept.txt" }), exact: true })).toBeVisible();
     await expect(group().getByRole("button", { name: t("groups.removeAttachment", { filename: "failed.txt" }), exact: true })).toHaveCount(0);
+    await expect(button("attachments.choose")).not.toHaveAccessibleDescription(t("attachments.none"));
     assert.equal(state.uploads.length, 1);
     await button("groups.mention").click();
     await group().getByRole("button", { name: /Resolved phone/u }).click();

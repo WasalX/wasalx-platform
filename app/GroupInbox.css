@@ -28,7 +28,6 @@
 .wx-group-composer > .wx-button-primary { justify-self: end; }
 .wx-group label, .wx-group-modal label { display: grid; gap: var(--wx-space-2); font-size: var(--wx-font-size-2); font-weight: var(--wx-weight-medium); }
 .wx-group :is(input, select, textarea), .wx-group-modal :is(input, select) { inline-size: 100%; min-inline-size: 0; min-block-size: var(--wx-control-height); padding: var(--wx-space-2) var(--wx-space-3); border: 1px solid var(--wx-color-border-strong); border-radius: var(--wx-radius-control); background: var(--wx-color-surface); color: inherit; font: inherit; }
-.wx-group input[type="file"] { max-inline-size: 22rem; }
 .wx-group textarea { resize: vertical; font-size: var(--wx-font-size-4); }
 .wx-group fieldset { min-inline-size: 0; border: 1px solid var(--wx-color-border); padding: var(--wx-space-3); }
 .wx-group fieldset ul { max-block-size: 15rem; overflow: auto; }
