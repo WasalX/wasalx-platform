@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { tenantId, tenantName, withSignedPlatformFixture } from "./support/signed-platform-fixture.mjs";
+import { operatorCaseProgress } from "./support/operator-case-progress.mjs";
 
 const expected = new Map([
   ["meta-cost-operator.spec.ts", 5],
@@ -49,7 +50,7 @@ async function runRegisteredCases(locale, env, scratch) {
       const stackLine = /\/tests\/e2e\/[a-z0-9-]+\.spec\.ts:(\d+):\d+/u.exec(first?.error?.stack ?? "")?.[1];
       const line = first?.error?.location?.line ?? (stackLine ? Number(stackLine) : undefined);
       console.log(JSON.stringify({ locale, case: key, specLine: spec.line, assertionLine: line,
-        status, action, durationMs: first?.duration }));
+        status, action, durationMs: first?.duration, ...operatorCaseProgress(test, first) }));
     }
   }
   console.log(JSON.stringify({ locale, expected: expectedCount, executed, passed }));

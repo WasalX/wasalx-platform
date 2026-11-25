@@ -117,7 +117,8 @@ test('operator cost drafts, accepted activation and every bounded reassessment p
 test('statement file replacements invalidate all four imported actions and stale read completions',async({page},info)=>{
  test.skip(!ready,'Requires root-supplied authenticated platform session and reused control-plane server');test.setTimeout(90_000);
  await page.addInitScript(()=>{const original=File.prototype.text;const controls={release:undefined as undefined|(()=>void),finished:false};Object.assign(window,{costFileRead:controls});File.prototype.text=function(){if(this.name!=='delayed.json')return original.call(this);return new Promise(resolve=>{controls.finished=false;controls.release=()=>{void original.call(this).then(value=>{resolve(value);controls.finished=true;});};});};});
- const h=await setup(page);await h.statement.getByRole('combobox',{name:t('cost.statement.version'),exact:true}).selectOption(statementId);
+ const h=await setup(page);
+ await test.step('Select statement version',()=>h.statement.getByRole('combobox',{name:t('cost.statement.version'),exact:true}).selectOption(statementId));
  await expect(h.statement.getByRole('button',{name:t('cost.statement.recordReview'),exact:true})).toBeDisabled();
  await h.statement.locator('summary').filter({hasText:t('cost.statement.retention')}).click();await h.statement.locator('summary').filter({hasText:t('cost.statement.recovery')}).click();
  const review={expectedVersion:3,expectedInputSha256:'f'.repeat(64),expectedCurrentHeadId:null,reviewSha256:'3'.repeat(64),subjectCoverage:'VERIFIED_NO_SUBJECT_DATA',subjectRefs:[],priorAdjustments:[],originalSha256:null};

@@ -21,19 +21,27 @@ function review(): MetaTransitionOperatorReview { return { id: plan, tenantId: t
 type Write = { path: string; key: string; scope: string; action: MetaTransitionOperatorAction; body: MetaTransitionOperatorRequest };
 function terminal(write: Write, disposition: "APPLIED" | "NO_EFFECT" = "APPLIED"): MetaTransitionOperatorResult { return { tenantId: tenant, planId: write.path.split("/account-transitions/")[1]!.split("/")[0]!, requestKey: write.key, action: write.action, request: structuredClone(write.body), state: disposition, commandReceiptId: id(10), approvalReceiptId: disposition === "APPLIED" ? id(11) : null, duplicate: false }; }
 function admitted() { test.skip(!ready, "Requires root-supplied authenticated platform session and reused control-plane server"); }
+function observeOperatorCount(name: string, value: number) {
+  test.info().annotations.push({ type: "wasalx-operator:" + name, description: String(value) });
+}
 async function setup(page: Page) {
   const errors: string[] = [], expected: Array<{ url: string; status: number }> = [], writes: Write[] = [], reads: string[] = [];
   page.on("pageerror", error => errors.push(error.message));
   page.on("console", message => { if (message.type() !== "error") return; const index = expected.findIndex(item => item.url === message.location().url && message.text().includes(String(item.status))); if (index >= 0) expected.splice(index, 1); else errors.push(message.text()); });
   const gate: { wait: Promise<void> | null; entered: boolean } = { wait: null, entered: false };
   const listGate: { wait: Promise<void> | null; entered: boolean; omitSelected: boolean } = { wait: null, entered: false, omitSelected: false };
-  const h = { current: review(), gate, listGate, writes, reads, errors, expected, deny: false, write: async (route: Route, value: Write) => { h.current.pendingCommand = terminal(value); h.current.actions[value.action] = false; h.current.revision++; h.current.reviewSha256 = "d".repeat(64); await route.fulfill({ json: h.current.pendingCommand }); } };
+  const h = { current: review(), gate, listGate, writes, reads, errors, expected, deny: false, deniedReads: 0, write: async (route: Route, value: Write) => { h.current.pendingCommand = terminal(value); h.current.actions[value.action] = false; h.current.revision++; h.current.reviewSha256 = "d".repeat(64); await route.fulfill({ json: h.current.pendingCommand }); } };
   await page.route(target => target.pathname === root() || target.pathname.startsWith(root() + "/"), async route => {
     const request = route.request(), target = new URL(request.url());
     expect(request.headers()["x-wasalx-platform-recovery-scope"]).toMatch(/^[a-f0-9]{64}$/u);
     if (request.method() === "GET") {
       reads.push(target.pathname + target.search);
-      if (h.deny) { expected.push({ url: request.url(), status: 403 }); return route.fulfill({ status: 403, json: { error: "PRIVATE_AUTHORITY_DETAIL" } }); }
+      if (h.deny) {
+        expected.push({ url: request.url(), status: 403 });
+        await route.fulfill({ status: 403, json: { error: "PRIVATE_AUTHORITY_DETAIL" } });
+        h.deniedReads++;
+        return;
+      }
       if (target.pathname === root()) {
         const capturedPlans = structuredClone([...(listGate.omitSelected ? [] : [h.current]), { ...review(), id: other, name: "Other plan" }]);
         if (listGate.wait) { const wait = listGate.wait; listGate.wait = null; listGate.entered = true; await wait; }
@@ -165,7 +173,12 @@ test("operator lost-response recovery keeps exact intent through reload, mismatc
   // Another operator's storage remains untouched and cannot become this page's intent.
   await page.evaluate(({ original, tenant, plan }) => { sessionStorage.setItem(`wasalx.meta.transition-review:${"0".repeat(64)}:${tenant}:${plan}`, JSON.stringify({ scope: "0".repeat(64), tenantId: tenant, planId: plan, key: original.key, action: original.action, request: original.body })); }, { original, tenant, plan });
   await page.reload(); await x.open(false); await expect(x.dialog().getByText(text("held"), { exact: true })).toHaveCount(0); expect(h.writes).toHaveLength(2); expect(await page.evaluate(() => Object.keys(sessionStorage).some(key => key.startsWith(`wasalx.meta.transition-review:${"0".repeat(64)}:`)))).toBe(true);
-  expect(h.expected).toEqual([]); expect(h.errors).toEqual([]);
+  await test.step("Check transition console", () => {
+    observeOperatorCount("pendingExpectedConsole", h.expected.length);
+    observeOperatorCount("unexpectedConsole", h.errors.length);
+    expect(h.expected).toEqual([]);
+    expect(h.errors).toEqual([]);
+  });
 });
 
 test("operator authority loss removes loaded evidence and storage failure prevents approval dispatch", async ({ page }, info) => {
@@ -175,7 +188,22 @@ test("operator authority loss removes loaded evidence and storage failure preven
   await record(page); await expect(x.dialog().getByText(text("storage"), { exact: true })).toBeVisible(); expect(h.writes).toHaveLength(0);
   // Read-only refresh may restore visibility but never bypasses storage admission.
   await x.dialog().getByRole("button", { name: text("refresh"), exact: true }).click(); await expect(x.dialog().getByRole("button", { name: text("review"), exact: true })).toHaveCount(0);
-  h.deny = true; await x.dialog().getByRole("button", { name: text("refresh"), exact: true }).click(); await expect(x.dialog().getByRole("heading", { name: "Transition account", exact: true })).toHaveCount(0); await expect(x.dialog().getByText("اتصال المبيعات (Sales)", { exact: true })).toHaveCount(0); await expect(page.getByText("PRIVATE_AUTHORITY_DETAIL")).toHaveCount(0); await expect(x.dialog().getByRole("combobox", { name: text("plan"), exact: true }).locator("option")).toHaveCount(1);
+  h.deny = true;
+  await test.step("Check revoked transition authority", async () => {
+    const options = x.dialog().getByRole("combobox", { name: text("plan"), exact: true }).locator("option");
+    try {
+      await x.dialog().getByRole("button", { name: text("refresh"), exact: true }).click();
+      await expect(x.dialog().getByRole("heading", { name: "Transition account", exact: true })).toHaveCount(0);
+      await expect(x.dialog().getByText("اتصال المبيعات (Sales)", { exact: true })).toHaveCount(0);
+      await expect(page.getByText("PRIVATE_AUTHORITY_DETAIL")).toHaveCount(0);
+      await expect(options).toHaveCount(1);
+    } finally {
+      observeOperatorCount("deniedReads", h.deniedReads);
+      if (h.deniedReads) observeOperatorCount("authorityStatus", 403);
+      const count = await options.count().catch(() => null);
+      if (count !== null) observeOperatorCount("authorityPlanOptions", count);
+    }
+  });
   expect(h.writes).toHaveLength(0); await screenshot(page, info, "authority-loss"); expect(h.expected).toEqual([]); expect(h.errors).toEqual([]);
 });
 
@@ -183,8 +211,22 @@ test("operator late review reads cannot cross a plan boundary; exact GET proof s
   admitted(); const x = await setup(page), h = x.h;
   let release = () => {}; h.gate.wait = new Promise<void>(resolve => { release = resolve; }); h.gate.entered = false;
   await x.dialog().getByRole("button", { name: text("refresh"), exact: true }).click(); await expect.poll(() => h.gate.entered).toBe(true);
-  await x.dialog().getByRole("combobox", { name: text("plan"), exact: true }).selectOption(other); await expect(x.dialog().getByRole("heading", { name: "Other plan", exact: true })).toBeVisible();
-  release(); await expect(x.dialog().getByRole("heading", { name: "Transition account", exact: true })).toHaveCount(0); await expect(x.dialog().getByRole("button", { name: text("review"), exact: true })).toBeDisabled();
+  await test.step("Select alternate plan while review is held", async () => {
+    await x.dialog().getByRole("combobox", { name: text("plan"), exact: true }).selectOption(other);
+    await expect(x.dialog().getByRole("heading", { name: "Other plan", exact: true })).toBeVisible();
+  });
+  await test.step("Check controls after late review", async () => {
+    const buttons = x.dialog().getByRole("button", { name: text("review"), exact: true });
+    release();
+    try {
+      await expect(x.dialog().getByRole("heading", { name: "Transition account", exact: true })).toHaveCount(0);
+      await expect(buttons).toBeDisabled();
+    } finally {
+      observeOperatorCount("transitionReads", h.reads.length);
+      const count = await buttons.count().catch(() => null);
+      if (count !== null) observeOperatorCount("lateReviewButtons", count);
+    }
+  });
   await x.dialog().getByRole("combobox", { name: text("plan"), exact: true }).selectOption(plan); await expect(x.dialog().getByRole("heading", { name: "Transition account", exact: true })).toBeVisible();
   h.write = async (route, write) => { h.current.pendingCommand = terminal(write); h.current.actions.PREREQUISITES = false; h.expected.push({ url: route.request().url(), status: 502 }); await route.fulfill({ status: 502, json: { error: "Private lost response" } }); };
   await prepare(page, "PREREQUISITES"); await record(page); await expect(x.dialog().getByText(text("result.APPLIED"), { exact: true })).toBeVisible(); await expect(x.dialog().getByText(text("held"), { exact: true })).toHaveCount(0);
@@ -206,7 +248,19 @@ test("pending plan-list reads exclude approval writes and removed reviews retain
   await expect(x.dialog().getByLabel(text("evidence"), { exact: true })).toBeDisabled();
   await expect(x.dialog().getByRole("button", { name: text("record"), exact: true })).toHaveCount(0); expect(h.writes).toHaveLength(0);
   releaseList(); await expect(x.dialog().getByRole("heading", { name: "Transition account", exact: true })).toHaveCount(0);
-  await expect(close()).toBeEnabled(); await expect(refreshPlans()).toBeEnabled(); await expect(choosePlan()).toBeEnabled(); expect(h.writes).toHaveLength(0);
+  await test.step("Check controls after pending plan removal", async () => {
+    try {
+      await expect(close()).toBeEnabled();
+      await expect(refreshPlans()).toBeEnabled();
+      await expect(choosePlan()).toBeEnabled();
+      expect(h.writes).toHaveLength(0);
+    } finally {
+      observeOperatorCount("transitionReads", h.reads.length);
+      observeOperatorCount("transitionWrites", h.writes.length);
+      const count = await choosePlan().locator("option").count().catch(() => null);
+      if (count !== null) observeOperatorCount("remainingPlanOptions", count);
+    }
+  });
   h.listGate.omitSelected = false; await refreshPlans().click(); await expect(choosePlan().locator(`option[value="${plan}"]`)).toHaveCount(1); await choosePlan().selectOption(plan);
   await expect(x.dialog().getByRole("heading", { name: "Transition account", exact: true })).toBeVisible(); await prepare(page, "PREREQUISITES");
   let releaseWrite = () => {}; const writePending = new Promise<void>(resolve => { releaseWrite = resolve; });
