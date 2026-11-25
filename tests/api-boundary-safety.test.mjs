@@ -9,6 +9,9 @@ import { formatNumber } from "../lib/i18n/format.ts";
 import { arabicPlatformMessages } from "../lib/i18n/messages/ar/platform.ts";
 import { englishPlatformMessages } from "../lib/i18n/messages/en/platform.ts";
 import { createTranslator } from "../lib/i18n/translate.ts";
+import { arabicCommonMessages } from "../lib/i18n/messages/ar/common.ts";
+import { operatorFailureMessage } from "../lib/operator-ui.ts";
+import { localizedUiError } from "../lib/ui-error.ts";
 
 const read = (path) => readFile(new URL(`../${path}`, import.meta.url), "utf8");
 
@@ -121,7 +124,56 @@ test("a view given an unmapped API error shows the translated fallback, never th
   }
 });
 
-test("views never render or rethrow an API's own error text (#358)", async () => {
+test("ticket events show the Arabic catalogue fallback for a coded browser error (#418)", async () => {
+  const source = await read("app/TicketEventWorkflows.tsx");
+  const parsed = ts.createSourceFile("TicketEventWorkflows.tsx", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const component = parsed.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === "TicketEventWorkflows");
+  const handler = component?.body?.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === "showError");
+  assert.ok(handler);
+  const compiled = ts.transpileModule(handler.getText(parsed), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+  const t = createTranslator(arabicCommonMessages);
+  let displayed;
+  const showError = new Function("locale", "t", "setError", "operatorFailureMessage", "localizedUiError",
+    compiled + ";return showError;")("ar", t, value => { displayed = value; }, operatorFailureMessage, localizedUiError);
+  const problem = new DOMException("Synthetic quota message", "QuotaExceededError");
+  assert.ok(problem instanceof Error && problem.code > 0);
+  showError(problem);
+  assert.equal(displayed, arabicCommonMessages["common.errors.generic"]);
+});
+
+function caughtMessageLines(source, path) {
+  const parsed = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const lines = [];
+  function scan(binding, body) {
+    if (!binding || !ts.isIdentifier(binding)) return;
+    function inspect(node) {
+      if (ts.isPropertyAccessExpression(node) && ts.isIdentifier(node.expression)
+        && node.expression.text === binding.text && node.name.text === "message") {
+        const parent = node.parent;
+        const compares = ts.isBinaryExpression(parent)
+          && [ts.SyntaxKind.EqualsEqualsEqualsToken, ts.SyntaxKind.ExclamationEqualsEqualsToken].includes(parent.operatorToken.kind);
+        const checksLiteral = ts.isCallExpression(parent) && ts.isPropertyAccessExpression(parent.expression)
+          && ((parent.expression.name.text === "test" && ts.isRegularExpressionLiteral(parent.expression.expression))
+            || (parent.expression.name.text === "includes" && ts.isArrayLiteralExpression(parent.expression.expression)));
+        if (!compares && !checksLiteral) lines.push(parsed.getLineAndCharacterOfPosition(node.getStart(parsed)).line + 1);
+      }
+      ts.forEachChild(node, inspect);
+    }
+    inspect(body);
+  }
+  function visit(node) {
+    if (ts.isCatchClause(node)) scan(node.variableDeclaration?.name, node.block);
+    if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === "catch") {
+      const callback = node.arguments[0];
+      if (callback && (ts.isArrowFunction(callback) || ts.isFunctionExpression(callback))) scan(callback.parameters[0]?.name, callback.body);
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(parsed);
+  return lines;
+}
+
+test("operator views map API and caught errors to catalogue text (#358, #418)", async () => {
   // API error text is English only. Views show catalogue text: operatorFailureMessage, apiError or a t() key.
   const files = (await readdir(new URL("../app", import.meta.url), { recursive: true }))
     .map((path) => `app/${path.replaceAll("\\", "/")}`)
@@ -130,10 +182,15 @@ test("views never render or rethrow an API's own error text (#358)", async () =>
   const raw = [
     /\b(?:result|body|payload)\??\.(?:error|message)\b/u, // a parsed response body's own text
     /\{\s*(?:String\()?[\w.?]+\.(?:\w*safe_error|error_message)\)?\s*\}/u, // a stored API error rendered as is
+    /\b(\w+)\s+instanceof\s+Error\s*&&\s*["']code["']\s+in\s+\1\b/u, // a code property does not make a caught message trusted
   ];
   const findings = [];
   for (const path of files) {
-    (await read(path)).split("\n").forEach((line, index) => {
+    const source = await read(path);
+    if (path.endsWith(".tsx")) {
+      for (const line of caughtMessageLines(source, path)) findings.push(`${path}:${line}`);
+    }
+    source.split("\n").forEach((line, index) => {
       if (raw.some((pattern) => pattern.test(line))) findings.push(`${path}:${index + 1}`);
     });
   }
