@@ -110,7 +110,7 @@ try {
     ...mount("infra/docker/full/keycloak/themes/wasalx", theme),
     ...mount("app/fonts", theme + "/login/resources/fonts"),
     ...mount("public", theme + "/login/resources/shared"),
-    imageId, "start-dev", "--db=dev-mem", "--import-realm",
+    imageId, "--verbose", "start-dev", "--db=dev-mem", "--import-realm",
     "--spi-email-sender--provider=wasalx-fenced", "--spi-email-template--provider=wasalx-fenced");
   assert.match(containerId, /^[0-9a-f]{64}$/u);
   phase = "Keycloak loopback port";
@@ -151,9 +151,15 @@ try {
       [/BindException|Address already in use/iu, "address-in-use"],
       [/Unable to start HTTP server|Failed to start server/iu, "server-start"],
       [/Unrecognized option|Unknown option/iu, "unsupported-option"],
+      [/validating password|password policy/iu, "password-policy"],
+      [/Access is denied|Read-only file system|Unable to create directory/iu, "read-only-filesystem"],
+      [/OutOfMemoryError|unable to create native thread/iu, "runtime-resources"],
+      [/Script upload is disabled/iu, "script-upload"],
+      [/JDBC|datasource|hibernate/iu, "database"],
+      [/invalid credentials|invalid credential|credential data/iu, "credential-import"],
     ];
     const reported = diagnostics.filter(([pattern]) => pattern.test(privateLog)).map(([, label]) => label);
-    const classes = [...new Set(privateLog.match(/\b(?:java|org\.keycloak|io\.quarkus)\.[a-z.]+\.[A-Z][A-Za-z]+(?:Exception|Error)\b/gu))];
+    const classes = [...new Set(privateLog.match(/\b(?:javax?|org\.(?:keycloak|hibernate|h2|infinispan|jboss)|io\.(?:quarkus|netty|vertx)|com\.fasterxml)\.[a-z.]+\.[A-Z][A-Za-z]+(?:Exception|Error)\b/gu))];
     console.error(JSON.stringify({ diagnostics: reported, exceptionClasses: classes }));
   }
   process.exitCode = 1;
