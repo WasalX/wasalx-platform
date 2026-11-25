@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
 import { languageTag, supportedLocales, textDirection } from "../../lib/i18n/locales.ts";
 import { englishTenantMessages as en } from "../../lib/i18n/messages/en/tenant.ts";
 import { arabicTenantMessages as ar } from "../../lib/i18n/messages/ar/tenant.ts";
+import type { MetaSignupAttemptView } from "../../lib/meta-signup-contract.ts";
 
 const { entries } = JSON.parse(readFileSync("storybook-static/index.json", "utf8")) as {
   entries: Record<string, { type: "story" | "docs"; title: string }>;
@@ -18,6 +19,87 @@ for (const theme of ["light", "dark"] as const) {
   for (const locale of supportedLocales) {
     test.describe(`${theme} ${locale}`, () => {
       test.use({ colorScheme: theme, locale: languageTag(locale) });
+
+      test("desktop Meta signup and number recovery are actionable", async ({ page }, testInfo) => {
+        const messages = locale === "ar" ? ar : en;
+        const errors: string[] = [];
+        page.on("pageerror", error => errors.push(error.message));
+        await page.emulateMedia({ reducedMotion: "reduce" });
+        await page.clock.setFixedTime(new Date("2026-10-17T16:00:00Z"));
+
+        const sdk = { appId: "12345678", configId: "87654321", graphVersion: "v24.0" };
+        const challenge = "S".repeat(43);
+        const prepared: MetaSignupAttemptView = {
+          purpose: "NEW_NUMBER", attemptId: "44000000-0000-4000-8000-000000000001", revision: 1,
+          status: "AWAITING_AUTHORIZATION", nextAction: "AUTHORIZE", expiresAt: "2026-10-17T16:10:00Z",
+          canCancel: true, canStartAgain: false, choices: [],
+          readiness: { authorization: "PENDING", number: "PENDING", subscription: "PENDING", messaging: "UNKNOWN",
+            payment: { requestedPayer: "CUSTOMER", status: "UNKNOWN", paymentMethodVerified: false } },
+        };
+        const recovery: MetaSignupAttemptView = {
+          ...prepared, revision: 2, status: "OUTCOME_UNKNOWN", nextAction: "REVIEW_OUTCOME",
+          reasonCode: "META_SIGNUP_CREDENTIAL_UNAVAILABLE",
+        };
+        let attempt: MetaSignupAttemptView | null = null;
+        const discoveryBodies: unknown[] = [];
+        await page.route("https://connect.facebook.net/en_US/sdk.js", route => route.fulfill({
+          contentType: "text/javascript",
+          body: 'window.FB={init(){},login(callback){callback({authResponse:{code:"synthetic-code-once"}});}};',
+        }));
+        await page.route("**/api/connections/meta/signup/**", route => {
+          const request = route.request();
+          const path = new URL(request.url()).pathname.split("/signup/")[1];
+          switch (`${request.method()} ${path}`) {
+            case "GET capabilities": return route.fulfill({ json: { enabled: true, payerModes: ["CUSTOMER"], sdk } });
+            case "GET attempts": return route.fulfill({ json: { attempt } });
+            case `GET attempts/${prepared.attemptId}`: return route.fulfill({ json: attempt });
+            case "POST attempts":
+              attempt = prepared;
+              return route.fulfill({ json: { ...attempt, challenge, sdk } });
+            case `POST attempts/${prepared.attemptId}/exchange`:
+              attempt = recovery;
+              return route.fulfill({ json: attempt });
+            case `POST attempts/${prepared.attemptId}/discover`:
+              discoveryBodies.push(request.postDataJSON());
+              attempt = { ...recovery, revision: 3, status: "NUMBER_REQUIRED", nextAction: "COMPLETE_META_SETUP",
+                reasonCode: "META_SIGNUP_NO_PHONE", readiness: { ...recovery.readiness, authorization: "VERIFIED" } };
+              return route.fulfill({ json: attempt });
+            default: return route.abort();
+          }
+        });
+
+        const globals = `a11y.manual:!true;auditTheme:${theme};auditLocale:${locale}`;
+        const response = await page.goto(`/iframe.html?${new URLSearchParams({ id: "product-meta-signup--english", viewMode: "story", globals })}`);
+        expect(response?.ok()).toBe(true);
+        const canvas = page.locator("#storybook-root > .wx-story-canvas");
+        await expect(canvas).toHaveClass(new RegExp(`\\btheme-${theme}\\b`));
+        const content = canvas.getByRole("main");
+        await expect(content).toHaveAttribute("lang", locale);
+        await expect(content).toHaveAttribute("dir", textDirection(locale));
+        const signup = content.getByRole("region", { name: messages["tenant.metaSignup.title"], exact: true });
+        const screenshot = () => page.screenshot({ fullPage: true, animations: "disabled", caret: "hide", scale: "css" });
+
+        await signup.getByRole("button", { name: messages["tenant.metaSignup.prepare"], exact: true }).click();
+        const connect = signup.getByRole("button", { name: messages["tenant.metaSignup.connect"], exact: true });
+        await expect(connect).toBeEnabled();
+        await expect(connect).toBeInViewport();
+        const ready = await screenshot();
+
+        await connect.click();
+        await expect(signup.getByText(messages["tenant.metaSignup.status.OUTCOME_UNKNOWN"], { exact: true })).toBeVisible();
+        await expect(signup.getByText(messages["tenant.metaSignup.reason.META_SIGNUP_CREDENTIAL_UNAVAILABLE"], { exact: true })).toBeVisible();
+        const discover = signup.getByRole("button", { name: messages["tenant.metaSignup.discover"], exact: true });
+        await expect(discover).toBeEnabled();
+        await expect(discover).toBeInViewport();
+        const recoverable = await screenshot();
+
+        await discover.click();
+        await expect(signup.getByText(messages["tenant.metaSignup.status.NUMBER_REQUIRED"], { exact: true })).toBeVisible();
+        expect(discoveryBodies).toEqual([{ expectedRevision: recovery.revision }]);
+        expect(errors).toEqual([]);
+        writeFileSync(testInfo.outputPath(`meta-signup-ready-desktop-${theme}-${locale}.png`), ready);
+        writeFileSync(testInfo.outputPath(`meta-signup-recovery-desktop-${theme}-${locale}.png`), recoverable);
+      });
 
       for (const [storyId, entry] of stories) {
         test(storyId, async ({ page }, testInfo) => {
