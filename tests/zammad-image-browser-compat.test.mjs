@@ -1101,11 +1101,30 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
         machine=User.create!(login: "tenant-automation-ui-#{SecureRandom.hex(12)}", email: '', firstname: 'Tenant', lastname: 'Automation UI proof', active: true,
           roles: [Role.find_by!(name: 'Agent'), *roles], created_by_id: owner.id, updated_by_id: owner.id)
         raise 'UI fixture inherited queue access' unless machine.group_ids_access_map.empty?
-        puts JSON.generate(id:machine.id,login:machine.login,group_id:group.id,role_ids:machine.role_ids.sort)
+        puts JSON.generate(id:machine.id,login:machine.login,group_id:group.id,group_active:group.active?,role_ids:machine.role_ids.sort)
       `)).split("\n").find(line => line.startsWith("{")) ?? "");
       const adminContext = await browser.newContext({ viewport: scenario.viewport, timezoneId: "Asia/Riyadh",
         isMobile: scenario.mobile, hasTouch: scenario.mobile, storageState: adminStorageState });
       const adminPage = await adminContext.newPage();
+      const chooserStartedAt = Date.now();
+      const chooserEvents = [];
+      const chooserWorkflow = new Map();
+      const chooserLogPrefix = 'wasalx-native-queue-chooser-state ';
+      const chooserEventLimit = 24;
+      adminPage.on('console', message => {
+        if (message.type() !== 'debug' || chooserEvents.length >= chooserEventLimit) return;
+        const line = message.text();
+        if (!line.startsWith(chooserLogPrefix)) return;
+        let state;
+        try { state = JSON.parse(line.slice(chooserLogPrefix.length)); } catch { return; }
+        if (!state) return;
+        const { elapsedMs, trigger, fieldGeneration, fieldPresent, modalReady, menuOpen, browserGroupPresent, expectedOptionInDom } = state;
+        if (!Number.isSafeInteger(elapsedMs) || !Number.isSafeInteger(fieldGeneration)
+          || !['state', 'input-click', 'option-click'].includes(trigger)
+          || ![fieldPresent, modalReady, menuOpen, expectedOptionInDom].every(value => typeof value === 'boolean')
+          || !(browserGroupPresent === null || typeof browserGroupPresent === 'boolean')) return;
+        chooserEvents.push({ elapsedMs, trigger, fieldGeneration, fieldPresent, modalReady, menuOpen, browserGroupPresent, expectedOptionInDom });
+      });
       const coreWorkflowRequests = new Set();
       const coreWorkflowResponses = new Set();
       let coreWorkflowCompleted;
@@ -1113,29 +1132,79 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
         socket.on('framesent', frame => {
           let value;
           try { value = JSON.parse(frame.payload.toString()); } catch { return; }
-          if (value.event === 'core_workflow' && String(value.params?.id) === String(machineUiSeed.id)
-            && value.params?.group_ids?.[String(machineUiSeed.group_id)]?.includes('full')) {
-            coreWorkflowRequests.add(value.request_id);
+          if (value.event === 'core_workflow' && String(value.params?.id) === String(machineUiSeed.id)) {
+            const fullGrant = Boolean(value.params?.group_ids?.[String(machineUiSeed.group_id)]?.includes('full'));
+            if (fullGrant) coreWorkflowRequests.add(value.request_id);
+            if (typeof value.request_id === 'string' && chooserWorkflow.size < chooserEventLimit && !chooserWorkflow.has(value.request_id)) {
+              chooserWorkflow.set(value.request_id, { fullGrant, requestMs: Date.now() - chooserStartedAt, responseMs: null });
+            }
           }
         });
         socket.on('framereceived', frame => {
           let values;
           try { values = JSON.parse(frame.payload.toString()); } catch { return; }
           for (const value of Array.isArray(values) ? values : [values]) {
-            if (value.event === 'core_workflow' && coreWorkflowRequests.has(value.data?.request_id)) {
-              coreWorkflowResponses.add(value.data.request_id);
+            if (value.event !== 'core_workflow') continue;
+            const requestId = value.data?.request_id;
+            const timing = chooserWorkflow.get(requestId);
+            if (timing?.responseMs === null) timing.responseMs = Date.now() - chooserStartedAt;
+            if (coreWorkflowRequests.has(requestId)) {
+              coreWorkflowResponses.add(requestId);
               coreWorkflowCompleted?.();
             }
           }
         });
       });
       let saveAttempted = false;
+      let chooserPhase = 'open-editor';
+      let failure = null;
       try {
       await adminPage.goto(`${zammadOrigin}/#manage/users`, { waitUntil: "domcontentloaded", referer: `${zammadOrigin}/desktop` });
       await adminPage.waitForFunction(locale => window.App?.i18n?.get() === locale
         && window.App?.Session?.get('preferences')?.locale === locale, scenario.locale);
-      const language = await adminPage.evaluate(() => ({ locale: window.App.i18n.get(), dir: document.documentElement.dir,
-        search: window.App.i18n.translatePlain("Search for users"), submit: window.App.i18n.translatePlain("Submit") }));
+      const language = await adminPage.evaluate(({ groupId, startedAt, prefix, limit }) => {
+        const chooserSelector = '.js-groupListNewItemRow .js-groupListItemAddNew';
+        const optionSelector = `li[data-value="${groupId}"] [role="option"]`;
+        let lastInput;
+        let fieldGeneration = 0;
+        let lastState;
+        let count = 0;
+        const sample = trigger => {
+          if (count >= limit) return;
+          const modal = document.querySelector('.modal');
+          if (!modal && !lastState) return;
+          const chooser = modal?.querySelector(chooserSelector);
+          const input = chooser?.querySelector('.js-input');
+          if (input && input !== lastInput) {
+            lastInput = input;
+            fieldGeneration += 1;
+          }
+          const state = {
+            fieldGeneration, fieldPresent: Boolean(input), modalReady: Boolean(modal?.classList.contains('modal--ready')),
+            menuOpen: Boolean(chooser?.querySelector('.searchableSelect.open')),
+            browserGroupPresent: window.App?.Group?.exists?.(groupId) ?? null,
+            expectedOptionInDom: Boolean(chooser?.querySelector(optionSelector)),
+          };
+          const signature = JSON.stringify(state);
+          if (trigger === 'state' && signature === lastState) return;
+          lastState = signature;
+          count += 1;
+          console.debug(prefix + JSON.stringify({ elapsedMs: Date.now() - startedAt, trigger, ...state }));
+        };
+        // Sample transitions and the actual clicks without querying layout or waiting for readiness.
+        const observer = new MutationObserver(() => {
+          sample('state');
+          if (count >= limit) observer.disconnect();
+        });
+        observer.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['class', 'hidden'] });
+        document.addEventListener('click', event => {
+          if (!(event.target instanceof Element) || !event.target.closest(chooserSelector)) return;
+          if (event.target.closest('.js-input')) sample('input-click');
+          else if (event.target.closest(optionSelector)) sample('option-click');
+        }, { capture: true, passive: true });
+        return { locale: window.App.i18n.get(), dir: document.documentElement.dir,
+          search: window.App.i18n.translatePlain("Search for users"), submit: window.App.i18n.translatePlain("Submit") };
+      }, { groupId: machineUiSeed.group_id, startedAt: chooserStartedAt, prefix: chooserLogPrefix, limit: chooserEventLimit });
       assert.equal(language.dir, scenario.locale === "ar" ? "rtl" : "ltr");
       if (scenario.locale === "ar") { assert.notEqual(language.search, "Search for users"); assert.notEqual(language.submit, "Submit"); }
       await adminPage.getByPlaceholder(language.search).fill(machineUiSeed.login);
@@ -1144,11 +1213,15 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
       const fullGrant = machineDialog.locator(`input[name="group_ids::${machineUiSeed.group_id}"][value="full"]`);
       assert.equal(await fullGrant.count(), 0);
       const newGrant = machineDialog.locator('.js-groupListNewItemRow');
+      chooserPhase = 'open-chooser';
       await newGrant.locator('.js-groupListItemAddNew .js-input').click();
+      chooserPhase = 'select-expected-option';
       await newGrant.getByRole('option', { name: 'Operations', exact: true }).click();
+      chooserPhase = 'add-grant';
       await newGrant.locator('input[value="full"]').locator('..').click();
       await newGrant.locator('.js-add').click();
       assert.equal(await fullGrant.isChecked(), true);
+      chooserPhase = 'workflow-response';
       await new Promise((resolve, reject) => {
         if (coreWorkflowResponses.size) return resolve();
         const timeout = setTimeout(() => reject(new Error('No matching Users Full-grant CoreWorkflow websocket response')), 30_000);
@@ -1158,6 +1231,7 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
         && !window.App.Config.get('core_workflow_ajax_mode')
         && Object.keys(window.App.FormHandlerCoreWorkflow.getRequests()).length === 0);
       await adminPage.screenshot({ path: join(evidenceDirectory, `native-permission-${scenario.name}-before.png`), fullPage: false });
+      chooserPhase = 'save-and-readback';
       saveAttempted = true;
       const [machineSave] = await Promise.all([
         adminPage.waitForResponse(response => new URL(response.url()).pathname === `/api/v1/users/${machineUiSeed.id}`
@@ -1185,12 +1259,21 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
       await writeFile(join(evidenceDirectory, `native-permission-${scenario.name}.json`), JSON.stringify(proof, null, 2));
       return proof;
       } catch (error) {
+        failure = error?.name === 'TimeoutError' ? 'timeout' : 'failed';
         await writeFile(join(evidenceDirectory, `native-permission-${scenario.name}-failure.json`), JSON.stringify({
           ...scenario, machineId: machineUiSeed.id, saveAttempted, noReplay: true, error: String(error),
           matchingRequestResponseIds: [...coreWorkflowResponses],
         }, null, 2));
         throw error;
-      } finally { await adminContext.close(); }
+      } finally {
+        console.log(`native-queue-chooser ${JSON.stringify({
+          scenario: scenario.name, phase: chooserPhase, outcome: failure ?? 'passed', saveAttempted,
+          railsGroupPresent: Number.isSafeInteger(machineUiSeed.group_id), railsGroupActive: machineUiSeed.group_active === true,
+          chooserEvents, chooserEventsAtLimit: chooserEvents.length === chooserEventLimit,
+          coreWorkflow: [...chooserWorkflow.values()], coreWorkflowAtLimit: chooserWorkflow.size === chooserEventLimit,
+        })}`);
+        await adminContext.close();
+      }
 
     };
     const legacyGrantUiProofs = [await proveNativeQueueGrant(scenarios[0])];
