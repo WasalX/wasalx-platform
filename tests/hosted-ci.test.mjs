@@ -15,6 +15,7 @@ import { reportTimingsWithQuarantine, validateQuarantine } from "../scripts/host
 import { parsePostgresShardArgs, postgresScenarioGroups, verifyPostgresReports } from "../scripts/postgres-scenario-registry.mjs";
 import { discoverBrowserCases } from "../scripts/release/browser-shards.mjs";
 import { operatorCaseProgress } from "./support/operator-case-progress.mjs";
+import { cleanupKeycloakIdentity } from "./support/hosted-keycloak-cleanup.mjs";
 
 const repository = fileURLToPath(new URL("../", import.meta.url));
 const read = file => readFile(join(repository, file), "utf8");
@@ -170,6 +171,7 @@ test("tracked tests belong to a named CI runner or the test allowlist", async ()
       "playwright.application.config.ts", "playwright.identity.config.ts", "playwright.storybook.config.ts",
       "tests/visual/inbox-synthetic.spec.ts", "scripts/storybook-visual-regression.mjs", "scripts/run-application-e2e.mjs"].map(read));
   const operatorRunner = await read("tests/hosted-platform-operator.mjs");
+  const identityRunner = await read("tests/hosted-keycloak-identity.mjs");
   const fixtureSpecs = new Map(jobs["application-e2e"].strategy.matrix.locale.map(locale => {
     const cases = discoverBrowserCases({ argv: ["pnpm", "test:e2e"], env: {
       WASALX_E2E_LOCALES: locale, WASALX_E2E_ROLES: "tenant_owner", WASALX_E2E_PLATFORM_URL: "",
@@ -219,8 +221,9 @@ test("tracked tests belong to a named CI runner or the test allowlist", async ()
           && referencesFile(applicationRunner, "playwright.application.config.ts")
           && referencesFile(application, "./tests/e2e")
           && posix.dirname(file) === "tests/e2e" && referencesFile(application, posix.basename(file));
-      case "playwright.identity.config.ts":
-        return referencesFile(identity, "./tests/e2e")
+      case "keycloak-identity":
+        return runsFile(command, "tests/hosted-keycloak-identity.mjs")
+          && referencesFile(identityRunner, "playwright.identity.config.ts") && referencesFile(identity, "./tests/e2e")
           && posix.dirname(file) === "tests/e2e" && referencesFile(identity, posix.basename(file));
       case "storybook":
         return referencesFile(storybookRunner, "playwright.storybook.config.ts")
@@ -834,6 +837,55 @@ test("Hosted operator diagnostics retain only allowed step labels and bounded ob
   }).terminalStep, inFlight.title);
 });
 
+test("Hosted Keycloak identity job builds the project image and requires the isolated cases", async () => {
+  const { jobs } = parse(await read(".github/workflows/ci.yml"));
+  const job = jobs["keycloak-identity"];
+  assert.equal(job.needs, "changes");
+  assert.match(job.if, /needs\.changes\.outputs\.keycloak-identity != 'false'/u);
+  assert.equal(jobs.changes.outputs["keycloak-identity"], "${{ steps.keycloak-identity.outputs.needed }}");
+  const run = job.steps.find(step => runsFile(step.run ?? "", "tests/hosted-keycloak-identity.mjs"));
+  assert.match(run.run, /docker build --file Dockerfile\.foundation-keycloak/u);
+  assert(!job.steps.some(step => step.uses?.startsWith("actions/upload-artifact@")));
+  const gate = jobs["ci-gate"];
+  assert(gate.needs.includes("keycloak-identity"));
+  assert.equal(gate.steps[0].env.KEYCLOAK_IDENTITY, "${{ needs.keycloak-identity.result }}");
+  assert.equal(gate.steps[0].env.KEYCLOAK_IDENTITY_NEEDED, "${{ needs.changes.outputs.keycloak-identity }}");
+});
+
+test("Hosted Keycloak cleanup verifies the prebuilt tag and attempts other resources after a failure", async () => {
+  const image = "wasalx/ci-keycloak:1-1";
+  const container = "wasalx-ci-keycloak-1-1";
+  let tagged = true;
+  let imageChecks = 0;
+  const docker = async (...args) => {
+    if (args[0] === "ps") {
+      assert.deepEqual(args, ["ps", "-aq", "--filter", "name=^/" + container + "$"]);
+      return "owned-container";
+    }
+    if (args[0] === "rm") {
+      assert.deepEqual(args, ["rm", "-f", container]);
+      throw new Error("Container removal failed");
+    }
+    if (args[1] === "ls") {
+      assert.deepEqual(args, ["image", "ls", "-q", image]);
+      imageChecks++;
+      return tagged ? "owned-image" : "";
+    }
+    assert.deepEqual(args, ["image", "rm", image]);
+    tagged = false;
+  };
+  const failures = await cleanupKeycloakIdentity({
+    docker, image, container, callback: { listening: false }, scratch: "owned-fixtures",
+    removeScratch: async () => { throw new Error("Fixture removal failed"); },
+  });
+  assert.deepEqual(failures, ["container", "fixtures"]);
+  assert.equal(tagged, false);
+  assert.equal(imageChecks, 2);
+  assert.deepEqual(await cleanupKeycloakIdentity({
+    docker: async () => "", image, container, callback: { listening: false },
+  }), []);
+});
+
 test("Hosted browser jobs retain Playwright diagnostics on failure or cancellation", async () => {
   const { jobs } = parse(await read(".github/workflows/ci.yml"));
   const diagnostics = {
@@ -869,7 +921,7 @@ test("CI gate requires each event's jobs and rejects unplanned skips, failures, 
     DEV_INSTALL_NEEDED: "true", DEV_INSTALL: "success", STORYBOOK_NEEDED: "true", STORYBOOK: "success",
     ZAMMAD_NEEDED: "true", ZAMMAD_COMPATIBILITY: "success",
     INSTALLER_PORTAL_NEEDED: "true", INSTALLER_PORTAL: "success",
-    APPLICATION_NEEDED: "true", APPLICATION_E2E: "success", PLATFORM_OPERATOR_E2E: "success",
+    APPLICATION_NEEDED: "true", APPLICATION_E2E: "success", PLATFORM_OPERATOR_E2E: "success", KEYCLOAK_IDENTITY: "success",
   };
   const unselected = {
     ...pr, INTEGRATION_NEEDED: "false", INTEGRATION: "skipped", PORTAL_INTEGRATION: "skipped",
@@ -877,7 +929,7 @@ test("CI gate requires each event's jobs and rejects unplanned skips, failures, 
     DEV_INSTALL_NEEDED: "false", DEV_INSTALL: "skipped", STORYBOOK_NEEDED: "false", STORYBOOK: "skipped",
     ZAMMAD_NEEDED: "false", ZAMMAD_COMPATIBILITY: "skipped",
     INSTALLER_PORTAL_NEEDED: "false", INSTALLER_PORTAL: "skipped",
-    APPLICATION_NEEDED: "false", APPLICATION_E2E: "skipped", PLATFORM_OPERATOR_E2E: "skipped",
+    APPLICATION_NEEDED: "false", APPLICATION_E2E: "skipped", PLATFORM_OPERATOR_E2E: "skipped", KEYCLOAK_IDENTITY_NEEDED: "false", KEYCLOAK_IDENTITY: "skipped",
   };
   const queue = {
     ...pr, EVENT: "merge_group", REVIEW: "skipped", IMAGES: "success",
@@ -891,8 +943,13 @@ test("CI gate requires each event's jobs and rejects unplanned skips, failures, 
   for (const [lane, result, override, expected] of [
     ["PR with selected jobs", pr, {}, 0],
     ["PR with unselected jobs", unselected, {}, 0],
+    ["PR with Keycloak unselected and operator selected", pr, { KEYCLOAK_IDENTITY_NEEDED: "false", KEYCLOAK_IDENTITY: "skipped" }, 0],
+    ["PR with operator unselected and Keycloak selected", unselected, { KEYCLOAK_IDENTITY_NEEDED: "true", KEYCLOAK_IDENTITY: "success" }, 0],
     ["PR with a failed signed-in operator shard", pr, { PLATFORM_OPERATOR_E2E: "failure" }, 1],
     ["PR with selected signed-in operator skipped", pr, { PLATFORM_OPERATOR_E2E: "skipped" }, 1],
+    ["PR with a failed Keycloak identity job", pr, { KEYCLOAK_IDENTITY: "failure" }, 1],
+    ["PR with Keycloak identity skipped without selection evidence", unselected, { KEYCLOAK_IDENTITY_NEEDED: "" }, 1],
+    ["merge queue with Keycloak identity skipped", queue, { KEYCLOAK_IDENTITY: "skipped" }, 1],
     ["PR with a failed application shard", pr, { APPLICATION_E2E: "failure" }, 1],
     ["PR with a cancelled application shard", pr, { APPLICATION_E2E: "cancelled" }, 1],
     ["PR with application skipped without selection evidence", unselected, { APPLICATION_NEEDED: "" }, 1],
@@ -1105,7 +1162,7 @@ test("PR image results are advisory while the merge queue requires the full imag
     if (imageResult === "failure") assert.match(advisory.stdout, /::warning::Advisory PR image builds: failure/u);
 
     const result = runWorkflowScript(gate.steps[0].run, {
-      EVENT: "merge_group", CHANGES: "success", PRIVACY: "success", WORKFLOW_LINT: "success", STORYBOOK: "success", APPLICATION_E2E: "success", PLATFORM_OPERATOR_E2E: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: "skipped",
+      EVENT: "merge_group", CHANGES: "success", PRIVACY: "success", WORKFLOW_LINT: "success", STORYBOOK: "success", APPLICATION_E2E: "success", PLATFORM_OPERATOR_E2E: "success", KEYCLOAK_IDENTITY: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: "skipped",
       IMAGES: imageResult, INTEGRATION: "success", PORTAL_INTEGRATION: "success",
       INTEGRATION_COVERAGE: "success", DEV_INSTALL: "skipped", INFRA: "success",
       ZAMMAD_COMPATIBILITY: "success",
@@ -1115,7 +1172,7 @@ test("PR image results are advisory while the merge queue requires the full imag
   }
   const summary = join(directory, "gate").replaceAll("\\", "/");
   const result = runWorkflowScript(gate.steps[0].run, {
-    EVENT: "pull_request", CHANGES: "success", PRIVACY: "success", WORKFLOW_LINT: "success", STORYBOOK: "success", APPLICATION_E2E: "success", PLATFORM_OPERATOR_E2E: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: "success",
+    EVENT: "pull_request", CHANGES: "success", PRIVACY: "success", WORKFLOW_LINT: "success", STORYBOOK: "success", APPLICATION_E2E: "success", PLATFORM_OPERATOR_E2E: "success", KEYCLOAK_IDENTITY: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: "success",
     IMAGES: "skipped", INTEGRATION_NEEDED: "false", INTEGRATION: "skipped",
     PORTAL_INTEGRATION: "skipped", INTEGRATION_COVERAGE: "skipped", DEV_INSTALL_NEEDED: "false", DEV_INSTALL: "skipped",
     INSTALLER_PORTAL_NEEDED: "false", INSTALLER_PORTAL: "skipped",
@@ -1283,7 +1340,7 @@ ${detector.run}`, { GITHUB_OUTPUT: outputFile.replaceAll("\\", "/"), DIFF_PATHS:
   ]) {
     const pr = event === "pull_request";
     const result = runWorkflowScript(gateStep.run, {
-      EVENT: event, CHANGES: "success", PRIVACY: "success", WORKFLOW_LINT: "success", STORYBOOK: "success", APPLICATION_E2E: "success", PLATFORM_OPERATOR_E2E: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: pr ? "success" : "skipped",
+      EVENT: event, CHANGES: "success", PRIVACY: "success", WORKFLOW_LINT: "success", STORYBOOK: "success", APPLICATION_E2E: "success", PLATFORM_OPERATOR_E2E: "success", KEYCLOAK_IDENTITY: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: pr ? "success" : "skipped",
       IMAGES: pr ? "skipped" : "success", INTEGRATION_NEEDED: "false",
       INTEGRATION: pr ? "skipped" : "success", PORTAL_INTEGRATION: pr ? "skipped" : "success",
       INTEGRATION_COVERAGE: pr ? "skipped" : "success",
@@ -1299,7 +1356,7 @@ ${detector.run}`, { GITHUB_OUTPUT: outputFile.replaceAll("\\", "/"), DIFF_PATHS:
     ["true", "failure", 1], ["true", "cancelled", 1],
   ]) {
     const result = runWorkflowScript(gateStep.run, {
-      EVENT: "pull_request", CHANGES: "success", PRIVACY: "success", WORKFLOW_LINT: "success", STORYBOOK: "success", APPLICATION_E2E: "success", PLATFORM_OPERATOR_E2E: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: "success",
+      EVENT: "pull_request", CHANGES: "success", PRIVACY: "success", WORKFLOW_LINT: "success", STORYBOOK: "success", APPLICATION_E2E: "success", PLATFORM_OPERATOR_E2E: "success", KEYCLOAK_IDENTITY: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: "success",
       IMAGES: "skipped", INTEGRATION_NEEDED: "false",
       INTEGRATION: "skipped", PORTAL_INTEGRATION: "skipped", INTEGRATION_COVERAGE: "skipped",
       DEV_INSTALL_NEEDED: needed, DEV_INSTALL: jobResult, INFRA_NEEDED: "false", INFRA: "skipped",
@@ -1320,7 +1377,7 @@ ${detector.run}`, { GITHUB_OUTPUT: outputFile.replaceAll("\\", "/"), DIFF_PATHS:
   ]) {
     const pr = event === "pull_request";
     const result = runWorkflowScript(gateStep.run, {
-      EVENT: event, CHANGES: "success", PRIVACY: "success", WORKFLOW_LINT: "success", STORYBOOK: "success", APPLICATION_E2E: "success", PLATFORM_OPERATOR_E2E: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: pr ? "success" : "skipped",
+      EVENT: event, CHANGES: "success", PRIVACY: "success", WORKFLOW_LINT: "success", STORYBOOK: "success", APPLICATION_E2E: "success", PLATFORM_OPERATOR_E2E: "success", KEYCLOAK_IDENTITY: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: pr ? "success" : "skipped",
       IMAGES: pr ? "skipped" : "success", DEV_INSTALL_NEEDED: "false", DEV_INSTALL: "skipped",
       INSTALLER_PORTAL_NEEDED: pr ? "false" : "true", INSTALLER_PORTAL: pr ? "skipped" : "success",
       INFRA_NEEDED: "true", INFRA: "success", INTEGRATION_NEEDED: needed, GITHUB_STEP_SUMMARY: summary,
@@ -1382,6 +1439,14 @@ test("Zammad compatibility gates CI and reuses the same job on the nightly sched
   assert(Object.hasOwn(compatibility.on, "workflow_call"));
   assert.deepEqual(compatibility.permissions, { contents: "read" });
   assert.equal(compatibility.jobs.compatibility["runs-on"], "ubuntu-24.04");
+  const manifest = JSON.parse(await read("infra/docker/full/zammad/typecheck-upstream.json"));
+  const dockerfile = (await read("infra/docker/Dockerfile.zammad")).replaceAll("\r\n", "\n");
+  assert.match(manifest.revision, /^[a-f0-9]{40}$/u);
+  assert(dockerfile.includes("FROM scratch AS typecheck-source\nADD https://github.com/zammad/zammad.git#"
+    + manifest.revision + ":app/frontend /app/frontend/"));
+  const typecheck = dockerfile.split(/^RUN /mu).find(run => run.includes("pnpm lint:ts"));
+  assert(dockerfile.includes("COPY --chown=1000:1000 --from=typecheck-source / /tmp/typecheck-upstream/"));
+  assert.match(typecheck, /prepare-zammad-typecheck\.mjs restore \/opt\/zammad \/tmp\/typecheck-upstream\.json \/tmp\/typecheck-upstream [\s\S]+rm -rf \/tmp\/typecheck-upstream[\s\S]+pnpm lint:ts[\s\S]+prepare-zammad-typecheck\.mjs remove/u);
 });
 
 test("PostgreSQL coverage requires an exact report from every shard", async t => {

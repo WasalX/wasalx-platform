@@ -18,6 +18,4 @@ ProtectSystem=strict
 PrivateTmp=true
 UnsetEnvironment=DOCKER_CONTEXT
 TimeoutStartSec=4h
-ExecStartPre=:/bin/sh -c 'status=0; rm -rf -- "${CACHE_DIRECTORY:?}"/rehearsal-* || status=$?; containers=$(docker --host unix:///run/docker.sock ps -aq --filter label=wasalx.io/purpose=dr-rehearsal) && echo "$containers" | xargs -r docker --host unix:///run/docker.sock rm --force --volumes || status=$?; exit "$status"'
 ExecStart=/usr/bin/node scripts/dr/rehearse-control-plane-backup.mjs
-ExecStopPost=:/bin/sh -c 'status=0; rm -rf -- "${CACHE_DIRECTORY:?}"/rehearsal-* || status=$?; containers=$(docker --host unix:///run/docker.sock ps -aq --filter label=wasalx.io/purpose=dr-rehearsal) && echo "$containers" | xargs -r docker --host unix:///run/docker.sock rm --force --volumes || status=$?; exit "$status"'
