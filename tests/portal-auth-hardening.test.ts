@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
 import { readFile } from "node:fs/promises";
+import { registerHooks } from "node:module";
 import test from "node:test";
 import { exportJWK, generateKeyPair, SignJWT } from "jose";
 import {
@@ -71,6 +72,105 @@ test("identity JSON responses are content-typed and size bounded", async () => {
   await assert.rejects(() => readBoundedJson(new Response("{}", { headers: { "content-type": "text/plain" } }), 32));
   await assert.rejects(() => readBoundedJson(new Response("x".repeat(33), { headers: { "content-type": "application/json" } }), 32));
   assert.deepEqual(await readBoundedJson(new Response('{"ok":true}', { headers: { "content-type": "application/json" } }), 32), { ok: true });
+});
+
+test("authenticated portal mutations distinguish malformed JSON from an omitted body", async (t) => {
+  const origin = "https://portal.invalid";
+  const id = "10000000-0000-4000-8000-000000000001";
+  const key = "synthetic-mutation";
+  const actor = "operator@example.test";
+  const session = { userId: "synthetic-user", tenantId: id, role: "tenant_owner", displayName: actor, csrfToken: "synthetic-csrf" };
+  const dataModule = (source: string) => `data:text/javascript,${encodeURIComponent(source)}`;
+  const sessionStore = dataModule(`export async function loadStoredPortalSession() { return ${JSON.stringify(session)}; }`);
+  const effects = dataModule(`
+    export const calls = [];
+    export async function startNotionRoutingOAuth(...args) {
+      calls.push(["notion", ...args]);
+      return { integrationId: ${JSON.stringify(id)}, authorizationUrl: "https://authorization.invalid/" };
+    }
+    export async function retryDelivery(...args) { calls.push(["delivery", ...args]); }
+    export async function getPrivacyRequest() { return { request_type: "EXPORT" }; }
+    export async function retryPrivacyRequest(...args) {
+      calls.push(["privacy", ...args]);
+      return { state: "QUEUED" };
+    }
+  `);
+  const routeFiles = [
+    "/api/client-routing/integrations/notion/start/route.ts",
+    "/api/deliveries/[id]/retry/route.ts",
+    "/api/privacy/requests/[id]/retry/route.ts",
+  ];
+  // Use the real handlers and authentication. Replace session storage and mutation effects.
+  const hooks = registerHooks({ resolve(specifier, context, nextResolve) {
+    const parent = decodeURIComponent(context.parentURL ?? "");
+    if (parent.endsWith("/lib/portal-session.ts") && specifier === "./portal-session-store.ts") {
+      return { url: sessionStore, shortCircuit: true };
+    }
+    if (routeFiles.some(file => parent.endsWith(file))) {
+      if (specifier === "next/server") return nextResolve("vinext/shims/server", context);
+      if (/\/lib\/(data|control-plane-data|fixture-data)(\.ts)?$/u.test(specifier)) {
+        return { url: effects, shortCircuit: true };
+      }
+      if (specifier.startsWith(".") && !specifier.endsWith(".ts")) {
+        return nextResolve(new URL(`${specifier}.ts`, context.parentURL).href, context);
+      }
+    }
+    return nextResolve(specifier, context);
+  } });
+  const previous = snapshotEnvironment([...managedEnvironment, "PORTAL_FIXTURE_ROLE"]);
+  t.mock.method(globalThis, "fetch", async () => assert.fail("Portal mutation tests must keep every request in-process"));
+  try {
+    process.env.PORTAL_DATA_BACKEND = "control-plane";
+    process.env.PORTAL_COOKIE_SECURE = "false";
+    process.env.PORTAL_PUBLIC_ORIGIN = origin;
+    delete process.env.PORTAL_FIXTURE_ROLE;
+    const { calls } = await import(effects) as { calls: unknown[][] };
+    const { POST: notion } = await import("../app/api/client-routing/integrations/notion/start/route.ts");
+    const { POST: delivery } = await import("../app/api/deliveries/[id]/retry/route.ts");
+    const { POST: privacy } = await import("../app/api/privacy/requests/[id]/retry/route.ts");
+    const cases = [
+      { name: "Notion OAuth start", post: notion, field: "integrationId", valid: id, invalid: 42, status: 200,
+        call: (value?: unknown) => ["notion", value] },
+      { name: "delivery retry", post: delivery, field: "confirmOutcomeUnknown", valid: true, invalid: "yes", status: 200,
+        call: (value: unknown = false) => ["delivery", id, actor, value, key] },
+      { name: "managed privacy retry", post: privacy, field: "confirmation", valid: "DELETE", invalid: false, status: 202,
+        call: (value?: unknown) => ["privacy", id, value, key] },
+      { name: "fixture privacy retry", post: privacy, field: "confirmation", valid: "DELETE", invalid: false, status: 202,
+        call: (value?: unknown) => ["privacy", id, value, key, actor], fixture: true },
+    ];
+    for (const contract of cases) {
+      await t.test(contract.name, async (contractTest) => {
+        process.env.PORTAL_DATA_BACKEND = contract.fixture ? "fixture" : "control-plane";
+        const variants = [
+          { label: "valid body", raw: JSON.stringify({ [contract.field]: contract.valid }), expected: [contract.call(contract.valid)], status: contract.status },
+          { label: "empty object", raw: "{}", expected: [contract.call()], status: contract.status },
+          { label: "omitted body", raw: undefined, expected: [contract.call()], status: contract.status },
+          { label: "malformed JSON", raw: JSON.stringify({ [contract.field]: contract.valid }).slice(0, -1), expected: [], status: 400 },
+          { label: "JSON array", raw: "[]", expected: [], status: 400 },
+          { label: "JSON null", raw: "null", expected: [], status: 400 },
+          { label: "invalid field type", raw: JSON.stringify({ [contract.field]: contract.invalid }), expected: [], status: 400 },
+        ];
+        for (const { label, raw, expected, status } of variants) {
+          await contractTest.test(label, async () => {
+            calls.length = 0;
+            const response = await contract.post(new Request(origin, {
+              method: "POST",
+              headers: {
+                origin, cookie: "wasalx_session=synthetic-cookie", "content-type": "application/json",
+                "x-wasalx-csrf": session.csrfToken, "idempotency-key": key,
+                "oai-authenticated-user-id": session.userId, "oai-authenticated-user-email": actor,
+              },
+              body: raw,
+            }), { params: Promise.resolve({ id }) });
+            assert.deepEqual({ status: response.status, calls }, { status, calls: expected });
+          });
+        }
+      });
+    }
+  } finally {
+    hooks.deregister();
+    restoreEnvironment(previous);
+  }
 });
 
 test("identity JSON admission cancels rejected headers and times out stalled bodies even if cancellation stalls", async () => {
