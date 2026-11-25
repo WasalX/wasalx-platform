@@ -262,6 +262,7 @@ export const englishCaseMessages = {
   "teamsAdmin.storage": "Recovery storage is unavailable. Enable session storage before saving.",
   "teamsAdmin.discard": "Discard unsaved team changes?",
   "teamsAdmin.loading": "Loading teams…",
+  "teamsAdmin.listFailed": "Could not load support teams. Try again to see your teams.",
   "teamsAdmin.empty": "No support teams yet. Create a team to organize ticket work.",
   "teamsAdmin.more": "Load more teams",
   "teamsAdmin.choose": "Choose a team to review its settings and access.",
