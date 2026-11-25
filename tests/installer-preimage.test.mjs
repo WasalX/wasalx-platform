@@ -6,9 +6,11 @@ import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import test from "node:test";
 import { runInNewContext } from "node:vm";
-import { assertRetainedPreimage, composePreimage, composeServiceHash, resolveComposeServiceReferences, sha256, firstDifference } from "../scripts/release/installer-artifacts.mjs";
+import { assertRetainedPreimage, composePreimage, composeServiceHash, preserveReplacement, recreateRefusals, resolveComposeServiceReferences, sha256, firstDifference, writeArtifactState } from "../scripts/release/installer-artifacts.mjs";
 import { assertRollbackInventory, rollbackStatePath } from "../scripts/release/installer-rollback-state.mjs";
 import { diagnosePreimageRerender } from "../scripts/release/diagnose-preimage-rerender.mjs";
+import { devValueDigest } from "../scripts/release/installer-stack.mjs";
+import { executeStage } from "../scripts/release/installer-stages.mjs";
 
 const id = "c".repeat(64);
 const imageId = `sha256:${"d".repeat(64)}`;
@@ -64,18 +66,21 @@ async function rerenderFixture(t, subject = {}) {
       "com.docker.compose.version": "2.40.3", "com.docker.compose.config-hash": "" } },
     HostConfig: {}, Mounts: [], State: { Running: false }, NetworkSettings: { Networks: {} } }));
   const hashFiles = [], calls = [];
-  const context = { repository: candidate, project: "fixture", environment: {}, command: async (_command, args) => {
+  const context = { repository: candidate, directory: candidate, privateDirectory: join(root, "private"),
+    project: "fixture", model, plan: [], environment: {}, command: async (_command, args) => {
     calls.push(args);
+    if (args[0] === "info") return JSON.stringify({ ID: "engine", Name: "fixture", DockerRootDir: root });
     if (args[0] === "ps") return rows.map((row) => row.Id).join(" ");
     if (args[0] === "inspect") return JSON.stringify(rows);
-    if (args[0] === "image") return JSON.stringify([{ Id: imageId, Config: {} }]);
+    if (args[0] === "image" && args[1] === "inspect") return JSON.stringify([{ Id: imageId, Config: {} }]);
+    if (args[0] === "diff" || (args[0] === "image" && args[1] === "tag")) return "";
     if (args[1] === "version") return "2.40.3+ds1-0ubuntu1~24.04.1";
     if (args.includes("--hash")) {
       const path = args[args.lastIndexOf("--file") + 1]; hashFiles.push(path);
       assert.equal(isWithinFixture(candidate, path), false);
       if (process.platform !== "win32") assert.equal((await fsPromises.stat(path)).mode & 0o777, 0o600);
       const rendered = JSON.parse(await readFile(path, "utf8"));
-      assert.deepEqual(rendered.services.other, model.services.other);
+      if (args.at(-1) !== "other") assert.deepEqual(rendered.services.other, model.services.other);
       assert.ok(!args.includes("--no-interpolate") && args.includes("--no-normalize") && args.includes("--no-consistency"));
       return `${args.at(-1)} ${sha256(JSON.stringify(rendered.services[args.at(-1)]))}`;
     }
@@ -85,6 +90,61 @@ async function rerenderFixture(t, subject = {}) {
   return { context, rows, model, file, hashFiles, calls };
 }
 const isWithinFixture = (parent, path) => !relative(parent, path).startsWith("..");
+
+test("replacement capture records an exited non-target mismatch and refuses to use it for recreation", async (t) => {
+  const { context, rows, model, calls } = await rerenderFixture(t, { network_mode: "service:peer" });
+  const label = "com.docker.compose.config-hash", subject = rows[0];
+  subject.HostConfig.RestartPolicy = { Name: "no" };
+  subject.HostConfig.NetworkMode = `container:${sha256("previous-peer")}`;
+  subject.State.Status = "exited";
+  const labelHash = sha256(JSON.stringify({ ...model.services.subject, network_mode: subject.HostConfig.NetworkMode }));
+  subject.Config.Labels[label] = labelHash;
+  for (const name of ["peer", "other"]) {
+    rows.find((row) => row.Config.Labels["com.docker.compose.service"] === name).Config.Labels[label] = sha256(JSON.stringify(model.services[name]));
+  }
+  // The candidate model is separate from the deployed Compose inputs.
+  Object.assign(context, { model: { services: { subject: { image: `subject@${imageId}` } } },
+    candidateSha: "a".repeat(40), candidateTree: "b".repeat(40), buildContextSha256: sha256("context"),
+    catalogSha256: sha256("catalog"), drained: true });
+  const { snapshot, sha256: preimageSha256 } = await preserveReplacement(context);
+  const retained = snapshot.containers.find(({ service }) => service === "subject");
+  const rollbackFields = ["subject.compose.config-hash", "subject.network_mode"];
+  assert.equal(retained.id, subject.Id);
+  assert.deepEqual(retained.compose.configHashMismatch, { labelHash,
+    renderedHash: sha256(JSON.stringify({ ...model.services.subject, network_mode: `container:${rows[1].Id}` })),
+    fieldFamilies: ["network_mode"] });
+  assert.deepEqual(recreateRefusals(retained), rollbackFields);
+  assert.ok(snapshot.containers.filter((entry) => entry !== retained).every((entry) => !entry.compose.configHashMismatch));
+
+  subject.State.Running = true;
+  await assert.rejects(preserveReplacement(context), { rollbackFields });
+  subject.State.Running = false;
+  context.model.services.subject.build = { context: "." };
+  await assert.rejects(preserveReplacement(context), { rollbackFields });
+  delete context.model.services.subject.build;
+
+  await writeArtifactState(context, { schemaVersion: 1, kind: "compose-candidate-artifacts", state: "PASS",
+    candidateSha: context.candidateSha, candidateTree: context.candidateTree, project: context.project,
+    buildContextSha256: context.buildContextSha256, catalogSha256: context.catalogSha256,
+    buildContextAlgorithm: "sha256-git-archive-tar-v1", modelSha256: devValueDigest(context.model), plan: [], images: [],
+    preimage: { transactionId: snapshot.transactionId, sha256: preimageSha256 } });
+  calls.length = 0;
+  await assert.rejects(executeStage("replace", context), { rollbackFields });
+  assert.ok(calls.every((args) => args[0] === "info" || args[0] === "image" && args[1] === "inspect"));
+});
+
+for (const [description, running, restartPolicy, build] of [
+  ["a replacement target", false, "no", { context: "." }],
+  ["a running container", true, "no"],
+  ["a container with a restart policy", false, "on-failure"],
+]) test(`replacement capture refuses a Compose mismatch for ${description}`, async (t) => {
+  const { context, rows } = await rerenderFixture(t, { build });
+  rows.splice(1);
+  rows[0].State.Running = running;
+  rows[0].HostConfig.RestartPolicy = { Name: restartPolicy };
+  rows[0].Config.Labels["com.docker.compose.config-hash"] = sha256("old");
+  await assert.rejects(preserveReplacement(context), { rollbackFields: ["subject.compose.config-hash"] });
+});
 
 for (const field of ["network_mode", "ipc", "pid"]) test(`Compose preimage resolves ${field} service references before hashing`, async (t) => {
   const { context, rows, model, hashFiles } = await rerenderFixture(t, { [field]: "service:peer" });
@@ -263,20 +323,27 @@ for (const [field, hostField] of [["network_mode", "NetworkMode"], ["ipc", "IpcM
     const fixture = await rerenderFixture(t, { [field]: "service:peer" });
     const { context, model } = fixture;
     const originals = structuredClone(fixture.rows);
+    model.services.other.network_mode = "service:peer";
     for (const row of originals) {
       const name = row.Config.Labels["com.docker.compose.service"];
       row.Name = `/${name}`; row.Config.Image = model.services[name].image; row.Config.Hostname = name;
       row.Config.Env = []; row.State = { Running: false, ExitCode: 0, StartedAt: "0001-01-01T00:00:00Z" };
       if (name === "subject") row.HostConfig[hostField] = `container:${sha256("peer")}`;
-      const service = name === "subject" ? { ...model.services[name], [field]: `container:${sha256("peer")}` } : model.services[name];
-      row.Config.Labels["com.docker.compose.config-hash"] = sha256(JSON.stringify(service));
+      const service = { ...model.services[name] };
+      if (name === "subject") service[field] = row.HostConfig[hostField];
+      if (name === "other") {
+        row.HostConfig.RestartPolicy = { Name: "no" };
+        row.HostConfig.NetworkMode = `container:${sha256("previous-peer")}`;
+        service.network_mode = row.HostConfig.NetworkMode;
+      }
       model.services[name].hostname = name;
       row.Config.Labels["com.docker.compose.config-hash"] = sha256(JSON.stringify({ ...service, hostname: name }));
     }
     const snapshot = { transactionId: "transaction", buildTags: [], containers: [] };
     for (const row of originals) snapshot.containers.push({ id: row.Id, image: row.Image,
       service: row.Config.Labels["com.docker.compose.service"], running: false, inspect: row, networks: [], rootfsChanges: "",
-      rollbackTag: "rollback:old", compose: await composePreimage(row, context, { Config: {} }, "2.40.3+ds1-0ubuntu1~24.04.1", originals) });
+      rollbackTag: "rollback:old", compose: await composePreimage(row, context, { Config: {} }, "2.40.3+ds1-0ubuntu1~24.04.1", originals,
+        { outsideReplacementTargets: row.Id === sha256("other") }) });
     let rows = originals.map((row) => row.Config.Labels["com.docker.compose.service"] === "other" ? structuredClone(row) : {
       ...structuredClone(row), Id: sha256(`candidate-${row.Config.Labels["com.docker.compose.service"]}`),
     });
@@ -303,20 +370,33 @@ for (const [field, hostField] of [["network_mode", "NetworkMode"], ["ipc", "IpcM
     };
     const source = await readFile(new URL("../scripts/release/installer-artifacts.mjs", import.meta.url), "utf8");
     const extract = (a, b) => source.slice(source.indexOf(a), b ? source.indexOf(b) : undefined).replaceAll("export ", "");
+    const targets = ["subject", "peer"];
     const rollback = runInNewContext([
       extract("async function referenceImageId(", "export async function writeArtifactState("), extract("function refuse("), ";rollbackReplacement",
     ].join("\n"), { assert, firstDifference, sha256, structuredClone, resolve, rollbackStatePath, assertRollbackInventory,
       fileDigest: async (path) => sha256(await readFile(path)),
       resolveComposeServiceReferences, composeServiceHash, preparePrivateDirectory: async () => {},
       readBoundArtifacts: async () => ({ manifest: { state: "PASS", images: [], preimage: { sha256: "binding" } }, snapshot }),
-      readOptionalState: async (_context, kind) => kind === "replacement-effects" ? {} : { targets: ["subject", "peer"], containers: rows },
+      readOptionalState: async (_context, kind) => kind === "replacement-effects" ? {} : { targets, containers: rows },
       inspectOwned: async () => rows, readFile, produceRollbackSafety: async () => ({ migrations: "NONE", protectedWrites: "NONE" }),
       atomicExclusiveJson: async (_path, value) => receipts.push(value),
     });
+    const retained = rows.find((row) => row.Id === sha256("other"));
+    if (field === "network_mode") {
+      targets.push("other");
+      await assert.rejects(rollback(context), /capture-only container is a replacement target: other\.compose\.config-hash/u);
+      targets.pop();
+      retained.Id = sha256("candidate-other");
+      await assert.rejects(rollback(context), /exact rollback refused: other\.compose\.config-hash/u);
+      retained.Id = sha256("other");
+      assert.deepEqual(created, []);
+      assert.deepEqual(receipts, []);
+    }
     assert.equal(await rollback(context), 0);
     assert.deepEqual(created, ["peer", "subject"]);
     const restored = rows.find((row) => row.Config.Labels["com.docker.compose.service"] === "subject");
     assert.notEqual(restored.Config.Labels["com.docker.compose.config-hash"], originals[0].Config.Labels["com.docker.compose.config-hash"]);
     assert.equal(receipts.at(-1).containers.length, 3);
+    assert.equal(receipts.at(-1).containers.find(({ service }) => service === "other").restoredId, sha256("other"));
   });
 }

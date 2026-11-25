@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import type { MetaCostUsageSnapshot } from "../packages/core/src/meta-cost";
 import { formatDateTime, formatNumber } from "../lib/i18n/format";
 import { useI18n } from "./I18nProvider";
+import { ScrollRegion } from "./tenant-ui";
 import { useVisibleRefresh } from "./use-visible-refresh";
 import styles from "./MetaCostUsage.module.css";
 import {MetaCostStatements} from "./MetaCostStatements";
@@ -12,10 +13,10 @@ export type CostAccount={id:string;names:string[]};
 export type CostUsage=MetaCostUsageSnapshot&{accounts?:CostAccount[];tariffs?:Array<Record<string,unknown>>};
 type PlatformScope={tenantId:string;csrfToken:string};
 
-export function MetaCostUsage({canExport,platform,management,refreshKey=0}:{canExport:boolean;platform?:PlatformScope;refreshKey?:number;
+export function MetaCostUsage({open,canExport,platform,management,refreshKey=0}:{open:boolean;canExport:boolean;platform?:PlatformScope;refreshKey?:number;
   management?:(snapshot:CostUsage,accountId:string,window:{from:string;to:string})=>ReactNode}){
   const{locale,t}=useI18n();
-  const[open,setOpen]=useState(Boolean(platform)),[accounts,setAccounts]=useState<CostAccount[]>([]),[account,setAccount]=useState("unattributed");
+  const[accounts,setAccounts]=useState<CostAccount[]>([]),[account,setAccount]=useState("unattributed");
   const[window,setWindow]=useState(()=>{const now=new Date();return{from:new Date(Date.UTC(now.getUTCFullYear(),now.getUTCMonth(),1)).toISOString().slice(0,16),to:new Date(Date.UTC(now.getUTCFullYear(),now.getUTCMonth()+1,1)).toISOString().slice(0,16)}});
   const[loaded,setLoaded]=useState<{scope:string;value:CostUsage}|null>(null),[loading,setLoading]=useState(false),[failed,setFailed]=useState(false),[downloading,setDownloading]=useState(false),[page,setPage]=useState(0);
   const sequence=useRef(0),alive=useRef(true);
@@ -56,9 +57,7 @@ export function MetaCostUsage({canExport,platform,management,refreshKey=0}:{canE
   };
   const currentPage=Math.min(page,Math.max(0,Math.ceil((snapshot?.rows.length??0)/100)-1));
   const rows=snapshot?.rows.slice(currentPage*100,(currentPage+1)*100)??[];
-  return <details className={styles.section} open={open} onToggle={event=>setOpen(event.currentTarget.open)}>
-    <summary>{t("cost.title")}</summary>
-    {open?<div className={styles.content}>
+  return open?<div className={styles.content}>
       <p className={styles.help}>{t("cost.description")}</p>
       <div className={styles.filters}>
         <label>{t("cost.account")}<select value={account} onChange={event=>{setAccount(event.target.value);setPage(0);}}><option value="unattributed">{t("cost.unattributed")}</option>{accounts.map((item,index)=><option key={item.id} value={item.id}>{item.names.join(" / ")||t("cost.accountFallback",{count:formatNumber(index+1,locale)})}</option>)}</select></label>
@@ -72,14 +71,10 @@ export function MetaCostUsage({canExport,platform,management,refreshKey=0}:{canE
       {snapshot?<>
         <div className={styles.coverage}>{snapshot.coverage.map(item=><p key={`${item.purpose}-${item.evidence_mode}`}><b>{t(`cost.purpose.${item.purpose}`)} · {t(`cost.mode.${item.evidence_mode}`)}</b><span>{t("cost.coverage",{delivered:formatNumber(item.delivered,locale),estimated:formatNumber(item.estimated,locale),unresolved:formatNumber(item.unresolved,locale),free:formatNumber(item.reported_free,locale)})}</span></p>)}</div>
         {snapshot.totals.length?<ul className={styles.totals}>{snapshot.totals.map(item=><li key={`${item.purpose}-${item.evidenceMode}-${item.currency}-${item.tariffVersionId}`}><span>{t(`cost.purpose.${item.purpose}`)} · {t(`cost.mode.${item.evidenceMode}`)} · {t(`cost.rounding.${item.rounding}`)}</span><strong><bdi dir="ltr">{item.amount===null?t("cost.partialPeriod"):`${item.currency} ${item.amount}`}</bdi></strong>{item.partialPeriod?<button type="button" onClick={()=>{setWindow({from:new Date(item.periodFrom).toISOString().slice(0,16),to:new Date(item.periodTo).toISOString().slice(0,16)});setPage(0);}}>{t("cost.wholePeriod")}</button>:null}</li>)}</ul>:null}
-        {snapshot.rows.length?<div className={styles.tableWrap} role="region" aria-label={t("cost.tableCaption")}
-    // Keyboard users need to focus an otherwise non-interactive overflow area.
-    // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex
-    tabIndex={0}><table><caption>{t("cost.tableCaption")}</caption><thead><tr><th scope="col">{t("cost.when")}</th><th scope="col">{t("cost.basis")}</th><th scope="col">{t("cost.state")}</th><th scope="col">{t("cost.amount")}</th></tr></thead><tbody>{rows.map(row=><tr key={`${row.deliveryId}-${row.purpose}`}><td>{formatDateTime(row.deliveredAt??row.observedAt,locale,{dateStyle:"medium",timeStyle:"short",timeZone:"UTC"})}</td><td>{t(`cost.purpose.${row.purpose}`)}<small>{t(`cost.mode.${row.evidenceMode}`)} · {t(`cost.payer.${row.payerState}`)}</small></td><td>{t(`cost.state.${row.state}`)}<small>{t(`cost.reason.${row.reason}`)}</small></td><td><bdi dir="ltr">{row.amount===null?t("cost.pending"):`${row.currency} ${row.amount}`}</bdi></td></tr>)}</tbody></table></div>:<p>{t("cost.empty")}</p>}
+        {snapshot.rows.length?<ScrollRegion className={styles.tableWrap} aria-label={t("cost.tableCaption")}><table><caption>{t("cost.tableCaption")}</caption><thead><tr><th scope="col">{t("cost.when")}</th><th scope="col">{t("cost.basis")}</th><th scope="col">{t("cost.state")}</th><th scope="col">{t("cost.amount")}</th></tr></thead><tbody>{rows.map(row=><tr key={`${row.deliveryId}-${row.purpose}`}><td>{formatDateTime(row.deliveredAt??row.observedAt,locale,{dateStyle:"medium",timeStyle:"short",timeZone:"UTC"})}</td><td>{t(`cost.purpose.${row.purpose}`)}<small>{t(`cost.mode.${row.evidenceMode}`)} · {t(`cost.payer.${row.payerState}`)}</small></td><td>{t(`cost.state.${row.state}`)}<small>{t(`cost.reason.${row.reason}`)}</small></td><td><bdi dir="ltr">{row.amount===null?t("cost.pending"):`${row.currency} ${row.amount}`}</bdi></td></tr>)}</tbody></table></ScrollRegion>:<p>{t("cost.empty")}</p>}
         {snapshot.rows.length>100?<nav className={styles.pagination} aria-label={t("cost.pages")}><button type="button" disabled={currentPage===0} onClick={()=>setPage(currentPage-1)}>{t("cost.previous")}</button><span>{t("cost.page",{page:formatNumber(currentPage+1,locale),count:formatNumber(Math.ceil(snapshot.rows.length/100),locale)})}</span><button type="button" disabled={(currentPage+1)*100>=snapshot.rows.length} onClick={()=>setPage(currentPage+1)}>{t("cost.next")}</button></nav>:null}
         {!platform&&account!=="unattributed"?<MetaCostStatements key={account} query={query} canExport={canExport}/>:null}
         {management?.(snapshot,account,{from:`${window.from}:00.000Z`,to:`${window.to}:00.000Z`})}
       </>:null}
-    </div>:null}
-  </details>;
+    </div>:null;
 }

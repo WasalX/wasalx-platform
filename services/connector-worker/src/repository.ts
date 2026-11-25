@@ -397,7 +397,74 @@ export class OutboxRepository{
       await client.query("DELETE FROM public.delivery_attempts WHERE tenant_id=$1 AND delivery_id=$2 AND attempt_number=$3 AND state='CLAIMED'",[job.tenantId,job.id,job.attempts]);
     });
   }
-  private async metaDeliveryContextCurrent(client:PoolClient,job:DeliveryJob,requireWorking=true){
+  async admitAgentReplySignal(job: DeliveryJob, leaseId: string, sourceId?: string) {
+    return this.tenant(job.tenantId, async client => {
+      const privacy = await client.query<{ allowed: boolean }>(
+        "SELECT pg_try_advisory_xact_lock_shared(hashtextextended('privacy:'||$1::text,0)) AS allowed", [job.tenantId],
+      );
+      if (privacy.rows[0]?.allowed !== true) return;
+      if ((await client.query<{ active: boolean }>(
+        "SELECT app.lock_current_active_tenant_for_event_admission() AS active",
+      )).rows[0]?.active !== true) return;
+      const source = (await client.query<{ id: string; messageId: string; canType: boolean }>(`WITH latest AS MATERIALIZED (
+        SELECT message.id, message.external_message_id AS "messageId", delivery.state='SENDING' AS "canType"
+        FROM delivery_outbox delivery
+        JOIN connections connection ON connection.tenant_id=delivery.tenant_id AND connection.id=delivery.connection_id
+        JOIN message_links link ON link.tenant_id=delivery.tenant_id AND link.connection_id=delivery.connection_id
+          AND link.zammad_ticket_id=delivery.zammad_ticket_id AND link.direction='INBOUND'
+        JOIN normalized_messages message ON message.tenant_id=link.tenant_id AND message.connection_id=link.connection_id
+          AND message.external_message_id=link.external_message_id AND message.external_group_id=delivery.external_chat_id
+        JOIN event_inbox event ON event.tenant_id=message.tenant_id AND event.id=message.event_inbox_id
+        WHERE delivery.tenant_id=$1 AND delivery.id=$2 AND delivery.attempts=$4
+          AND delivery.direct_origin='HUMAN' AND delivery.delivery_origin='TICKET' AND delivery.batch_sequence=0
+          AND ((delivery.state='SENDING' AND delivery.lease_id=$3 AND delivery.lease_expires_at>clock_timestamp())
+            OR delivery.state IN ('SENT','DELIVERED','READ'))
+          AND delivery.content_redacted_at IS NULL AND NOT app.delivery_has_active_privacy_target(delivery.id)
+          AND connection.state='WORKING'
+          AND NOT EXISTS (SELECT 1 FROM connection_operations op WHERE op.tenant_id=delivery.tenant_id
+            AND op.connection_id=delivery.connection_id AND op.operation_type IN ('PAUSE','DISCONNECT')
+            AND op.state IN ('STAGED','QUEUED','RUNNING','FAILED_RETRYABLE'))
+          AND message.created_at<=delivery.created_at AND link.created_at<=delivery.created_at
+          AND NOT message.from_me AND NOT message.from_api AND message.provider_metadata->'direct'='true'::jsonb
+          AND message.provider_metadata->>'input_type'<>'reaction' AND event.status='PROCESSED'
+          AND (connection.provider='WAHA' OR event.meta_direct_asset=$5::jsonb)
+        ORDER BY message.provider_timestamp DESC, message.created_at DESC, message.id DESC LIMIT 1
+      ), eligible AS (
+        SELECT latest.* FROM latest
+        WHERE NOT EXISTS (SELECT 1 FROM privacy_job_targets target WHERE target.tenant_id=$1
+          AND target.target_type='NORMALIZED_MESSAGE' AND target.target_id=latest.id::text
+          AND target.state IN ('PENDING','EXTERNAL_COMPLETE','COMPLETE'))
+      )
+      ${sourceId
+        ? 'SELECT id, "messageId", "canType" FROM eligible WHERE id=$6'
+        : `UPDATE normalized_messages message SET agent_reply_signal_claimed_at=clock_timestamp()
+            FROM eligible WHERE message.tenant_id=$1 AND message.id=eligible.id AND message.agent_reply_signal_claimed_at IS NULL
+            RETURNING eligible.id, eligible."messageId", eligible."canType"`}`,
+      [job.tenantId, job.id, leaseId, job.attempts, job.metaCredentialContext ? JSON.stringify({
+        providerSessionId: job.metaCredentialContext.providerSessionId,
+        phoneNumberId: job.metaCredentialContext.phoneNumberId,
+        wabaId: job.metaCredentialContext.wabaId,
+      }) : null, ...(sourceId ? [sourceId] : [])])).rows[0];
+      if (!source || !sourceId) return source;
+      if (job.provider === "meta") return await this.metaDeliveryContextCurrent(client, job, true, true) ? source : undefined;
+      const assignment = await client.query(`SELECT 1 FROM provider_sessions session
+        JOIN LATERAL app.current_waha_session_runtime(session.id) runtime ON true
+        WHERE session.tenant_id=$1 AND session.connection_id=$2 AND session.opaque_session_id=$3
+          AND session.waha_worker_id=$4 AND session.assignment_fencing_token=$5
+          AND session.assignment_lease_expires_at>clock_timestamp()
+          AND session.ownership_state='ACTIVE' AND session.state='WORKING'
+          AND runtime.health_state='HEALTHY' AND runtime.lifecycle_state IN ('ACTIVE','DRAINING')
+          AND runtime.last_heartbeat_at>=now()-make_interval(secs=>runtime.heartbeat_ttl_seconds)`,
+      [job.tenantId, job.connectionId, job.sessionId, job.wahaWorkerId, job.wahaAssignmentFencingToken]);
+      return assignment.rowCount === 1 ? source : undefined;
+    }).catch(error => {
+      if (error instanceof Error && "code" in error && error.code === "55P03") {
+        throw new ProviderError("Reply signal context is busy.", true, "REPLY_SIGNAL_CONTEXT_BUSY");
+      }
+      throw error;
+    });
+  }
+  private async metaDeliveryContextCurrent(client:PoolClient,job:DeliveryJob,requireWorking=true,nonwaiting=false){
     const context=job.metaCredentialContext;
     if(!context)return false;
     const row=(await client.query<{current:boolean}>(`/* meta_delivery_context_current */
@@ -410,7 +477,7 @@ export class OutboxRepository{
         AND ps.ownership_state='ACTIVE'
         -- ACTIVE routes cannot be released; keep this reader compatible with pre-release migration prefixes.
         AND EXISTS(SELECT 1 FROM webhook_routes route WHERE route.tenant_id=c.tenant_id AND route.connection_id=c.id
-          AND route.provider='META' AND route.state='ACTIVE') FOR UPDATE OF ps`,
+          AND route.provider='META' AND route.state='ACTIVE') ${nonwaiting ? 'FOR SHARE OF ps NOWAIT' : 'FOR UPDATE OF ps'}`,
       [job.tenantId,job.connectionId,job.connectionSecretReference,context.providerSessionId,context.phoneNumberId,context.wabaId,JSON.stringify(context.proof??null),requireWorking])).rows;
     if(row.length!==1||row[0].current!==true)return false;
     let revision:number;

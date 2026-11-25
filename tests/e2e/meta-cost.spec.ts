@@ -23,7 +23,6 @@ function result(accountId:string,count=1):MetaCostUsageSnapshot{
 // Mocked application rendering proves UX only. P08/P10 actual-stack fixtures own
 // authority, signed receipt, SQL arithmetic and managed workflow qualification.
 test("cost usage preserves exact money, role boundaries, account changes and complete exports",async({page},testInfo)=>{
-  test.skip(testInfo.project.name==="tablet-820");
   let reads=0,failed=false,holdRetired=false,retiredRoute:Route|undefined;
   let notifyRetired:()=>void=()=>{};
   const retiredRequested=new Promise<void>(resolve=>{notifyRetired=resolve;});

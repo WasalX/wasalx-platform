@@ -62,14 +62,19 @@ UserInfo.with_user_id(actor.id) do
       rescue Wasalx::PortalMailboxAdministration::Conflict
       end
     end
-    verification = SecureRandom.uuid
-    invoke.call('MAILBOX_VERIFY_START', { 'operation_id' => verification, 'mailbox_id' => id, 'expected_version' => shown[:version] })
-    job = Delayed::Job.where('handler LIKE ?', "%#{verification}%").order(:id).last!
-    assert.call(!job.handler.include?(password) && !job.handler.include?('credentials'), 'credentials entered job arguments')
-    # Exercise actual native drivers and the owned fixture transport; no success doubles.
-    job.payload_object.perform
-    status = invoke.call('MAILBOX_VERIFY_STATUS', { 'mailbox_id' => id, 'operation_id' => verification })
-    assert.call(status[:verification] == 'VERIFIED' && !Channel.find(id).active, 'exact native verification absent or auto-activated')
+    verify_transport = lambda do |version|
+      verification = SecureRandom.uuid
+      invoke.call('MAILBOX_VERIFY_START', { 'operation_id' => verification, 'mailbox_id' => id, 'expected_version' => version })
+      job = Delayed::Job.where('handler LIKE ?', "%#{verification}%").order(:id).last!
+      assert.call(!job.handler.include?(password) && !job.handler.include?('credentials'), 'credentials entered job arguments')
+      # Exercise actual native drivers and the owned fixture transport; no success doubles.
+      job.payload_object.perform
+      verified = invoke.call('MAILBOX_VERIFY_STATUS', { 'mailbox_id' => id, 'operation_id' => verification })
+      assert.call(verified[:verification] == 'VERIFIED' && verified[:verification_version] == version &&
+        !Channel.find(id).active, 'exact native verification absent or auto-activated')
+      verified
+    end
+    status = verify_transport.call(shown[:version])
     if Wasalx::PortalMailboxAdministration.seed_signature?(group)
       begin
         invoke.call('MAILBOX_ACTIVATE', { 'operation_id' => SecureRandom.uuid, 'mailbox_id' => id, 'expected_version' => status[:version] })
@@ -105,8 +110,11 @@ UserInfo.with_user_id(actor.id) do
       http = ActionDispatch::Integration::Session.new(Rails.application)
       http.host!('localhost')
       http.post(Wasalx::PortalDelegation::PATH, params: body, headers: { 'Authorization' => "Token token=#{runtime.token}",
-        'Content-Type' => 'application/json', 'X-Wasalx-Timestamp' => timestamp, 'X-Wasalx-Signature' => signature })
-      [http.response.status, JSON.parse(http.response.body)]
+        'Content-Type' => 'application/json', 'Accept' => 'application/json',
+        'X-Wasalx-Timestamp' => timestamp, 'X-Wasalx-Signature' => signature })
+      response = http.response
+      assert.call(response.media_type == 'application/json', "Signed portal #{operation} returned non-JSON (HTTP #{response.status})")
+      [response.status, JSON.parse(response.body)]
     end
     customer = ticket = expected_sender = nil
     Transaction.execute do
@@ -148,10 +156,12 @@ UserInfo.with_user_id(actor.id) do
     assert.call(!WasalxTicketOperation.exists?(operation_id: [denied_reply, denied_create]), 'paused send committed a receipt')
     note_status, = portal.call('REPLY', draft.call.merge(operation_id: SecureRandom.uuid, internal: true))
     assert.call(note_status == 200, 'mailbox pause blocked internal notes')
-    # PAUSE does not change the verified configuration version. Only exact reviewed
-    # activation restores readiness; never set Channel.active directly for recovery.
+    # The first activation bound the group's sender, which changes the verification version.
     current_status = invoke.call('MAILBOX_SHOW', { 'mailbox_id' => id })
-    invoke.call('MAILBOX_ACTIVATE', { 'operation_id' => SecureRandom.uuid, 'mailbox_id' => id, 'expected_version' => current_status[:version] })
+    assert.call(current_status[:verification_version] == status[:verification_version] &&
+      current_status[:version] != current_status[:verification_version], 'sender binding did not invalidate the first verification')
+    verified_binding = verify_transport.call(current_status[:version])
+    invoke.call('MAILBOX_ACTIVATE', { 'operation_id' => SecureRandom.uuid, 'mailbox_id' => id, 'expected_version' => verified_binding[:version] })
     assert.call(Channel.find(id).active && group.reload.email_address_id == expected_sender.id, 'verified activation did not restore exact sender')
     code, options = portal.call('CREATE_OPTIONS', { group_id: group.id.to_s })
     assert.call(code == 200 && options.dig('channels', 'email') == true, 'verified activation did not restore email options')

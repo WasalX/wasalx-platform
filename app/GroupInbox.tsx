@@ -5,6 +5,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEve
 import { ModalDialog } from "./ModalDialog";
 import { isAbortError } from "../lib/bot-conversations";
 import { useI18n } from "./I18nProvider";
+import { ScrollRegion } from "./tenant-ui";
 import { useVisibleRefresh } from "./use-visible-refresh";
 import "./GroupInbox.css";
 
@@ -638,8 +639,7 @@ function GroupInboxSession({ selectedGroup, selectedMessage = null, selectGroup,
         <button type="button" className={`${button} wx-group-back`} onClick={() => { selectGroup(null); requestAnimationFrame(() => chooser.current?.focus()); }}>{t("groups.back")}</button>
         {loading ? <p>{t("groups.loading")}</p> : !group ? <p>{t(selectedGroup ? "groups.unavailable" : "groups.choose")}</p> : <>
           <header className="wx-group-header"><h2 ref={heading} tabIndex={-1} dir="auto">{group.name}</h2><span>{t("groups.whatsapp")}</span></header>
-          {/* eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- Independently scrolling history must accept keyboard focus. */}
-          <div ref={timeline} className="wx-group-history" role="region" tabIndex={0} aria-label={t("groups.history")} onScroll={() => {
+          <ScrollRegion ref={timeline} className="wx-group-history" aria-label={t("groups.history")} onScroll={() => {
             const region = timeline.current; if (!region) return;
             const near = region.scrollHeight - region.scrollTop - region.clientHeight < 64;
             setFollowing(near); followingRef.current = near; if (near) void markVisibleRead();
@@ -676,7 +676,7 @@ function GroupInboxSession({ selectedGroup, selectedMessage = null, selectGroup,
               </div> : null}
             </li>)}</ol>
             {!messages.length ? <p>{t("groups.noMessages")}</p> : null}
-          </div>
+          </ScrollRegion>
           {incoming || contextMode || !following ? <button type="button" className={button} disabled={busy} onClick={jumpLatest}>{t(incoming ? "groups.newMessages" : "groups.latest", { count: incoming })}</button> : null}
           <details className="wx-group-related"><summary>{t("groups.relatedTickets")}</summary>
             <label htmlFor="wx-group-ticket-filter">{t("groups.ticketStatus")}<select id="wx-group-ticket-filter" value={ticketFilter} onChange={event => setTicketFilter(event.target.value as typeof ticketFilter)}>

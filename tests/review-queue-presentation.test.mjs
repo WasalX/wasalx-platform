@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import { arabicTenantMessages } from "../lib/i18n/messages/ar/tenant.ts";
 import { englishTenantMessages } from "../lib/i18n/messages/en/tenant.ts";
 import { createTranslator } from "../lib/i18n/translate.ts";
+import { readTenantPortalSource } from "./helpers/tenant-portal-source.mjs";
 
-const source = await readFile(new URL("../app/WasalXApp.tsx", import.meta.url), "utf8");
+const source = readTenantPortalSource();
 const reasons = [
   "identifier_limit_exceeded",
   "media_malware_detected",

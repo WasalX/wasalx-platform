@@ -465,7 +465,7 @@ try{
     await migrate(protectedPrefix);
     const routingUpgrade=await seedMetaRoutingLegacyUpgrade(admin);
     metaIdentityRoutingHistory=await seedMetaDirectLegacyRoutingHistory(admin);
-    const marketingMigration="0204_whatsapp_marketing_preferences.sql";
+    const marketingMigration="0205_whatsapp_marketing_preferences.sql";
     for(const file of migrationFiles.filter(file=>file>="0171_meta_external_routing.sql"&&file<marketingMigration)){
       await writeFile(resolve(protectedPrefix,file),await readFile(new URL(file,controlMigrationsUrl)));
     }

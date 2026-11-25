@@ -11,7 +11,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     const { id } = await context.params;
     if (isFixtureBackend()) return NextResponse.json(await (await import("../../../../../../lib/fixture-data")).downloadPrivacyExport(id, principal.displayName), { headers });
     if (!isControlPlaneBackend()) {
-      return NextResponse.json({ error: "Privacy lifecycle requires the production control plane" }, { status: 503, headers });
+      return NextResponse.json({ error: "Privacy lifecycle requires the managed service" }, { status: 503, headers });
     }
     return NextResponse.json(await downloadPrivacyExport(id), { headers });
   } catch (error) {

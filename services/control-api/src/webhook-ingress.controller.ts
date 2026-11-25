@@ -1,5 +1,5 @@
-import { createHmac, timingSafeEqual } from "node:crypto";
-import { BadRequestException, Body, Controller, Get, Header, HttpCode, NotFoundException, Param, Post, Query, Req, ServiceUnavailableException, SetMetadata, UnauthorizedException } from "@nestjs/common";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
+import { BadRequestException, Body, Controller, Get, Header, HttpCode, NotFoundException, type OnModuleInit, Param, Post, Query, Req, ServiceUnavailableException, SetMetadata, UnauthorizedException } from "@nestjs/common";
 import { PUBLIC_ROUTE } from "./auth.guard.js";
 import { DatabaseService, type MetaLifecycleEventType, type MetaLifecycleRoute, type MetaRoutingRoute, type WebhookRoute } from "./database.service.js";
 import { admitMetaTemplateSafety } from "./meta-template-ingress.js";
@@ -28,11 +28,31 @@ const WAHA_EVENTS=new Set(["message","message.any","message.edited","message.rev
 
 @Controller("webhooks")
 @SetMetadata(PUBLIC_ROUTE,true)
-export class WebhookIngressController{
+export class WebhookIngressController implements OnModuleInit{
   private readonly testRecipients=parseWahaTestRecipientAllowlist(process.env.WASALX_TEST_RECIPIENT_ALLOWLIST);
   private readonly defaultMetaAppId=process.env.META_APP_ID;
   private readonly metaApps=loadMetaWebhookApps(process.env.META_WEBHOOK_APPS_FILE,this.defaultMetaAppId,process.env.META_APP_SECRET_REFERENCE);
   constructor(private readonly database:DatabaseService,private readonly secrets:WebhookSecretService,private readonly drains:TenantDrainService,private readonly routingConnectors?:RoutingConnectorsConfig,private readonly secretProvisioning?:SecretProvisioningService){}
+
+  async onModuleInit() {
+    if (!this.metaApps) return;
+    const app = this.selectMetaApp()!;
+    const configured = process.env.META_VERIFY_TOKEN;
+    if (!configured) throw new Error(`META_VERIFY_TOKEN is required for META_WEBHOOK_APPS_FILE app ${app.appId}`);
+
+    let registered: string;
+    try {
+      registered = await this.resolveMetaSecret(app.verifyTokenReference);
+    } catch {
+      throw new Error(`META_WEBHOOK_APPS_FILE app ${app.appId} verification token could not be resolved`);
+    }
+    // Fixed-size digests let the comparison run even when the token lengths differ.
+    const configuredDigest = createHash("sha256").update(configured, "utf16le").digest();
+    const registeredDigest = createHash("sha256").update(registered, "utf16le").digest();
+    if (!timingSafeEqual(configuredDigest, registeredDigest)) {
+      throw new Error(`META_WEBHOOK_APPS_FILE app ${app.appId} verification token must match META_VERIFY_TOKEN`);
+    }
+  }
 
   @Post("waha/:token")@HttpCode(202)
   async waha(@Param("token")token:string,@Req()request:RawWebhookRequest,@Body()body:Record<string,unknown>){

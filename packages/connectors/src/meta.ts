@@ -7,6 +7,8 @@ import { recordStructuredLog, safeRequestId } from "@wasalx/observability";
 import { metaAccountFundingProof } from "../../core/src/meta-account-policy.js";
 import {readMetaTransitionInventory} from './meta-account-transition-read.js';
 import type {
+  AgentReplySignal,
+  AgentReplySignalInput,
   ConnectionState,
   DirectProviderMessage,
   DirectProviderIdentityChange,
@@ -90,7 +92,7 @@ export type MetaConfig = {
   wabaIdFor?: (connectionId: string) => string;
   baseUrl?: string;
   timeoutMs?: number;
-  beforeRequest?: () => Promise<void>;
+  beforeRequest?: (purpose?: "agent-reply-signal") => Promise<void>;
   /** Exact final Messages HTTP admission, after upload/preparation. */
   beforeFinancialMutation?: (requestSha256: string) => Promise<void>;
   /** Distinct nonfinancial template-copy effect; stable transition checkpoint is mandatory. */
@@ -650,6 +652,31 @@ export class MetaGroupsAdapter implements MessagingProviderAdapter {
     return metaAccountFundingProof(accountId, owner, funding,new Date(),{value:currency,graphVersion:this.config.graphVersion});
   }
 
+  agentReplySignals(input: AgentReplySignalInput): AgentReplySignal[] {
+    const messageId = validatedMessageId(input.inboundMessageId);
+    const phoneId = this.phoneNumberId(input.connectionId);
+    return [{
+      kind: "read-and-typing",
+      send: async (signal, canType) => {
+        await this.assertTestRecipient({ recipient_type: "individual", ...this.recipientFields({ ...input, recipientType: "DIRECT" }) });
+        let typing = false;
+        const result = await this.request<{ success?: boolean }>(`/${encodeURIComponent(phoneId)}/messages`, {
+          method: "POST",
+          get body() {
+            // Resolve presence at serialization, after the asynchronous request preflight.
+            typing = canType();
+            return { messaging_product: "whatsapp", status: "read", message_id: messageId,
+              ...(typing ? { typing_indicator: { type: "text" } } : {}) };
+          },
+          purpose: "agent-reply-signal",
+          signal,
+        }, "read");
+        if (result?.success !== true) throw invalidResponse("Meta did not acknowledge the reply signal.", true);
+        return typing ? "sent" : "read-only";
+      },
+    }];
+  }
+
   async send(input: SendMessage) {
     if (input.messagingAccountId !== undefined && !/^[0-9]{1,32}$/u.test(input.messagingAccountId))
       throw new ProviderError("Meta account context is unavailable.",false,"META_ACCOUNT_CONTEXT_INVALID");
@@ -822,7 +849,7 @@ export class MetaGroupsAdapter implements MessagingProviderAdapter {
     return{allocationConfigId:allocation,deleted:raw.request_status==="DELETED",requestStatus:raw.request_status};
   }
 
-  private recipientFields(input: SendMessage): { to: string } | { recipient: string } {
+  private recipientFields(input: Pick<SendMessage, "recipientType" | "groupId" | "metaDirectRecipient">): { to: string } | { recipient: string } {
     if (input.recipientType !== "DIRECT") {
       if (input.metaDirectRecipient !== undefined) throw directIdentityError();
       return { to: validatedId(input.groupId, "group ID") };
@@ -889,6 +916,7 @@ export class MetaGroupsAdapter implements MessagingProviderAdapter {
       formData?: FormData;
       headers?: HeadersInit;
       signal?: AbortSignal;
+      purpose?: "agent-reply-signal";
       beforeDispatch?: () => Promise<void>;
     },
     semantics: GraphRequestSemantics,
@@ -904,7 +932,7 @@ export class MetaGroupsAdapter implements MessagingProviderAdapter {
     // A rejected preflight proves that no request was dispatched. Keep its
     // classification outside the network/unknown-effect error boundary.
     if (messageSend) await this.assertTestRecipient(init.body);
-    await this.config.beforeRequest?.();
+    await this.config.beforeRequest?.(init.purpose);
     await init.beforeDispatch?.();
     if (messageSend) {
       const phoneNumberId=/^\/([0-9]{1,32})\/messages$/u.exec(path)?.[1];

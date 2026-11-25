@@ -40,7 +40,7 @@ export async function metaSavedActivationJourney(page:Page,locale:'en'|'ar',role
   return route.continue();
  });
  await installMetaRoutingReadFixture(page);
- const open=async()=>{await page.goto(`/app?view=connections&connection=${id}`);await expect(page.locator('[data-application-ready="true"]')).toBeVisible();return page.locator(`section[aria-labelledby="saved-access-${id}"]`);};
+ const open=async()=>{await page.goto(`/app?view=connections&connection=${id}`,{waitUntil:"commit"});await expect(page.locator('[data-application-ready="true"]')).toBeVisible();return page.locator(`section[aria-labelledby="saved-access-${id}"]`);};
  let section=await open();const act=()=>section.getByRole('button',{name:t('tenant.metaActivation.activate'),exact:true}),refresh=()=>section.getByRole('button',{name:t('tenant.metaActivation.refresh'),exact:true});
  await expect(section.getByText(t('tenant.metaActivation.reason.FUNDING_REQUIRED'),{exact:true})).toBeVisible();
  if(!['tenant_owner','tenant_admin'].includes(role)){await expect(act()).toHaveCount(0);expect(writes).toHaveLength(0);expect(expected).toEqual([]);expect(problems).toEqual([]);return;}

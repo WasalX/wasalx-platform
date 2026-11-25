@@ -6,7 +6,7 @@
 - The private [project board](https://github.com/orgs/WasalX/projects/1) has the pinned **Project brief**.
 - The GitHub environments are `dev`, `stg`, and `prod`. See [environment use and data rules](DELIVERY.md#environments).
 - Milestones: v0.1.0 (current) and v0.2.0 (next). Dates and scope are on the [repo milestones](https://github.com/WasalX/wasalx-platform/milestones).
-- Lead threads are WasalX Master, WasalX Delivery, and WasalX Design.
+- Lead threads are WasalX Master, WasalX Delivery, WasalX QA, and WasalX Design.
 - UI project: yes
 - Other repos: WasalX/wasalx-zammad-addon
 - [Delivery rules](DELIVERY.md) define how changes ship.
@@ -93,7 +93,7 @@ Everything else, such as features, fixes, docs, `DESIGN.md`, UI, added or change
 - **Help desk and identity provider** — Help-desk tickets, articles, attachments, and customer and agent contact data in help-desk storage. Staff accounts and credentials in the identity provider's database.
 - **Object storage and backups** — Media and privacy exports in object storage. Backups can contain copies of database and help-desk data.
 - **Outside processors** — The email provider receives invitee email addresses. WhatsApp providers receive recipients and message content.
-- **Logs** — Structured application logs identify people and records by ID and redact sensitive fields by key.
+- **Logs** — Structured application logs identify people and records by ID and redact sensitive fields by key. Free-text redaction truncates at token boundaries and scans only the retained prefix.
 
 Tenant retention settings keep resolved cases and media for 1 to 3,650 days, with a default of 90 days. Group history uses its own setting with the same range and default. Unmatched webhook diagnostics are eligible for purge within 24 hours, subject to legal holds. Privacy exports expire within 168 hours.
 

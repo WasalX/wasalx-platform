@@ -72,7 +72,7 @@ export async function verifyMetaPrimaryDelivery({admin,db,pool,controller,reques
    await c.query(`INSERT INTO bot_conversations(id,tenant_id,assignment_id,connection_id,flow_version_id,external_chat_id,state,current_node_id,zammad_ticket_id,zammad_ticket_number,last_activity_at,normalized_reference,zammad_customer_id)
     VALUES($1,$2,$3,$4,$5,$6,'BOT','done',$7,$7,clock_timestamp(),$8,$9)`,[conversation,tenantId,assignment,connectionId,version,canonical,ticket,`BOT-${String(index).padStart(12,'0')}`,customer]);
    await c.query(`INSERT INTO normalized_messages(tenant_id,event_inbox_id,connection_id,external_message_id,external_group_id,external_participant_id,message_text,provider_timestamp,provider_metadata)
-    VALUES($1,$2,$3,$4,$5,$5,'Synthetic primary fixture',clock_timestamp(),$6)`,[tenantId,id,connectionId,message.id,canonical,{direct:true,zammad_customer_id:customer}]);
+    VALUES($1,$2,$3,$4,$5,$5,'Synthetic primary fixture',clock_timestamp(),$6)`,[tenantId,id,connectionId,message.id,canonical,{direct:true,input_type:'text',zammad_customer_id:customer}]);
    await c.query("UPDATE event_inbox SET status='PROCESSED',lease_id=NULL,lease_expires_at=NULL WHERE id=$1",[id]);
    const enqueue=async(origin='BOT',source=id,created=null)=>{
     const did=randomUUID();return(await c.query(`INSERT INTO delivery_outbox(id,tenant_id,connection_id,bot_conversation_id,external_chat_id,zammad_ticket_id,zammad_article_id,message_body,content_type,idempotency_key,state,direct_origin,meta_routing_source_event_id,created_at)
@@ -113,7 +113,7 @@ export async function verifyMetaPrimaryDelivery({admin,db,pool,controller,reques
    await resolveMetaDirectMessage(c,{...event,id:newPrimaryId,providerEventId:laterValue.messages[0].id,payload:laterPayload},laterLease,
     {provider:'meta',connectionId,messageId:laterValue.messages[0].id,metaIdentity:parseMetaDirectIdentity(laterValue.messages[0],laterValue.contacts).identity},appId);
    await c.query(`INSERT INTO normalized_messages(tenant_id,event_inbox_id,connection_id,external_message_id,external_group_id,external_participant_id,message_text,provider_timestamp,provider_metadata)
-    VALUES($1,$2,$3,$4,$5,$5,'Synthetic later primary',clock_timestamp(),$6)`,[tenantId,newPrimaryId,connectionId,laterValue.messages[0].id,canonical,{direct:true,zammad_customer_id:customer}]);
+    VALUES($1,$2,$3,$4,$5,$5,'Synthetic later primary',clock_timestamp(),$6)`,[tenantId,newPrimaryId,connectionId,laterValue.messages[0].id,canonical,{direct:true,input_type:'text',zammad_customer_id:customer}]);
    await c.query("UPDATE event_inbox SET status='PROCESSED',lease_id=NULL,lease_expires_at=NULL WHERE id=$1",[newPrimaryId]);
   });
   await db.withTenant(tenantId,async c=>{
@@ -132,6 +132,58 @@ export async function verifyMetaPrimaryDelivery({admin,db,pool,controller,reques
     VALUES($1,$2,$3,$4,$5,$6,'Synthetic agent reply','text/plain',$7,'QUEUED','HUMAN') RETURNING *`,[tenantId,connectionId,conversation,canonical,ticket,String(83000+index),randomUUID()])).rows[0];
    assert.equal(result.meta_routing_source_event_id,newPrimaryId);
    assert.equal(await repository.metaDeliveryContextCurrent(c,{...job,id:result.id,metaDirectRecipientSnapshot:result.meta_direct_recipient}),true);
+   await c.query('SAVEPOINT agent_reply_signals');
+   const laterMessageId=laterValue.messages[0].id;
+   // Freeze an ordered inbound pair before the reply's existing outbox timestamp.
+   await c.query(`INSERT INTO message_links(tenant_id,connection_id,external_message_id,zammad_ticket_id,direction,created_at)
+    VALUES($1,$2,$3,$5,'INBOUND',$6::timestamptz-interval '2 seconds'),
+          ($1,$2,$4,$5,'INBOUND',$6::timestamptz-interval '1 second')`,
+    [tenantId,connectionId,message.id,laterMessageId,ticket,result.created_at]);
+   const replyLease=randomUUID();
+   await c.query(`UPDATE delivery_outbox SET state='SENDING',attempts=1,lease_id=$2,
+      lease_expires_at=clock_timestamp()+interval '1 minute' WHERE id=$1`,[result.id,replyLease]);
+   const signalRepository=Object.create(OutboxRepository.prototype);
+   signalRepository.tenant=async(scope,operation)=>{
+    assert.equal((await c.query('SELECT app.current_tenant_id() AS tenant')).rows[0].tenant,scope);
+    return operation(c);
+   };
+   const signalJob={...job,id:result.id,attempts:1,metaDirectRecipientSnapshot:result.meta_direct_recipient};
+   assert.equal(await signalRepository.admitAgentReplySignal(signalJob,randomUUID()),undefined);
+
+   await c.query('SAVEPOINT reply_signal_paused');
+   await c.query("UPDATE connections SET state='PAUSED' WHERE tenant_id=$1 AND id=$2",[tenantId,connectionId]);
+   assert.equal(await signalRepository.admitAgentReplySignal(signalJob,replyLease),undefined);
+   await c.query('ROLLBACK TO SAVEPOINT reply_signal_paused');
+
+   await c.query('SAVEPOINT reply_signal_other_tenant');
+   await c.query("SELECT set_config('app.tenant_id',$1,true)",[foreignTenant]);
+   assert.equal(await signalRepository.admitAgentReplySignal({...signalJob,tenantId:foreignTenant},replyLease),undefined);
+   await c.query('ROLLBACK TO SAVEPOINT reply_signal_other_tenant');
+
+   await c.query('SAVEPOINT reply_signal_privacy');
+   const privacyJobId=randomUUID();
+   const privacyJob=await c.query(`INSERT INTO privacy_jobs(id,tenant_id,job_type,scope_type,scope_value,disposition,
+    idempotency_key,unmatched_diagnostic_hours_snapshot)
+    SELECT $1::uuid,tenant_id,'RETENTION_SWEEP','TENANT',tenant_id::text,'RETENTION_DELETE',$1::text,
+      unmatched_diagnostic_hours FROM retention_policies WHERE tenant_id=$2`,[privacyJobId,tenantId]);
+   assert.equal(privacyJob.rowCount,1);
+   await c.query(`INSERT INTO privacy_job_targets(tenant_id,job_id,target_type,target_id,target_sha256)
+    SELECT tenant_id,$1,'NORMALIZED_MESSAGE',id::text,encode(digest(id::text,'sha256'),'hex')
+    FROM normalized_messages WHERE tenant_id=$2 AND connection_id=$3 AND external_message_id=$4`,
+    [privacyJobId,tenantId,connectionId,laterMessageId]);
+   assert.equal(await signalRepository.admitAgentReplySignal(signalJob,replyLease),undefined,
+    'A privacy target on the latest inbound prevents signaling an older inbound');
+   await c.query('ROLLBACK TO SAVEPOINT reply_signal_privacy');
+
+   const selected=await signalRepository.admitAgentReplySignal(signalJob,replyLease);
+   assert.equal(selected?.messageId,laterMessageId);
+   assert.equal(selected.canType,true);
+   assert.deepEqual(await signalRepository.admitAgentReplySignal(signalJob,replyLease,selected.id),selected);
+   assert.equal(await signalRepository.admitAgentReplySignal(signalJob,replyLease),undefined);
+   await c.query(`UPDATE delivery_outbox SET state='SENT',external_message_id='wamid.synthetic-reply',
+     lease_id=NULL,lease_expires_at=NULL WHERE id=$1`,[result.id]);
+   assert.deepEqual(await signalRepository.admitAgentReplySignal(signalJob,replyLease,selected.id),{...selected,canType:false});
+   await c.query('ROLLBACK TO SAVEPOINT agent_reply_signals');
    await c.query('SAVEPOINT primary_config_fence');
    await c.query("UPDATE provider_sessions SET provider_state_data=jsonb_set(provider_state_data,'{metaRouting}','{\"version\":1}') WHERE id=$1",[sessionId]);
    assert.equal((await guard(c,participant,[id])).allowed,false);assert.equal(await repository.metaDeliveryContextCurrent(c,job),false);

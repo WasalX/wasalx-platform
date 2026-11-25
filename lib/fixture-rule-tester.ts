@@ -152,7 +152,7 @@ function validateRule(candidate: unknown, index: number, identifiers: Set<string
   if (!isPlainObject(candidate)) throw new FixtureRuleTestError(`Rule ${index + 1} must be an object`);
   if (candidate.matcherType === "advanced") {
     throw new FixtureRuleTestError(
-      "Advanced expression testing requires the Node control plane and its safe RE2 engine; the fixture preview supports deterministic presets only.",
+      "Advanced expression testing requires the managed service; the preview workspace supports deterministic presets only.",
       422,
       "ADVANCED_RULE_REQUIRES_CONTROL_PLANE",
     );

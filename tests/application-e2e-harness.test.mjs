@@ -122,11 +122,12 @@ test("browser suites never automatically repeat an unclassified failure", () => 
 
 
 test("application E2E harness is role-complete, bounded, fixture-only, and artifact-safe", async () => {
-  const [config, runner, spec, arabicSpec, layout, app] = await Promise.all([
+  const [config, runner, spec, arabicSpec, axeHelper, layout, app] = await Promise.all([
     read("playwright.application.config.ts"),
     read("scripts/run-application-e2e.mjs"),
     read("tests/e2e/application.spec.ts"),
     read("tests/e2e/arabic.spec.ts"),
+    read("tests/helpers/axe.ts"),
     read("app/layout.tsx"),
     readTenantPortalSource(),
   ]);
@@ -147,11 +148,14 @@ test("application E2E harness is role-complete, bounded, fixture-only, and artif
   assert.match(runner, /WASALX_E2E_LOCALES/u);
   assert.match(arabicSpec, /lang", "ar"/u);
   assert.match(arabicSpec, /dir", "rtl"/u);
-  assert.match(arabicSpec, /AxeBuilder/u);
+  for (const suite of [spec, arabicSpec]) {
+    assert.match(suite, /import \{ expectAxeClean \} from "\.\.\/helpers\/axe"/u);
+    assert.match(suite, /await expectAxeClean\(page\)/u);
+  }
+  assert.match(axeHelper, /new AxeBuilder\(\{ page \}\)[\s\S]*\.analyze\(\)/u);
   assert.match(config, /output[\s\S]*playwright[\s\S]*application/u);
   assert.match(config, /trace:\s*"retain-on-failure"/u);
   assert.doesNotMatch(runner, /\bnpx\b/u);
-  assert.match(spec, /AxeBuilder/u);
   assert.match(spec, /Shift\+Tab/u);
   assert.match(spec, /Meta\+K/u);
   assert.match(spec, /view=cases&ticket=10382/u);
