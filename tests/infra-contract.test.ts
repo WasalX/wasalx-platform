@@ -1177,6 +1177,23 @@ test("all WasalX deployables have pinned, non-root, health-checked container ima
   assert.match(compose, /DEV_SECRET_STORE_JSON: \$\{DEV_SECRET_STORE_JSON:-\{\}\}/);
 });
 
+test("Dockerfiles pin the Node base image at most once", async () => {
+  const files = spawnSync("git", ["ls-files", "-z", "--", ":(glob)**/Dockerfile*"], {
+    cwd: new URL("../", import.meta.url),
+    encoding: "utf8",
+  });
+  assert.ifError(files.error);
+  assert.equal(files.status, 0, files.stderr);
+  const dockerfiles = files.stdout.split("\0").filter(Boolean);
+  assert.ok(dockerfiles.includes("Dockerfile.portal"), "Dockerfile discovery must include the repository root");
+  const nodePin = /(?<![\w.-])node(?::[\w.-]+)?@sha256:[a-f0-9]{64}\b/giu;
+  for (const file of dockerfiles) {
+    const dockerfile = (await read(file)).replace(/^[ \t]*#.*$/gm, "");
+    const pins = dockerfile.match(nodePin) ?? [];
+    assert.ok(pins.length <= 1, `${file} has ${pins.length} Node base pins: ${pins.join(", ")}`);
+  }
+});
+
 test("Docker dependency stages coalesce safely and keep pnpm trust checks enabled", async () => {
   assert.doesNotMatch(await read("Dockerfile.connector-worker"), /^#\s*syntax=/m);
   const backendDockerfiles = [

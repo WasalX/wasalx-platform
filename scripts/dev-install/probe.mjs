@@ -39,12 +39,11 @@ export function sanitizeProbeError(error, { service, field } = {}) {
   return `probe-scan error=${name} message=${message}${code}${target}${censusField}${fields.length ? ` fields=${fields.join(",")}` : ""}${frames.length ? ` at=${frames.join(",")}` : ""}`;
 }
 
-export function censusFailure(model, rows, heldServices, serviceCount) {
-  const active = activeServiceNames(model, composeProfiles);
+export function censusFailure(model, rows, heldServices, active = activeServiceNames(model, composeProfiles)) {
   const held = new Set(heldServices ?? [...devHeldServices, ...Object.keys(devHeldPrerequisites(model, active))]);
   const oneShots = new Set(oneShotServiceNames(model, active));
   const names = rows.map(row => row.Config?.Labels?.[serviceLabel]).sort();
-  if (active.length !== serviceCount || !active.every(name => servicePattern.test(name)) || !isDeepStrictEqual(names, active)) return { field: "inventory" };
+  if (!active.every(name => servicePattern.test(name)) || !isDeepStrictEqual(names, active)) return { field: "inventory" };
   for (const service of [...held, ...devPreservedServices]) {
     if (!active.includes(service)) return { field: "inventory" };
   }
@@ -144,9 +143,10 @@ async function main() {
     const model = JSON.parse(read("compose", "--project-directory", repository, "--env-file", resolve(values["env-file"]),
       ...files.flatMap(path => ["--file", resolve(repository, path)]), ...composeProfiles.flatMap(profile => ["--profile", profile]),
       "--project-name", project, "config", "--no-interpolate", "--no-env-resolution", "--format", "json"));
+    const active = activeServiceNames(model, composeProfiles);
     const host = await dockerIdentity(context);
     const rows = await inspectOwned(context);
-    target = censusFailure(model, rows, held, 37);
+    target = censusFailure(model, rows, held, active);
     if (target) throw new ProbeError("stack census failed");
     const version = read("compose", "version", "--short");
     const resources = projectResources(read, project, rows);
@@ -185,13 +185,14 @@ async function main() {
     const sync = await readDevNativeSync(context);
     if (sync.pending !== 0) throw new ProbeError("native membership work is pending");
     const after = await inspectOwned(context);
-    target = censusFailure(model, after, held, 37);
+    target = censusFailure(model, after, held, active);
     if (target) throw new ProbeError("stack census failed");
     if (!isDeepStrictEqual(after.map(devContainerPreimage), preimages) || !isDeepStrictEqual(await dockerIdentity(context), host) ||
         !isDeepStrictEqual(projectResources(read, project, after), resources)) throw new ProbeError("native preimage changed during scan");
     const containers = Object.fromEntries(preimages.map(({ service, id, image, configSha256, hostConfigSha256 }) =>
       [service, [id, image, configSha256, hostConfigSha256]]));
-    process.stdout.write(`${JSON.stringify({ census: "PASS", services: rows.length, rerendered_hashes: Object.keys(composeHashes).length,
+    process.stdout.write(`${JSON.stringify({ census: "PASS", expected_services: active.length, services: rows.length,
+      rerendered_hashes: Object.keys(composeHashes).length,
       containers, fields, compose_hashes: composeHashes })}\n`);
   } catch (error) {
     process.stderr.write(`${sanitizeProbeError(error, target ?? undefined)}\n`);

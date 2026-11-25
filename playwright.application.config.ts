@@ -37,6 +37,8 @@ const nodeBin = dirname(process.execPath);
 const artifactSuite = process.env.WASALX_E2E_LOCALES === "en" ? "application-en" : "application";
 const artifactRoot = resolve("output", "playwright", artifactSuite, language);
 
+const tabletOnly = /(?:^|\s)@tablet-only(?:\s|$)/u;
+
 export default defineConfig({
   testDir: "./tests/e2e",
   testMatch: platformUrl ? ["meta-cost-operator.spec.ts", "meta-transition-operator.spec.ts"] : language === "ar" ? ["arabic.spec.ts", "public-site.spec.ts", "meta-billing-diagnostic.spec.ts", "meta-account-policy.spec.ts", "meta-account-transition.spec.ts", "meta-managed-policy.spec.ts", "meta-cost.spec.ts", "meta-cost-statements.spec.ts", "meta-account-transition-execution.spec.ts", "meta-transition-operator.spec.ts"] : ["application.spec.ts", "public-site.spec.ts", "meta-billing-diagnostic.spec.ts", "meta-account-policy.spec.ts", "meta-account-transition.spec.ts", "meta-managed-policy.spec.ts", "meta-cost.spec.ts", "meta-cost-statements.spec.ts", "meta-account-transition-execution.spec.ts", "meta-transition-operator.spec.ts"],
@@ -80,6 +82,7 @@ export default defineConfig({
   projects: [
     {
       name: "desktop",
+      grepInvert: tabletOnly,
       use: {
         ...devices["Desktop Chrome"],
         viewport: { width: 1_440, height: 1_000 },
@@ -87,6 +90,7 @@ export default defineConfig({
     },
     {
       name: "mobile-390",
+      grepInvert: tabletOnly,
       use: {
         browserName: "chromium",
         deviceScaleFactor: 1,
@@ -97,6 +101,8 @@ export default defineConfig({
     },
     {
       name: "tablet-820",
+      // Cover shell and inbox layouts, the audit table, group drawer, and Arabic RTL.
+      grep: /(?:^|\s)@tablet(?:\s|$)/u,
       use: {
         browserName: "chromium",
         deviceScaleFactor: 1,

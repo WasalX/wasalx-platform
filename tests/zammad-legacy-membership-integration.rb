@@ -17,6 +17,7 @@ original_clients = WebsocketServer.instance_variable_get(:@clients)
 original_options = WebsocketServer.instance_variable_get(:@options)
 users = []
 client_id = nil
+rails_session = nil
 proof = {}
 begin
   UserInfo.current_user_id = 1
@@ -28,10 +29,13 @@ begin
     portal_user_id: SecureRandom.uuid, subject: SecureRandom.uuid, email: '', user_id: user.id, revision: 1, member_state: 'ACTIVE', portal_role: 'tenant_owner')
   control_allowed = true
   control_database_failure = false
+  policy = { 'mfa_required' => false, 'session_timeout_minutes' => 60, 'policy_version' => 1,
+    'subject' => member.subject, 'mfa_amr_values' => [], 'mfa_acr_values' => [] }
   Wasalx::Client.define_singleton_method(:post) do |path, input, scope:, **_options|
     raise 'Unexpected control call' unless path == '/internal/v1/zammad/membership/check' && scope == 'zammad:membership'
     ActiveRecord::Base.connection.execute('SELECT wasalx_intentionally_missing_column') if control_database_failure
-    { 'allowed' => control_allowed && input[:user_id] == member.portal_user_id && input[:revision] == member.revision }
+    { 'allowed' => control_allowed && input[:user_id] == member.portal_user_id &&
+      input[:native_user_id] == user.id.to_s && input[:revision] == member.revision, 'authentication_policy' => policy }
   end
   deliveries = []
   closes = []
@@ -40,10 +44,12 @@ begin
   assertion.call(Sessions.valid_client_id?(client_id), 'Fixture client ID violates the native session contract')
   socket.define_singleton_method(:send) { |value| deliveries << JSON.parse(value) }
   socket.define_singleton_method(:close_websocket) { closes << true }
-  clients = { client_id => { session: { 'id' => user.id }, websocket: socket, error_count: 0, last_ping: Time.now.to_i } }
+  rails_session = Session.create!(session_id: SecureRandom.hex(32), data: { 'user_id' => user.id })
+  socket_session = { 'id' => user.id, Wasalx::SessionAssurance::REFERENCE => rails_session.session_id }
+  clients = { client_id => { session: socket_session, websocket: socket, error_count: 0, last_ping: Time.now.to_i } }
   WebsocketServer.instance_variable_set(:@clients, clients)
   WebsocketServer.instance_variable_set(:@options, {})
-  Sessions.create(client_id, { 'id' => user.id }, { type: 'websocket' })
+  Sessions.create(client_id, socket_session, { type: 'websocket' })
   payload = { event: 'core_workflow', request_id: 'native-pool-proof', class_name: 'User', screen: 'edit',
     params: { id: user.id, firstname: user.firstname, lastname: user.lastname, email: '', active: true, role_ids: [agent.id] } }
   ActiveRecord::Base.remove_connection
@@ -93,7 +99,7 @@ begin
   ActiveRecord::Base.remove_connection
   assertion.call(!Wasalx::MembershipAccess.legacy_allowed?(client_id, { 'id' => user.id }), 'Removed stored session regained access after re-add')
   assertion.call(pool_missing.call, 'Missing session opened a database pool')
-  Sessions.create(client_id, { 'id' => user.id }, { type: 'websocket' })
+  Sessions.create(client_id, socket_session, { type: 'websocket' })
   control_allowed = false
   assertion.call(!Wasalx::MembershipAccess.legacy_allowed?(client_id), 'Current control denial was ignored')
   assertion.call(pool_missing.call, 'Control denial leaked its pool')
@@ -110,6 +116,7 @@ ensure
   ActiveRecord::Base.establish_connection if pool_missing.call
   Wasalx::Client.define_singleton_method(:post, original_post)
   Sessions.destroy(client_id)
+  rails_session&.destroy!
   WasalxMembership.where(user_id: users).destroy_all
   User.where(id: users).find_each(&:destroy!)
   WebsocketServer.instance_variable_set(:@clients, original_clients)

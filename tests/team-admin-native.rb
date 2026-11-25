@@ -9,8 +9,11 @@ actor.permissions!('admin.group')
 actor.permissions!('admin.user')
 assert = ->(condition, message) { raise message unless condition }
 invoke = ->(kind, input, user = actor) do
-  Wasalx::PortalTeamAdministration.new(actor: user, authorizer: -> { user.reload }, envelope: { 'tenant_id' => owner.tenant_id, 'instance_id' => owner.instance_id,
-    'actor' => { 'user_id' => owner.portal_user_id }, 'operation' => kind, 'input' => input }).call
+  # Match the request boundary: native transaction dispatch can clear the current actor.
+  UserInfo.with_user_id(user.id) do
+    Wasalx::PortalTeamAdministration.new(actor: user, authorizer: -> { user.reload }, envelope: { 'tenant_id' => owner.tenant_id, 'instance_id' => owner.instance_id,
+      'actor' => { 'user_id' => owner.portal_user_id }, 'operation' => kind, 'input' => input }).call
+  end
 end
 UserInfo.with_user_id(actor.id) do
   Group.transaction do
@@ -42,17 +45,25 @@ UserInfo.with_user_id(actor.id) do
     assert.call(changed.except(team_id) == old_map.except(team_id), 'unrelated direct grants changed')
     assert.call(Array(changed[team_id]).sort == %w[create read], 'granular grant persisted')
     assert.call(member.user.reload.group_access?(team_id.to_i, 'read') && member.user.group_ids_access('create').include?(team_id.to_i), 'native permission/cache projection missed saved grants')
-    # A native model workflow must apply to this package-owned update path.
+    # Zammad edits name_last and derives the read-only full path in name.
     workflow = CoreWorkflow.create!(name: "Team administration restriction #{SecureRandom.hex(5)}", object: 'Group',
       active: true, changeable: true, priority: 1, stop_after_match: true,
-      condition_saved: {}, condition_selected: { 'group.id' => { 'operator' => 'is', 'value' => [team_id] } },
-      perform: { 'group.name' => { 'operator' => 'set_fixed_to', 'set_fixed_to' => [name] } },
-      preferences: { 'screen' => %w[create edit] }, created_by_id: actor.id, updated_by_id: actor.id)
+      condition_saved: { 'group.name_last' => { 'operator' => 'is', 'value' => [name] } }, condition_selected: {},
+      perform: { 'group.name_last' => { 'operator' => 'set_fixed_to', 'set_fixed_to' => [name] } },
+      preferences: { 'screen' => ['edit'] }, created_by_id: actor.id, updated_by_id: actor.id)
+    disallowed_name = "Disallowed change #{SecureRandom.hex(5)}"
+    group = Group.find(team_id)
+    workflow_result = CoreWorkflow.perform(payload: { 'event' => 'core_workflow',
+      'request_id' => 'ChecksCoreWorkflow.validate_workflows', 'class_name' => 'Group', 'screen' => 'edit',
+      'params' => group.attributes.merge('name' => disallowed_name, 'name_last' => disallowed_name) },
+      user: actor, assets: false, policy: false)
+    assert.call(workflow_result.fetch(:restrict_values)['name_last'] == [name], 'native Group edit fixture has no active name restriction')
     restricted_id = SecureRandom.uuid
     workflow_denied = false
     begin
-      invoke.call('TEAM_SAVE', { 'team_id' => team_id, 'operation_id' => restricted_id, 'expected_version' => invoke.call('TEAM_SHOW', { 'team_id' => team_id })[:version], 'name' => 'Disallowed change', 'note' => '', 'active' => true })
-    rescue ActiveRecord::RecordInvalid, Exceptions::UnprocessableContent
+      invoke.call('TEAM_SAVE', { 'team_id' => team_id, 'operation_id' => restricted_id, 'expected_version' => invoke.call('TEAM_SHOW', { 'team_id' => team_id })[:version], 'name' => disallowed_name, 'note' => '', 'active' => true })
+    rescue Exceptions::ApplicationModel => error
+      raise unless error.record == group && error.message.include?("'name_last'")
       workflow_denied = true
     end
     assert.call(workflow_denied, 'native Group core workflow was bypassed')

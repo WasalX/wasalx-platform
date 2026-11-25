@@ -18,6 +18,10 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  zammad-compatibility:
+    if: github.event_name == 'schedule' && github.repository == 'WasalX/wasalx-platform'
+    uses: ./.github/workflows/zammad-compatibility.yml
+
   frozen-disk-qemu:
     if: github.repository == 'WasalX/wasalx-platform' && (github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main')
     runs-on: ubuntu-24.04
@@ -187,7 +191,7 @@ jobs:
         run: |
           log="$RUNNER_TEMP/wasalx-nightly/diagnostics/phases.log"
           grep -Fxq "installer=$COMMIT tree=$(git rev-parse 'HEAD^{tree}') images=$COMMIT" "$log"
-          grep -Fxq 'probe-scan services=37 rerendered_hashes=37 census=PASS' "$log"
+          grep -Eq '^probe-scan services=([1-9][0-9]*) rerendered_hashes=\1 census=PASS$' "$log"
       - name: Tear down the disposable stack and volumes
         if: always() && steps.changes.outputs.needed != 'false' && steps.migration-check.outputs.skip != 'true'
         timeout-minutes: 4

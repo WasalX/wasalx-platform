@@ -78,7 +78,7 @@ export async function ticketEventWorkflowJourney(page: Page, testInfo: TestInfo,
   await expect(initialBinding.getByRole("combobox", { name: t("workspace.mode"), exact: true })).toHaveValue("LEGACY");
   await expect(initialBinding.getByText(t("workspace.effectiveLegacy"), { exact: true })).toBeVisible();
   await panel.getByRole("button", { name: t("workspace.create"), exact: true }).click();
-  const draft = panel.locator("form.panel.bot-flow-editor");
+  const draft = panel.locator("div.panel.bot-flow-editor");
   await expect(draft.locator('option[value="REFERENCE_MESSAGES"]')).toHaveCount(0);
   await draft.getByRole("textbox", { name: t("name"), exact: true }).fill("Ticket reference workflow");
   await draft.getByRole("textbox", { name: t("text"), exact: true }).fill("Reference: ");
@@ -104,6 +104,12 @@ export async function ticketEventWorkflowJourney(page: Page, testInfo: TestInfo,
   await sampleState.selectOption("RESOLVED");
   await expect(draft.getByText(t("preview.noEffects"), { exact: true })).toBeVisible();
   await sampleState.selectOption("OPEN");
+  // The preview lives outside the draft form, so Enter in a preview value cannot save a version.
+  const writesBeforeEnter = writes.length;
+  const sampleReference = draft.getByRole("group", { name: t("variable.case.reference"), exact: true }).getByRole("textbox", { name: t("preview.value"), exact: true });
+  await expect(sampleReference).toHaveJSProperty("form", null);
+  await sampleReference.press("Enter");
+  expect(writes).toHaveLength(writesBeforeEnter);
   await draft.getByRole("button", { name: t("workspace.save"), exact: true }).click();
   await expect(draft).toHaveCount(0);
   await panel.getByRole("button", { name: t("workspace.publish"), exact: true }).click();

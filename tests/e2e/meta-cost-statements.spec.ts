@@ -20,9 +20,10 @@ async function downloadText(download:Download){const stream=await download.creat
 // Real publication, calculation, CSV controller and role enforcement have
 // separate API/actual-stack oracles; this is never financial/live authority.
 test('published statement history preserves exact amounts, unknown quantity and stale-account fences',async({page},testInfo)=>{
- test.skip(testInfo.project.name==='tablet-820');
  const errors:string[]=[];page.on('pageerror',error=>errors.push(error.message));
  let statementReads=0,oldRoute:Route|undefined,holdOld=false,initial:Route|undefined,detailRoute:Route|undefined,delayDetail=false;
+ let usageModule:Route|undefined;
+ await page.route(/\/MetaCostUsage-[^/]+\.js$/,route=>{usageModule=route;});
  await page.route('**/api/meta-costs/**',async route=>{
   const url=new URL(route.request().url());
   if(url.pathname.endsWith('/accounts'))return route.fulfill({json:[{id:accountA,names:['Customer service']},{id:accountB,names:['Other account']}]});
@@ -38,10 +39,14 @@ test('published statement history preserves exact amounts, unknown quantity and 
  const summary=page.locator('summary').filter({hasText:t('cost.title')});
  if(!['tenant_owner','tenant_admin','auditor'].includes(role)){await expect(summary).toHaveCount(0);expect(statementReads).toBe(0);expect(errors).toEqual([]);return;}
  const disclosure=page.locator('details').filter({has:summary});
+ // Keep the lazy panel pending while the operator uses the disclosure.
+ await expect.poll(()=>Boolean(usageModule)).toBe(true);
  await expect(summary).toBeVisible();await summary.focus();await expect(summary).toBeFocused();
  await page.keyboard.press('Enter');await expect(disclosure).toHaveJSProperty('open',true);
+ await expect(disclosure.getByRole('status')).toHaveText(t('tenant.loading.section'));
+ await usageModule!.continue();
  const accounts=disclosure.getByRole('combobox',{name:t('cost.account'),exact:true});
- await expect(accounts).toBeVisible();await accounts.selectOption(accountA);
+ await expect(accounts).toBeVisible();await expect(summary).toBeFocused();await accounts.selectOption(accountA);
  const panel=page.getByRole('region',{name:t('cost.statement.title'),exact:true});
  await expect.poll(()=>Boolean(initial)).toBe(true);await expect(panel.getByRole('status')).toContainText(t('cost.loading'));expect(errors).toEqual([]);
  await initial!.fulfill({json:[]});await expect(panel.getByText(t('cost.statement.empty'),{exact:true})).toBeVisible();
