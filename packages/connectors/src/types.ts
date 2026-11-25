@@ -118,6 +118,14 @@ export type SendMessage = {
 
 export type PreparedProviderMedia = { providerMediaId: string };
 
+export type AgentReplySignalInput = Pick<SendMessage, "connectionId" | "groupId" | "metaDirectRecipient"> & {
+  inboundMessageId: string;
+};
+export type AgentReplySignal = {
+  kind: "read" | "typing" | "read-and-typing";
+  send(signal: AbortSignal, canType: () => boolean): Promise<"sent" | "read-only" | "skipped" | "unsupported">;
+};
+
 export type ProviderGroupParticipant = { id:string; normalizedPhone?:string; displayName?:string };
 export type ProviderGroup = { id:string; name:string; participants:number; pictureUrl?:string; participantRoster?:ProviderGroupParticipant[] };
 export type ProviderIdentity = { phone:string; displayName?:string; sessionId:string };
@@ -133,6 +141,7 @@ export interface MessagingProviderAdapter {
   normalizeMutationWebhook?(connectionId:string,payload:unknown,headers:Headers): Promise<ProviderMessageMutation|null>;
   normalizeReceipts?(connectionId:string,payload:unknown,receivedAt?:string,connectionEngine?:"GOWS"|"NOWEB"): Promise<ProviderReceipt[]>;
   prepareMedia?(input:SendMessage): Promise<PreparedProviderMedia>;
+  agentReplySignals?(input: AgentReplySignalInput): AgentReplySignal[];
   send(input:SendMessage): Promise<{externalMessageId:string;state:DeliveryState}>;
 }
 

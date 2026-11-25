@@ -1,0 +1,69 @@
+name: Zammad compatibility
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  compatibility:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      GIT_TERMINAL_PROMPT: '0'
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.13.1'
+          package-manager-cache: false
+      - id: pnpm
+        uses: ./.github/actions/ci-pnpm
+      - name: Build service prerequisites
+        uses: ./.github/actions/ci-pnpm
+        with:
+          task: build
+          dependency-key: ${{ steps.pnpm.outputs.dependency-key }}
+      - name: Verify control API accepts attachment-only outbound articles
+        run: node --import ./tests/helpers/operator-input-fixtures.mjs --test tests/outbound-media.test.mjs
+      - name: Prepare compatibility fixtures and Chromium
+        run: |
+          pnpm run zammad:fetch
+          pnpm exec playwright install --with-deps chromium
+      - name: Preload the pinned mailbox fixture image
+        run: |
+          # The fixture uses pull_policy: never and cannot rely on BuildKit's cache.
+          mailbox_image=$(node --input-type=module -e "
+            import { MAILBOX_FIXTURE_NODE_IMAGE } from './scripts/contracts/prepare-mailbox-tls-fixture.mjs';
+            console.log(MAILBOX_FIXTURE_NODE_IMAGE);
+          ")
+          docker pull "$mailbox_image"
+      - name: Build the full-profile Zammad image
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { execFileSync } from 'node:child_process';
+          import { appendFileSync, readFileSync } from 'node:fs';
+          import { parse } from 'yaml';
+
+          const { services } = parse(readFileSync('compose.full.yaml', 'utf8'), { merge: true, logLevel: 'error' });
+          const { image, build } = services['zammad-railsserver'];
+          assert.match(image, /^[a-z0-9][a-z0-9._/:@-]{1,255}$/u);
+          assert.match(build.args.ZAMMAD_BASE_IMAGE, /@sha256:[a-f0-9]{64}$/u);
+          const commit = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+          assert.equal(commit, process.env.GITHUB_SHA);
+          const tree = execFileSync('git', ['rev-parse', 'HEAD^{tree}'], { encoding: 'utf8' }).trim();
+          const args = { ...build.args, COMMIT_SHA: commit, WASALX_CANDIDATE_TREE: tree };
+          execFileSync('docker', ['build', '--file', build.dockerfile, '--tag', image,
+            ...Object.entries(args).flatMap(([key, value]) => ['--build-arg', `${key}=${value}`]),
+            build.context], { stdio: 'inherit' });
+          appendFileSync(process.env.GITHUB_ENV, `WASALX_ZAMMAD_TEST_IMAGE=${image}\n`);
+          NODE
+      - name: Run the existing browser and Rails compatibility tests
+        env:
+          WASALX_IMAGE_CATALOG: release/installer-images.json
+        run: pnpm run zammad:compat:browser

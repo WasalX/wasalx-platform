@@ -6,9 +6,6 @@ import {arabicTenantMessages} from '../../lib/i18n/messages/ar/tenant';
 import {englishCommonMessages} from '../../lib/i18n/messages/en/common';
 import {arabicCommonMessages} from '../../lib/i18n/messages/ar/common';
 test('approved managed terms record intent without a funding or send-ready claim',async({page},testInfo)=>{
- // This scenario exercises several acknowledged and uncertain retries under the bounded CI CPU cap.
- test.setTimeout(90_000);
- test.skip(testInfo.project.name==='tablet-820');
  const locale=process.env.WASALX_E2E_LOCALE??'en',role=process.env.WASALX_E2E_ROLE??'tenant_owner';
  const messages:Record<string,string>=locale==='ar'?{...arabicTenantMessages,...arabicCommonMessages}:{...englishTenantMessages,...englishCommonMessages};
  const t=(key:string)=>messages[key]!,id='12000000-0000-4000-8000-000000000081',choiceId='23000000-0000-4000-8000-000000000081';
@@ -49,9 +46,14 @@ test('approved managed terms record intent without a funding or send-ready claim
  });
   await installMetaRoutingReadFixture(page);
  await page.goto(`/app?view=connections&connection=${id}`);await expect(page.locator('[data-application-ready="true"]')).toBeVisible();
- const section=page.locator(`section[aria-labelledby="payment-policy-${id}"]`);
+ const policySelector=`section[aria-labelledby="payment-policy-${id}"]`;
+ const section=page.locator(policySelector);
+ await expect(section).toBeVisible();
  const select=section.getByRole('button',{name:t('tenant.connection.paymentPolicy.select'),exact:true});
- if(!['tenant_owner','tenant_admin'].includes(role)){await expect(select).toHaveCount(0);await expect(section.getByRole('combobox')).toHaveCount(0);expect(posts).toEqual([]);}
+ if(!['tenant_owner','tenant_admin'].includes(role)){
+  await expect(section.getByRole('status')).toHaveText(t('tenant.connection.paymentPolicy.held'));
+  await expect(select).toHaveCount(0);await expect(section.getByRole('combobox')).toHaveCount(0);expect(posts).toEqual([]);
+ }
  else{
   await section.getByRole('combobox',{name:t('tenant.connection.paymentPolicy.managedChoice'),exact:true}).selectOption(choiceId);
   await section.getByText(t('tenant.connection.paymentPolicy.reviewTerms'),{exact:true}).click();await expect(section.getByText(choice.documentText,{exact:true})).toBeVisible();await expect(select).toBeDisabled();
@@ -81,7 +83,7 @@ test('approved managed terms record intent without a funding or send-ready claim
    await expect.poll(async()=>rateRegion.evaluate(element=>element.scrollLeft)).not.toBe(beforeScroll.left);
   }
   expect((await section.boundingBox())!.width).toBeLessThanOrEqual(page.viewportSize()!.width);
-  expect((await new AxeBuilder({page}).include('section[aria-labelledby^="payment-policy-"]').analyze()).violations).toEqual([]);
+  expect((await new AxeBuilder({page}).include(policySelector).analyze()).violations).toEqual([]);
   // A tall modal scrolls independently; capture the visible table, not a clipped section.
   // Allow fractional border clipping at the native-dialog scroll edge.
   await rateRegion.scrollIntoViewIfNeeded();await expect(rateRegion).toBeInViewport({ratio:0.99});
@@ -146,7 +148,8 @@ test('approved managed terms record intent without a funding or send-ready claim
 
 
  }
- expect((await new AxeBuilder({page}).include('section[aria-labelledby^="payment-policy-"]').analyze()).violations).toEqual([]);
+ await expect(section).toBeVisible();
+ expect((await new AxeBuilder({page}).include(policySelector).analyze()).violations).toEqual([]);
  const bounds=await section.boundingBox();expect(bounds!.width).toBeLessThanOrEqual(page.viewportSize()!.width);
  await testInfo.attach('managed-policy-held',{body:await section.screenshot(),contentType:'image/png'});expect(errors).toEqual([]);expect(expected).toEqual([]);
 });

@@ -44,7 +44,7 @@ test("bot action and handoff failures stop scheduling retries at their configure
   const handoff = { tenantId: "t1", attempts: 2, zammadSecretReference: "secret://zammad" };
   const repository = {
     claimBotActions: async () => [action],
-    claimDeliveries: async () => [],
+    whatsAppMarketingOptedOut:async()=>false,claimDeliveries: async () => [],
     claimBotHandoffs: async () => [handoff],
     claimStatuses: async () => [],
     retryBotAction: async () => calls.push("retry action"),

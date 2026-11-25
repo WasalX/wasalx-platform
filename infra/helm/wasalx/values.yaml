@@ -24,6 +24,8 @@ connectorRetries:
   wahaDeliveryMaxAttempts: 8
   metaDeliveryMaxAttempts: 8
   zammadStatusMaxAttempts: 8
+  botActionMaxAttempts: 8
+  botHandoffMaxAttempts: 8
 observability:
   enabled: true
   otlpEndpoint: "https://otel-collector.observability.svc.cluster.local:4318"
@@ -38,7 +40,7 @@ observability:
     enabled: false
     namespace: observability
     labels: { release: kube-prometheus-stack }
-    runbookBaseUrl: "https://github.com/WasalX/wasalx-platform/tree/main/docs/runbooks"
+    runbookBaseUrl: "https://github.com/WasalX/wasalx-platform/blob/main/docs/runbooks/alert-response.md"
 wahaBaseUrl: "http://waha.wasalx.svc.cluster.local:3000"
 wahaAdminSecretReference: "secret://platform/waha-admin"
 # Public HTTPS origin accepted by Meta and WAHA. The connector appends the
@@ -204,8 +206,8 @@ provisioner:
   reconcilerServiceAccountNamespace: ""
   workspaceBaseDomain: "support.example.com"
   oidcIssuer: "https://identity.example.com/realms/wasalx"
-  packageVersion: "0.5.85"
-  packageSha256: "981af2f0ce478a61a23db320f348bef0ce275bc7311638d21c91e20434dd217d"
+  packageVersion: "0.5.86"
+  packageSha256: "e569457480505547aafb9de429f791184cac0e4b5ad7c282894ac23412eed3c9"
 
   reconcileTimeoutMs: "45000"
   driverTimeoutMs: "60000"

@@ -3,6 +3,7 @@
 
 import argparse
 import base64
+from contextlib import redirect_stderr
 from copy import deepcopy
 from hashlib import sha256
 import importlib.util
@@ -15,9 +16,11 @@ import sys
 import tempfile
 import time
 import unittest
-from unittest.mock import patch
-from urllib.error import HTTPError
+from unittest.mock import Mock, patch
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
+from urllib.request import Request
+from urllib.response import addinfourl
 
 
 HERE = Path(__file__).resolve().parent
@@ -27,6 +30,9 @@ spec.loader.exec_module(agent)
 spec = importlib.util.spec_from_file_location("render", HERE / "render.py")
 render = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(render)
+spec = importlib.util.spec_from_file_location("bundle_stager", HERE.parent / "release/installer-hosted-bundles.py")
+stager = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(stager)
 COMMIT, TREE, TAG, MOVED = "1" * 40, "2" * 40, "v1.2.3-rc.1", "4" * 40
 COMPOSE_DIGEST = "sha256:" + "ab" * 32
 COMPOSE_REF = f"postgres@{COMPOSE_DIGEST}"
@@ -123,6 +129,122 @@ class PublicAPI:
         return Reply(json.dumps(value).encode(), headers)
 
 
+class RegistryStagingTest(unittest.TestCase):
+    def setUp(self):
+        manifest = json.dumps({"mediaType": "application/vnd.oci.image.manifest.v1+json",
+                               "config": {"digest": PRODUCT_DIGEST}}).encode()
+        self.digest = "sha256:" + sha256(manifest).hexdigest()
+        self.objects = {("manifests", self.digest): manifest}
+        self.referrers = {}
+        bundle_type = "application/vnd.dev.sigstore.bundle.v0.3+json"
+        for predicate in ("https://sigstore.dev/cosign/sign/v1", "https://slsa.dev/provenance/v0.2"):
+            payload = base64.b64encode(json.dumps({"predicateType": predicate}).encode()).decode()
+            blob = json.dumps({"dsseEnvelope": {"payload": payload}}).encode()
+            blob_digest = "sha256:" + sha256(blob).hexdigest()
+            self.objects["blobs", blob_digest] = blob
+            referrer = json.dumps({"artifactType": bundle_type, "subject": {"digest": self.digest},
+                                   "layers": [{"digest": blob_digest}]}).encode()
+            referrer_digest = "sha256:" + sha256(referrer).hexdigest()
+            self.objects["manifests", referrer_digest] = referrer
+            self.referrers[predicate] = {"digest": referrer_digest}
+
+    def stage_fixture(self, *, redirect_host=None):
+        requests = []
+
+        def https_open(_handler, request):
+            requests.append(request)
+            path = urlsplit(request.full_url).path
+            status, headers = 200, {}
+            if path == "/token":
+                body = b'{"token":"fixture"}'
+            else:
+                kind, reference = path.rsplit("/", 2)[-2:]
+                if kind == "referrers":
+                    body = json.dumps({"manifests": list(self.referrers.values())}).encode()
+                elif kind == "blobs" and redirect_host:
+                    status, body = 307, b""
+                    headers["location"] = f"https://{redirect_host}/download/{reference}"
+                else:
+                    body = self.objects["blobs" if kind == "download" else kind, reference]
+            response = addinfourl(io.BytesIO(body), headers, request.full_url, status)
+            response.msg = "fixture"
+            return response
+
+        inventory = json.loads(RAW)
+        for row in inventory["images"].values():
+            row["digest"] = self.digest
+        with tempfile.TemporaryDirectory() as work:
+            path = Path(work) / "images-manifest.json"
+            path.write_text(json.dumps(inventory), encoding="utf-8")
+            with patch.object(stager.urllib.request.HTTPSHandler, "https_open", autospec=True, side_effect=https_open):
+                stager.stage_hosted_bundles(path, {})
+        return requests
+
+    def test_blob_redirects_keep_authorization_only_on_the_registry_host(self):
+        for host, expected in (("ghcr.io", "Bearer fixture"), ("ghcr.io:443", "Bearer fixture"),
+                               ("download.example.test", None), ("ghcr.io:8443", None)):
+            with self.subTest(host=host):
+                requests = self.stage_fixture(redirect_host=host)
+                blob_headers = {req.get_header("Authorization") for req in requests if "/blobs/" in req.full_url}
+                download_headers = {req.get_header("Authorization") for req in requests if "/download/" in req.full_url}
+                self.assertEqual(blob_headers, {"Bearer fixture"})
+                self.assertEqual(download_headers, {expected})
+
+    def test_staging_requires_both_bundles(self):
+        for predicate in list(self.referrers):
+            with self.subTest(missing=predicate), patch.dict(self.referrers):
+                del self.referrers[predicate]
+                with self.assertRaisesRegex(ValueError, "^Signature and provenance bundles required$"):
+                    self.stage_fixture()
+
+    def test_staging_rejects_mismatched_oci_object_digest(self):
+        self.objects["manifests", self.digest] += b"\n"
+        with self.assertRaisesRegex(ValueError, "^OCI object digest mismatch$"):
+            self.stage_fixture()
+
+    def test_oci_response_is_limited_to_one_mib(self):
+        request = Request("https://example.test/v2/portal/blobs/" + self.digest)
+        raw = b"x" * 2**20
+        opener = Mock()
+        reply = Reply(raw)
+        reply.status = 200
+        opener.open.return_value = reply
+        self.assertEqual(stager.registry_bytes(opener, request, "wasalx/portal", {}), raw)
+        reply = Reply(raw + b"x")
+        reply.status = 200
+        opener.open.return_value = reply
+        with self.assertRaisesRegex(ValueError, "^OCI metadata exceeds staging limit$"):
+            stager.registry_bytes(opener, request, "wasalx/portal", {})
+
+    def test_redacted_request_errors_identify_http_status_and_read_phase(self):
+        request = Request("https://ghcr.io/token?scope=synthetic-private-value",
+                          headers={"Authorization": "Bearer fixture-value"})
+        for response_error, expected in (
+            (HTTPError("https://example.invalid/?signed=fixture-value", 429, "fixture-value", {}, None),
+             "phase=headers http_status=429"),
+            (URLError(ConnectionResetError(104, "fixture-value")), "phase=headers socket_error=ConnectionResetError errno=104"),
+            (None, "phase=body socket_error=TimeoutError"),
+        ):
+            with self.subTest(expected=expected):
+                opener = Mock()
+                if response_error is None:
+                    response = Mock()
+                    response.read.side_effect = TimeoutError("fixture-value")
+                    opener.open.return_value.__enter__ = Mock(return_value=response)
+                    opener.open.return_value.__exit__ = Mock(return_value=False)
+                else:
+                    opener.open.side_effect = response_error
+                timings = {}
+                with self.assertRaises(stager.RegistryRequestError) as failed:
+                    stager.registry_bytes(opener, request, "wasalx/portal", timings)
+                reason = str(failed.exception)
+                self.assertRegex(reason, r"^GET /token repo=wasalx/portal " + expected + r" elapsed_ms=\d+$")
+                self.assertNotIn("fixture-value", reason)
+                self.assertNotIn("synthetic-private-value", reason)
+                self.assertEqual(timings["token"][0][1], 429 if isinstance(response_error, HTTPError) else None)
+                opener.open.assert_called_once_with(request, timeout=30)
+
+
 class PullTest(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
@@ -133,8 +255,12 @@ class PullTest(unittest.TestCase):
         self.directory = self.work / "handover-outbox"
         self.outbox = agent.Outbox(self.directory, self.key)
         self.fake = PublicAPI()
+        self.trusted_root = self.work / "trusted_root.json"
+        original_root = b'{"root":"original"}'
+        self.trusted_root.write_bytes(original_root)
         self.config = {"mode": "report", "cosign": "/example/cosign",
-                       "trusted_root": "/example/trust.json", "trusted_root_sha256": "a" * 64}
+                       "trusted_root": str(self.trusted_root),
+                       "trusted_root_sha256": sha256(original_root).hexdigest()}
 
     def tick(self):
         agent.tick(agent.GitHub(self.fake.open), self.outbox, self.work, self.config)
@@ -244,6 +370,16 @@ class PullTest(unittest.TestCase):
             verify.assert_not_called()
         self.assertEqual(self.records(), [])
 
+    def test_live_failure_reports_a_redacted_reason(self):
+        result = subprocess.run(
+            [sys.executable, "-I", "-B", __file__, "--live", "--candidate", "private-fixture-value",
+             "--manifest", "unused", "--cosign", "unused", "--trust", "unused"],
+            cwd=HERE, text=True, capture_output=True, timeout=15)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("command=python3 -I -B scripts/dev-install/test_pull_agent.py --live exit=1 "
+                      "reason=live tooling is not the exact PR commit", result.stderr)
+        self.assertNotIn("private-fixture-value", result.stderr)
+
     def test_repointed_tag_keeps_existing_receipt(self):
         self.outbox.add(self.make_offer())
         first = self.records()[0].read_bytes()
@@ -258,6 +394,7 @@ class PullTest(unittest.TestCase):
         check_output = subprocess.check_output
 
         def capture(*args, **kwargs):
+            self.assertIsNone(kwargs.get("stderr"))
             return check_output(*args, **(kwargs | {"stderr": subprocess.PIPE}))
 
         with (patch.object(agent, "TOOLS", HERE), patch.object(agent.subprocess, "check_output", side_effect=capture),
@@ -266,10 +403,23 @@ class PullTest(unittest.TestCase):
         self.assertIn(b"hosted source commit mismatch", result.exception.stderr)
         self.assertEqual(self.records(), [])
 
-    def test_product_verification_failure_creates_no_handover(self):
-        with (patch.object(agent, "verify", side_effect=subprocess.CalledProcessError(1, "cosign")),
-              self.assertRaises(subprocess.CalledProcessError)):
-            self.tick()
+    def test_rotated_trusted_root_alerts_without_advancing_receipt_chain(self):
+        self.outbox.add(self.make_offer("v1.2.3-rc.0"))
+        previous = self.records()[0].read_bytes()
+        self.trusted_root.write_bytes(b'{"root":"rotated"}')
+        stderr = io.StringIO()
+        with redirect_stderr(stderr):
+            self.assertEqual(self.run_main(self.config), 1)
+        self.assertEqual(stderr.getvalue(), "<3>REPORT_TRUST_ROOT_MISMATCH: Re-pin Sigstore trust via TUF\n")
+        self.assertEqual([path.read_bytes() for path in self.records()], [previous])
+
+    def test_product_verification_failure_alerts_without_creating_handover(self):
+        stderr = io.StringIO()
+        with (patch.object(agent, "verify", side_effect=subprocess.CalledProcessError(1, "cosign")) as verify,
+              redirect_stderr(stderr)):
+            self.assertEqual(self.run_main(self.config), 1)
+        verify.assert_called_once()
+        self.assertEqual(stderr.getvalue(), "<3>REPORT_FAILED\n")
         self.assertEqual(self.records(), [])
 
     def test_repointed_tag_during_verification_creates_no_handover(self):
@@ -390,13 +540,18 @@ class PullTest(unittest.TestCase):
         identity.update(mode="report", trusted_root_sha256="a" * 64)
         bundle = self.work / "package"
         render.render_pull(identity, bundle)
-        for entry in (bundle / "SHA256SUMS").read_text().splitlines():
+        seals = (bundle / "SHA256SUMS").read_text().splitlines()
+        for file in ("scripts/release/cosign-pin.json", "scripts/release/installer-hosted-bundles.py",
+                     "scripts/installer-evidence.mjs"):
+            self.assertEqual((bundle / file).read_bytes(), (HERE.parents[1] / file).read_bytes())
+            self.assertTrue(any(entry.endswith(f"  {file}") for entry in seals))
+        for entry in seals:
             digest, name = entry.split("  ")
             self.assertEqual(digest, sha256((bundle / name).read_bytes()).hexdigest())
         unit = (bundle / render.PULL_SERVICE).read_text().splitlines()
         for setting in ("ProtectSystem=strict", "NoNewPrivileges=yes", "CPUQuota=100%", "MemoryMax=2G",
                         "TasksMax=64", "IOWeight=10", "Nice=10", "TimeoutStartSec=15min",
-                        "LoadCredential=receipt-key:/example/receipt_key"):
+                        "LoadCredential=receipt-key:/example/receipt_key", "StandardError=journal"):
             self.assertIn(setting, unit)
         self.assertFalse(any("@" in line or line.startswith("ReadWritePaths=") for line in unit))
         self.assertEqual(json.loads((bundle / "pull-config.json").read_bytes()).keys(), agent.CONFIG_FIELDS)
@@ -404,37 +559,70 @@ class PullTest(unittest.TestCase):
             render.render_pull({**identity, "mode": "unattended"}, self.work / "bad")
 
 
+LIVE_COMMAND = "python3 -I -B scripts/dev-install/test_pull_agent.py --live"
+
+
+class LiveParser(argparse.ArgumentParser):
+    def error(self, message):
+        self.exit(2, f"command={LIVE_COMMAND} exit=2 reason=invalid or missing CLI arguments\n")
+
+
 def live():
-    parser = argparse.ArgumentParser(description="Exercise exact PR tooling against a public main publication.")
+    parser = LiveParser(description="Exercise exact PR tooling against a public main publication.")
     parser.add_argument("--live", action="store_true")
     parser.add_argument("--candidate", required=True)
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--cosign", required=True)
     parser.add_argument("--trust", type=Path, required=True)
     args = parser.parse_args()
-    source = subprocess.check_output(["git", "rev-parse", "HEAD", "HEAD^{tree}"], text=True).splitlines()
-    if source[0] != args.candidate:
-        raise ValueError("live tooling is not the exact PR commit")
-    agent.TOOLS = HERE
-    api = agent.GitHub()
-    candidate = api.json(f"/commits/{agent.object_sha(args.candidate)}")
-    if [candidate["sha"], candidate["commit"]["tree"]["sha"]] != source:
-        raise ValueError("anonymous API did not bind the exact PR tree")
-    manifest = json.loads(args.manifest.read_bytes())
-    commit = agent.object_sha(manifest["commit"])
-    tree = agent.main_tree(api, commit)
-    config = {"cosign": args.cosign, "trusted_root": args.trust,
-              "trusted_root_sha256": sha256(args.trust.read_bytes()).hexdigest()}
-    with tempfile.TemporaryDirectory() as directory:
-        work = Path(directory) / agent.ASSET
-        work.write_bytes(args.manifest.read_bytes())
-        refs = agent.verify(work, commit, tree, config)
-    compose = agent.compose_refs(api, commit, refs)
-    print(f"PR_TOOLING={args.candidate} SIGNED_MAIN_PUBLICATION={commit} PRODUCT={len(refs)} COMPOSE={len(compose)} ANONYMOUS_API_GHCR_SIGSTORE=PASS")
+    command, reason = "git rev-parse HEAD HEAD^{tree}", "cannot read the checked-out PR commit and tree"
+    exit_code = 1
+    try:
+        source = subprocess.check_output(command.split(), text=True, stderr=subprocess.DEVNULL, timeout=10).splitlines()
+        command, reason = LIVE_COMMAND, "live tooling is not the exact PR commit"
+        if len(source) != 2 or source[0] != args.candidate:
+            raise ValueError
+        agent.TOOLS = HERE
+        api = agent.GitHub()
+        reason = "anonymous API did not bind the exact PR tree"
+        candidate = api.json(f"/commits/{agent.object_sha(args.candidate)}")
+        if [candidate["sha"], candidate["commit"]["tree"]["sha"]] != source:
+            raise ValueError
+        reason = "cannot read or validate the main publication manifest"
+        manifest_bytes = args.manifest.read_bytes()
+        commit = agent.object_sha(json.loads(manifest_bytes)["commit"])
+        reason = "anonymous API did not bind the publication to main"
+        tree = agent.main_tree(api, commit)
+        reason = "cannot prepare the pinned Sigstore root"
+        config = {"cosign": args.cosign, "trusted_root": args.trust,
+                  "trusted_root_sha256": sha256(args.trust.read_bytes()).hexdigest()}
+        command, reason = "node scripts/dev-install/pull-verify.mjs", "cannot verify the main publication signatures"
+        refs = agent.verify(args.manifest, commit, tree, config, staged=True)
+        command, reason = LIVE_COMMAND, "cannot validate the publication's Compose image references"
+        compose = agent.compose_refs(api, commit, refs)
+        print(f"PR_TOOLING={args.candidate} SIGNED_MAIN_PUBLICATION={commit} PRODUCT={len(refs)} COMPOSE={len(compose)} ANONYMOUS_API_GHCR_SIGSTORE=PASS")
+        return 0
+    except subprocess.CalledProcessError as error:
+        exit_code = error.returncode if error.returncode > 0 else 128 - error.returncode
+    except subprocess.TimeoutExpired:
+        exit_code = 124
+        reason += " (command deadline expired)"
+    except HTTPError as error:
+        reason += f" (HTTP {error.code})"
+    except agent.RateLimit:
+        reason += " (anonymous GitHub API rate limit)"
+    except (URLError, TimeoutError):
+        reason += " (network request failed or timed out)"
+    except OSError as error:
+        reason += f" (OS error {error.errno})"
+    except (agent.Pending, agent.TrustedRootMismatch, ValueError, TypeError, KeyError):
+        pass
+    print(f"command={command} exit={exit_code} reason={reason}", file=sys.stderr)
+    return exit_code
 
 
 if __name__ == "__main__":
     if "--live" in sys.argv:
-        live()
+        sys.exit(live())
     else:
         unittest.main()

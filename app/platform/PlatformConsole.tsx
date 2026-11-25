@@ -3,6 +3,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { formatCurrency, formatDateTime, formatDuration, formatNumber, formatRelativeTime } from "../../lib/i18n/format.ts";
 import { useI18n, useRelativeClock } from "../I18nProvider";
+import { ScrollRegion } from "../tenant-ui";
 import { LocaleSwitcher } from "../LocaleSwitcher";
 import { MetaDeletionReview } from "./MetaDeletionReview";
 import { InlineConfirmation, ModalDialog } from "../ModalDialog";
@@ -331,12 +332,8 @@ export function PlatformConsole({ initialOverview, initialTenants, operator, ini
               </select>
             </div>
             <p className={styles.tableScrollCue} id="platform-tenant-table-cue">{t("platform.tenants.scrollHint")}</p>
-            <div
+            <ScrollRegion
               className={styles.tableScroll}
-              role="region"
-              // Keyboard users need to focus an otherwise non-interactive overflow area.
-              // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex
-              tabIndex={0}
               aria-label={t("platform.tenants.tableLabel")}
               aria-describedby="platform-tenant-table-cue"
             >
@@ -362,7 +359,7 @@ export function PlatformConsole({ initialOverview, initialTenants, operator, ini
                   </tr>;
                 })}</tbody>
               </table>
-            </div>
+            </ScrollRegion>
             {!visibleTenants.length ? <div className={styles.empty}>{t("platform.tenants.empty")}</div> : null}
             {tenantFailure ? <div className={styles.pagination} role="alert"><span>{t("platform.tenants.loadFailed")}</span><button className={styles.secondaryButton} disabled={loadingTenants} onClick={() => void retryTenantLoad()}>{t("platform.error.retry")}</button></div> : null}
             {!tenantFailure && tenants.next_cursor ? <div className={styles.pagination}><button className={styles.secondaryButton} disabled={loadingTenants} onClick={() => void loadMoreTenants()}>{t(loadingTenants ? "platform.tenants.loadingMore" : "platform.tenants.loadMore")}</button></div> : null}
@@ -553,7 +550,7 @@ function Progress({ tenant }: { tenant: TenantOperation }) {
   const { locale, t } = useI18n();
   const progress = Math.min(100, Math.max(0, Number(tenant.progress_percent ?? 0)));
   const step = tenant.current_step ? stateLabel(tenant.current_step, t) : t(progress === 100 ? "platform.states.complete" : "platform.states.queued");
-  return <div className={styles.progress}><span><i style={{ inlineSize: `${progress}%` }} /></span><small>{formatNumber(progress / 100, locale, { style: "percent", maximumFractionDigits: 0 })} · {step}</small>{tenant.safe_error ? <small className={styles.progressError}>{tenant.safe_error}</small> : null}{tenant.attempts !== undefined && tenant.max_attempts !== undefined ? <small>{t("platform.tenants.attempts", { attempts: formatNumber(tenant.attempts, locale), maximum: formatNumber(tenant.max_attempts, locale) })}</small> : null}</div>;
+  return <div className={styles.progress}><span><i style={{ inlineSize: `${progress}%` }} /></span><small>{formatNumber(progress / 100, locale, { style: "percent", maximumFractionDigits: 0 })} · {step}</small>{tenant.safe_error ? <small className={styles.progressError}>{t("platform.tenants.operationFailed")}</small> : null}{tenant.attempts !== undefined && tenant.max_attempts !== undefined ? <small>{t("platform.tenants.attempts", { attempts: formatNumber(tenant.attempts, locale), maximum: formatNumber(tenant.max_attempts, locale) })}</small> : null}</div>;
 }
 
 function Status({ value, label }: { value: string; label?: string }) {

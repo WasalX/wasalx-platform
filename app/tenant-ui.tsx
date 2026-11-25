@@ -1,6 +1,7 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
-import { InlineConfirmation } from "./ModalDialog";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { InlineConfirmation, ModalDialog } from "./ModalDialog";
+import { operatorFailureMessage, operatorLocalFailure } from "../lib/operator-ui.ts";
 import { useI18n, useRelativeClock } from "./I18nProvider";
 import { formatDateTime, formatDuration, formatPastRelativeTime, formatRelativeTime } from "../lib/i18n/format.ts";
 import { localizedUiError } from "../lib/ui-error.ts";
@@ -189,22 +190,22 @@ export function SectionLoading({ quiet = false }: { quiet?: boolean }) {
   );
 }
 
+type ScrollRegionName = { "aria-label": string; "aria-labelledby"?: never } | { "aria-labelledby": string; "aria-label"?: never };
+
+/** A named overflow area that keyboard users can focus and scroll (WCAG 2.1.1). */
+export function ScrollRegion(props: Omit<React.ComponentPropsWithRef<"div">, "role" | "tabIndex" | "aria-label" | "aria-labelledby"> & ScrollRegionName) {
+  return <div {...props} role="region" tabIndex={0} />;
+}
+
 export function WideTable({ children }: { children: React.ReactNode }) {
   const { t } = useI18n();
   return (
-    <div
-      className="table-scroll"
-      role="region"
-      // Keyboard users need to focus an otherwise non-interactive overflow area.
-      // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex
-      tabIndex={0}
-      aria-label={t("tenant.accessibility.scrollTable")}
-    >
+    <ScrollRegion className="table-scroll" aria-label={t("tenant.accessibility.scrollTable")}>
       <span className="table-scroll-cue" aria-hidden="true">
         {t("tenant.accessibility.scrollTableCue")}
       </span>
       {children}
-    </div>
+    </ScrollRegion>
   );
 }
 
@@ -291,4 +292,208 @@ export function Toolbar({
       {children}
     </div>
   );
+}
+
+export const REVIEW_REASON_KEYS = new Set([
+  "identifier_limit_exceeded",
+  "media_malware_detected",
+  "media_too_large",
+  "media_type_unsafe",
+  "media_download_rejected",
+  "outbound_media_rejected",
+  "provider_delivery_failed",
+  "provider_outcome_unknown",
+  "non_retryable_review",
+  "group_action_outcome_unknown",
+]);
+const REVIEW_STATE_KEYS = new Set(["open", "resolved", "discarded", "reprocess_queued"]);
+
+export function reviewOriginalReason(row: RecordRow, t: TenantTranslator) {
+  const reason = String(row.reason_code ?? "").toLowerCase();
+  return REVIEW_REASON_KEYS.has(reason)
+    ? t(`tenant.deliveries.review.reason.${reason}`)
+    : t("tenant.deliveries.review.reason.unknown");
+}
+
+export function reviewReason(row: RecordRow, t: TenantTranslator) {
+  const state = reviewState(row.state);
+  return state === "resolved" || state === "discarded"
+    ? t(`tenant.deliveries.review.closed.${state}`)
+    : reviewOriginalReason(row, t);
+}
+
+export function reviewState(value: unknown) {
+  const state = String(value ?? "").toLowerCase();
+  return REVIEW_STATE_KEYS.has(state) ? state : "unknown";
+}
+
+export function deliveryRetriesAutomatically(value: unknown) {
+  return ["QUEUED", "FAILED_RETRYABLE"].includes(String(value ?? "").toUpperCase());
+}
+
+const DELIVERY_HOLD_REASONS = new Set(["waiting_for_earlier_delivery","waiting_for_inbound","rate_limited","policy_paused","connection_not_ready","destination_unavailable","waiting"]);
+export function deliveryHoldReason(row: RecordRow, t: TenantTranslator) {
+  const reason=String(row.hold_reason??row.delivery_hold_reason??"").toLowerCase();
+  return t(DELIVERY_HOLD_REASONS.has(reason)?`tenant.deliveries.hold.reason.${reason}`:"tenant.deliveries.hold.reason.waiting");
+}
+
+export function safeNavigationTarget(value: string | null, kind: "connection" | "delivery" | "review" | "ticket" | "group" | "message") {
+  const normalized = value?.trim().replace(/^#/u, "") ?? "";
+  const hasControlCharacter = [...normalized].some((character) => {
+    const codePoint = character.codePointAt(0) ?? 0;
+    return codePoint <= 31 || codePoint === 127;
+  });
+  if (!normalized || normalized.length > 128 || hasControlCharacter) return null;
+  if (kind === "ticket") return /^[1-9][0-9]{0,15}$/u.test(normalized) ? normalized : null;
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(normalized)) return null;
+  return normalized.toLowerCase();
+}
+
+export function DeliveryTable({
+  rows,
+  compact = false,
+  retry,
+  retryPending,
+  reviewUnknown,
+  inspect,
+  openCase,
+  canReadContent = false,
+  mutationHeaders,
+}: {
+  rows: RecordRow[];
+  compact?: boolean;
+  retry?: (id: string, outcomeUnknown: boolean, revision: string) => void;
+  retryPending?: (id: string) => boolean;
+  reviewUnknown?: (id:string|null) => void;
+  inspect?: (id:string) => void;
+  openCase?: (ticket: string) => void;
+  canReadContent?: boolean;
+  mutationHeaders?: Record<string,string>;
+}) {
+  const { t } = useI18n();
+  const [revealId, setRevealId] = useState<string | null>(null);
+  const [revealed, setRevealed] = useState<Record<string,{body:string;expiresAt:number}>>({});
+  const revealTimers = useRef(new Map<string,number>());
+  const visibleRowIds = useRef(new Set(rows.map(row=>String(row.id))));
+  const [revealing, setRevealing] = useState(false);
+  const [revealError, setRevealError] = useState<string | null>(null);
+  const hideRevealed = useCallback((id:string) => {
+    const timer=revealTimers.current.get(id);
+    if(timer!==undefined)window.clearTimeout(timer);
+    revealTimers.current.delete(id);
+    setRevealed((current) => { if(!(id in current))return current;const next={...current};delete next[id];return next });
+  },[]);
+  useEffect(()=>()=>{for(const timer of revealTimers.current.values())window.clearTimeout(timer);revealTimers.current.clear()},[]);
+  useEffect(()=>{
+    const currentIds=new Set(rows.map(row=>String(row.id)));
+    visibleRowIds.current=currentIds;
+    for(const id of revealTimers.current.keys())if(!currentIds.has(id))hideRevealed(id);
+  },[hideRevealed,rows]);
+  const reveal = async () => {
+    if (!canReadContent || !revealId || revealing || !mutationHeaders) return;
+    const id=revealId;
+    setRevealing(true);
+    setRevealError(null);
+    try {
+      const response = await fetch(`/api/deliveries/${encodeURIComponent(id)}/content`, {
+        method: "POST",
+        headers: mutationHeaders,
+        body: JSON.stringify({ purpose: "OPERATIONAL_REVIEW", confirmation: "REVEAL" }),
+      });
+      if (!response.ok) throw operatorLocalFailure(await apiError(response));
+      const result = await response.json() as { body?: string;expires_in_seconds?:number };
+      const seconds=Number(result.expires_in_seconds);
+      if(!Number.isFinite(seconds)||seconds<=0)throw operatorLocalFailure(t("tenant.deliveries.errors.reveal"));
+      if(!visibleRowIds.current.has(id)){setRevealId(null);return}
+      const ttl=Math.min(Math.floor(seconds),60)*1_000;
+      hideRevealed(id);
+      setRevealed((current) => ({ ...current, [id]: {body:String(result.body??""),expiresAt:Date.now()+ttl} }));
+      revealTimers.current.set(id,window.setTimeout(()=>hideRevealed(id),ttl));
+      setRevealId(null);
+    } catch (problem) {
+      setRevealError(operatorFailureMessage(problem, t("tenant.deliveries.errors.reveal")));
+    } finally {
+      setRevealing(false);
+    }
+  };
+  return (
+    <>
+    <WideTable>
+      <table>
+        <thead>
+          <tr>
+            <th>{t("tenant.deliveries.table.case")}</th>
+            <th>{t("tenant.deliveries.table.group")}</th>
+            <th>{t("tenant.deliveries.table.message")}</th>
+            <th>{t("tenant.deliveries.table.status")}</th>
+            <th>{t("tenant.deliveries.table.updated")}</th>
+            {!compact && <th><span className="sr-only">{t("cases.table.actions")}</span></th>}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => {
+            const ticketNumber = typeof row.ticket_number === "string" && row.ticket_number ? row.ticket_number : null;
+            const outcomeReviewId=safeNavigationTarget(typeof row.outcome_review_id==="string"?row.outcome_review_id:null,"review");
+            return <tr key={String(row.id)}>
+              <td>
+                {ticketNumber ? openCase ? <button className="ticket" onClick={() => openCase(ticketNumber)} aria-label={t("tenant.deliveries.table.openCase", { reference: ticketNumber })}><bdi>{ticketNumber}</bdi></button> : <span className="ticket"><bdi>{ticketNumber}</bdi></span> : <span className="muted">{t("tenant.deliveries.table.noCase")}</span>}
+              </td>
+              <td>
+                <b><bdi>{String(row.group_name)}</bdi></b>
+              </td>
+              <td>
+                {canReadContent && revealed[String(row.id)] !== undefined ? <span className="revealed-message"><span className="excerpt"><bdi>{revealed[String(row.id)]!.body}</bdi></span><button className="text-button" onClick={() => hideRevealed(String(row.id))}>{t("tenant.deliveries.actions.hide")}</button></span> : <span className="redacted-message"><span className="excerpt">{t("tenant.deliveries.contentRedacted")}</span>{canReadContent && !compact && row.body_available === true && mutationHeaders ? <button className="text-button" onClick={() => { setRevealError(null); setRevealId(String(row.id)); }}>{t("tenant.deliveries.actions.revealEllipsis")}</button> : null}</span>}
+                {row.error_message ? (
+                  <small className={deliveryRetriesAutomatically(row.state)?"delivery-pending-text":"danger-text"}>
+                    {t(deliveryRetriesAutomatically(row.state)?"tenant.deliveries.automaticRetry":"tenant.errors.deliveryReview")}
+                  </small>
+                ) : null}
+                {row.hold_reason ? <DeliveryHoldSummary row={row}/> : null}
+              </td>
+              <td>
+                <Status value={row.state} />
+              </td>
+              <td><RelativeTime value={row.updated_at} pastOnly/></td>
+              {!compact && (
+                <td>
+                  <div className="delivery-row-actions">
+                  {String(row.state) === "OUTCOME_UNKNOWN" && reviewUnknown ? (
+                    <button className="button small" onClick={()=>reviewUnknown(outcomeReviewId)}>
+                      {t("tenant.deliveries.actions.reviewOutcome")}
+                    </button>
+                  ) : retry && (String(row.state) === "FAILED_RETRYABLE" ||
+                  (String(row.state) === "FAILED_TERMINAL" && row.manual_retry_allowed === true)) ? (
+                    <button
+                      className="button small"
+                      disabled={retryPending?.(String(row.id))}
+                      onClick={() => retry(String(row.id), false, String(row.revision ?? row.updated_at))}
+                    >
+                      {t(retryPending?.(String(row.id)) ? "tenant.deliveries.actions.retrying" : "tenant.deliveries.actions.retry")}
+                    </button>
+                  ) : String(row.state) === "FAILED_TERMINAL" ? (
+                    <small title={t("tenant.deliveries.terminalFailureHelp")}>
+                      {t("tenant.deliveries.correctedReply")}
+                    </small>
+                  ) : String(row.state) === "BLOCKED" ? (
+                    <small>{t("tenant.deliveries.resolveEarlierPart")}</small>
+                  ) : null}
+                  {inspect ? <button className="button small secondary" onClick={() => inspect(String(row.id))}>{t("tenant.deliveries.actions.inspect")}</button> : null}
+                  </div>
+                </td>
+              )}
+            </tr>;
+          })}
+        </tbody>
+      </table>
+    </WideTable>
+    {canReadContent && revealId ? <ModalDialog close={() => setRevealId(null)} className="modal-backdrop" aria-labelledby="reveal-message-title"><div className="modal reveal-message-dialog"><div className="modal-head"><div><span className="eyebrow">{t("tenant.deliveries.reveal.eyebrow")}</span><h2 id="reveal-message-title">{t("tenant.deliveries.reveal.title")}</h2><p>{t("tenant.deliveries.reveal.body")}</p></div><button aria-label={t("tenant.deliveries.reveal.cancelLabel")} onClick={() => setRevealId(null)}>×</button></div>{revealError ? <div className="settings-feedback error" role="alert"><span>!</span><p>{revealError}</p></div> : null}<div className="audit-export-note"><span>i</span><p><b>{t("tenant.deliveries.reveal.investigationOnly")}</b><small>{t("tenant.deliveries.reveal.hideSoon")}</small></p></div><div className="modal-actions"><button className="button secondary" disabled={revealing} onClick={() => setRevealId(null)}>{t("tenant.deliveries.actions.cancel")}</button><button className="button primary" disabled={revealing} onClick={() => void reveal()}>{t(revealing ? "tenant.deliveries.actions.revealing" : "tenant.deliveries.actions.revealAndAudit")}</button></div></div></ModalDialog> : null}
+    </>
+  );
+}
+
+function DeliveryHoldSummary({row}:{row:RecordRow}){
+  const {t}=useI18n();
+  const ordering=(row.hold_reason??row.delivery_hold_reason)==="WAITING_FOR_EARLIER_DELIVERY";
+  const nextAttempt=ordering?null:row.available_at??row.delivery_next_attempt_at;const expires=ordering?null:row.hold_expires_at??row.delivery_hold_expires_at;
+  return <span className="delivery-hold-summary" role="status"><b>{deliveryHoldReason(row,t)}</b>{nextAttempt?<small>{t("tenant.deliveries.hold.nextAttempt")} <RelativeTime value={nextAttempt}/></small>:null}{expires?<small>{t("tenant.deliveries.hold.expires")} <RelativeTime value={expires}/></small>:null}</span>;
 }

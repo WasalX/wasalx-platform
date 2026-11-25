@@ -93,7 +93,7 @@ test('A failed final database admission is known unattempted, not an uncertain m
  const delivery={id:randomUUID(),tenantId:randomUUID(),connectionId:randomUUID(),provider:'meta',recipientType:'GROUP',groupId:'synthetic-group',
   sessionId:'555',connectionSecretReference:'synthetic',contentType:'text/plain',text:'Synthetic admission',idempotencyKey:'one',attempts:1,
   metaCredentialContext:{providerSessionId:randomUUID(),phoneNumberId:'555',wabaId:null,proof:null},metaBillingSnapshot:{schemaVersion:1,claim:'LEGACY_UNATTRIBUTED'}};
- const repository={claimBotActions:async()=>[],claimDeliveries:async()=>[delivery],claimStatuses:async()=>[],beginSend:async()=>true,
+ const repository={claimBotActions:async()=>[],whatsAppMarketingOptedOut:async()=>false,claimDeliveries:async()=>[delivery],claimStatuses:async()=>[],beginSend:async()=>true,
   assertMetaDeliveryContextCurrent:async()=>{},admitMetaMessageRequest:async()=>{throw new Error('Database interrupted before HTTP');},
   complete:async()=>assert.fail('No provider success'),outcomeUnknown:async()=>assert.fail('Nothing was dispatched'),
   fail:async(_job,_lease,retryable,_error,_at,_manual,code)=>{failed={retryable,code};}};

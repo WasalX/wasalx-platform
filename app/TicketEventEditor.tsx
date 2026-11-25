@@ -203,8 +203,15 @@ export function TicketEventEditor({ definition, onChange, disabled = false, memb
       <p className="ticket-event-help">{t("ticketEvent.addHelp")}</p>
     </section>
     <div className="ticket-event-stack"><button type="button" className="button secondary" onClick={() => setChecked(true)}>{t("ticketEvent.check")}</button>{checked ? <p role="status" className={valid ? "settings-feedback success" : "settings-feedback error"}>{t(valid ? "ticketEvent.valid" : missingMembers ? "ticketEvent.membersUnavailable" : "ticketEvent.invalid")}</p> : null}</div>
-    <TicketEventPreview key={definition.event} definition={definition} memberOptions={memberOptions} />
   </section>;
+}
+
+/** Render outside the draft form, so Enter in a preview value cannot save a version. */
+export function TicketEventPreviewPanel({ definition, memberOptions }: Pick<Props, "definition" | "memberOptions">) {
+  const { direction } = useI18n();
+  return <div className="ticket-event-editor bot-flow-editor bot-editor-layout ticket-event-preview-panel" dir={direction}>
+    <TicketEventPreview key={definition.event} definition={definition} memberOptions={memberOptions} />
+  </div>;
 }
 
 function TicketEventPreview({ definition, memberOptions }: Pick<Props, "definition" | "memberOptions">) {
@@ -244,9 +251,7 @@ function TicketEventPreview({ definition, memberOptions }: Pick<Props, "definiti
     ...(definition.event === "reference_received" ? [["current", current, setCurrent]] as [string, boolean, (value: boolean) => void][] : []),
     ...(definition.event === "quoted_command" ? [["sourceAuthorized", sourceAuthorized, setSourceAuthorized], ["agent", agent, setAgent], ["activeMember", activeMember, setActiveMember]] as [string, boolean, (value: boolean) => void][] : []),
   ];
-  // The preview sits inside the draft form; Enter in a preview value must not save a new version.
-  // eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- delegated guard for the inputs inside, not an interaction on the section
-  return <section className="bot-simulator ticket-event-stack" aria-labelledby={`${id}-title`} onKeyDown={event => { if (event.key === "Enter" && event.target instanceof HTMLInputElement) event.preventDefault(); }}>
+  return <section className="bot-simulator ticket-event-stack" aria-labelledby={`${id}-title`}>
     <div className="bot-section-head"><div><h3 id={`${id}-title`}>{t("ticketEvent.preview.title")}</h3><p>{t("ticketEvent.preview.help")}</p></div></div>
     <fieldset className="bot-flow-settings"><legend>{t("ticketEvent.preview.context")}</legend><div className="bot-form-grid">
       <label htmlFor={`${id}-provider`}>{t("ticketEvent.preview.provider")}<select id={`${id}-provider`} name={`${id}-provider`} value={provider} onChange={event => setProvider(event.target.value as "WAHA" | "META")}><option value="WAHA">{t("ticketEvent.value.WAHA")}</option><option value="META">{t("ticketEvent.value.META")}</option></select></label>

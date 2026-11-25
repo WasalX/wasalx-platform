@@ -13,7 +13,7 @@ export async function POST(
   try {
     await authenticatePortalRequest(request, "connection:write");
     if (!isControlPlaneBackend()) {
-      return response({ error: "Meta credentials require the persistent control plane." }, 501);
+      return response({ error: "Meta credentials require the managed service." }, 501);
     }
     const body = (await request.json().catch(() => ({}))) as { accessToken?: unknown };
     if (

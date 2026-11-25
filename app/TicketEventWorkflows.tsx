@@ -1,12 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useId, useRef, useState, type FormEvent } from "react";
+import { Fragment, useCallback, useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { parseTicketEventFlow, ticketEvents, type TicketEvent, type TicketEventDefinition } from "../packages/core/src/ticket-event-flow.ts";
 import { operatorResponseFailure } from "../lib/operator-ui.ts";
 import { localizedUiError } from "../lib/ui-error.ts";
 import { useI18n } from "./I18nProvider.tsx";
 import { InlineConfirmation } from "./ModalDialog.tsx";
-import { TicketEventEditor, ticketEventStarter } from "./TicketEventEditor.tsx";
+import { TicketEventEditor, TicketEventPreviewPanel, ticketEventStarter } from "./TicketEventEditor.tsx";
 
 type Row = Record<string, unknown>;
 type Binding = { id: string; whatsapp_group_id: string | null; event: TicketEvent; mode: "CUSTOM" | "OFF" | "INHERIT"; flow_version_id: string | null; revision: number | string };
@@ -206,16 +206,21 @@ export function TicketEventWorkflows({ active, flows, canWrite, workspaceId, mut
           {canWrite ? <div className="bot-heading-actions"><button type="button" className="button secondary" disabled={saving || publish} onClick={() => { void fetchDetail(selected).then(row => { setDetail(row); setDetailError(false); setError(""); onFlow(row); }).catch(showError); }}>{t("automation.common.reload")}</button><button type="button" className="button secondary" disabled={Boolean(draft) || saving || publish} onClick={() => openDraft(selectedDefinition, selected)}>{t("ticketEvent.workspace.edit")}</button>{selectedDetail.state === "DRAFT" ? <button type="button" className="button primary" disabled={Boolean(draft) || saving || !configuration || !Object.hasOwn(selectedDetail, "active_flow_version_id")} onClick={() => setPublish(true)}>{t("ticketEvent.workspace.publish")}</button> : null}</div> : null}
         </div>
         {publish ? <InlineConfirmation busy={saving} cancel={() => { if (!saving) setPublish(false); }} aria-labelledby={`${id}-publish-title`}><h4 id={`${id}-publish-title`}>{t("ticketEvent.workspace.publishTitle")}</h4><p>{t("ticketEvent.workspace.publishHelp")}</p><div className="bot-form-actions"><button type="button" data-inline-confirm-initial-focus className="button secondary" disabled={saving} onClick={() => setPublish(false)}>{t("automation.common.cancel")}</button><button type="button" className="button primary" disabled={saving} onClick={() => void publishDraft()}>{t("ticketEvent.workspace.publish")}</button></div></InlineConfirmation> : null}
-        <TicketEventEditor key={selected} definition={selectedDefinition} onChange={() => {}} disabled memberOptions={members} /></>
+        <Fragment key={selected}>
+          <TicketEventEditor definition={selectedDefinition} onChange={() => {}} disabled memberOptions={members} />
+          <TicketEventPreviewPanel definition={selectedDefinition} memberOptions={members} />
+        </Fragment></>
           : selected ? <div className="bot-editor-layout"><p role={detailError ? "alert" : "status"}>{t(detailError ? "ticketEvent.workspace.loadFailed" : "bot.loading")}</p>{detailError ? <button type="button" className="button secondary" onClick={() => { void fetchDetail(selected).then(row => { setDetail(row); setDetailError(false); }).catch(showError); }}>{t("automation.common.reload")}</button> : null}</div> : <p className="bot-editor-layout">{t("ticketEvent.workspace.choose")}</p>}
       </section>
     </div>
-    {draft ? <form className="panel bot-flow-editor" onSubmit={saveDraft}>
+    {draft ? <div className="panel bot-flow-editor"><form id={`${id}-draft`} onSubmit={saveDraft}>
       <div className="panel-heading"><div><h3 id={`${id}-draft-title`} tabIndex={-1}>{t("ticketEvent.workspace.draft")}</h3><p>{t("ticketEvent.workspace.draftHelp")}</p></div></div>
       <TicketEventEditor definition={draft.definition} onChange={definition => setDraft({ ...draft, definition })} disabled={!canWrite || saving} memberOptions={members} />
-      <div className="bot-form-actions"><button type="button" className="button secondary" disabled={saving} onClick={() => draftText === draft.initial ? closeDraft() : setDiscard(true)}>{t("automation.common.cancel")}</button><button type="submit" className="button primary" disabled={!canWrite || saving}>{t(saving ? "bot.command.saving" : "ticketEvent.workspace.save")}</button></div>
+      </form>
+      <TicketEventPreviewPanel definition={draft.definition} memberOptions={members} />
+      <div className="bot-form-actions"><button type="button" className="button secondary" disabled={saving} onClick={() => draftText === draft.initial ? closeDraft() : setDiscard(true)}>{t("automation.common.cancel")}</button><button type="submit" form={`${id}-draft`} className="button primary" disabled={!canWrite || saving}>{t(saving ? "bot.command.saving" : "ticketEvent.workspace.save")}</button></div>
       {discard ? <InlineConfirmation busy={saving} cancel={() => setDiscard(false)} aria-labelledby={`${id}-discard-title`}><h4 id={`${id}-discard-title`}>{t("ticketEvent.workspace.discardTitle")}</h4><div className="bot-form-actions"><button type="button" data-inline-confirm-initial-focus className="button secondary" onClick={() => setDiscard(false)}>{t("bot.editor.keepEditing")}</button><button type="button" className="button primary" onClick={closeDraft}>{t("bot.editor.discard")}</button></div></InlineConfirmation> : null}
-    </form> : null}
+    </div> : null}
     <section className="panel bot-flow-editor" aria-labelledby={`${id}-bindings-title`}><div className="panel-heading"><div><h3 id={`${id}-bindings-title`}>{t("ticketEvent.workspace.bindings")}</h3><p>{t("ticketEvent.workspace.bindingsHelp")}</p></div><button type="button" className="button secondary" disabled={saving} onClick={() => void refreshConfiguration()}>{t("automation.common.reload")}</button></div>
       {configuration ? <form onSubmit={saveBinding}><fieldset className="bot-form-grid" disabled={saving}>
         <label htmlFor={`${id}-scope`}>{t("ticketEvent.workspace.scope")}<select id={`${id}-scope`} name={`${id}-scope`} value={groupId} disabled={bindingDraft !== null} onChange={event => setGroupId(event.target.value)}><option value="">{t("ticketEvent.workspace.defaults")}</option>{configuration.groups.map(group => <option key={group.id} value={group.id}>{group.display_name}</option>)}</select></label>

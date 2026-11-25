@@ -106,7 +106,7 @@ test("delivery claims are reclaimable only before the provider network boundary"
 test("a WAHA network interruption after begin-send becomes outcome unknown and is never auto-rescheduled", async () => {
   const calls = [];
   const repository = {
-    claimBotActions:async()=>[],claimDeliveries: async () => [delivery],
+    claimBotActions:async()=>[],whatsAppMarketingOptedOut:async()=>false,claimDeliveries: async () => [delivery],
     beginSend: async () => calls.push("begin-send"),
     complete: async () => calls.push("complete"),
     fail: async () => calls.push("fail"),
@@ -136,7 +136,7 @@ test("a WAHA network interruption after begin-send becomes outcome unknown and i
 test("a projection failure after provider acceptance never rewrites known success as outcome unknown", async () => {
   const calls = [];
   const repository = {
-    claimBotActions:async()=>[],claimDeliveries: async () => [delivery],
+    claimBotActions:async()=>[],whatsAppMarketingOptedOut:async()=>false,claimDeliveries: async () => [delivery],
     beginSend: async () => calls.push("begin-send"),
     complete: async () => { calls.push("complete-attempt"); throw new Error("database unavailable"); },
     fail: async () => calls.push("fail"),

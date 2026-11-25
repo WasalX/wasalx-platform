@@ -24,7 +24,7 @@ export async function lifecycleRoute(
       return NextResponse.json(
         {
           error:
-            "Connection lifecycle operations require the persistent control-plane backend.",
+            "Connection lifecycle operations require the managed service.",
         },
         { status: 501 },
       );

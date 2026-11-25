@@ -91,6 +91,8 @@ spec:
             - { name: ZAMMAD_STATUS_MAX_ATTEMPTS, value: {{ $root.Values.connectorRetries.zammadStatusMaxAttempts | quote }} }
 {{- end }}
 {{- if or (eq $name "api") (eq $name "worker") }}
+            - { name: BOT_ACTION_MAX_ATTEMPTS, value: {{ $root.Values.connectorRetries.botActionMaxAttempts | quote }} }
+            - { name: BOT_HANDOFF_MAX_ATTEMPTS, value: {{ $root.Values.connectorRetries.botHandoffMaxAttempts | quote }} }
             # One shared, non-secret release gate controls both configuration
             # ingress and connector execution. Explicit env wins over any stale
             # same-named key accidentally left in a workload Secret.

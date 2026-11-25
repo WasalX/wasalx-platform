@@ -4,6 +4,11 @@ Run the same dry-run as CI with `python3 -I -B scripts/dev-install/test_dryrun.p
 It uses the example identity, a disposable Git bundle, and network-disabled dispatcher and guest containers.
 The fixture runs the native bind-mount, hostname, and review-origin checks and exercises a hung capture
 holding the native stage lock. SSH and Compose calls use recording fakes.
+For each container, the image check or pull, creation, and attached run share one 120-second deadline.
+The log reports Docker phase durations, a bounded list of fixture checkpoints, and the cleanup result.
+If creation or the attached run fails, a separate cleanup budget targets the named fixture container.
+After a create timeout, cleanup checks for late registration and reports an unconfirmed result
+if removal cannot be verified within that budget.
 
 The renderer takes an operator-owned identity file with the fields in
 `fixtures/identity.example.json`. Keep the real identity and rendered packet private.
@@ -27,7 +32,9 @@ The read-only running-stack scan is `node scripts/dev-install/probe.mjs --projec
 Run it as root from the candidate checkout, with the deployed Compose inputs in a separate tree.
 Use `--repository` to select the candidate checkout and repeat `--compose-file` to add overlays.
 `--held-services` overrides the DEV hold set with a comma-separated list. Nightly passes an empty list.
-Keep the JSON report private. The nightly logs only the counts and census result or a sanitized failure.
+The scan derives its expected service count from the active services in the rendered Compose model
+and checks the exact service inventory before and after scanning. Keep the JSON report private.
+The nightly logs only the counts and census result or a sanitized failure.
 
 ## Fresh held guest projects
 
@@ -35,7 +42,8 @@ Use a new `wasalx-dev-*` project with no existing containers, volumes, or networ
 After native preflight and candidate image preparation, run installer `replace`
 with `--drained --dev-fresh-held`, then `smoke` with `--dev-fresh-held`.
 The installer creates the DEV hold set and one-shot prerequisites used only by
-held services without starting them. A failed replacement stays fenced for review.
+held services without starting them. Smoke requires every held container to remain
+in Docker's `created` state. A failed replacement stays fenced for review.
 
 For a synthetic guest, pass `--dev-simulator` through preflight, image preparation,
 replacement, and smoke. It uses the nightly Compose adjustments and puts the WAHA
@@ -189,6 +197,43 @@ file. Keep the receipt files in sequence.
 
 The nightly PR leg binds the exact PR head and its tree through the anonymous GitHub
 API and independently verifies real GHCR/Sigstore bytes for the recorded main
-publication. The release path requires the RC asset and a successful census on the
+publication. The verifier uses the pinned trust root and validates the staged
+manifest, signature and provenance offline. The report agent stages those public
+GHCR bytes once per candidate. Registry credentials stay with the registry on
+redirects to another origin. Staging and offline verification have deadlines
+inside the agent watchdog, so the failing command and its redacted reason appear
+in the service journal. Nightly stages the bytes once for both the live pull
+check and the rehearsal. The release path requires the RC asset and a successful census on the
 latest nightly push run for that tag and commit. The census step checks the installer
 commit, tree and published image commit against the rehearsal log.
+
+### Re-pin Sigstore after a trusted-root rotation
+
+The verifier checks the installed root against the packet's
+`trusted_root_sha256` before using Cosign. A mismatch fails the unit and emits
+`REPORT_TRUST_ROOT_MISMATCH` at error priority in the journal. The outbox keeps
+its existing receipts. Before enabling unattended ticks, route failed runs of
+`wasalx-dev-pull.service` to the host's alert destination and check the error
+with `journalctl -u wasalx-dev-pull.service -p err`. Investigate verification
+failures even when the installed checksum still matches the old pin.
+
+1. On the trusted networked machine, verify the Linux amd64 Cosign binary
+   against the pin used by the [pull verifier](pull-verify.mjs).
+   Set `COSIGN` to that verified binary's absolute path. The cache path below
+   applies to the pinned Cosign v3.1.4. Initialize a clean TUF cache and record
+   the SHA-256 of the authenticated target.
+
+   ```sh
+   export TUF_ROOT="$(mktemp -d)"
+   "$COSIGN" initialize
+   root="$TUF_ROOT/tuf-repo-cdn.sigstore.dev/targets/trusted_root.json"
+   sha256sum "$root"
+   ```
+
+2. Stage the authenticated root at a new read-only path for the pull account.
+   Set the private pull identity's `trusted_root` and `trusted_root_sha256`
+   to that path and recorded hash. Render a new report packet, verify
+   `SHA256SUMS`, and have the exact packet and root reviewed and approved.
+3. Install the approved packet and root together, retaining the receipt key and
+   outbox. Under the authorized qualification window, verify the next eligible
+   candidate and confirm D1 accepts the signed receipt before resuming the timer.

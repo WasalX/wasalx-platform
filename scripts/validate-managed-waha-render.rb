@@ -112,6 +112,12 @@ worker_environment = deployments.fetch("wasalx-worker").dig("spec", "template", 
 abort "connector retry defaults are not eight" unless retry_environment.all? { |name| worker_environment[name] == "8" }
 abort "non-connector received delivery retries" if %w[wasalx-portal wasalx-api wasalx-invitation-mailer wasalx-identity-policy-activator].any? { |name| (environment_names.call(name) & retry_environment).any? }
 
+%w[wasalx-api wasalx-worker].each do |name|
+  environment = deployments.fetch(name).dig("spec", "template", "spec", "containers", 0, "env").to_h { |entry| [entry["name"], entry["value"]] }
+  abort "#{name} did not receive BOT_ACTION_MAX_ATTEMPTS=13" unless environment["BOT_ACTION_MAX_ATTEMPTS"] == "13"
+  abort "#{name} did not receive BOT_HANDOFF_MAX_ATTEMPTS=3" unless environment["BOT_HANDOFF_MAX_ATTEMPTS"] == "3"
+end
+
 runtime = documents.find do |document|
   document["kind"] == "ConfigMap" && document.dig("metadata", "name") == "wasalx-runtime"
 end

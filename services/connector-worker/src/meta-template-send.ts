@@ -68,6 +68,21 @@ export async function verifyApprovedTicketTemplateSend(job: DeliveryJob, adapter
   const inventory = await adapter.templatePreparationCalls().inventory(accountId);
   const found = inventory.complete && inventory.items.find(item => item.id === job.ticketTemplate?.id);
   const approval = found ? approvedTicketTemplate(found) : null;
-  if (!approval || approval.semanticSha256 !== job.ticketTemplate.semanticSha256 || approval.name !== job.template.name ||
+  if (!found || !approval || approval.semanticSha256 !== job.ticketTemplate.semanticSha256 || approval.name !== job.template.name ||
     approval.language !== job.template.languageCode || approval.parameterCount !== job.template.bodyParameters.length) throw held();
+  return found.category !== 'MARKETING';
+}
+
+export async function isVerifiedNonMarketingTemplate(job: DeliveryJob, adapter: MetaGroupsAdapter): Promise<boolean> {
+  const template = job.template, accountId = job.metaCredentialContext?.wabaId;
+  if (!template || !accountId) return false;
+  try {
+    const inventory = await adapter.templatePreparationCalls().inventory(accountId);
+    const matches = inventory.items.filter(item => item.name === template.name && item.language === template.languageCode);
+    return inventory.complete && matches.length === 1 && matches[0]!.status === "APPROVED"
+      && matches[0]!.category !== "MARKETING";
+  } catch {
+    // Missing classification never authorizes a template to an opted-out contact.
+    return false;
+  }
 }

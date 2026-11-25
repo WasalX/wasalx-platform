@@ -17,73 +17,54 @@ import { consumeExpectedDirectSetupDenial, metaDirectConsentJourney } from "./me
 import { consumeExpectedSignupDenial, metaSignupJourney } from "./meta-signup.fixture";
 import { ticketEventWorkflowJourney } from "./ticket-event-workflows.fixture";
 import type { TeamAccessData } from "../../lib/control-plane-data";
-import AxeBuilder from "@axe-core/playwright";
+import { expectAxeClean } from "../helpers/axe";
 import { expect, test, type Page } from "@playwright/test";
 
 const role = process.env.WASALX_E2E_ROLE ?? "tenant_owner";
-test("Audit uses localized workspace actions and truthful actors with permitted CSV export", async ({ page }, testInfo) => {
-  test.skip(testInfo.project.name === "tablet-820");
+test("Audit uses localized workspace actions and truthful actors with permitted CSV export", { tag: "@tablet" }, async ({ page }, testInfo) => {
   await auditWorkspaceJourney(page, "en", role, testInfo);
 });
-test("retryable human handoff has a fenced operator retry without resume or close", async ({ page }, testInfo) => {
-  test.skip(testInfo.project.name === "tablet-820");
+test("retryable human handoff has a fenced operator retry without resume or close", async ({ page }) => {
   await handoffRetryJourney(page, "en", role);
 });
 
 test("native routing sync keeps explicit queue policies separate from native readback", async ({ page }, testInfo) => {
-  test.setTimeout(90_000);
-  test.skip(testInfo.project.name === "tablet-820");
   await nativeRoutingSyncJourney(page, testInfo, "en", role);
 });
 test("fixed handoff agent selection preserves explicit and omitted immutable draft behavior", async ({ page }, testInfo) => {
-  test.skip(role !== "tenant_owner" || testInfo.project.name === "tablet-820");
-  test.setTimeout(90_000);
+  test.skip(role !== "tenant_owner");
   await fixedHandoffOwnerJourney(page, testInfo, "en");
 });
 (role !== "agent" ? test : test.skip)("linked account observations warn without changing Source membership", async ({ page }, testInfo) => {
-  test.skip(testInfo.project.name === "tablet-820");
-  test.setTimeout(90_000);
   await accountObservationJourney(page, testInfo, "en");
 });
 
 test("Meta saved access enables receiving only after current checks", async ({page},testInfo)=>{
- test.setTimeout(90_000);test.skip(testInfo.project.name==="tablet-820");
  await metaSavedActivationJourney(page,"en",role,testInfo);
 });
 
 test("Meta number release preserves reservation review and exact uncertain recovery",async({page},testInfo)=>{
- test.setTimeout(120_000);test.skip(testInfo.project.name==='tablet-820');
  await metaNumberReleaseJourney(page,'en',role,testInfo);
 });
 
 test("Meta existing-number access stays paused and recovers without registration or replay", async ({ page }, testInfo) => {
-  test.setTimeout(150_000);
-  test.skip(testInfo.project.name === "tablet-820");
   await metaAddAccessJourney(page, "en", role, testInfo);
 });
 
 test("Meta external routing preserves exact lost-response recovery and separate bot state", async ({ page }, testInfo) => {
-  test.setTimeout(120_000);
-  test.skip(testInfo.project.name === "tablet-820");
   await metaRoutingJourney(page, "en", role, testInfo);
 });
 
 test("Meta Business app consent and inert imports preserve unknown and stopped states", async ({ page }, testInfo) => {
-  test.setTimeout(120_000);
-  test.skip(testInfo.project.name === "tablet-820");
   await metaCoexistenceJourney(page, "en", role, testInfo);
 });
 
 test("Meta legacy move retains original requests, one-use access and paused completion", async ({ page }, testInfo) => {
-  test.setTimeout(180_000);
-  test.skip(testInfo.project.name === "tablet-820");
   test.skip(!["tenant_owner", "tenant_admin"].includes(role) && testInfo.project.name !== "desktop");
   await metaLegacyMigrationJourney(page, "en", role, testInfo);
 });
 
 test("Meta template preparation retains original requests and never grants number transfer", async ({ page }, testInfo) => {
-  test.setTimeout(150_000);
-  test.skip(testInfo.project.name === "tablet-820");
   test.skip(!["tenant_owner", "tenant_admin"].includes(role) && testInfo.project.name !== "desktop");
   await metaTemplatePreparationJourney(page, "en", role, testInfo);
 });
@@ -91,29 +72,22 @@ test("Meta template preparation retains original requests and never grants numbe
 
 
 test("Meta reconnect renews exact paused access without activating the connection", async ({ page }, testInfo) => {
-  test.setTimeout(120_000);
-  test.skip(testInfo.project.name === "tablet-820");
   await metaReconnectJourney(page, "en", role, testInfo);
 });
 
 
 
 test("Meta signup keeps callback, selection and recovery bound to the active attempt", async ({ page }, testInfo) => {
-  test.setTimeout(90_000);
-  test.skip(testInfo.project.name === "tablet-820");
   await metaSignupJourney(page, "en", role, testInfo);
 });
 
 (role !== "agent" ? test : test.skip)("workspace membership linking preserves explicit review and access boundaries", async ({ page }, testInfo) => {
-  test.skip(testInfo.project.name === "tablet-820");
   await workspaceAccessJourney(page, testInfo, "en", role === "tenant_owner");
 });
 (role === "tenant_owner" ? test : test.skip)("support scope preserves department assignment", async ({ page }, testInfo) => {
-  test.skip(testInfo.project.name === "tablet-820");
   await supportScopeJourney(page, testInfo, "en");
 });
 test("Meta direct setup and later Groups consent remain independent", async ({ page }, testInfo) => {
-  test.skip(testInfo.project.name === "tablet-820");
   await metaDirectConsentJourney(page, "en", role, testInfo);
 });
 
@@ -253,7 +227,6 @@ const expectedNetworkErrors = new WeakMap<Page, RegExp[]>();
 
 (role === "tenant_owner" ? test : test.skip)("alpha repair union loads pinned execution detail and fences stale same-target requests", async ({ page }, testInfo) => {
   test.skip(!["desktop", "mobile-390"].includes(testInfo.project.name));
-  test.setTimeout(60_000);
   await open(page, "automation");
   await page.getByRole("tab", { name: "Conversations", exact: true }).click();
   const opener = page.getByRole("article").filter({ hasText: /Support case.*#10421/u }).getByRole("button", { name: "View execution history" });
@@ -389,25 +362,9 @@ function expectNetworkFailure(page: Page, pattern: RegExp) {
   expect(mutations).toEqual([]);
 });
 
-async function expectAxeClean(page: Page) {
-  const result = await new AxeBuilder({ page })
-    .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"])
-    .analyze();
-  expect(
-    result.violations.map(({ id, impact, help, nodes }) => ({
-      id,
-      impact,
-      help,
-      nodes: nodes.map((node) => ({ target: node.target, html: node.html })),
-    })),
-    "axe must find no WCAG A/AA violations",
-  ).toEqual([]);
-}
-
 
 test("role navigation, history, titles, profile, and persisted theme behave as one application", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "desktop owns the exhaustive navigation transaction");
-  test.setTimeout(90_000);
   await open(page);
 
   const persona = personas[role];
@@ -497,7 +454,6 @@ test("role navigation, history, titles, profile, and persisted theme behave as o
 });
 
 test("data-service connections remain truthful, recoverable, and draft-safe", async ({ page }, testInfo) => {
-  test.setTimeout(90_000);
   const canWrite = ["tenant_owner", "tenant_admin"].includes(role);
   const pendingKey = "wasalx:pending-data-connection";
   const connectedId = "87000000-0000-4000-8000-000000000010";
@@ -912,9 +868,8 @@ test("WAHA group messaging policy follows settings permissions and preserves ret
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
 });
 
-test("mobile and tablet navigation keep content bounded and role-appropriate", async ({ page }, testInfo) => {
+test("mobile and tablet navigation keep content bounded and role-appropriate", { tag: "@tablet" }, async ({ page }, testInfo) => {
   test.skip(testInfo.project.name === "desktop", "responsive projects own this transaction");
-  test.setTimeout(90_000);
   await open(page);
   const viewport = testInfo.project.name === "mobile-390" ? 390 : 820;
   expect(await page.evaluate(() => window.innerWidth)).toBe(viewport);
@@ -954,6 +909,22 @@ test("mobile and tablet navigation keep content bounded and role-appropriate", a
     expect(await page.locator(".sidebar").evaluate((element) => element.getBoundingClientRect().width)).toBeGreaterThan(150);
     await page.getByRole("button", { name: "Use automatic sidebar" }).click();
     expect(await page.locator(".sidebar").evaluate((element) => element.getBoundingClientRect().width)).toBe(72);
+
+    const inbox = navigationLink(page, "Inbox");
+    if (role === "auditor") {
+      await expect(inbox).toHaveCount(0);
+    } else {
+      await page.route("**/api/inbox", async (route) => {
+        expect(route.request().method()).toBe("POST");
+        expect(route.request().postDataJSON()).toEqual({ operation: "LIST", input: { limit: 50, state: "open" } });
+        await route.fulfill({ json: { items: [], next_cursor: null } });
+      });
+      await inbox.click();
+      await expect(page.getByRole("heading", { level: 1, name: titles.inbox })).toBeVisible();
+      await expect(page.getByRole("navigation", { name: "Conversation workspace" })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "No conversations here" })).toBeVisible();
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(viewport);
+    }
   } else {
     await expect(pin).toBeHidden();
     await expect(primary.getByRole("link")).toHaveCount(0);
@@ -999,7 +970,6 @@ test("mobile and tablet navigation keep content bounded and role-appropriate", a
 });
 
 test("one-to-one bot configuration, simulation, handoff, and role boundaries stay usable", async ({ page }, testInfo) => {
-  test.setTimeout(90_000);
   const clonedFlowVersions = new Map<number, string>();
   const saveClonedVersion = async (expectedVersion: number) => {
     const pending = page.waitForResponse(response => response.request().method() === "POST" && /^\/api\/bot-flows\/[^/]+\/clone$/u.test(new URL(response.url()).pathname));
@@ -1767,7 +1737,6 @@ test("one-to-one bot configuration, simulation, handoff, and role boundaries sta
 
 (role === "tenant_owner" ? test : test.skip)("an ambiguous pairing-code outcome stays visible after the provider state changes", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop");
-  await page.clock.install();
   let failed = false;
   await page.route(/\/api\/connections\/12000000-0000-4000-8000-000000000002$/u, async (route) => route.fulfill({
     status: 200,
@@ -1790,13 +1759,14 @@ test("one-to-one bot configuration, simulation, handoff, and role boundaries sta
   const dialog = page.getByRole("dialog", { name: "Connection details" });
   await dialog.getByRole("button", { name: "Use a pairing code instead" }).click();
   const phone = dialog.getByRole("textbox", { name: "WhatsApp number" });
-  await phone.fill("12025550131");
+  await phone.fill("+12025550131");
   await dialog.getByRole("button", { name: "Request pairing code" }).click();
   const alert = dialog.getByRole("alert");
   await expect(alert).toContainText("This service is temporarily unavailable.");
   await expect(alert.getByRole("button", { name: "Retry same request" })).toBeVisible();
   await phone.fill("");
-  await page.clock.runFor(30_000);
+  await expect(dialog.locator(".connection-detail-shell")).not.toHaveAttribute("data-unsaved");
+  await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
   await expect(dialog.getByRole("heading", { name: "Connection failed" })).toBeVisible();
   await expect(alert).toContainText("This service is temporarily unavailable.");
   await expect(alert.getByRole("button", { name: "Retry same request" })).toBeVisible();
@@ -1847,7 +1817,6 @@ test("duplicate cleanup reconciles the connection list immediately on close", as
 
 (role === "tenant_owner" ? test : test.skip)("owner configures a group and validates normalized identifiers", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop");
-  test.setTimeout(75_000);
 
   await open(page, "groups");
   await page.getByRole("button", { name: "Configure Riyadh · Last mile" }).click();
@@ -1951,7 +1920,6 @@ test("duplicate cleanup reconciles the connection list immediately on close", as
 
 (role === "tenant_owner" ? test : test.skip)("owner inspects delivery receipts and bounded review evidence", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop");
-  test.setTimeout(75_000);
 
   await open(page, "deliveries");
   await page.getByRole("button", { name: "Inspect" }).first().click();
@@ -2239,7 +2207,6 @@ test("duplicate cleanup reconciles the connection list immediately on close", as
 
 (role === "tenant_owner" ? test : test.skip)("owner completes team, support, privacy, and audit governance workflows", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop");
-  test.setTimeout(90_000);
 
   await open(page, "team");
   await expect(page.getByRole("region", { name: "Team access summary" })).toContainText("Tenant owner");
@@ -2414,8 +2381,7 @@ test("duplicate cleanup reconciles the connection list immediately on close", as
 });
 
 // Append to tests/e2e/application.spec.ts. Existing role/open/expect/test only.
-(role === "tenant_owner" ? test : test.skip)("tablet group grant controls and save footer remain unobstructed", async ({ page }, testInfo) => {
-  test.skip(testInfo.project.name !== "tablet-820");
+(role === "tenant_owner" ? test : test.skip)("tablet group grant controls and save footer remain unobstructed", { tag: ["@tablet", "@tablet-only"] }, async ({ page }) => {
   const mutations: string[] = [];
   await page.route("**/api/group-workspace/groups/*", async route => {
     if (route.request().method() !== "GET") {
@@ -2496,7 +2462,7 @@ test("duplicate cleanup reconciles the connection list immediately on close", as
   await save.click();
   await expect(dialog.getByRole("alert")).toContainText("WhatsApp numbers: enter each number in international format, starting with + and the country code.");
   expect(patches).toEqual([]);
-  await numbers.fill("12025550142\n+12025550142");
+  await numbers.fill("+12025550142\n+1 (202) 555-0142");
   await save.click();
   await expect(dialog.getByRole("alert")).toContainText("WhatsApp numbers: remove repeated numbers, including differently formatted copies.");
   await expect(dialog.getByRole("alert")).not.toContainText("international format");
@@ -2509,17 +2475,15 @@ test("duplicate cleanup reconciles the connection list immediately on close", as
 
 (role === "tenant_owner" ? test : test.skip)("ticket event workflows edit publish and bind with pinned versions", async ({ page }, testInfo) => {
   test.skip(!["desktop","mobile-390"].includes(testInfo.project.name));
-  test.setTimeout(90_000);
   await ticketEventWorkflowJourney(page, testInfo, "en");
 });
 
 
 (role === "tenant_owner" ? test : test.skip)("keep-open bot policy preserves legacy and immutable draft settings", async ({ page }, testInfo) => {
   test.skip(!["desktop", "mobile-390"].includes(testInfo.project.name));
-  test.setTimeout(120_000);
   await keepOpenPolicyJourney(page, testInfo, "en");
 });
 test("en deletion receipt status stays truthful and out of URL queries", async ({ page }, testInfo) => {
-  test.skip(role !== "tenant_owner" || testInfo.project.name === "tablet-820");
+  test.skip(role !== "tenant_owner");
   await metaDeletionStatusJourney(page, "en", testInfo);
 });

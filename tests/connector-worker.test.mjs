@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
 import dnsPromises from "node:dns/promises";
 import https from "node:https";
+import timers from "node:timers/promises";
 import {syncBuiltinESMExports} from "node:module";
 import {MetaDirectEffectNotAttempted} from "../services/connector-worker/dist/packages/core/src/meta-direct-identity.js";
+import {approvedTicketTemplate} from "../services/connector-worker/dist/packages/core/src/meta-template-continuity.js";
+import {parseMetaTemplateInventoryItem} from "../services/connector-worker/dist/packages/core/src/meta-template-inventory.js";
 import {executeBotAction,safeHttpsRequest} from "../services/connector-worker/dist/services/connector-worker/src/bot-action.js";
 import { createHash } from "node:crypto";
 import test from "node:test";
@@ -26,7 +29,7 @@ const secret="worker-test-secret-at-least-32-bytes";
 // Existing synthetic unenrolled delivery fixtures have no account authority.
 // New account-policy tests use the actual repository and explicit guard failures.
 class DeliveryProcessor extends ProductionDeliveryProcessor {
-  constructor(repository,...dependencies){super({assertMetaBillingSendCurrent:async()=>{},admitMetaMessageRequest:async()=>{},...repository},...dependencies)}
+  constructor(repository,...dependencies){super({assertMetaBillingSendCurrent:async()=>{},admitMetaMessageRequest:async()=>{},whatsAppMarketingOptedOut:async()=>false,...repository},...dependencies)}
 }
 class InboundProcessor extends ProductionInboundProcessor {
   constructor(repository,...dependencies){super({quotedCommandCandidate:async()=>null,messageIsWithinAdmissionWindow:async()=>true,hasRunnableGroupBinding:async()=>false,renewWahaWorkerAssignment:async(_event,context)=>context,...repository},...dependencies)}
@@ -48,7 +51,164 @@ test("inbound Meta workers use the admitted app ID and retain the fallback for o
   await processor.drainTenant("synthetic");
   assert.deepEqual(apps, ["10002", "10003", "10001"]);
 });
+
+test("second-app Meta direct messages and media use the admitted app ID", async t => {
+  t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-11-01T00:00:00Z") });
+  const defaultAppId = "10001";
+  const appId = "10002";
+  const previousAppId = process.env.META_APP_ID;
+  process.env.META_APP_ID = defaultAppId;
+  t.after(() => {
+    if (previousAppId === undefined) delete process.env.META_APP_ID;
+    else process.env.META_APP_ID = previousAppId;
+  });
+  const token = "synthetic-meta-token-for-proof";
+  const proof = metadataProof(token, { appId });
+  const context = {
+    metaCredentialContext: metaContext(proof), connectionSecretReference: proof.secretReference,
+    mediaEnabled: true, retentionDays: 30,
+    zammadBaseUrl: "https://zammad.example", zammadSecretReference: "secret://zammad",
+  };
+  const events = [
+    { id: "wamid.text", type: "text", text: { body: "Hello" } },
+    { id: "wamid.image", type: "image", image: { id: "20001", mime_type: "image/png" } },
+  ].map(message => ({
+    id: message.id, providerEventId: message.id, eventType: "messages", attempts: 1,
+    tenantId: proof.tenantId, connectionId: proof.connectionId, provider: "meta", metaWebhookAppId: appId,
+    payload: { entry: [{ id: proof.wabaId, changes: [{ field: "messages", value: {
+      metadata: { phone_number_id: proof.phoneNumberId },
+      messages: [{ ...message, from: "12025550102", timestamp: String(Date.now() / 1000) }],
+    } }] }] },
+  }));
+  const completed = [], linked = [];
+  let mediaProofChecks = 0;
+  const repository = Object.assign(Object.create(InboundRepository.prototype), {
+    claim: async () => events,
+    messageIsWithinAdmissionWindow: async () => true,
+    resolveMetaDirectMessage: async (_event, _lease, message, resolvedAppId) => {
+      assert.equal(resolvedAppId, appId);
+      return message;
+    },
+    assertMetaDirectIdentityCurrent: async (_event, _lease, _chat, checkedAppId) => assert.equal(checkedAppId, appId),
+    directContext: async () => context,
+    tenant: async (_tenant, work) => work({ query: async (sql, params) => {
+      assert.match(sql, /app\.meta_lifecycle_guard/u);
+      assert.equal(params[7], appId);
+      mediaProofChecks++;
+      return { rows: [{ meta_account_proof: proof }] };
+    } }),
+    processDirectMessage: async () => ({ duplicate: false, queued: false }),
+    linkMediaObject: async event => linked.push(event.id),
+    complete: async (event, _lease, outcome) => completed.push([event.id, outcome]),
+    fail: async (_event, _lease, _retryable, error) => assert.fail(error),
+  });
+  t.mock.method(globalThis, "fetch", async (url, init) => {
+    if (url.pathname === "/api/v1/users/search") return Response.json([]);
+    assert.equal(url.pathname, "/api/v1/users");
+    return Response.json({ id: 7, login: JSON.parse(init.body).login });
+  });
+  const media = { prepare: async ({ beforeMetaRequest, media }) => {
+    assert.equal(media.url, "meta-media://20001");
+    await beforeMetaRequest(token);
+    return { mediaObjectId: "synthetic-media", attachment: { filename: "image.png", "mime-type": "image/png" } };
+  } };
+  await new ProductionInboundProcessor(repository, { resolve: async () => ({ token: "synthetic-zammad-token" }) },
+    media, undefined, undefined, defaultAppId).drainTenant(proof.tenantId);
+  assert.deepEqual(completed.sort(), [["wamid.image", "PROCESSED"], ["wamid.text", "PROCESSED"]]);
+  assert.deepEqual(linked, ["wamid.image"]);
+  assert.equal(mediaProofChecks, 1);
+});
+
 const wahaAssignment={providerBaseUrl:"http://waha-gows.internal:3000/",wahaWorkerId:"30000000-0000-4000-8000-000000000001",wahaAssignmentFencingToken:7,wahaAssignmentLeaseExpiresAt:"2026-08-09T23:59:59.000Z"};
+
+const agentReplyChat = "12025550120@c.us";
+const agentReplyInbound = { id: "inbound-link", messageId: `false_${agentReplyChat}_3EB0965B123D06E0B70741`, canType: true };
+const agentReplyDelivery = { id: "reply-1", tenantId: "tenant-a", connectionId: "c1", groupId: agentReplyChat,
+    botConversationId: "conversation-1", recipientType: "DIRECT", directOrigin: "HUMAN", ticketId: "42", articleId: "9",
+    text: "Synthetic reply", contentType: "text/plain", idempotencyKey: "reply-1", attempts: 1,
+    provider: "waha", ...wahaAssignment, sessionId: "s1", connectionSecretReference: "secret://connection" };
+
+test("agent reply completes during a read timeout, with bounded signal backoff and inbound deduplication", async t => {
+  const delivery = agentReplyDelivery, inbound = agentReplyInbound;
+  const completed = Promise.withResolvers(), firstRead = Promise.withResolvers();
+  const wakeups = [Promise.withResolvers(), Promise.withResolvers()];
+  const backoffs = [];
+  const timeouts = [];
+  let reads = 0, typing = 0, replies = 0, claimed = false;
+  t.mock.method(Math, "random", () => 0.5);
+  t.mock.method(timers, "setTimeout", delay => {
+    const release = Promise.withResolvers();
+    wakeups[backoffs.length].resolve(release.resolve);
+    backoffs.push(delay);
+    return release.promise;
+  });
+  t.mock.method(AbortSignal, "timeout", delay => {
+    const controller = new AbortController();
+    timeouts.push({ delay, controller });
+    return controller.signal;
+  });
+  t.mock.method(globalThis, "fetch", async (url, init) => {
+    if (url.pathname === "/api/sendText") {
+      await firstRead.promise;
+      return Response.json({ id: `sent-${++replies}` });
+    }
+    if (url.pathname === "/api/startTyping") {
+      typing++;
+      return new Response(null, { status: 501 });
+    }
+    assert.equal(url.pathname, "/api/sendSeen");
+    if (++reads === 1) return new Promise((_, reject) => {
+      init.signal.addEventListener("abort", () => reject(init.signal.reason), { once: true });
+      firstRead.resolve(timeouts.find(item => item.delay === 2_000).controller);
+    });
+    return new Response(null, { status: 429 });
+  });
+  const repository = {
+    claimBotActions: async () => [], claimDeliveries: async () => [delivery], beginSend: async () => true,
+    admitAgentReplySignal: async (_job, _lease, sourceId) => {
+      if (sourceId) return sourceId === inbound.id ? inbound : undefined;
+      if (claimed) return;
+      claimed = true;
+      return inbound;
+    },
+    complete: async () => completed.resolve(), claimStatuses: async () => [],
+    fail: async () => assert.fail("Signal must never fail delivery"),
+    outcomeUnknown: async () => assert.fail("Signal must never change delivery outcome"),
+  };
+  const processor = new DeliveryProcessor(repository, { resolve: async () => ({ apiKey: "synthetic" }) }, { metaGraphVersion: "v24.0" });
+  const drain = processor.drainTenant(delivery.tenantId);
+  const abortRead = await firstRead.promise;
+  await completed.promise;
+  assert.equal(replies, 1);
+  abortRead.abort();
+  (await wakeups[0].promise)();
+  (await wakeups[1].promise)();
+  await drain;
+  assert.deepEqual(backoffs, [1_000, 2_000]);
+  assert.equal(timeouts.length, 4);
+  assert(timeouts.every(item => item.delay === 2_000));
+  assert.deepEqual([reads, typing], [3, 1]);
+  await processor.drainTenant(delivery.tenantId);
+  assert.deepEqual([replies, reads, typing], [2, 3, 1]);
+});
+
+test("when the reply completes first the worker only sends a read receipt", async t => {
+  const completed = Promise.withResolvers();
+  const requests = [];
+  t.mock.method(globalThis, "fetch", async url => {
+    requests.push(url.pathname);
+    return url.pathname === "/api/sendText" ? Response.json({ id: "sent" }) : new Response(null, { status: 201 });
+  });
+  const repository = {
+    claimBotActions: async () => [], claimDeliveries: async () => [agentReplyDelivery], beginSend: async () => true,
+    // Even a SENDING snapshot can be stale by the time its result reaches the dispatcher.
+    admitAgentReplySignal: async () => { await completed.promise; return agentReplyInbound; },
+    complete: async () => completed.resolve(), claimStatuses: async () => [],
+  };
+  const processor = new DeliveryProcessor(repository, { resolve: async () => ({ apiKey: "synthetic" }) }, { metaGraphVersion: "v24.0" });
+  await processor.drainTenant(agentReplyDelivery.tenantId);
+  assert.deepEqual(requests, ["/api/sendText", "/api/sendSeen"]);
+});
 test("tenant drain jobs require a signed, scoped, matching tenant context",async()=>{const now=Math.floor(Date.now()/1000);const token=await signServiceJwt({iss:"wasalx-control",aud:"wasalx-connector-worker",sub:"scheduler",tenant_id:"tenant-a",instance_id:"scheduler-1",scope:"delivery:drain",iat:now,exp:now+120,jti:crypto.randomUUID()},secret);assert.equal((await verifyDrainJob({tenantId:"tenant-a",token},secret)).tenantId,"tenant-a");await assert.rejects(()=>verifyDrainJob({tenantId:"tenant-b",token},secret),ServiceAuthenticationError);const inboxToken=await signServiceJwt({iss:"wasalx-control",aud:"wasalx-connector-worker",sub:"scheduler",tenant_id:"tenant-a",instance_id:"scheduler-1",scope:"inbox:drain",iat:now,exp:now+120,jti:crypto.randomUUID()},secret);assert.equal((await verifyDrainJob({tenantId:"tenant-a",token:inboxToken},secret,"inbox:drain")).tenantId,"tenant-a");await assert.rejects(()=>verifyDrainJob({tenantId:"tenant-a",token:inboxToken},secret),ServiceAuthenticationError)});
 
 test("delivery completion and Zammad status are independent durable stages",async()=>{const delivery={id:"d1",tenantId:"tenant-a",connectionId:"c1",groupBindingId:"b1",groupId:"g1",ticketId:"42",articleId:"9",text:"Resolved",contentType:"text/plain",idempotencyKey:"idem-1",attempts:1,provider:"waha",...wahaAssignment,sessionId:"s1",connectionSecretReference:"secret://connection",zammadBaseUrl:"https://zammad.example",zammadSecretReference:"secret://zammad"};const status={id:"s1",deliveryId:"d1",tenantId:"tenant-a",ticketId:"42",state:"SENT",externalMessageId:"wamid.1",attempts:1,zammadBaseUrl:"https://zammad.example",zammadSecretReference:"secret://zammad"};const calls=[];const repository={claimBotActions:async()=>[],claimDeliveries:async()=>[delivery],beginSend:async()=>{calls.push("delivery-begin")},complete:async()=>{calls.push("delivery-complete")},fail:async()=>{},outcomeUnknown:async()=>{},claimStatuses:async()=>[status],completeStatus:async()=>{calls.push("status-complete")},retryStatus:async()=>{},failStatus:async()=>{}};const originalFetch=globalThis.fetch;globalThis.fetch=async(input)=>{const url=String(input);if(url.includes("sendText"))return new Response(JSON.stringify({id:"wamid.1"}),{status:200});if(url.includes("/api/v1/tickets/42"))return new Response(JSON.stringify({id:42}),{status:200});throw new Error(`unexpected ${url}`)};try{const processor=new DeliveryProcessor(repository,{resolve:async reference=>reference.endsWith("connection")?{apiKey:"key"}:{token:"token"}},{wahaBaseUrl:"https://waha.example",metaGraphVersion:"v24.0"});assert.deepEqual(await processor.drainTenant("tenant-a"),{actions:0,deliveries:1,statuses:1});assert.deepEqual(calls,["delivery-begin","delivery-complete","status-complete"])}finally{globalThis.fetch=originalFetch}});
@@ -1111,6 +1271,90 @@ function lifecycleState({revision=1,blocked=true,recovery=false}={}){
   return{schemaVersion:1,revision,lastObservedAt:stamp.observedAt,lastEvent:stamp.event,lastPayloadSha256:stamp.payloadSha256,
     reasonStates:[{reason:"ACCOUNT_OFFBOARDED",negative,...(recovery?{recovery:recovered}:{}),...(!blocked?{clearedThrough:recovered}:{}),blocked}]};
 }
+
+function withUnrestrictedMarketingFixture(t){
+  const prior=process.env.WASALX_TEST_RECIPIENT_ALLOWLIST;
+  process.env.WASALX_TEST_RECIPIENT_ALLOWLIST="*";
+  t.after(()=>{if(prior===undefined)delete process.env.WASALX_TEST_RECIPIENT_ALLOWLIST;else process.env.WASALX_TEST_RECIPIENT_ALLOWLIST=prior;});
+}
+
+test("marketing opt-outs block unverified templates before POST and preserve service replies",async(t)=>{
+  t.after(routingFixtureEnvironment("123450987"));
+  withUnrestrictedMarketingFixture(t);
+  const token="synthetic-meta-token-for-proof";
+  for(const [category,optedOut,expectedPosts,ticketTemplate] of [["MARKETING",true,0],["UTILITY",true,1],["UNKNOWN",true,0],
+    ["UTILITY",false,1],[null,true,1],["MARKETING",true,0,true],["UTILITY",true,1,true],["MARKETING",false,1,true]]){
+    const delivery=metaDelivery(metadataProof(token));
+    if(category)delivery.template={name:"synthetic_notice",languageCode:"en_US",bodyParameters:[]};
+    const item={id:"23456",name:"synthetic_notice",language:"en_US",category,status:"APPROVED",parameter_format:"POSITIONAL",
+      components:[{type:"BODY",text:"Synthetic notice"}]};
+    if(ticketTemplate){
+      const approved=approvedTicketTemplate(parseMetaTemplateInventoryItem(item));
+      delivery.directOrigin="HUMAN";
+      delivery.ticketTemplate={id:approved.id,semanticSha256:approved.semanticSha256};
+    }
+    let posts=0,reads=0,failures=[];
+    const repository={
+      claimBotActions:async()=>[],claimDeliveries:async()=>[delivery],beginSend:async()=>true,
+      assertMetaDeliveryContextCurrent:async()=>{},metaInheritedTemplateContext:async()=>null,
+      whatsAppMarketingOptedOut:async()=>optedOut,admitMetaMessageRequest:async(_job,_lease,_hash,_runtime,_phone,_proof,nonMarketing)=>{
+        assert.equal(nonMarketing,Boolean(optedOut&&category==="UTILITY"));
+        if(delivery.template&&optedOut&&!nonMarketing)throw new ProviderError("Marketing is stopped",false,"WHATSAPP_MARKETING_OPTED_OUT");
+      },
+      fail:async(...args)=>failures.push(args[6]),complete:async()=>{},claimStatuses:async()=>[],
+      outcomeUnknown:async()=>assert.fail("No ambiguous dispatch expected"),
+    };
+    const fetch=t.mock.method(globalThis,"fetch",async(input)=>{
+      if(String(input).includes("/message_templates")){
+        reads++;
+        return Response.json({data:[item]});
+      }
+      posts++;
+      return Response.json({messages:[{id:"wamid.synthetic"}]});
+    });
+    try{
+      await new DeliveryProcessor(repository,{resolve:async()=>({accessToken:token})},{metaGraphVersion:"v24.0",metaAppId:"123450987"}).drainTenant(delivery.tenantId);
+    }finally{fetch.mock.restore()}
+    assert.equal(reads,ticketTemplate||category&&optedOut?1:0);
+    assert.equal(posts,expectedPosts);
+    assert.deepEqual(failures,expectedPosts?[]:["WHATSAPP_MARKETING_OPTED_OUT"]);
+  }
+});
+
+test("the final outbox admission refuses stopped template recipients before stamping the provider request",async()=>{
+  const queries=[];
+  const job={...metaDelivery(),template:{name:"synthetic_notice",languageCode:"en_US",bodyParameters:[]}};
+  const client={release(){},async query(sql,parameters){
+    queries.push({sql,parameters});
+    const rows=sql.includes(" AS acquired")?[{acquired:true}]
+      :sql.includes(" AS active")?[{active:true}]
+      :sql.includes("FROM delivery_outbox delivery JOIN delivery_attempts")?[{id:"attempt",meta_billing_snapshot:null}]
+      :sql.includes("FROM whatsapp_marketing_preferences")?[{opted_out:true}]:[];
+    return{rowCount:sql.startsWith("UPDATE delivery_outbox")?1:rows.length,rows};
+  }};
+  const repository=new OutboxRepository({connect:async()=>client});
+  repository.metaDeliveryContextCurrent=async()=>true;
+  repository.metaBillingCurrent=async()=>{};
+  await assert.rejects(()=>repository.admitMetaMessageRequest(job,"lease","a".repeat(64)),{code:"WHATSAPP_MARKETING_OPTED_OUT",outcomeKnown:true});
+  assert.ok(!queries.some(({sql})=>sql.startsWith("UPDATE delivery_attempts")));
+  await repository.fail(job,"lease",false,"Marketing is stopped",undefined,false,"WHATSAPP_MARKETING_OPTED_OUT");
+  assert.deepEqual(queries.find(({sql})=>sql.includes("'whatsapp.marketing_delivery_refused'")).parameters,[job.tenantId,job.connectionId,job.id]);
+});
+
+test("a concrete Meta 131050 rejection reaches the durable failure path as a terminal opt-out",async(t)=>{
+  t.after(routingFixtureEnvironment("123450987"));
+  withUnrestrictedMarketingFixture(t);
+  const token="synthetic-meta-token-for-proof";
+  const delivery={...metaDelivery(metadataProof(token)),template:{name:"synthetic_notice",languageCode:"en_US",bodyParameters:[]}};
+  const failures=[];
+  const repository={claimBotActions:async()=>[],claimDeliveries:async()=>[delivery],beginSend:async()=>true,
+    assertMetaDeliveryContextCurrent:async()=>{},metaInheritedTemplateContext:async()=>null,whatsAppMarketingOptedOut:async()=>false,
+    fail:async(...args)=>failures.push([args[2],args[6]]),complete:async()=>assert.fail("No successful send"),claimStatuses:async()=>[],
+    outcomeUnknown:async()=>assert.fail("A 131050 rejection is definitive")};
+  t.mock.method(globalThis,"fetch",async()=>Response.json({error:{code:131050,message:"Synthetic private provider detail"}},{status:400}));
+  await new DeliveryProcessor(repository,{resolve:async()=>({accessToken:token})},{metaGraphVersion:"v24.0",metaAppId:"123450987"}).drainTenant(delivery.tenantId);
+  assert.deepEqual(failures,[[false,"META_MARKETING_OPTED_OUT"]]);
+});
 
 test("Meta delivery request fences pending, changed, blocked and malformed lifecycle without dispatch",async(t)=>{
   t.after(routingFixtureEnvironment("123450987"));

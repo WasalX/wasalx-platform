@@ -5,6 +5,7 @@ import { createDemoWorkspace, receiveGroupMessage, validDemoRule, type DemoRule,
 import type { englishMarketingMessages } from "../lib/i18n/messages/en/marketing.ts";
 import { createTranslator } from "../lib/i18n/translate.ts";
 import { MarketingIcon } from "./MarketingIcon";
+import { ScrollRegion } from "./tenant-ui";
 import { MarketingMotionToggle, useMarketingMotion } from "./MarketingMotion";
 
 export function MarketingInbox({ messages, locale }: { messages: Record<keyof typeof englishMarketingMessages, string>; locale: "en" | "ar" }) {
@@ -215,8 +216,7 @@ export function MarketingInbox({ messages, locale }: { messages: Record<keyof ty
               {!related.some(ticket => relatedFilter === "all" || ticket.status === relatedFilter) && <p className="inbox-empty">{t("marketing.demo.noRelated")}</p>}
             </div>}
           </div>}
-          {/* eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- The named scroll region needs keyboard focus so visitors can read its complete history with arrow keys. */}
-          <div className="inbox-messages" role="region" ref={transcript} key={`${currentView}-${activeIndex}-${group}`} tabIndex={0} aria-label={t(currentView === "groups" ? "marketing.demo.groupHistory" : "marketing.demo.tickets")}>
+          <ScrollRegion className="inbox-messages" ref={transcript} key={`${currentView}-${activeIndex}-${group}`} aria-label={t(currentView === "groups" ? "marketing.demo.groupHistory" : "marketing.demo.tickets")}>
             <span className="inbox-day">{t("marketing.inbox.today")}</span>
             {visibleMessages.map((message, index) => {
               // ponytail: linear lookup is sufficient for this small local demo; index origins if history grows.
@@ -227,7 +227,7 @@ export function MarketingInbox({ messages, locale }: { messages: Record<keyof ty
                 <DemoMessage author={message.author} roleLabel={roleLabel} text={message.text} time={message.time} outbound={message.outbound} triggerLabel={message.triggerRanges?.length ? t("marketing.demo.triggerMessage") : undefined} triggerRanges={message.triggerRanges} quote={message.quote ? <><strong>{message.quote.author}</strong><span>{message.quote.text}</span></> : undefined} note={message.tickets.length > 0 && message.group !== null ? currentView === "groups" ? <span className="inbox-trigger" data-created={!autoplay || !original || phase >= 1}>{message.tickets.map(id => <span key={id}><button type="button" onClick={() => openTicket(id)} disabled={autoplay && original && phase < 1}><MarketingIcon name="ticket"/>{autoplay && original && phase < 1 ? t("marketing.groups.opening") : <>{t("marketing.demo.ticket")} <bdi>#{1042 + id}</bdi></>}</button><button type="button" className="inbox-request-reply" onClick={() => groupReply(id)}><MarketingIcon name="reply"/>{t("marketing.demo.replyToTicket")}</button></span>)}</span> : activeIndex !== undefined && origins.includes(activeIndex) ? t("marketing.demo.origin") : t("marketing.demo.linkedReply") : undefined}/>
               </div>;
             })}
-          </div>
+          </ScrollRegion>
           <form className="inbox-composer" onSubmit={event => { event.preventDefault(); send(); }}>
             {sendError && <p className="inbox-send-error" role="alert">{t("marketing.demo.referenceLimit")}</p>}
             {(currentView === "groups" || isGroupTicket) && <div className="inbox-composer-toolbar"><div className="inbox-sender-switch" role="group" aria-label={t("marketing.demo.sendAs")}>

@@ -6,6 +6,7 @@ import type { MetaRoutingEvidence } from "@wasalx/core/meta-routing";
 import { resolveMetaTestStatusRecipientLink, type MetaTestRecipientLink } from "@wasalx/core/meta-test-recipient-link";
 import { parseWahaTestRecipientAllowlist } from "@wasalx/core/waha-test-recipient-scope";
 import { setMetaTestPhoneTransaction } from "@wasalx/core/meta-test-phone-policy";
+import type { parseMetaMarketingPreferences } from "@wasalx/core/meta-marketing-preferences";
 
 @Injectable()
 export class DatabaseService implements OnModuleDestroy {
@@ -47,7 +48,7 @@ export class DatabaseService implements OnModuleDestroy {
   async resolveClientRoutingWebhookRoute(routeHash:string){const result=await this.pool.query<ClientRoutingWebhookRoute>("SELECT * FROM app.resolve_client_routing_webhook_route($1)",[routeHash]);return result.rows[0]??null}
   async enqueueClientRoutingWebhook(route:ClientRoutingWebhookRoute,eventSha256:string){return this.withTenant(route.tenant_id,async client=>(await client.query<{job_id:string;duplicate:boolean}>("SELECT * FROM app.enqueue_client_routing_webhook_sync($1,$2)",[route.source_state_id,eventSha256])).rows[0]!) }
   async resolveOidcMemberships(subject:string){const result=await this.pool.query<OidcMembership>("SELECT * FROM app.resolve_oidc_memberships($1)",[subject]);return result.rows}
-  async acceptWebhookEvent(route:WebhookRoute,input:{providerEventId:string;eventType:string;payload:unknown;payloadSha256:string;routeKey:string;providerSessionKey:string;providerEngine:string;metaRoutingEvidence?:MetaRoutingEvidence;metaTestRecipientLink?:MetaTestRecipientLink},verifiedAppId?:string){return this.withTenant(route.tenant_id,async client=>{
+  async acceptWebhookEvent(route:WebhookRoute,input:{providerEventId:string;eventType:string;payload:unknown;payloadSha256:string;routeKey:string;providerSessionKey:string;providerEngine:string;metaRoutingEvidence?:MetaRoutingEvidence;metaTestRecipientLink?:MetaTestRecipientLink;marketingPreference?:ReturnType<typeof parseMetaMarketingPreferences>[number]&{accountId:string}},verifiedAppId?:string){return this.withTenant(route.tenant_id,async client=>{
     const appId=verifiedAppId??process.env.META_APP_ID;
     const tenant=(await client.query<{active:boolean}>("SELECT app.lock_current_active_tenant_for_event_admission() AS active")).rows[0];
     if(tenant?.active!==true)throw new NotFoundException("Webhook route was not found");
@@ -66,7 +67,12 @@ export class DatabaseService implements OnModuleDestroy {
            OR provider_state_data#>>'{metaAccountProof,credentialMetadata,appId}'=$4) FOR SHARE`,
       [route.tenant_id,route.connection_id,input.providerSessionKey,verifiedAppId??null]);
     if(session.rowCount!==1)throw new NotFoundException("Webhook route was not found");
-    const lifecycleEvent=(route.provider==="WAHA"&&input.eventType==="session.status")||(route.provider==="META"&&input.eventType==="message.status");
+    const preference=input.marketingPreference;
+    if((input.eventType==="user_preferences")!==Boolean(preference)
+      ||(preference&&(route.provider!=="META"||session.rows[0]?.waba_id!==preference.accountId)))
+      throw new NotFoundException("Webhook route was not found");
+    const lifecycleEvent=(route.provider==="WAHA"&&input.eventType==="session.status")
+      ||(route.provider==="META"&&(input.eventType==="message.status"||Boolean(preference)));
     if(!lifecycleEvent&&!identitySafety&&(connection.state!=="WORKING"||session.rows[0]?.state!=="WORKING"))throw new NotFoundException("Webhook route was not found");
     const currentSession=session.rows[0]!;
     if(route.provider==="META"&&input.eventType==="message.status"&&parseWahaTestRecipientAllowlist(process.env.WASALX_TEST_RECIPIENT_ALLOWLIST)!==undefined){
@@ -102,12 +108,15 @@ export class DatabaseService implements OnModuleDestroy {
     const routingEvidence=input.metaRoutingEvidence?{...input.metaRoutingEvidence,providerSessionId:currentSession.id,appId}:null;
     if(routingEvidence&&(routingEvidence.phoneNumberId!==currentSession.opaque_session_id||routingEvidence.payloadSha256!==input.payloadSha256
       ||(currentSession.waba_id!==null&&routingEvidence.accountId!==currentSession.waba_id)))throw new NotFoundException("Webhook route was not found");
-    const inserted=await client.query<{id:string}>("INSERT INTO event_inbox (tenant_id,connection_id,provider,provider_event_id,event_type,payload,payload_sha256,status,received_at,meta_direct_asset,meta_direct_identity_change,meta_direct_identity_transition,meta_routing_evidence,meta_webhook_app_id) VALUES ($1,$2,$3,$4,$5,$6,$7,'ACCEPTED',clock_timestamp(),$8::jsonb,$9::jsonb,$10::jsonb,$11::jsonb,$12) ON CONFLICT (provider,connection_id,provider_event_id_sha256) DO NOTHING RETURNING id",[route.tenant_id,route.connection_id,route.provider,input.providerEventId,input.eventType,input.payload,input.payloadSha256,metaDirectAsset,identityChange,transition,routingEvidence,verifiedAppId??null]);
+    const inserted=await client.query<{id:string}>("INSERT INTO event_inbox (tenant_id,connection_id,provider,provider_event_id,event_type,payload,payload_sha256,status,received_at,meta_direct_asset,meta_direct_identity_change,meta_direct_identity_transition,meta_routing_evidence,meta_webhook_app_id,processed_at) VALUES ($1,$2,$3,$4,$5,$6,$7,CASE WHEN $12::boolean THEN 'PROCESSED' ELSE 'ACCEPTED' END,clock_timestamp(),$8::jsonb,$9::jsonb,$10::jsonb,$11::jsonb,$13,CASE WHEN $12::boolean THEN clock_timestamp() END) ON CONFLICT (provider,connection_id,provider_event_id_sha256) DO NOTHING RETURNING id",[route.tenant_id,route.connection_id,route.provider,input.providerEventId,input.eventType,input.payload,input.payloadSha256,metaDirectAsset,identityChange,transition,routingEvidence,Boolean(preference),verifiedAppId??null]);
     if(!inserted.rows[0]){
       const raced=(await client.query<{id:string;event_type:string;payload_sha256:string}>("SELECT id,event_type,payload_sha256 FROM event_inbox WHERE tenant_id=$1 AND connection_id=$2 AND provider=$3 AND provider_event_id_sha256=app.webhook_event_id_sha256($1,$2,$3,$4)",[route.tenant_id,route.connection_id,route.provider,input.providerEventId])).rows[0];
       if(raced&&raced.event_type===input.eventType&&raced.payload_sha256===input.payloadSha256)return{id:raced.id,duplicate:true};
       throw new ConflictException("Webhook event admission conflicted with another request");
     }
+    if(preference)await client.query(
+      "SELECT app.record_whatsapp_marketing_preference($1,$2,$3,$4,'PREFERENCE_WEBHOOK',$5,$6)",
+      [preference.phone,preference.bsuid,preference.optedOut,preference.observedAt,route.connection_id,inserted.rows[0].id]);
     await client.query("UPDATE connections SET last_provider_event_at=clock_timestamp(),updated_at=now() WHERE tenant_id=$1 AND id=$2",[route.tenant_id,route.connection_id]);
     return{id:inserted.rows[0].id,duplicate:false};
   })}

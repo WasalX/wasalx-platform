@@ -25,7 +25,7 @@ if [[ -e "$archive" || -e "$checksum" ]]; then
   exit 3
 fi
 
-git archive --format=tar.gz --prefix="wasalx-${version}/" --output="$archive" "$commit"
+git -c core.autocrlf=false archive --format=tar.gz --prefix="wasalx-${version}/" --output="$archive" "$commit"
 (
   cd "$output_dir"
   node -e 'const fs=require("node:fs"),crypto=require("node:crypto"),p=process.argv[1];console.log(crypto.createHash("sha256").update(fs.readFileSync(p)).digest("hex")+"  "+p)' "$(basename "$archive")" > "$(basename "$checksum")"
