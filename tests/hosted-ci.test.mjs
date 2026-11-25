@@ -90,6 +90,7 @@ test("application ownership rejects a shared spec moved out of hosted fixture mo
   const shared = "tests/e2e/meta-cost-statements.spec.ts";
   const english = "tests/e2e/application.spec.ts";
   const arabic = "tests/e2e/arabic.spec.ts";
+  const operatorRunner = await read("tests/hosted-platform-operator.mjs");
   const fixtureSpecs = new Map([["en", new Set([english, shared])], ["ar", new Set([arabic, shared])]]);
   assert(hostedApplicationOwns(english, fixtureSpecs));
   assert(hostedApplicationOwns(arabic, fixtureSpecs));
@@ -207,6 +208,11 @@ test("tracked tests belong to a named CI runner or the test allowlist", async ()
         return runsFile(command, "scripts/run-application-e2e.mjs")
           && referencesFile(applicationRunner, "playwright.application.config.ts")
           && referencesFile(application, "./tests/e2e") && hostedApplicationOwns(file, fixtureSpecs);
+      case "platform-operator-e2e":
+        return runsFile(command, "tests/hosted-platform-operator.mjs")
+          && referencesFile(operatorRunner, "playwright.application.config.ts")
+          && referencesFile(application, "./tests/e2e") && posix.dirname(file) === "tests/e2e"
+          && referencesFile(operatorRunner, posix.basename(file)) && referencesFile(application, posix.basename(file));
       case "test:e2e":
         return runsFile(command, "scripts/run-application-e2e.mjs")
           && referencesFile(applicationRunner, "playwright.application.config.ts")
@@ -735,6 +741,7 @@ test("CI gates integration and infrastructure and runs portal integration files 
   assert.equal(gateStep.env.PORTAL_INTEGRATION, "${{ needs.portal-integration.result }}");
   assert.equal(gateStep.env.APPLICATION_NEEDED, "${{ needs.changes.outputs.application-e2e }}");
   assert.equal(gateStep.env.APPLICATION_E2E, "${{ needs.application-e2e.result }}");
+  assert.equal(gateStep.env.PLATFORM_OPERATOR_E2E, "${{ needs.platform-operator-e2e.result }}");
   assert.equal(gateStep.env.INTEGRATION_COVERAGE, "${{ needs.integration-coverage.result }}");
   assert.equal(gateStep.env.DEV_INSTALL_NEEDED, "${{ needs.changes.outputs.dev-install }}");
   assert.equal(gateStep.env.DEV_INSTALL, "${{ needs.dev-install-dryrun.result }}");
@@ -752,7 +759,14 @@ test("Application browser CI shards roles and locales and reuses the portal buil
   const portal = jobs["portal-integration"];
   const build = jobs["portal-browser-build"];
   const selection = jobs.changes.steps.find(step => step.id === "application-e2e");
+  const operator = jobs["platform-operator-e2e"];
   assert(jobs["ci-gate"].needs.includes("application-e2e"));
+  assert(jobs["ci-gate"].needs.includes("platform-operator-e2e"));
+  assert.deepEqual(operator.needs, application.needs);
+  assert.equal(operator.if, application.if);
+  assert.deepEqual(operator.strategy.matrix.locale, application.strategy.matrix.locale);
+  assert(!operator.steps.some(step => step.uses?.startsWith("actions/upload-artifact@")));
+  assert(operator.steps.some(step => runsFile(step.run ?? "", "tests/hosted-platform-operator.mjs")));
   assert.equal(selection.if, "github.event_name == 'pull_request'");
   assert.equal(jobs.changes.outputs["application-e2e"], "${{ steps.application-e2e.outputs.needed }}");
   assert.match(application.if, /needs\.changes\.outputs\.application-e2e != 'false'/u);
@@ -822,7 +836,7 @@ test("CI gate requires each event's jobs and rejects unplanned skips, failures, 
     DEV_INSTALL_NEEDED: "true", DEV_INSTALL: "success", STORYBOOK_NEEDED: "true", STORYBOOK: "success",
     ZAMMAD_NEEDED: "true", ZAMMAD_COMPATIBILITY: "success",
     INSTALLER_PORTAL_NEEDED: "true", INSTALLER_PORTAL: "success",
-    APPLICATION_NEEDED: "true", APPLICATION_E2E: "success",
+    APPLICATION_NEEDED: "true", APPLICATION_E2E: "success", PLATFORM_OPERATOR_E2E: "success",
   };
   const unselected = {
     ...pr, INTEGRATION_NEEDED: "false", INTEGRATION: "skipped", PORTAL_INTEGRATION: "skipped",
@@ -830,7 +844,7 @@ test("CI gate requires each event's jobs and rejects unplanned skips, failures, 
     DEV_INSTALL_NEEDED: "false", DEV_INSTALL: "skipped", STORYBOOK_NEEDED: "false", STORYBOOK: "skipped",
     ZAMMAD_NEEDED: "false", ZAMMAD_COMPATIBILITY: "skipped",
     INSTALLER_PORTAL_NEEDED: "false", INSTALLER_PORTAL: "skipped",
-    APPLICATION_NEEDED: "false", APPLICATION_E2E: "skipped",
+    APPLICATION_NEEDED: "false", APPLICATION_E2E: "skipped", PLATFORM_OPERATOR_E2E: "skipped",
   };
   const queue = {
     ...pr, EVENT: "merge_group", REVIEW: "skipped", IMAGES: "success",
@@ -844,6 +858,8 @@ test("CI gate requires each event's jobs and rejects unplanned skips, failures, 
   for (const [lane, result, override, expected] of [
     ["PR with selected jobs", pr, {}, 0],
     ["PR with unselected jobs", unselected, {}, 0],
+    ["PR with a failed signed-in operator shard", pr, { PLATFORM_OPERATOR_E2E: "failure" }, 1],
+    ["PR with selected signed-in operator skipped", pr, { PLATFORM_OPERATOR_E2E: "skipped" }, 1],
     ["PR with a failed application shard", pr, { APPLICATION_E2E: "failure" }, 1],
     ["PR with a cancelled application shard", pr, { APPLICATION_E2E: "cancelled" }, 1],
     ["PR with application skipped without selection evidence", unselected, { APPLICATION_NEEDED: "" }, 1],
@@ -1056,7 +1072,7 @@ test("PR image results are advisory while the merge queue requires the full imag
     if (imageResult === "failure") assert.match(advisory.stdout, /::warning::Advisory PR image builds: failure/u);
 
     const result = runWorkflowScript(gate.steps[0].run, {
-      EVENT: "merge_group", CHANGES: "success", PRIVACY: "success", WORKFLOW_LINT: "success", STORYBOOK: "success", APPLICATION_E2E: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: "skipped",
+      EVENT: "merge_group", CHANGES: "success", PRIVACY: "success", WORKFLOW_LINT: "success", STORYBOOK: "success", APPLICATION_E2E: "success", PLATFORM_OPERATOR_E2E: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: "skipped",
       IMAGES: imageResult, INTEGRATION: "success", PORTAL_INTEGRATION: "success",
       INTEGRATION_COVERAGE: "success", DEV_INSTALL: "skipped", INFRA: "success",
       ZAMMAD_COMPATIBILITY: "success",
@@ -1066,7 +1082,7 @@ test("PR image results are advisory while the merge queue requires the full imag
   }
   const summary = join(directory, "gate").replaceAll("\\", "/");
   const result = runWorkflowScript(gate.steps[0].run, {
-    EVENT: "pull_request", CHANGES: "success", PRIVACY: "success", WORKFLOW_LINT: "success", STORYBOOK: "success", APPLICATION_E2E: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: "success",
+    EVENT: "pull_request", CHANGES: "success", PRIVACY: "success", WORKFLOW_LINT: "success", STORYBOOK: "success", APPLICATION_E2E: "success", PLATFORM_OPERATOR_E2E: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: "success",
     IMAGES: "skipped", INTEGRATION_NEEDED: "false", INTEGRATION: "skipped",
     PORTAL_INTEGRATION: "skipped", INTEGRATION_COVERAGE: "skipped", DEV_INSTALL_NEEDED: "false", DEV_INSTALL: "skipped",
     INSTALLER_PORTAL_NEEDED: "false", INSTALLER_PORTAL: "skipped",
@@ -1234,7 +1250,7 @@ ${detector.run}`, { GITHUB_OUTPUT: outputFile.replaceAll("\\", "/"), DIFF_PATHS:
   ]) {
     const pr = event === "pull_request";
     const result = runWorkflowScript(gateStep.run, {
-      EVENT: event, CHANGES: "success", PRIVACY: "success", WORKFLOW_LINT: "success", STORYBOOK: "success", APPLICATION_E2E: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: pr ? "success" : "skipped",
+      EVENT: event, CHANGES: "success", PRIVACY: "success", WORKFLOW_LINT: "success", STORYBOOK: "success", APPLICATION_E2E: "success", PLATFORM_OPERATOR_E2E: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: pr ? "success" : "skipped",
       IMAGES: pr ? "skipped" : "success", INTEGRATION_NEEDED: "false",
       INTEGRATION: pr ? "skipped" : "success", PORTAL_INTEGRATION: pr ? "skipped" : "success",
       INTEGRATION_COVERAGE: pr ? "skipped" : "success",
@@ -1250,7 +1266,7 @@ ${detector.run}`, { GITHUB_OUTPUT: outputFile.replaceAll("\\", "/"), DIFF_PATHS:
     ["true", "failure", 1], ["true", "cancelled", 1],
   ]) {
     const result = runWorkflowScript(gateStep.run, {
-      EVENT: "pull_request", CHANGES: "success", PRIVACY: "success", WORKFLOW_LINT: "success", STORYBOOK: "success", APPLICATION_E2E: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: "success",
+      EVENT: "pull_request", CHANGES: "success", PRIVACY: "success", WORKFLOW_LINT: "success", STORYBOOK: "success", APPLICATION_E2E: "success", PLATFORM_OPERATOR_E2E: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: "success",
       IMAGES: "skipped", INTEGRATION_NEEDED: "false",
       INTEGRATION: "skipped", PORTAL_INTEGRATION: "skipped", INTEGRATION_COVERAGE: "skipped",
       DEV_INSTALL_NEEDED: needed, DEV_INSTALL: jobResult, INFRA_NEEDED: "false", INFRA: "skipped",
@@ -1271,7 +1287,7 @@ ${detector.run}`, { GITHUB_OUTPUT: outputFile.replaceAll("\\", "/"), DIFF_PATHS:
   ]) {
     const pr = event === "pull_request";
     const result = runWorkflowScript(gateStep.run, {
-      EVENT: event, CHANGES: "success", PRIVACY: "success", WORKFLOW_LINT: "success", STORYBOOK: "success", APPLICATION_E2E: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: pr ? "success" : "skipped",
+      EVENT: event, CHANGES: "success", PRIVACY: "success", WORKFLOW_LINT: "success", STORYBOOK: "success", APPLICATION_E2E: "success", PLATFORM_OPERATOR_E2E: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: pr ? "success" : "skipped",
       IMAGES: pr ? "skipped" : "success", DEV_INSTALL_NEEDED: "false", DEV_INSTALL: "skipped",
       INSTALLER_PORTAL_NEEDED: pr ? "false" : "true", INSTALLER_PORTAL: pr ? "skipped" : "success",
       INFRA_NEEDED: "true", INFRA: "success", INTEGRATION_NEEDED: needed, GITHUB_STEP_SUMMARY: summary,
