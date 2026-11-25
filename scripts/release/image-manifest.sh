@@ -39,28 +39,34 @@ download_main_image_manifest() {
 }
 
 download_nightly_image_manifest() {
-  local base=$1 directory=$2 candidates commit run jobs artifacts tree complete
+  local base=$1 directory=$2 mode=${3:-exact} candidates commit run jobs artifacts tree complete reason summary
   local manifest="$directory/images-manifest.json"
   require_main_ancestor "$base" >&2 || return
-  candidates=$(git rev-list --first-parent --max-count=5 "$base") || return
+  candidates=$base
+  if [[ "$mode" == pr-fixture ]]; then
+    candidates=$(git rev-list --first-parent --max-count=5 "$base") || return
+  fi
 
   for commit in $candidates; do
     run=$(green_main_run "$commit") || return
     if [[ -z "$run" ]]; then
-      echo "Nightly publication skipped $commit: no green main CI push run" >&2
+      reason='no green main CI push run'
+      echo "Nightly publication unavailable for $commit ($reason)" >&2
       continue
     fi
     [[ "$run" =~ ^[0-9]+$ ]] || return 1
     jobs=$(successful_manifest_jobs "$run") || return
     if [[ "$jobs" == 0 ]]; then
-      echo "Nightly publication skipped $commit: no successful Image digest manifest job" >&2
+      reason='no successful Image digest manifest job'
+      echo "Nightly publication unavailable for $commit ($reason)" >&2
       continue
     fi
     [[ "$jobs" == 1 ]] || return 1
     artifacts=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run/artifacts?name=images-manifest" \
       --jq '[.artifacts[] | select(.expired == false)] | length') || return
     if [[ "$artifacts" == 0 ]]; then
-      echo "Nightly publication skipped $commit: no available images-manifest artifact" >&2
+      reason='no available images-manifest artifact'
+      echo "Nightly publication unavailable for $commit ($reason)" >&2
       continue
     fi
     [[ "$artifacts" == 1 ]] || return 1
@@ -77,24 +83,38 @@ download_nightly_image_manifest() {
       else error("Invalid nightly publication manifest identity or completeness") end
     ' "$manifest") || return
     if [[ "$complete" == false ]]; then
-      echo "Nightly publication skipped $commit: images-manifest is incomplete" >&2
+      reason='images-manifest is incomplete'
+      echo "Nightly publication unavailable for $commit ($reason)" >&2
       rm -- "$manifest" || return
       continue
     fi
 
-    if [[ "$commit" == "$base" ]]; then
-      echo "Nightly uses $commit: requested base has a complete publication (run $run)" >&2
+    if [[ "$mode" == pr-fixture ]]; then
+      summary="PR signed-image fixture uses main publication $commit (run $run, PR base $base)."
     else
-      local warning="Nightly images come from $commit (run $run) because requested base $base has no complete green publication."
-      printf '::warning::%s\n' "$warning" >&2
-      if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
-        printf '%s\n' "$warning" >> "$GITHUB_STEP_SUMMARY" || return
-      fi
+      summary="Exact main publication $commit is complete (run $run)."
+    fi
+    if [[ "$commit" != "$base" ]]; then
+      summary+=" The PR base has no complete green publication."
+      printf '::warning::%s\n' "$summary" >&2
+    else
+      printf '%s\n' "$summary" >&2
+    fi
+    if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
+      printf '%s\n' "$summary" >> "$GITHUB_STEP_SUMMARY" || return
     fi
     printf '%s\n' "$commit"
     return
   done
 
-  echo "::error::No complete green main publication for $base in up to five first-parent commits" >&2
+  if [[ "$mode" == pr-fixture ]]; then
+    echo "::error::No complete green main publication for PR fixture base $base in up to five first-parent commits" >&2
+  else
+    summary="BLOCKED: Exact main publication for $base is unavailable ($reason)."
+    printf '::error::%s\n' "$summary" >&2
+    if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
+      printf '%s\n' "$summary" >> "$GITHUB_STEP_SUMMARY" || return
+    fi
+  fi
   return 1
 }
