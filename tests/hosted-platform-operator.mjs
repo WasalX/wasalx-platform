@@ -44,8 +44,12 @@ async function runRegisteredCases(locale, env, scratch) {
       if (first && !["skipped", "interrupted"].includes(first.status)) executed++;
       if (test.expectedStatus === "passed" && test.results.length === 1 && first?.status === "passed") passed++;
       const status = first?.status ?? "unreported";
-      const line = first?.error?.location?.line ?? spec.line;
-      console.log(JSON.stringify({ locale, case: key, line, status, durationMs: first?.duration }));
+      const message = first?.error?.message ?? "";
+      const action = /\b(locator\.(?:click|fill|selectOption|setInputFiles|check)|page\.(?:goto|evaluate|reload)|expect\.(?:poll|toBeVisible|toHaveCount|toBeDisabled|toEqual))\b/u.exec(message)?.[0];
+      const stackLine = /\/tests\/e2e\/[a-z0-9-]+\.spec\.ts:(\d+):\d+/u.exec(first?.error?.stack ?? "")?.[1];
+      const line = first?.error?.location?.line ?? (stackLine ? Number(stackLine) : undefined);
+      console.log(JSON.stringify({ locale, case: key, specLine: spec.line, assertionLine: line,
+        status, action, durationMs: first?.duration }));
     }
   }
   console.log(JSON.stringify({ locale, expected: expectedCount, executed, passed }));
@@ -89,10 +93,11 @@ try {
     }, scratch);
     phase = "fixture cleanup";
   });
-  console.log("Synthetic platform fixture cleaned up");
+  phase = "session cleanup";
 } catch (error) {
   console.error("Operator browser job failed during " + phase + " (" + error.name + ")");
   process.exitCode = 1;
 } finally {
   await rm(scratch, { recursive: true, force: true });
+  if (phase === "session cleanup") console.log("Synthetic platform fixture and session state cleaned up");
 }

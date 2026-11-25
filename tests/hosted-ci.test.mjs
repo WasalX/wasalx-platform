@@ -90,7 +90,6 @@ test("application ownership rejects a shared spec moved out of hosted fixture mo
   const shared = "tests/e2e/meta-cost-statements.spec.ts";
   const english = "tests/e2e/application.spec.ts";
   const arabic = "tests/e2e/arabic.spec.ts";
-  const operatorRunner = await read("tests/hosted-platform-operator.mjs");
   const fixtureSpecs = new Map([["en", new Set([english, shared])], ["ar", new Set([arabic, shared])]]);
   assert(hostedApplicationOwns(english, fixtureSpecs));
   assert(hostedApplicationOwns(arabic, fixtureSpecs));
@@ -169,6 +168,7 @@ test("tracked tests belong to a named CI runner or the test allowlist", async ()
     await Promise.all(["scripts/validate-infra.sh", "infra/docker/Dockerfile.zammad", "tests/zammad-image-browser-compat.test.mjs",
       "playwright.application.config.ts", "playwright.identity.config.ts", "playwright.storybook.config.ts",
       "tests/visual/inbox-synthetic.spec.ts", "scripts/storybook-visual-regression.mjs", "scripts/run-application-e2e.mjs"].map(read));
+  const operatorRunner = await read("tests/hosted-platform-operator.mjs");
   const fixtureSpecs = new Map(jobs["application-e2e"].strategy.matrix.locale.map(locale => {
     const cases = discoverBrowserCases({ argv: ["pnpm", "test:e2e"], env: {
       WASALX_E2E_LOCALES: locale, WASALX_E2E_ROLES: "tenant_owner", WASALX_E2E_PLATFORM_URL: "",
