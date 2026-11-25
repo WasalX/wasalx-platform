@@ -793,12 +793,30 @@ test("Hosted browser jobs retain Playwright diagnostics on failure or cancellati
 
 test("CI gate requires each event's jobs and rejects unplanned skips, failures, and cancellations", async t => {
   const { jobs } = parse(await read(".github/workflows/ci.yml"));
-  const [{ run }] = jobs["ci-gate"].steps;
+  const { "ci-gate": gate, "lint-on-push": pushLint } = jobs;
+  const [{ run, env }] = gate.steps;
+  const lint = pushLint.steps.find(step => step.name === "Lint");
+  assert(gate.needs.includes("lint-on-push"));
+  assert.equal(env.LINT_ON_PUSH, "${{ needs.lint-on-push.result }}");
+  assert.equal(pushLint.if, "github.event_name == 'push'");
+  assert.equal(pushLint["continue-on-error"], undefined);
+  assert.equal(lint.if, undefined);
+  assert.equal(lint["continue-on-error"], undefined);
+  const injectedLint = runWorkflowScript(`
+pnpm() {
+  [[ "$1 $2" == "run lint" ]] || return 99
+  return 17
+}
+${lint.run}`, {});
+  assert.ifError(injectedLint.error);
+  assert.equal(injectedLint.status, 17, injectedLint.stderr);
+
   const directory = await mkdtemp(join(tmpdir(), "ci-gate-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const summary = join(directory, "summary.md");
   const pr = {
     EVENT: "pull_request", CHANGES: "success", PRIVACY: "success", WORKFLOW_LINT: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: "success", IMAGES: "skipped",
+    LINT_ON_PUSH: "skipped",
     INTEGRATION_NEEDED: "true", INTEGRATION: "success", PORTAL_INTEGRATION: "success",
     INTEGRATION_COVERAGE: "success", INFRA_NEEDED: "true", INFRA: "success",
     DEV_INSTALL_NEEDED: "true", DEV_INSTALL: "success", STORYBOOK_NEEDED: "true", STORYBOOK: "success",
@@ -819,9 +837,9 @@ test("CI gate requires each event's jobs and rejects unplanned skips, failures, 
     INTEGRATION_NEEDED: "", INFRA_NEEDED: "", DEV_INSTALL_NEEDED: "", DEV_INSTALL: "skipped", STORYBOOK_NEEDED: "", APPLICATION_NEEDED: "",
     ZAMMAD_NEEDED: "",
   };
-  const push = { ...queue, EVENT: "push", CHANGES: "skipped", CHECKS: "skipped", FULL_UNIT: "success", IMAGES: "skipped",
+  const push = { ...queue, EVENT: "push", CHANGES: "skipped", CHECKS: "skipped", FULL_UNIT: "success", IMAGES: "skipped", LINT_ON_PUSH: "success",
     INSTALLER_PORTAL_NEEDED: "", INSTALLER_PORTAL: "skipped" };
-  const dispatch = { ...push, EVENT: "workflow_dispatch", INFRA: "skipped", PRIVACY: "skipped" };
+  const dispatch = { ...push, EVENT: "workflow_dispatch", INFRA: "skipped", PRIVACY: "skipped", LINT_ON_PUSH: "skipped" };
 
   for (const [lane, result, override, expected] of [
     ["PR with selected jobs", pr, {}, 0],
@@ -855,6 +873,10 @@ test("CI gate requires each event's jobs and rejects unplanned skips, failures, 
     ["merge queue with Zammad compatibility skipped", queue, { ZAMMAD_COMPATIBILITY: "skipped" }, 1],
     ["merge queue missing the installer portal build", queue, { INSTALLER_PORTAL_NEEDED: "false", INSTALLER_PORTAL: "skipped" }, 1],
     ["main push", push, {}, 0],
+    ["main push with an injected lint failure", push, { LINT_ON_PUSH: injectedLint.status === 0 ? "success" : "failure" }, 1],
+    ["main push with cancelled lint", push, { LINT_ON_PUSH: "cancelled" }, 1],
+    ["main push with skipped lint", push, { LINT_ON_PUSH: "skipped" }, 1],
+    ["main push with missing lint result", push, { LINT_ON_PUSH: "" }, 1],
     ["main push with Storybook skipped", push, { STORYBOOK: "skipped" }, 1],
     ["main push with skipped units", push, { FULL_UNIT: "skipped" }, 1],
     ["main push with failed units", push, { FULL_UNIT: "failure" }, 1],
@@ -880,9 +902,17 @@ test("CI seeds pnpm caches on main and builds cleanly in the merge queue", async
   const actionPath = "./.github/actions/ci-pnpm";
   const action = parse(await read(".github/actions/ci-pnpm/action.yml"));
 
-  for (const job of [jobs.checks, jobs["lint-on-push"], jobs.integration]) {
+  const pushLint = jobs["lint-on-push"];
+  for (const job of [jobs.checks, pushLint, jobs.integration]) {
     assert.equal(job.steps.find(step => step.id === "pnpm")?.uses, actionPath);
   }
+  assert.equal(pushLint.steps.find(step => step.id === "pnpm").with["seed-dependencies"], "true");
+  const eslintRestore = pushLint.steps.find(step => step.id === "eslint-cache");
+  const eslintSave = pushLint.steps.find(step => step.uses?.startsWith("actions/cache/save@"));
+  assert.match(eslintRestore.uses, /^actions\/cache\/restore@/u);
+  assert.equal(eslintRestore.with["fail-on-cache-miss"], undefined);
+  assert.equal(eslintSave.if, "steps.eslint-cache.outputs.cache-hit != 'true'");
+  assert.equal(eslintSave.with.key, "${{ steps.eslint-cache.outputs.cache-primary-key }}");
   const modules = action.runs.steps.find(step => step.id === "modules");
   const store = action.runs.steps.find(step => step.id === "store");
   assert(action.runs.steps.indexOf(modules) < action.runs.steps.indexOf(store));
@@ -1040,6 +1070,7 @@ test("PR image results are advisory while the merge queue requires the full imag
 
     const result = runWorkflowScript(gate.steps[0].run, {
       EVENT: "merge_group", CHANGES: "success", PRIVACY: "success", WORKFLOW_LINT: "success", STORYBOOK: "success", APPLICATION_E2E: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: "skipped",
+      LINT_ON_PUSH: "skipped",
       IMAGES: imageResult, INTEGRATION: "success", PORTAL_INTEGRATION: "success",
       INTEGRATION_COVERAGE: "success", DEV_INSTALL: "skipped", INFRA: "success",
       ZAMMAD_COMPATIBILITY: "success",
@@ -1050,6 +1081,7 @@ test("PR image results are advisory while the merge queue requires the full imag
   const summary = join(directory, "gate").replaceAll("\\", "/");
   const result = runWorkflowScript(gate.steps[0].run, {
     EVENT: "pull_request", CHANGES: "success", PRIVACY: "success", WORKFLOW_LINT: "success", STORYBOOK: "success", APPLICATION_E2E: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: "success",
+    LINT_ON_PUSH: "skipped",
     IMAGES: "skipped", INTEGRATION_NEEDED: "false", INTEGRATION: "skipped",
     PORTAL_INTEGRATION: "skipped", INTEGRATION_COVERAGE: "skipped", DEV_INSTALL_NEEDED: "false", DEV_INSTALL: "skipped",
     INSTALLER_PORTAL_NEEDED: "false", INSTALLER_PORTAL: "skipped",
@@ -1134,6 +1166,7 @@ ${detector.run}`, { GITHUB_OUTPUT: outputFile.replaceAll("\\", "/"), DIFF_PATHS:
     const pr = event === "pull_request";
     const result = runWorkflowScript(gateStep.run, {
       EVENT: event, CHANGES: "success", PRIVACY: "success", WORKFLOW_LINT: "success", STORYBOOK: "success", APPLICATION_E2E: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: pr ? "success" : "skipped",
+      LINT_ON_PUSH: "skipped",
       IMAGES: pr ? "skipped" : "success", INTEGRATION_NEEDED: "false",
       INTEGRATION: pr ? "skipped" : "success", PORTAL_INTEGRATION: pr ? "skipped" : "success",
       INTEGRATION_COVERAGE: pr ? "skipped" : "success",
@@ -1150,6 +1183,7 @@ ${detector.run}`, { GITHUB_OUTPUT: outputFile.replaceAll("\\", "/"), DIFF_PATHS:
   ]) {
     const result = runWorkflowScript(gateStep.run, {
       EVENT: "pull_request", CHANGES: "success", PRIVACY: "success", WORKFLOW_LINT: "success", STORYBOOK: "success", APPLICATION_E2E: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: "success",
+      LINT_ON_PUSH: "skipped",
       IMAGES: "skipped", INTEGRATION_NEEDED: "false",
       INTEGRATION: "skipped", PORTAL_INTEGRATION: "skipped", INTEGRATION_COVERAGE: "skipped",
       DEV_INSTALL_NEEDED: needed, DEV_INSTALL: jobResult, INFRA_NEEDED: "false", INFRA: "skipped",
@@ -1171,6 +1205,7 @@ ${detector.run}`, { GITHUB_OUTPUT: outputFile.replaceAll("\\", "/"), DIFF_PATHS:
     const pr = event === "pull_request";
     const result = runWorkflowScript(gateStep.run, {
       EVENT: event, CHANGES: "success", PRIVACY: "success", WORKFLOW_LINT: "success", STORYBOOK: "success", APPLICATION_E2E: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: pr ? "success" : "skipped",
+      LINT_ON_PUSH: "skipped",
       IMAGES: pr ? "skipped" : "success", DEV_INSTALL_NEEDED: "false", DEV_INSTALL: "skipped",
       INSTALLER_PORTAL_NEEDED: pr ? "false" : "true", INSTALLER_PORTAL: pr ? "skipped" : "success",
       INFRA_NEEDED: "true", INFRA: "success", INTEGRATION_NEEDED: needed, GITHUB_STEP_SUMMARY: summary,
