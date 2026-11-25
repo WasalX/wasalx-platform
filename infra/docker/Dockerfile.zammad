@@ -9,7 +9,7 @@ ADD https://github.com/zammad/zammad.git#8facd9250f4e1634124965eb0ba79a78a3fcdc1
 FROM ${NODE_IMAGE} AS node-toolchain
 RUN npm install --global pnpm@10.33.3 && npm cache clean --force
 WORKDIR /src
-ADD https://github.com/WasalX/wasalx-zammad-addon.git#6eca6ee16e5ea0687298f6a28a65397090623a8b /src
+ADD https://github.com/WasalX/wasalx-zammad-addon.git#a59c45e49cf60c6f585165591f7664b90d46fb26 /src
 COPY scripts/build-zammad-package.mjs ./scripts/build-zammad-package.mjs
 RUN node scripts/build-zammad-package.mjs
 
