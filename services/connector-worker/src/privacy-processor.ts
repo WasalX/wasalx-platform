@@ -179,6 +179,7 @@ export class PrivacyProcessor {
       local: {
         messages: local.messages,
         participantIdentities: local.participantIdentities,
+        ...(local.whatsappMarketingPreferences ? { whatsappMarketingPreferences: local.whatsappMarketingPreferences } : {}),
         metaDirectAliases: local.metaDirectAliases,
         metaDirectIdentityEvents: local.metaDirectIdentityEvents,
         metaDirectRecipients: local.metaDirectRecipients,

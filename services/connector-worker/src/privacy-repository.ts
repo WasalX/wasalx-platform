@@ -554,6 +554,13 @@ export class PrivacyRepository {
       if (participantIdentities.length > 5_000) {
         throw new PrivacyRepositoryError("EXPORT_SCOPE_TOO_LARGE", "Export contains too many participant identities; choose a narrower scope", false);
       }
+      const whatsappMarketingPreferences = (await client.query<Record<string, unknown>>(
+        `SELECT id,subject_kind,subject,opted_out,observed_at
+         FROM whatsapp_marketing_preferences WHERE tenant_id=$1 AND ($2::boolean
+           OR app.whatsapp_marketing_subject_matches(subject_kind,subject,$3))
+         ORDER BY id LIMIT 5001`, [job.tenantId,job.scopeType==="TENANT",participantIds],
+      )).rows;
+      if(whatsappMarketingPreferences.length>5000)throw new PrivacyRepositoryError("EXPORT_SCOPE_TOO_LARGE","Export contains too many WhatsApp marketing preferences; choose a narrower scope",false);
       const groupWorkspaceParticipants = job.scopeType === "TENANT" || participantIds.length > 0
         ? (
           await client.query<Record<string, unknown>>(
@@ -657,7 +664,7 @@ export class PrivacyRepository {
       if(!finance)throw new PrivacyRepositoryError("FINANCE_EXPORT_UNAVAILABLE","Financial privacy export is unavailable",false);
       const {metaCostStatements,metaCostSourceReviewStatus}=finance;
       const metaSignupAttempts = (await this.signupPrivacy(client,job,leaseId,"export")) as Array<Record<string,unknown>>;
-      return { metaSignupAttempts, metaCostStatements, metaCostSourceReviewStatus, metaCostAssessments, metaCostTariffs, ticketIds, messages, participantIdentities, metaDirectAliases, metaDirectIdentityEvents, metaDirectRecipients, metaCoexistence, metaRouting, metaBillingEvidence, metaAccountPolicies, metaAccountTransitions, metaManagedAuthority, metaFinancialEffects, groupWorkspaceParticipants, correlations, botConversations, botEvents, botActions };
+      return { ...(whatsappMarketingPreferences.length?{whatsappMarketingPreferences}:{}), metaSignupAttempts, metaCostStatements, metaCostSourceReviewStatus, metaCostAssessments, metaCostTariffs, ticketIds, messages, participantIdentities, metaDirectAliases, metaDirectIdentityEvents, metaDirectRecipients, metaCoexistence, metaRouting, metaBillingEvidence, metaAccountPolicies, metaAccountTransitions, metaManagedAuthority, metaFinancialEffects, groupWorkspaceParticipants, correlations, botConversations, botEvents, botActions };
     });
   }
 
@@ -963,6 +970,19 @@ export class PrivacyRepository {
         await client.query(`UPDATE connection_operations SET result=jsonb_set(result,'{metaAccountFundingProof}',
           jsonb_build_object('redacted',true,'sha256',encode(digest((result->'metaAccountFundingProof')::text,'sha256'),'hex')))
           WHERE tenant_id=$1 AND result ? 'metaAccountFundingProof' AND NOT(result->'metaAccountFundingProof' ? 'redacted')`,[job.tenantId]);
+      }
+      if(job.jobType==="DELETE"&&(job.scopeType==="TENANT"||job.scopeType==="PARTICIPANT"||job.scopeType==="ZAMMAD_USER")){
+        await client.query(`DELETE FROM whatsapp_marketing_preferences WHERE tenant_id=$1
+          AND ($2='TENANT' OR app.whatsapp_marketing_subject_matches(subject_kind,subject,
+            CASE WHEN $2='PARTICIPANT' THEN ARRAY[$3::text] ELSE ARRAY(
+              SELECT message.external_participant_id FROM normalized_messages message JOIN privacy_job_targets target
+                ON target.tenant_id=message.tenant_id AND target.target_type='NORMALIZED_MESSAGE' AND target.target_id=message.id::text
+              WHERE target.tenant_id=$1 AND target.job_id=$4
+              UNION
+              SELECT alias.value FROM meta_direct_identity_aliases alias JOIN privacy_job_targets target
+                ON target.tenant_id=alias.tenant_id AND target.target_type='META_DIRECT_ALIAS' AND target.target_id=alias.id::text
+              WHERE target.tenant_id=$1 AND target.job_id=$4
+            ) END))`,[job.tenantId,job.scopeType,job.scopeValue,job.id]);
       }
       let participantIdentities = 0;
       let metaDirectAliases = 0;

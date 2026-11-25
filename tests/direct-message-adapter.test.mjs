@@ -232,7 +232,7 @@ test("classifies official Meta errors by numeric code and retains only safe diag
       [190,"META_AUTHENTICATION_FAILED",false],[131005,"META_PERMISSION_REQUIRED",false],[131009,"META_INVALID_REQUEST",false],
       [131047,"META_CUSTOMER_WINDOW_CLOSED",false],[130429,"META_RATE_LIMITED",true],[131056,"META_RATE_LIMITED",true],
       [131000,"META_SERVER_ERROR",true],[131016,"META_SERVER_ERROR",true],[131026,"META_DELIVERY_REJECTED",false],
-      [131050,"META_DELIVERY_REJECTED",false],[131051,"META_DELIVERY_REJECTED",false],[131052,"META_DELIVERY_REJECTED",false],[131053,"META_DELIVERY_REJECTED",false],
+      [131050,"META_MARKETING_OPTED_OUT",false],[131051,"META_DELIVERY_REJECTED",false],[131052,"META_DELIVERY_REJECTED",false],[131053,"META_DELIVERY_REJECTED",false],
     ]){
       globalThis.fetch=async()=>new Response(JSON.stringify({error:{code:graphCode,error_subcode:7,type:"OAuthException",message:"private token material"}}),{status:400,headers:{"content-type":"application/json"}});
       await assert.rejects(()=>adapter.send({connectionId:"c1",groupId:"12025550102",recipientType:"DIRECT",text:"Hello",idempotencyKey:String(graphCode)}),error=>{

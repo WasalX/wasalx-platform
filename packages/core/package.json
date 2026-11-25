@@ -4,6 +4,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./meta-marketing-preferences": {
+      "types": "./dist/meta-marketing-preferences.d.ts",
+      "default": "./dist/meta-marketing-preferences.js"
+    },
     "./meta-test-phone-policy": {
       "types": "./dist/meta-test-phone-policy.d.ts",
       "default": "./dist/meta-test-phone-policy.js"
