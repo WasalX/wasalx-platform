@@ -294,15 +294,18 @@ const dump = "synthetic plaintext";
 const ownedContainer = "d".repeat(64);
 const otherContainer = "e".repeat(64);
 const otherDrill = "60000000-0000-4000-8000-000000000006";
+const otherVolume = "another-drill-data";
 
 function dockerDrill(directory) {
   let lockFd;
   const containers = new Map([[otherContainer, { owner: otherDrill, name: "another-drill", purpose: "dr-rehearsal" }]]);
+  const volumes = new Map([[otherVolume, { owner: otherDrill, purpose: "dr-rehearsal" }]]);
   const removed = [];
   const fixture = {
-    containers, removed, failure: undefined,
+    containers, volumes, removed, removedVolumes: [], commandCount: 0, failure: undefined,
     options: {
       state: directory, cache: directory,
+      ...(process.platform === "linux" ? {} : { syncState: async () => {} }),
       lock(path) {
         if (process.platform === "linux") return lockRestoreDrill(path);
         if (lockFd !== undefined) {
@@ -317,6 +320,7 @@ function dockerDrill(directory) {
         return (lockFd = openSync(path, "a+"));
       },
       spawn(program, args, options) {
+        fixture.commandCount++;
         assert.equal(program, "docker");
         assert.deepEqual(args.slice(0, 2), ["--host", "unix:///run/docker.sock"]);
         assert.equal(options.env.DOCKER_CONTEXT, undefined);
@@ -324,13 +328,43 @@ function dockerDrill(directory) {
         const output = stdout => ({ status: 0, stdout });
         const [command, first, second] = args.slice(2);
         if (command === "info") return output("test-engine");
+        if (command === "volume") {
+          if (first === "ls") {
+            assert.match(args[5], /^name=\^wasalx-dr-[0-9a-f]{32}-data\$$/u);
+            const rows = [...volumes].filter(([name]) => args[5] === `name=^${name}$`);
+            return output(rows.map(([name, row]) => `${name} local ${row.purpose} ${row.owner}`).join("\n"));
+          }
+          const name = args.at(-1);
+          if (first === "create") {
+            const owner = args.find(arg => arg.startsWith("wasalx.io/rehearsal-id=")).split("=")[1];
+            assert.deepEqual(args.slice(2), ["volume", "create", "--driver", "local", "--label",
+              "wasalx.io/purpose=dr-rehearsal", "--label", `wasalx.io/rehearsal-id=${owner}`, name]);
+            assert.equal(name, `wasalx-dr-${owner.replaceAll("-", "")}-data`);
+            fixture.volume = name;
+            const volume = { owner, purpose: "dr-rehearsal" };
+            if (fixture.volumeFailure === "create-timeout") {
+              fixture.lateVolume = volume;
+              return { status: null, error: new Error("Docker volume request timed out") };
+            }
+            volumes.set(name, volume);
+            return output(`${name}\n`);
+          }
+          assert.deepEqual(args.slice(2), ["volume", "rm", fixture.volume]);
+          assert.ok(!containers.has(ownedContainer));
+          if (fixture.volumeFailure === "remove-still-present") return output(name);
+          fixture.removedVolumes.push(name);
+          assert.ok(volumes.delete(name));
+          return output(name);
+        }
         if (command === "run") {
           fixture.onRun?.();
           assert.ok(args.includes("wasalx.io/purpose=dr-rehearsal"));
           const owner = args.find(arg => arg.startsWith("wasalx.io/rehearsal-id=")).split("=")[1];
           const name = args[args.indexOf("--name") + 1];
           assert.equal(name, `wasalx-dr-${owner.replaceAll("-", "")}`);
-          const container = { owner, name, purpose: "dr-rehearsal" };
+          assert.ok(args.includes(`type=volume,source=${fixture.volume},target=/var/lib/postgresql`));
+          assert.equal(volumes.get(fixture.volume).owner, owner);
+          const container = { owner, name, purpose: "dr-rehearsal", volume: fixture.volume };
           if (fixture.failure === "start-timeout") {
             fixture.lateContainer = container;
             return { status: null, error: new Error("Docker request timed out") };
@@ -346,8 +380,16 @@ function dockerDrill(directory) {
           const rows = [...containers].filter(([id, row]) => filter === `id=${id}` || filter === `label=wasalx.io/rehearsal-id=${row.owner}`);
           return output(rows.map(([id, row]) => `${id} ${row.name} ${row.purpose} ${row.owner}`).join("\n"));
         }
+        if (command === "container" && first === "inspect") {
+          assert.deepEqual(args.slice(2), ["container", "inspect", "--format", "{{json .Mounts}}", ownedContainer]);
+          const mounted = containers.get(ownedContainer).volume;
+          return output(JSON.stringify([
+            { Type: "bind", Destination: "/backup/input.dump", RW: false },
+            { Type: "volume", Name: mounted, Destination: "/var/lib/postgresql", RW: true },
+          ]));
+        }
         if (command === "rm") {
-          assert.deepEqual(args.slice(2), ["rm", "--force", "--volumes", ownedContainer]);
+          assert.deepEqual(args.slice(2), ["rm", "--force", ownedContainer]);
           if (fixture.failure === "remove") return { status: 1 };
           if (fixture.failure === "remove-still-present") return output(ownedContainer);
           removed.push(ownedContainer);
@@ -491,6 +533,7 @@ test("quarterly restore uses the exact archive version and cleans scratch on fai
     assert.deepEqual(calls, steps);
     if (scratch) await assert.rejects(stat(scratch), { code: "ENOENT" });
     assert.deepEqual([...fixture.containers.keys()], [otherContainer]);
+    assert.deepEqual([...fixture.volumes.keys()], [otherVolume]);
   }
 });
 
@@ -529,6 +572,7 @@ test("service, direct restore and interrupted cleanup contend for one lock", asy
   assert.equal(receipt.artifact.manifestSha256, validateBackupManifest(value, now).manifestSha256);
   assert.deepEqual(JSON.parse(await readFile(args.at(-1), "utf8")), receipt);
   assert.deepEqual(fixture.removed, [ownedContainer]);
+  assert.deepEqual(fixture.removedVolumes, [fixture.volume]);
   assert.ok(fixture.containers.has(otherContainer));
   assert.ok((await stat(otherScratch)).isDirectory());
   await assert.rejects(stat(pending), { code: "ENOENT" });
@@ -557,8 +601,9 @@ test("failed cleanup suppresses evidence, and stale recovery cannot remove anoth
   fixture.failure = "remove";
   await assert.rejects(direct(), /cleanup failed: Could not confirm removal/u);
   await assert.rejects(stat(args.at(-1)), { code: "ENOENT" });
-  const [secondDrill, id] = (await readFile(pending, "utf8")).trim().split(" ");
+  const [secondDrill, volume, id] = (await readFile(pending, "utf8")).trim().split(" ");
   assert.equal(id, ownedContainer);
+  assert.equal(volume, fixture.volume);
   assert.notEqual(firstDrill, secondDrill);
   await assert.rejects(direct(), /requires interrupted-drill cleanup/u);
   await assert.rejects(recover(firstDrill), /does not match the pending drill/u);
@@ -568,6 +613,8 @@ test("failed cleanup suppresses evidence, and stale recovery cannot remove anoth
   const owned = fixture.containers.get(ownedContainer);
   fixture.containers.set(ownedContainer, { ...owned, owner: otherDrill });
   await assert.rejects(recover(secondDrill), /ownership does not match this drill/u);
+  fixture.containers.set(ownedContainer, { ...owned, volume: otherVolume });
+  await assert.rejects(recover(secondDrill), /data mount does not match the drill-owned volume/u);
   fixture.containers.set(ownedContainer, owned);
   fixture.containers.set(otherContainer, { ...owned });
   await assert.rejects(recover(secondDrill), /ownership does not match this drill/u);
@@ -575,6 +622,7 @@ test("failed cleanup suppresses evidence, and stale recovery cannot remove anoth
   fixture.containers.set(otherContainer, { owner: otherDrill, name: "another-drill", purpose: "dr-rehearsal" });
   await recover(secondDrill);
   assert.deepEqual([...fixture.containers.keys()], [otherContainer]);
+  assert.deepEqual([...fixture.volumes.keys()], [otherVolume]);
   await assert.rejects(stat(pending), { code: "ENOENT" });
   await assert.rejects(recover(secondDrill), /does not match the pending drill/u);
   await assert.rejects(stat(args.at(-1)), { code: "ENOENT" });
@@ -591,6 +639,7 @@ test("a timed-out Docker start stays pending until the late target is removed", 
   await assert.rejects(recover(), /Could not confirm removal/u);
   await assert.rejects(runPostgresRestore(args, fixture.options), /requires interrupted-drill cleanup/u);
   await assert.rejects(stat(args.at(-1)), { code: "ENOENT" });
+  assert.ok(fixture.volumes.has(fixture.volume));
 
   fixture.containers.set(ownedContainer, fixture.lateContainer);
   fixture.failure = "remove-still-present";
@@ -601,7 +650,94 @@ test("a timed-out Docker start stays pending until the late target is removed", 
   await recover();
   assert.deepEqual(fixture.removed, [ownedContainer]);
   assert.deepEqual([...fixture.containers.keys()], [otherContainer]);
+  assert.deepEqual([...fixture.volumes.keys()], [otherVolume]);
   await assert.rejects(stat(join(directory, "pending-drill")), { code: "ENOENT" });
+});
+
+test("a surviving data volume blocks the receipt and can be recovered after container removal", async t => {
+  const directory = await mkdtemp(join(tmpdir(), "wasalx-dr-orphan-volume-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const args = await directRestoreArgs(directory, bindDump(manifest()));
+  const fixture = dockerDrill(directory);
+  const pending = join(directory, "pending-drill");
+
+  for (const failure of [undefined, "restore"]) {
+    fixture.failure = failure;
+    fixture.volumeFailure = "remove-still-present";
+    await assert.rejects(runPostgresRestore(args, fixture.options), error => {
+      assert.match(error.message, /cleanup failed: Could not confirm removal of the restore volume/u);
+      if (failure) {
+        assert.ok(error instanceof AggregateError);
+        assert.match(error.message, /Original failure: restore fixture failed/u);
+        assert.equal(error.errors[0].message, "restore fixture failed");
+      }
+      return true;
+    });
+    await assert.rejects(stat(args.at(-1)), { code: "ENOENT" });
+    assert.deepEqual([...fixture.containers.keys()], [otherContainer]);
+    const [owner, volume, id] = (await readFile(pending, "utf8")).trim().split(" ");
+    assert.equal(id, ownedContainer);
+    assert.equal(volume, fixture.volume);
+    const original = fixture.volumes.get(volume);
+    assert.equal(original.owner, owner);
+    await assert.rejects(runPostgresRestore(args, fixture.options), /requires interrupted-drill cleanup/u);
+
+    const recover = () => runPostgresRestore(["--cleanup-interrupted", owner], fixture.options);
+    fixture.volumeFailure = undefined;
+    fixture.volumes.set(volume, { ...original, owner: otherDrill });
+    await assert.rejects(recover(), /Restore volume ownership does not match this drill/u);
+    assert.equal(fixture.volumes.get(volume).owner, otherDrill);
+    fixture.volumes.set(volume, original);
+    await recover();
+    assert.deepEqual([...fixture.volumes.keys()], [otherVolume]);
+    await assert.rejects(stat(pending), { code: "ENOENT" });
+  }
+});
+
+test("a timed-out volume allocation stays pending until its exact volume appears", async t => {
+  const directory = await mkdtemp(join(tmpdir(), "wasalx-dr-late-volume-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const args = await directRestoreArgs(directory, bindDump(manifest()));
+  const fixture = dockerDrill(directory);
+  const pending = join(directory, "pending-drill");
+  fixture.volumeFailure = "create-timeout";
+  await assert.rejects(runPostgresRestore(args, fixture.options), /Could not confirm creation or removal of the restore volume/u);
+  const [owner, volume, phase] = (await readFile(pending, "utf8")).trim().split(" ");
+  assert.equal(volume, fixture.volume);
+  assert.equal(phase, "allocating-volume");
+  const recover = () => runPostgresRestore(["--cleanup-interrupted", owner], fixture.options);
+  await assert.rejects(recover(), /Could not confirm creation or removal of the restore volume/u);
+  assert.deepEqual(fixture.removed, []);
+  assert.deepEqual(fixture.removedVolumes, []);
+  fixture.volumes.set(volume, fixture.lateVolume);
+  await recover();
+  assert.deepEqual([...fixture.volumes.keys()], [otherVolume]);
+  assert.deepEqual(fixture.removedVolumes, [volume]);
+  await assert.rejects(stat(pending), { code: "ENOENT" });
+  await assert.rejects(stat(args.at(-1)), { code: "ENOENT" });
+});
+
+test("failure to sync the pending pathname prevents any Docker activity", async t => {
+  const directory = await mkdtemp(join(tmpdir(), "wasalx-dr-pending-sync-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const args = await directRestoreArgs(directory, bindDump(manifest()));
+  const fixture = dockerDrill(directory);
+  const pending = join(directory, "pending-drill");
+  let record;
+  const syncError = new Error("State directory sync failed");
+  const syncState = async state => {
+    assert.equal(state, directory);
+    record = await readFile(pending, "utf8");
+    throw syncError;
+  };
+  await assert.rejects(runPostgresRestore(args, { ...fixture.options, syncState }), { cause: syncError });
+  assert.match(record, /^[0-9a-f-]{36}\n$/u);
+  assert.equal(fixture.commandCount, 0);
+  await assert.rejects(stat(args.at(-1)), { code: "ENOENT" });
+  await assert.rejects(runPostgresRestore(args, fixture.options), /requires interrupted-drill cleanup/u);
+  await runPostgresRestore(["--cleanup-interrupted", record.trim()], fixture.options);
+  await assert.rejects(stat(pending), { code: "ENOENT" });
+  assert.equal(fixture.commandCount, 0);
 });
 
 test("the quarterly systemd timer activates the one-shot restore service", async () => {

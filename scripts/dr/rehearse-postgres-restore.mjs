@@ -5,7 +5,7 @@ import { lstat, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import { basename, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { validateBackupManifest, validateRestoreEvidence } from "./contracts.mjs";
-import { purposeLabel, recoverRestoreDrill, rehearsalLabel, runRestoreDrill } from "./restore-drill.mjs";
+import { postgresVolumePath, purposeLabel, recoverRestoreDrill, rehearsalLabel, runRestoreDrill } from "./restore-drill.mjs";
 
 const POSTGRES_IMAGE = "postgres:18.6-alpine@sha256:6c538e7206ea40ff740ef27883529390a690b6ead6ba96b44c67a9f7c638e8fd";
 const RESTORE_DATABASE = "wasalx_dr_rehearsal";
@@ -39,6 +39,7 @@ export async function rehearsePostgresRestore(options, drill) {
     "--env", "POSTGRES_PASSWORD",
     "--env", `POSTGRES_DB=${RESTORE_DATABASE}`,
     "--mount", `type=bind,source=${artifactPath},target=/backup/input.dump,readonly`,
+    "--mount", `type=volume,source=${drill.volume},target=${postgresVolumePath}`,
     POSTGRES_IMAGE,
   ], { ...process.env, POSTGRES_PASSWORD: password });
   await waitForPostgres(drill.docker, containerId);
