@@ -5,6 +5,7 @@ const steps = new Set([
   "Select transition plan",
   "Read transition review",
   "Select statement version",
+  "Verify lost transition response",
   "Check transition console",
   "Check revoked transition authority",
   "Select alternate plan while review is held",
@@ -14,7 +15,7 @@ const steps = new Set([
 
 const counts = new Set([
   "transitionReads", "transitionWrites", "deniedReads", "authorityPlanOptions",
-  "lateReviewButtons", "remainingPlanOptions", "pendingExpectedConsole", "unexpectedConsole",
+  "lateReviewButtons", "remainingPlanOptions", "pendingExpectedConsole", "unexpectedConsole", "matchedLostResponseConsole",
 ]);
 const metricPrefix = "wasalx-operator:";
 
@@ -35,7 +36,8 @@ export function operatorCaseProgress(test, result) {
         typeof description !== "string" || !/^[0-9]{1,4}$/u.test(description)) continue;
     const name = type.slice(metricPrefix.length);
     const value = Number(description);
-    if (counts.has(name) || (name === "authorityStatus" && value === 403)) observations[name] = value;
+    if (counts.has(name) || (name === "authorityStatus" && value === 403) ||
+        (name === "lostResponseStatus" && value === 502)) observations[name] = value;
   }
   return { lastCompletedStep, terminalStep, observations };
 }

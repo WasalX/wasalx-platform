@@ -1,4 +1,4 @@
-import { expect, test, type Page, type Route, type TestInfo } from "@playwright/test";
+import { expect, test, type Page, type Request, type Route, type TestInfo } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 import { englishPlatformMessages } from "../../lib/i18n/messages/en/platform.ts";
 import { arabicPlatformMessages } from "../../lib/i18n/messages/ar/platform.ts";
@@ -26,11 +26,25 @@ function observeOperatorCount(name: string, value: number) {
 }
 async function setup(page: Page) {
   const errors: string[] = [], expected: Array<{ url: string; status: number }> = [], writes: Write[] = [], reads: string[] = [];
+  const lostResponse = { request: undefined as Request | undefined, consoleMatches: 0 };
   page.on("pageerror", error => errors.push(error.message));
-  page.on("console", message => { if (message.type() !== "error") return; const index = expected.findIndex(item => item.url === message.location().url && message.text().includes(String(item.status))); if (index >= 0) expected.splice(index, 1); else errors.push(message.text()); });
+  page.on("console", message => {
+    if (message.type() !== "error") return;
+    const index = expected.findIndex(item => item.url === message.location().url && message.text().includes(String(item.status)));
+    if (index >= 0) {
+      expected.splice(index, 1);
+      return;
+    }
+    if (lostResponse.consoleMatches === 0 && lostResponse.request?.url() === message.location().url &&
+        /^Failed to load resource: the server responded with a status of 502(?: \([^\r\n]*\))?$/u.test(message.text())) {
+      lostResponse.consoleMatches++;
+      return;
+    }
+    errors.push(message.text());
+  });
   const gate: { wait: Promise<void> | null; entered: boolean } = { wait: null, entered: false };
   const listGate: { wait: Promise<void> | null; entered: boolean; omitSelected: boolean } = { wait: null, entered: false, omitSelected: false };
-  const h = { current: review(), gate, listGate, writes, reads, errors, expected, deny: false, deniedReads: 0, write: async (route: Route, value: Write) => { h.current.pendingCommand = terminal(value); h.current.actions[value.action] = false; h.current.revision++; h.current.reviewSha256 = "d".repeat(64); await route.fulfill({ json: h.current.pendingCommand }); } };
+  const h = { current: review(), gate, listGate, writes, reads, errors, expected, lostResponse, deny: false, deniedReads: 0, write: async (route: Route, value: Write) => { h.current.pendingCommand = terminal(value); h.current.actions[value.action] = false; h.current.revision++; h.current.reviewSha256 = "d".repeat(64); await route.fulfill({ json: h.current.pendingCommand }); } };
   await page.route(target => target.pathname === root() || target.pathname.startsWith(root() + "/"), async route => {
     const request = route.request(), target = new URL(request.url());
     expect(request.headers()["x-wasalx-platform-recovery-scope"]).toMatch(/^[a-f0-9]{64}$/u);
@@ -160,9 +174,28 @@ test("operator records three explicit local reviews and independently selected m
 
 test("operator lost-response recovery keeps exact intent through reload, mismatched proof and deliberate resolution", async ({ page }, info) => {
   admitted(); const x = await setup(page), h = x.h;
-  h.write = async (route, write) => { h.current.revision++; h.current.reviewSha256 = "f".repeat(64); h.current.pendingCommand = { ...terminal(write), requestKey: id(99) }; h.expected.push({ url: route.request().url(), status: 502 }); await route.fulfill({ status: 502, json: { error: "PRIVATE_TRANSPORT_DETAIL" } }); };
-  await prepare(page, "PREREQUISITES"); await record(page); await expect(x.dialog().getByText(text("held"), { exact: true })).toBeVisible(); expect(h.writes).toHaveLength(1); const original = structuredClone(h.writes[0]!);
-  await expect(page.getByText("PRIVATE_TRANSPORT_DETAIL")).toHaveCount(0); await page.reload(); await x.open(false); await expect(x.dialog().getByText(text("held"), { exact: true })).toBeVisible();
+  const responseBody = { error: "PRIVATE_TRANSPORT_DETAIL" };
+  h.write = async (route, write) => {
+    h.current.revision++;
+    h.current.reviewSha256 = "f".repeat(64);
+    h.current.pendingCommand = { ...terminal(write), requestKey: id(99) };
+    h.lostResponse.request = route.request();
+    await route.fulfill({ status: 502, json: responseBody });
+  };
+  await prepare(page, "PREREQUISITES");
+  await test.step("Verify lost transition response", async () => {
+    const [response] = await Promise.all([
+      page.waitForResponse(candidate => candidate.request() === h.lostResponse.request),
+      record(page),
+    ]);
+    expect(response.request().method()).toBe("POST");
+    expect(response.url()).toBe(new URL(`${root()}/${plan}/review/prerequisites`, page.url()).href);
+    expect(response.status()).toBe(502);
+    expect(await response.json()).toEqual(responseBody);
+    observeOperatorCount("lostResponseStatus", response.status());
+  });
+  await expect(x.dialog().getByText(text("held"), { exact: true })).toBeVisible(); expect(h.writes).toHaveLength(1); const original = structuredClone(h.writes[0]!);
+  await expect(page.getByText(responseBody.error)).toHaveCount(0); await page.reload(); await x.open(false); await expect(x.dialog().getByText(text("held"), { exact: true })).toBeVisible();
   expect(h.reads.some(path => path.endsWith(`?requestKey=${original.key}`))).toBe(true); expect(h.writes).toHaveLength(1);
   // Even same-key terminal state without an approval receipt cannot release it.
   h.current.pendingCommand = { ...terminal(original), approvalReceiptId: null };
@@ -175,6 +208,7 @@ test("operator lost-response recovery keeps exact intent through reload, mismatc
   await page.reload(); await x.open(false); await expect(x.dialog().getByText(text("held"), { exact: true })).toHaveCount(0); expect(h.writes).toHaveLength(2); expect(await page.evaluate(() => Object.keys(sessionStorage).some(key => key.startsWith(`wasalx.meta.transition-review:${"0".repeat(64)}:`)))).toBe(true);
   await test.step("Check transition console", () => {
     observeOperatorCount("pendingExpectedConsole", h.expected.length);
+    observeOperatorCount("matchedLostResponseConsole", h.lostResponse.consoleMatches);
     observeOperatorCount("unexpectedConsole", h.errors.length);
     expect(h.expected).toEqual([]);
     expect(h.errors).toEqual([]);

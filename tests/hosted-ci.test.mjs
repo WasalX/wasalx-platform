@@ -806,20 +806,24 @@ test("Hosted operator diagnostics retain only allowed step labels and bounded ob
   const testCase = { annotations: [
     { type: "wasalx-operator:authorityStatus", description: "200" },
     { type: "wasalx-operator:authorityStatus", description: "403" },
+    { type: "wasalx-operator:lostResponseStatus", description: "502" },
+    { type: "wasalx-operator:lostResponseStatus", description: "503" },
+    { type: "wasalx-operator:matchedLostResponseConsole", description: "0" },
     { type: "wasalx-operator:pendingExpectedConsole", description: "1" },
     { type: "wasalx-operator:unexpectedConsole", description: "0" },
     { type: "wasalx-operator:unexpectedConsole", description: "Raw console message" },
     { type: "wasalx-operator:transitionReads", description: "12345" },
     { type: "wasalx-operator:unregistered-count", description: "4" },
   ] };
-  const completed = { title: "Read transition review", duration: 7 };
+  const completed = { title: "Verify lost transition response", duration: 7 };
   const inFlight = { title: "Check transition console", duration: -1 };
   assert.deepEqual(operatorCaseProgress(testCase, {
     steps: [completed, { title: "Unknown nested step", duration: 2 }, inFlight],
   }), {
     lastCompletedStep: completed.title,
     terminalStep: inFlight.title,
-    observations: { authorityStatus: 403, pendingExpectedConsole: 1, unexpectedConsole: 0 },
+    observations: { authorityStatus: 403, lostResponseStatus: 502, matchedLostResponseConsole: 0,
+      pendingExpectedConsole: 1, unexpectedConsole: 0 },
   });
   assert.equal(operatorCaseProgress({}, {
     steps: [completed, { title: inFlight.title, duration: 2, error: { message: "Raw details" } }],
