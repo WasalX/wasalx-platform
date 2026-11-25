@@ -3,6 +3,9 @@
 ARG ZAMMAD_BASE_IMAGE=ghcr.io/zammad/zammad@sha256:390705d0eefd8a473293c1f9130cb2f40a2484bd629dd3b33aa0e700ee86d13b
 ARG NODE_IMAGE=node:24-trixie-slim@sha256:0711b541c1c33a8a530ac4f0d391baa9a15b3d804695b1b24a47daa5fb60e74d
 
+FROM scratch AS typecheck-source
+ADD https://github.com/zammad/zammad.git#8facd9250f4e1634124965eb0ba79a78a3fcdc19:app/frontend /app/frontend/
+
 FROM ${NODE_IMAGE} AS node-toolchain
 RUN npm install --global pnpm@10.33.3 && npm cache clean --force
 WORKDIR /src
@@ -35,8 +38,9 @@ RUN --mount=type=cache,id=wasalx-zammad-pnpm-v10,target=/opt/zammad/.local/share
 # WasalX packages only app/frontend files, so rebuild the Vite bundle that can
 # actually reference those plugins. A full `assets:precompile` needlessly
 # recompiles the entire legacy application and is not required for this package.
-RUN --mount=type=cache,id=wasalx-zammad-pnpm-v10,target=/opt/zammad/.local/share/pnpm/store,uid=1000,gid=1000,sharing=locked \
-    node /tmp/prepare-zammad-typecheck.mjs restore /opt/zammad /tmp/typecheck-upstream.json \
+RUN --mount=type=bind,from=typecheck-source,target=/tmp/typecheck-upstream \
+    --mount=type=cache,id=wasalx-zammad-pnpm-v10,target=/opt/zammad/.local/share/pnpm/store,uid=1000,gid=1000,sharing=locked \
+    node /tmp/prepare-zammad-typecheck.mjs restore /opt/zammad /tmp/typecheck-upstream.json /tmp/typecheck-upstream \
     && NODE_OPTIONS=--max-old-space-size=4096 pnpm lint:ts \
     && node /tmp/prepare-zammad-typecheck.mjs remove /opt/zammad /tmp/typecheck-upstream.json \
     && bundle exec vite clobber \
