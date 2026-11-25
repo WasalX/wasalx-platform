@@ -64,6 +64,8 @@ async function keyboardClick(page:Page,locator:Locator){await locator.focus();aw
 test('operator cost drafts, accepted activation and every bounded reassessment page remain reachable',async({page},info)=>{
  test.skip(!ready,'Requires root-supplied authenticated platform session and reused control-plane server');
  const h=await setup(page);const reassess=h.management.getByRole('group',{name:t('cost.manage.reassess'),exact:true});
+ await expect(h.dialog.getByRole('navigation',{name:t('cost.pages'),exact:true})).toHaveCount(1);
+ await expect(reassess.getByRole('navigation',{name:t('cost.manage.reassessPages'),exact:true})).toBeVisible();
  h.setWrite(async(route,write)=>{
   if(write.path===`${root()}/tariffs`){expect(write.body).toEqual({definition:tariff(),supersedesId:null});h.tariffs.push({id:tariffId,state:'DRAFT',definition:tariff(),definition_sha256:'2'.repeat(64),supersedes_id:null,created_at:from,accepted_policies:[{id:policyA,createdAt:from},{id:policyB,createdAt:to}]});}
   else if(write.path.endsWith('/activate')){expect(write.body).toEqual({expectedDefinitionSha256:'2'.repeat(64),policyVersionId:policyB});h.tariffs[0]!.state='ACTIVE';}

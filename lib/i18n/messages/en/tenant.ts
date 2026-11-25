@@ -517,6 +517,7 @@ export const englishTenantMessages = {
   "cost.manage.acceptanceVersion": "Acceptance {count}",
   "cost.manage.activate": "Activate reviewed version",
   "cost.manage.reassess": "Reassess messages",
+  "cost.manage.reassessPages": "Reassessment pages",
   "cost.manage.reassessHelp": "Select up to 100 current assessments. Without a new evidence file, their existing reviewed selector facts are retained. Messages are never resent.",
   "cost.manage.selectorFile": "Replacement selector evidence (optional JSON file)",
   "cost.manage.message": "Message {count}",
