@@ -13,7 +13,8 @@ const text = (key: string) => t(`platform.metaTransition.${key}`);
 const state = process.env.WASALX_E2E_PLATFORM_STORAGE_STATE, url = process.env.WASALX_E2E_PLATFORM_URL;
 const tenant = process.env.WASALX_E2E_PLATFORM_TENANT_ID ?? "", tenantName = process.env.WASALX_E2E_PLATFORM_TENANT_NAME ?? "";
 const ready = Boolean(state && url && tenantName && /^[0-9a-f-]{36}$/u.test(tenant) && process.env.WASALX_E2E_REUSE_SERVER === "1");
-test.use({ storageState: state ?? { cookies: [], origins: [] } });
+const browserLocale = locale === "ar" ? "en-US" : "ar-SA";
+test.use({ locale: browserLocale, storageState: state ?? { cookies: [], origins: [] } });
 const id = (n: number) => `64000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const plan = id(2), other = id(8), root = () => `/api/platform-console/operations/tenants/${tenant}/meta/account-transitions`;
 function review(): MetaTransitionOperatorReview { return { id: plan, tenantId: tenant, name: "Transition account", revision: 3, requestedMode: "CUSTOMER", sourceCurrency: "USD", targetCurrency: "SAR", phase: "RESERVED", evidenceMode: "SIMULATED", reviewSha256: "a".repeat(64), connectionNames: ["اتصال المبيعات (Sales)"], connectionCount: 1, providerStatus: null, checkpoints: [], proof: { sourceScope: "CURRENT", targetAccess: "NONE", payment: "VERIFIED", renewedObserver: "ABSENT", prerequisiteApproval: "MISSING", targetReview: "MISSING" }, actions: { PREREQUISITES: true, TARGET: false, COMPLETION: false }, reasons: [], arrangements: [], originalGrant: null, pendingCommand: null }; }
@@ -46,7 +47,10 @@ async function setup(page: Page) {
     const value = { path: target.pathname, key: request.headers()["idempotency-key"] ?? "", scope: request.headers()["x-wasalx-platform-recovery-scope"] ?? "", action, body: request.postDataJSON() as MetaTransitionOperatorRequest };
     expect(value.key).toMatch(/^[0-9a-f-]{36}$/u); writes.push(structuredClone(value)); await h.write(route, value);
   });
-  await page.context().addCookies([{ name: "wasalx_locale", value: locale, url: new URL(url!).origin }]);
+  const origin = new URL(url!).origin;
+  const localeCookies = [{ name: "wasalx_locale", value: locale, url: origin }];
+  if (origin.startsWith("https:")) localeCookies.push({ name: "__Host-wasalx_locale", value: locale, url: origin });
+  await page.context().addCookies(localeCookies);
   const dialog = () => page.getByRole("dialog").filter({ has: page.getByRole("heading", { name: text("title"), exact: true }) });
   const open = async (navigate = true) => { if (navigate) await page.goto(url!); const row = page.getByRole("row").filter({ has: page.getByText(tenantName, { exact: true }) }); await expect(row).toHaveCount(1); await row.getByRole("button", { name: text("open"), exact: true }).click(); await dialog().getByLabel(text("plan"), { exact: true }).selectOption(h.current.id); await expect(dialog().getByRole("heading", { name: h.current.name, exact: true })).toBeVisible(); };
   await open(); return { ...h, h, dialog, open };
@@ -76,8 +80,41 @@ test("operator records three explicit local reviews and independently selected m
   h.current = { ...review(), id: id(30), name: "Managed transition", revision: 10, requestedMode: "WASALX_MANAGED", arrangements: [{ id: id(20), label: "Approved arrangement", expiresAt: "2099-01-01T00:00:00Z" }] };
   await x.open(false); await prepare(page, "PREREQUISITES");
   await x.dialog().getByLabel(text("arrangement"), { exact: true }).selectOption(id(20)); await x.dialog().getByLabel(text("receiver"), { exact: true }).fill("9"); await x.dialog().getByLabel(text("termsVersion"), { exact: true }).fill("2026.10"); await x.dialog().getByLabel(text("terms"), { exact: true }).fill("Approved target terms / الشروط المعتمدة");
-  await x.dialog().getByRole("button", { name: text("review"), exact: true }).click(); await expect(x.dialog().getByRole("button", { name: text("record"), exact: true })).toHaveCount(0); expect(h.writes).toHaveLength(3);
-  await x.dialog().getByLabel(text("acceptTerms"), { exact: true }).check(); await screenshot(page, info, "managed-form");
+  await expect(page.locator("html")).toHaveAttribute("lang", locale);
+  expect(await page.evaluate(() => navigator.language)).toBe(browserLocale);
+
+  const dialog = x.dialog(), reviewApproval = dialog.getByRole("button", { name: text("review"), exact: true });
+  const recordApproval = dialog.getByRole("button", { name: text("record"), exact: true });
+  const termsConfirmation = dialog.getByRole("checkbox", { name: text("acceptTerms"), exact: true });
+  const evidenceConfirmation = dialog.getByRole("checkbox", { name: text("confirmEvidence"), exact: true });
+  const evidence = dialog.getByLabel(text("evidence"), { exact: true });
+  const alert = dialog.getByRole("alert").filter({ hasText: /\S/u });
+  await evidenceConfirmation.uncheck();
+  await evidence.fill("");
+  await reviewApproval.press("Enter");
+  await expect(evidence).toBeFocused();
+  await expect(alert).toHaveCount(0);
+  await expect(recordApproval).toHaveCount(0);
+  expect(h.writes).toHaveLength(3);
+  await evidence.fill("b".repeat(64));
+
+  for (const [checkbox, message] of [[termsConfirmation, "acceptTermsRequired"], [evidenceConfirmation, "confirmEvidenceRequired"]] as const) {
+    await reviewApproval.press("Enter");
+    await expect(checkbox).toBeFocused();
+    await expect(checkbox).toHaveAttribute("aria-invalid", "true");
+    await expect(checkbox).toHaveAccessibleDescription(text(message));
+    await expect(alert).toHaveText(text(message));
+    await expect(alert).toBeInViewport();
+    await expect(recordApproval).toHaveCount(0);
+    expect(h.writes).toHaveLength(3);
+    await screenshot(page, info, message);
+
+    await page.keyboard.press("Space");
+    await expect(checkbox).toBeChecked();
+    await expect(checkbox).toHaveAccessibleDescription("");
+    await expect(alert).toHaveCount(0);
+  }
+  await screenshot(page, info, "managed-form");
   for (const checkbox of await x.dialog().getByRole("checkbox").all()) { const box = await checkbox.boundingBox(); expect(box).not.toBeNull(); expect(box!.width).toBeLessThan(30); expect(box!.height).toBeLessThan(30); }
   expect((await new AxeBuilder({ page }).include('[role="dialog"]').analyze()).violations).toEqual([]); await record(page); await expect.poll(() => h.writes.length).toBe(4); await expect(x.dialog().getByLabel(text("reviewKind"), { exact: true }).locator('option[value="PREREQUISITES"]')).toHaveCount(0);
   expect(h.writes[3]!.body.managed).toEqual({ arrangementVersionId: id(20), targetReceivingBusinessId: "9", targetTermsDocumentText: "Approved target terms / الشروط المعتمدة", targetTermsVersion: "2026.10" });
