@@ -1,795 +1,143 @@
-name: ci
+name: Compose replay phase diagnostic
 
-on:
-  pull_request:
-    types: [opened, synchronize, reopened]
-  merge_group:
-  push:
-    branches: [main]
-  workflow_dispatch:
+on: workflow_dispatch
 
 permissions:
   contents: read
 
-concurrency:
-  group: ci-${{ github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-
-defaults:
-  run:
-    shell: bash
-
-env:
-  PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
-
 jobs:
-  changes:
-    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    outputs:
-      images: ${{ steps.matrix.outputs.images }}
-      matrix: ${{ steps.matrix.outputs.matrix }}
-      installer-portal: ${{ steps.matrix.outputs.installer-portal }}
-      infra: ${{ steps.infra.outputs.needed }}
-      dev-install: ${{ steps.dev-install.outputs.needed }}
-      integration: ${{ steps.integration.outputs.needed }}
-      storybook: ${{ steps.storybook.outputs.needed }}
-      application-e2e: ${{ steps.application-e2e.outputs.needed }}
-      zammad: ${{ steps.zammad.outputs.needed }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: ${{ github.event_name == 'merge_group' && '0' || '2' }}
-          persist-credentials: false
-      - id: infra
-        if: github.event_name == 'pull_request'
-        run: |
-          # Use the same test-merge base as the image matrix. Only a clean diff can skip tests.
-          needed=true
-          if git diff --quiet --no-ext-diff --no-renames HEAD^1 HEAD -- \
-            infra/helm/ infra/terraform/ ':(glob)scripts/validate-*' scripts/release/fetch-verified-asset.sh \
-            compose.full.yaml tests/fixtures/production-backup-alerts.yaml tests/secret-adapter-readiness.test.rb \
-            .github/workflows/ci.yml; then
-            needed=false
-          fi
-          echo "needed=$needed" >> "$GITHUB_OUTPUT"
-      - id: dev-install
-        if: github.event_name == 'pull_request'
-        run: |
-          needed=true
-          if git diff --quiet --no-ext-diff --no-renames HEAD^1 HEAD -- \
-            scripts/dev-install/ scripts/release/installer-stages.mjs scripts/release/installer-stack.mjs \
-            scripts/release/compose-stage-lock.mjs scripts/release/compose-stage-config.json \
-            .github/workflows/ci.yml; then
-            needed=false
-          fi
-          echo "needed=$needed" >> "$GITHUB_OUTPUT"
-      - id: integration
-        if: github.event_name == 'pull_request'
-        run: |
-          needed=true
-          if git diff --quiet --no-ext-diff --no-renames HEAD^1 HEAD -- \
-            .github/workflows/ci.yml scripts/test-postgres-integration.mjs scripts/postgres-scenario-registry.mjs \
-            ':(glob)tests/*postgres*.mjs' tests/rendered-html.test.mjs tests/app-first-load-js-budget.json; then
-            needed=false
-          fi
-          echo "needed=$needed" >> "$GITHUB_OUTPUT"
-      - id: application-e2e
-        if: github.event_name == 'pull_request'
-        run: |
-          needed=true
-          if git diff --quiet --no-ext-diff --no-renames HEAD^1 HEAD -- \
-            app/ lib/ packages/ public/ worker/ db/ build/ tests/e2e/ tests/fixtures/ tests/helpers/ \
-            scripts/run-application-e2e.mjs scripts/application-e2e-pool.mjs scripts/release/ \
-            playwright.application.config.ts next.config.ts vite.config.ts hosting.json tsconfig.json \
-            cloudflare-env.d.ts next-env.d.ts ':(glob)**/package.json' pnpm-lock.yaml pnpm-workspace.yaml \
-            patches/ .npmrc .github/actions/ci-pnpm/ .github/workflows/ci.yml; then
-            needed=false
-          fi
-          echo "needed=$needed" >> "$GITHUB_OUTPUT"
-      - id: storybook
-        if: github.event_name == 'pull_request'
-        run: |
-          needed=true
-          if git diff --quiet --no-ext-diff --no-renames HEAD^1 HEAD -- \
-            app/ lib/ packages/ public/ .storybook/ tests/visual/ tests/fixtures/ tests/helpers/ \
-            ':(glob)tests/*-browser.mjs' tests/storybook-static-contract.test.mjs \
-            scripts/serve-storybook-static.mjs scripts/storybook-visual-regression.mjs \
-            playwright.storybook.config.ts package.json pnpm-lock.yaml pnpm-workspace.yaml \
-            patches/ .npmrc tsconfig.json .github/actions/ci-pnpm/ .github/workflows/ci.yml; then
-            needed=false
-          fi
-          echo "needed=$needed" >> "$GITHUB_OUTPUT"
-      - id: zammad
-        if: github.event_name == 'pull_request'
-        run: |
-          needed=true
-          if git diff --quiet --no-ext-diff --no-renames HEAD^1 HEAD -- \
-            compose.full.yaml .dockerignore infra/docker/Dockerfile.zammad infra/docker/full/zammad/ \
-            zammad-addon.json zammad-package/ build/zammad/ release/installer-images.json \
-            ':(glob)scripts/*zammad*' ':(glob)scripts/contracts/*mailbox*' scripts/release/operator-input.mjs \
-            tests/zammad-image-browser-compat.test.mjs tests/fixtures/native-compat-cleanup.mjs ':(glob)tests/**/*.rb' \
-            services/control-api/ services/connector-worker/ packages/ lib/domain.ts lib/literal-matcher.ts \
-            scripts/build-services.mjs tsconfig.json ':(glob)services/*/tsconfig*.json' .gitattributes \
-            tests/outbound-media.test.mjs tests/helpers/operator-input-fixtures.mjs \
-            ':(glob)**/package.json' pnpm-lock.yaml pnpm-workspace.yaml .npmrc patches/ \
-            .github/actions/ci-pnpm/ .github/workflows/ci.yml .github/workflows/zammad-compatibility.yml; then
-            needed=false
-          fi
-          echo "needed=$needed" >> "$GITHUB_OUTPUT"
-      - id: matrix
-        env:
-          EVENT: ${{ github.event_name }}
-        run: |
-          args=()
-          if [ "$EVENT" = pull_request ]; then
-            args+=(--pull-request)
-          fi
-          matrix=$(python3 scripts/release/images-by-digest.py matrix "${args[@]}")
-          images=$(jq '.include | length > 0' <<< "$matrix")
-          installer_portal=$(jq 'any(.include[]; .image == "portal")' <<< "$matrix")
-          if [[ "$EVENT" == pull_request ]] && ! git diff --quiet --no-ext-diff --no-renames HEAD^1 HEAD -- \
-            scripts/release/installer-stages.mjs scripts/release/installer-artifacts.mjs release/installer-images.json; then
-            installer_portal=true
-          fi
-          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
-          echo "images=$images" >> "$GITHUB_OUTPUT"
-          echo "installer-portal=$installer_portal" >> "$GITHUB_OUTPUT"
-
-  workflow-lint:
+  replay:
+    name: Cold Compose replay (${{ matrix.sample }})
     runs-on: ubuntu-24.04
     timeout-minutes: 3
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Lint workflows with actionlint
-        env:
-          ACTIONLINT_URL: https://github.com/kjanat/actionlint/releases/download/v1.17.1/actionlint_1.17.1_linux_amd64.tar.gz
-          ACTIONLINT_SHA256: 6bfe0f49f0e108b9b23732baf7de63bfa4d89174fa40f9cb98feb9676df3318f
-        run: |
-          scratch=$(mktemp -d)
-          bash scripts/release/fetch-verified-asset.sh "$ACTIONLINT_URL" "$scratch/actionlint.tar.gz" "$ACTIONLINT_SHA256"
-          tar -xzf "$scratch/actionlint.tar.gz" -C "$scratch" actionlint
-          "$scratch/actionlint" -shellcheck= -pyflakes=
-
-  storybook:
-    needs: changes
-    if: >-
-      ${{ !cancelled() && (github.event_name == 'merge_group' || github.event_name == 'push' ||
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'pull_request' && needs.changes.outputs.storybook != 'false')) }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: '24.13.1'
-          package-manager-cache: false
-      - uses: ./.github/actions/ci-pnpm
-      - name: Build Storybook
-        run: pnpm run build:storybook
-      - name: Check the built story index
-        run: node --test tests/storybook-static-contract.test.mjs
-      - name: Install Playwright Chromium
-        env:
-          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '0'
-        run: pnpm exec playwright install --no-shell chromium
-      - name: Audit and capture every story
-        run: >-
-          node scripts/storybook-visual-regression.mjs --require-browser tests/visual/storybook-ci.spec.ts
-          tests/visual/inbox-synthetic.spec.ts --fully-parallel --workers=2
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: failure() || cancelled()
-        with: &storybook-audit-artifact
-          name: storybook-audit
-          path: |
-            test-results/storybook
-            output/playwright/design-system
-            output/playwright/inbox/synthetic
-          retention-days: 7
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: success()
-        with: *storybook-audit-artifact
-
-  privacy:
-    if: github.event_name != 'workflow_dispatch'
-    uses: ./.github/workflows/privacy.yml
-
-  dependency-review:
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    steps:
-      - uses: actions/dependency-review-action@bbc44d14a204704ccc493733616cd1e93a0321ec # v5.0.1
-        with:
-          fail-on-severity: high
-
-  dev-install-dryrun:
-    needs: changes
-    if: ${{ !cancelled() && github.event_name == 'pull_request' && needs.changes.outputs.dev-install != 'false' }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: dev-install-dryrun
-        run: python3 -I -B scripts/dev-install/test_dryrun.py --container
-
-  checks:
-    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
-    name: ${{ matrix.name }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
     strategy:
       fail-fast: false
-      max-parallel: 5
       matrix:
         include:
-          - {name: Lint, mode: lint}
-          - {name: Typecheck, mode: typecheck}
-          - {name: Collection, mode: collection}
-          - &unit-one {name: Unit 1/2, mode: unit, shard: 1}
-          - &unit-two {name: Unit 2/2, mode: unit, shard: 2}
-    steps: &check-steps
+          - sample: failed-tree
+            head: f422452a6de8c97bd81f01d6d40dff6777fd7c66
+            tree: 1ec309bf5afd40485651fd97a71a4660bdb8ea7b
+          - sample: parent-tree
+            head: 529bbee9999dd14c63a8efa89b48f188fc047c6d
+            tree: 99b148f2870a7d160cba2a2e10e251bc8c3eda05
+    steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: ${{ github.event_name == 'pull_request' && matrix.mode == 'unit' && '2' || '1' }}
+          ref: ${{ matrix.head }}
+          fetch-depth: 1
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24.13.1'
           package-manager-cache: false
-      - name: Test DEV Compose preflight
-        if: matrix.mode == 'unit' && matrix.shard == 1
-        run: node --test tests/installer-dev-recreatability.test.mjs
-      - name: Check image publication contracts
-        if: matrix.mode == 'lint'
+      - name: Run original preflight and observe process phases
+        env:
+          EXPECTED_HEAD: ${{ matrix.head }}
+          EXPECTED_TREE: ${{ matrix.tree }}
         run: |
-          python3 -B -m unittest discover -s tests -p 'test_images_by_digest.py' -v
-          python3 -B tests/patch-keycloak-jackson.test.py
-          node --test tests/fetch-zammad-addon.test.mjs
-          ruby tests/zammad-database-entrypoint.test.rb
-      - name: Check production secret adapter readiness
-        if: matrix.mode == 'lint'
-        run: |
-          manifest=$(mktemp)
-          trap 'rm -f "$manifest"' EXIT
-          bash scripts/validate-infra.sh --render-secret-adapter > "$manifest"
-          ruby scripts/validate-secret-adapter-render.rb "$manifest"
-          ruby tests/secret-adapter-readiness.test.rb "$manifest"
-      - name: Check browser runner network contracts
-        if: matrix.mode == 'lint'
-        run: python3 -B tests/playwright-network-native.test.py
-      - name: Set up pnpm dependencies
-        id: pnpm
-        uses: ./.github/actions/ci-pnpm
-      - name: Install Ruby test prerequisites
-        if: matrix.mode == 'unit' || matrix.mode == 'collection'
-        run: |
-          if ! ruby -rminitest -e 'puts RUBY_VERSION'; then
-            sudo apt-get -o Acquire::Retries=2 update
-            sudo apt-get -o Acquire::Retries=2 install -y ruby ruby-minitest
-          fi
-      - name: Build check prerequisites
-        if: matrix.mode == 'unit' || matrix.mode == 'collection' || matrix.mode == 'typecheck'
-        env:
-          GIT_TERMINAL_PROMPT: '0'
-        run: pnpm run zammad:package
-      - name: Build service prerequisites
-        if: matrix.mode != 'lint'
-        uses: ./.github/actions/ci-pnpm
-        with:
-          task: build
-          dependency-key: ${{ steps.pnpm.outputs.dependency-key }}
-          force-build: ${{ github.event_name == 'merge_group' && matrix.mode == 'typecheck' }}
-      - name: Check add-on session state
-        if: matrix.mode == 'unit' && matrix.shard == 1
-        run: ruby tests/fixtures/native-session-state-contract.rb
-      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        id: eslint-cache
-        if: matrix.mode == 'lint'
-        with:
-          path: .git/hosted-eslint-cache
-          key: eslint-${{ runner.os }}-${{ hashFiles('eslint.config.*', 'pnpm-lock.yaml') }}-${{ github.sha }}
-          restore-keys: eslint-${{ runner.os }}-${{ hashFiles('eslint.config.*', 'pnpm-lock.yaml') }}-
-      - name: Lint
-        if: matrix.mode == 'lint'
-        run: pnpm run lint --cache --cache-strategy content --cache-location .git/hosted-eslint-cache
-      - name: Typecheck
-        if: matrix.mode == 'typecheck'
-        run: pnpm exec tsc --noEmit
-      - name: Collect tests
-        if: matrix.mode == 'collection'
-        run: node scripts/hosted-ci.mjs collection
-      - name: Run unit shard
-        if: matrix.mode == 'unit'
-        env:
-          SHARD: ${{ matrix.shard }}
-        run: node scripts/hosted-ci.mjs unit "$SHARD" 2
+          set -eu
+          head="$(git rev-parse HEAD)"
+          tree="$(git rev-parse 'HEAD^{tree}')"
+          test "$head" = "$EXPECTED_HEAD"
+          test "$tree" = "$EXPECTED_TREE"
+          printf 'workflow_head=%s replay_head=%s replay_tree=%s\n' "$GITHUB_SHA" "$head" "$tree"
 
-  full-unit:
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
-    name: Full ${{ matrix.name }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    strategy:
-      fail-fast: false
-      matrix:
-        include: [*unit-one, *unit-two]
-    steps: *check-steps
+          python3 -I -B - <<'PY'
+          import os
+          from pathlib import Path
+          import re
+          import subprocess
+          from tempfile import TemporaryFile
+          import time
 
-  lint-on-push:
-    name: Lint on push
-    if: github.event_name == 'push'
-    # Cache warm-up only; PRs and the queue gate lint, so a failure here must not make a published trunk commit unusable.
-    continue-on-error: true
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: '24.13.1'
-          package-manager-cache: false
-      - name: Set up pnpm dependencies
-        id: pnpm
-        uses: ./.github/actions/ci-pnpm
-        with:
-          seed-dependencies: 'true'
-      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        id: eslint-cache
-        with:
-          path: .git/hosted-eslint-cache
-          key: eslint-${{ runner.os }}-${{ hashFiles('eslint.config.*', 'pnpm-lock.yaml') }}-${{ github.sha }}
-          restore-keys: eslint-${{ runner.os }}-${{ hashFiles('eslint.config.*', 'pnpm-lock.yaml') }}-
-      - name: Lint
-        run: pnpm run lint --cache --cache-strategy content --cache-location .git/hosted-eslint-cache
-      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        if: steps.eslint-cache.outputs.cache-hit != 'true'
-        with:
-          path: .git/hosted-eslint-cache
-          key: ${{ steps.eslint-cache.outputs.cache-primary-key }}
+          def phases(root):
+              pending = [root]
+              seen = set()
+              active = set()
+              while pending:
+                  pid = pending.pop()
+                  if pid in seen:
+                      continue
+                  seen.add(pid)
+                  proc = Path("/proc") / str(pid)
+                  try:
+                      exe = Path(os.readlink(proc / "exe")).name
+                      if exe in ("docker", "docker-compose"):
+                          args = (proc / "cmdline").read_bytes().split(b"\0")[1:]
+                          if exe == "docker" and b"compose" in args and b"config" in args:
+                              active.add("docker_cli")
+                          elif exe == "docker-compose":
+                              if b"docker-cli-plugin-metadata" in args:
+                                  active.add("plugin_metadata")
+                              elif b"config" in args:
+                                  active.add("plugin_config")
+                  except (FileNotFoundError, ProcessLookupError, PermissionError):
+                      pass
+                  # A Go process may start a child from any of its OS threads.
+                  for children in (proc / "task").glob("*/children"):
+                      try:
+                          pending.extend(map(int, children.read_text().split()))
+                      except (FileNotFoundError, ProcessLookupError, PermissionError):
+                          pass
+              return active
 
-  integration:
-    needs: changes
-    if: >-
-      ${{ !cancelled() && (github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
-      (github.event_name == 'pull_request' && (needs.changes.result != 'success' || needs.changes.outputs.integration != 'false'))) }}
-    name: PostgreSQL ${{ matrix.shard }}/4
-    runs-on: ubuntu-24.04
-    timeout-minutes: 25
-    permissions:
-      contents: read
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [1, 2, 3, 4]
-    services:
-      postgres:
-        image: &integration-postgres-image postgres:17.10-alpine3.23@sha256:8189a1f6e40904781fc9e2612687877791d21679866db58b1de996b31fc312e4
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: wasalx-ci-admin
-          POSTGRES_DB: wasalx_ci
-        ports: ['5432']
-        options: >-
-          --tmpfs /var/lib/postgresql/data:rw,nosuid,nodev,noexec,size=512m
-          --health-cmd "pg_isready -h 127.0.0.1 -U postgres -d wasalx_ci"
-          --health-interval 5s --health-timeout 5s --health-retries 10
-    steps:
-      - &integration-checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - &integration-node
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: '24.13.1'
-          package-manager-cache: false
-      - &integration-pnpm
-        name: Set up pnpm dependencies
-        id: pnpm
-        uses: ./.github/actions/ci-pnpm
-      - &integration-build
-        name: Build service prerequisites
-        uses: ./.github/actions/ci-pnpm
-        with:
-          task: build
-          dependency-key: ${{ steps.pnpm.outputs.dependency-key }}
-          force-build: 'true'
-      - name: Test PostgreSQL integration
-        env:
-          SHARD: ${{ matrix.shard }}
-          DATABASE_ADMIN_URL: postgresql://postgres:wasalx-ci-admin@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/wasalx_ci
-          DATABASE_APP_URL: postgresql://wasalx_runtime:wasalx-test-app@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/wasalx_ci
-        run: node scripts/test-postgres-integration.mjs --shard "$SHARD/4" --report "postgres-shard-$SHARD.json"
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          overwrite: true
-          name: postgres-scenarios-${{ matrix.shard }}
-          path: postgres-shard-${{ matrix.shard }}.json
-          if-no-files-found: error
-          retention-days: 7
-      # Save after shard 1 passes without waiting for shards 2-4 because the cache holds only build outputs.
-      - name: Save service build cache
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && matrix.shard == 1
-        uses: ./.github/actions/ci-pnpm
-        with:
-          task: save-build
-          dependency-key: ${{ steps.pnpm.outputs.dependency-key }}
+          with TemporaryFile() as tap_file:
+              started = time.monotonic()
+              replay = subprocess.Popen(
+                  ["node", "--test", "tests/installer-dev-recreatability.test.mjs"],
+                  stdout=tap_file, stderr=subprocess.STDOUT,
+              )
+              first = {}
+              last = {}
+              previous = started
+              max_gap = 0
+              observer_cpu = time.process_time()
+              while replay.poll() is None:
+                  now = time.monotonic()
+                  if now - started >= 20:
+                      break
+                  max_gap = max(max_gap, now - previous)
+                  previous = now
+                  elapsed = (now - started) * 1000
+                  for phase in phases(replay.pid):
+                      first.setdefault(phase, elapsed)
+                      last[phase] = elapsed
+                  time.sleep(0.01)
+              print(f"sample_max_gap_ms={max_gap * 1000:.1f} observer_cpu_ms={(time.process_time() - observer_cpu) * 1000:.1f}")
+              for phase in ("docker_cli", "plugin_metadata", "plugin_config"):
+                  if phase in first:
+                      print(f"{phase}_first_ms={first[phase]:.1f} {phase}_last_ms={last[phase]:.1f}")
+                  else:
+                      print(f"{phase}=unobserved")
+              if "plugin_config" in first:
+                  print(f"plugin_config_observed_span_ms={last['plugin_config'] - first['plugin_config']:.1f}")
+              if "docker_cli" in first and "plugin_config" in first:
+                  print(f"cli_to_plugin_first_seen_ms={first['plugin_config'] - first['docker_cli']:.1f}")
+              status = replay.wait()
+              tap_file.seek(0)
+              tap = tap_file.read()
 
-  portal-browser-build:
-    needs: changes
-    if: >-
-      ${{ !cancelled() && (github.event_name != 'pull_request' ||
-      needs.changes.result != 'success' || needs.changes.outputs.integration != 'false' ||
-      needs.changes.outputs.application-e2e != 'false') }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    env: &portal-browser-env
-      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.wrangler/ci-chromium
-    steps:
-      - *integration-checkout
-      - *integration-node
-      - *integration-pnpm
-      - name: Build the portal
-        run: pnpm run build
-      - name: Install Playwright Chromium
-        env:
-          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '0'
-        run: pnpm exec playwright install --no-shell chromium
-      - name: Package portal and Chromium
-        run: tar -czf portal-browser.tar.gz dist packages/observability/dist .wrangler/ci-chromium
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: portal-browser
-          path: portal-browser.tar.gz
-          if-no-files-found: error
-          retention-days: 1
+          timing = re.search(rb"(?m)^\s*# Candidate Compose render took ([0-9.]+) ms\s*$", tap)
+          if timing:
+              print(f"native_call_elapsed_ms={timing[1].decode('ascii')}")
+          timeout = b"spawnSync docker ETIMEDOUT" in tap
+          passed = status == 0 and b"ok 1 - DEV preimage replay:" in tap and bool(re.search(rb"(?m)^# pass 1$", tap))
+          result = "pass" if passed else "docker_timeout" if timeout else "failure"
+          print(f"replay={result} replay_exit={status}")
 
-  portal-integration:
-    needs: [changes, portal-browser-build]
-    if: >-
-      ${{ !cancelled() && needs.portal-browser-build.result == 'success' &&
-      (github.event_name != 'pull_request' || needs.changes.result != 'success' ||
-      needs.changes.outputs.integration != 'false') }}
-    env: *portal-browser-env
-    runs-on: ubuntu-24.04
-    timeout-minutes: 25
-    steps:
-      - *integration-checkout
-      - name: dev-install-dryrun
-        if: github.event_name != 'pull_request'
-        run: python3 -I -B scripts/dev-install/test_dryrun.py --container
-      - *integration-node
-      - *integration-pnpm
-      - name: Test native installer preimage capture
-        run: >-
-          node --experimental-strip-types --import ./tests/helpers/operator-input-fixtures.mjs --test --test-concurrency=1
-          tests/installer-preimage.test.mjs
-      - *integration-build
-      - &download-portal-browser
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: portal-browser
-      - &extract-portal-browser
-        name: Restore portal and Chromium
-        run: tar -xzf portal-browser.tar.gz
-      - name: Prepare browser fixtures
-        env:
-          POSTGRES_IMAGE: *integration-postgres-image
-        run: |
-          # Keep both shared fixture images available for the serialized browser tests.
-          docker pull "$POSTGRES_IMAGE"
-          for attempt in 1 2 3; do
-            if docker pull redis:8.4.1-alpine@sha256:e55195a3afbb812a14306909caad6583a1ab6c79f393f53490e42cb2111084a9; then break; fi
-            test "$attempt" != 3
-            sleep "$attempt"
-          done
-      - name: Test portal and tenant integration
-        # Keep Docker fixture network changes out of Chromium page loads.
-        env:
-          # The dedicated runner executes these files serially. Stay outside Linux's ephemeral range.
-          WASALX_E2E_CONTROL_PORT: '14101'
-          WASALX_E2E_PORTAL_PORT: '14102'
-        run: >-
-          node --test --test-concurrency=1 tests/multitenant-e2e.test.mjs tests/platform-invitation-e2e.test.mjs
-          tests/portal-security-headers.test.mjs tests/rendered-html.test.mjs
-
-  application-e2e:
-    needs: [changes, portal-browser-build]
-    if: >-
-      ${{ !cancelled() && needs.portal-browser-build.result == 'success' &&
-      (github.event_name != 'pull_request' || needs.changes.result != 'success' ||
-      needs.changes.outputs.application-e2e != 'false') }}
-    name: Application E2E (${{ matrix.locale }}, ${{ matrix.roles }})
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    env: *portal-browser-env
-    strategy:
-      fail-fast: false
-      matrix:
-        locale: [en, ar]
-        roles: [tenant_owner, 'tenant_admin,supervisor', 'agent,auditor']
-    steps:
-      - *integration-checkout
-      - *integration-node
-      - *integration-pnpm
-      - *download-portal-browser
-      - *extract-portal-browser
-      - name: Test application fixtures
-        env:
-          WASALX_E2E_SKIP_BUILD: '1'
-          WASALX_E2E_LOCALES: ${{ matrix.locale }}
-          WASALX_E2E_ROLES: ${{ matrix.roles }}
-        run: node scripts/run-application-e2e.mjs
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: failure() || cancelled()
-        with:
-          name: application-e2e-${{ matrix.locale }}-${{ matrix.roles }}
-          path: |
-            output/playwright/application*/*/report/**
-            output/playwright/application*/*/results/**
-          retention-days: 7
-
-  integration-coverage:
-    needs: integration
-    if: ${{ !cancelled() && needs.integration.result != 'skipped' }}
-    runs-on: ubuntu-slim
-    timeout-minutes: 5
-    steps:
-      - *integration-checkout
-      - *integration-node
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          pattern: postgres-scenarios-*
-          path: postgres-scenarios
-          merge-multiple: true
-      - name: Require exactly-once scenario coverage
-        run: node scripts/postgres-scenario-registry.mjs postgres-scenarios
-
-  infra-validate:
-    needs: changes
-    if: >-
-      ${{ !cancelled() && (github.event_name == 'merge_group' ||
-      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
-      (github.event_name == 'pull_request' && (needs.changes.result != 'success' || needs.changes.outputs.infra != 'false'))) }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: .wasalx-infra-tool-cache
-          key: infra-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/validate-infra.sh', 'scripts/release/fetch-verified-asset.sh') }}
-      - name: Validate infrastructure
-        run: bash scripts/validate-infra.sh
-      - name: Validate native OpenTofu setup
-        # Exercise the pinned host binary and provider mirror alongside the Docker path.
-        run: bash scripts/validate-infra.sh --terraform-test-only
-
-  images:
-    needs: [changes]
-    if: ${{ !cancelled() && github.event_name == 'merge_group' && needs.changes.outputs.images == 'true' }}
-    name: Build ${{ matrix.image }}${{ matrix.pending && ' (pending add-on source)' || '' }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      max-parallel: 21
-      matrix: ${{ fromJSON(needs.changes.outputs.matrix) }}
-    steps: &image-steps
-      - name: Require GitHub-hosted execution
-        env:
-          HOSTED_KIND: ${{ runner.environment }}
-        run: test "$HOSTED_KIND" = github-hosted
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - if: ${{ !matrix.pending }}
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: 22.23.4
-      - if: ${{ !matrix.pending }}
-        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-        with:
-          version: v0.30.1
-          driver-opts: image=moby/buildkit:v0.26.3
-          cache-binary: false
-      - name: Build and inspect without publication
-        if: ${{ !matrix.pending }}
-        env:
-          IMAGE: ${{ matrix.image }}
-          PUBLIC_ADDON_SOURCE: ${{ toJSON(matrix.addonSource) }}
-          PUBLIC_CONTACT_EMAIL: ${{ matrix.image == 'portal' && vars.PUBLIC_CONTACT_EMAIL || '' }}
-        run: python3 scripts/release/images-by-digest.py build --cache read --image "$IMAGE" --output "records/$IMAGE.json"
-      - name: Record pending add-on source
-        if: matrix.pending
-        env:
-          IMAGE: ${{ matrix.image }}
-          PUBLIC_ADDON_SOURCE: ${{ toJSON(matrix.addonSource) }}
-        run: python3 scripts/release/images-by-digest.py pending --image "$IMAGE" --output "records/$IMAGE.json"
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          overwrite: true
-          name: image-build-${{ matrix.image }}
-          path: records/${{ matrix.image }}.json
-          if-no-files-found: error
-
-  pr-images:
-    # Keep the PR matrix outside the required gate's dependency graph.
-    needs: [changes]
-    if: ${{ !cancelled() && github.event_name == 'pull_request' && needs.changes.outputs.images == 'true' }}
-    name: Build ${{ matrix.image }}${{ matrix.pending && ' (pending add-on source)' || '' }} (advisory)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      max-parallel: 8
-      matrix: ${{ fromJSON(needs.changes.outputs.matrix) }}
-    steps: *image-steps
-
-  pr-image-results:
-    name: PR image results (advisory)
-    if: always() && github.event_name == 'pull_request'
-    needs: pr-images
-    runs-on: ubuntu-slim
-    timeout-minutes: 2
-    permissions: {}
-    steps:
-      - name: Report PR image builds
-        env:
-          IMAGES: ${{ needs.pr-images.result }}
-        run: |
-          echo "PR image builds (advisory): $IMAGES" >> "$GITHUB_STEP_SUMMARY"
-          case "$IMAGES" in
-            success|skipped) ;;
-            *) echo "::warning::Advisory PR image builds: $IMAGES"; exit 1 ;;
-          esac
-
-  installer-portal:
-    name: Build portal with the installer
-    needs: changes
-    if: ${{ !cancelled() && needs.changes.outputs.installer-portal == 'true' }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: 22.23.4
-          package-manager-cache: false
-      - name: Build from the verified Git archive
-        run: |
-          node --input-type=module <<'NODE'
-          import { readFile } from "node:fs/promises";
-          import { sha256 } from "./scripts/release/installer-artifacts.mjs";
-          import { buildCandidateImage, createCandidatePlan, run, verifyBuildContext } from "./scripts/release/installer-stages.mjs";
-          const environment = process.env;
-          const candidateSha = run("git", ["rev-parse", "HEAD"], environment);
-          const candidateTree = run("git", ["rev-parse", "HEAD^{tree}"], environment);
-          const buildContext = await verifyBuildContext(candidateSha);
-          const catalog = JSON.parse(await readFile("release/installer-images.json", "utf8"));
-          const portal = createCandidatePlan(catalog, {}).find(({ id }) => id === "portal");
-          if (!portal) throw new Error("The installer catalog must include the portal");
-          await buildCandidateImage(portal, {
-            candidateSha, candidateTree, buildContext, buildContextSha256: sha256(buildContext), environment,
-          });
-          NODE
-
-  publish:
-    needs: lint-on-push
-    if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'WasalX/wasalx-platform' }}
-    concurrency:
-      group: release-${{ github.sha }}
-      cancel-in-progress: false
-    permissions:
-      contents: read
-      packages: write
-      id-token: write
-    uses: ./.github/workflows/branch-image.yml
-
-  zammad-compatibility:
-    needs: changes
-    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.changes.outputs.zammad != 'false') }}
-    uses: ./.github/workflows/zammad-compatibility.yml
-
-  ci-gate:
-    if: always()
-    needs: [changes, workflow-lint, storybook, privacy, dependency-review, checks, full-unit, images, installer-portal, integration, portal-integration, application-e2e, integration-coverage, infra-validate, dev-install-dryrun, zammad-compatibility]
-    runs-on: ubuntu-slim
-    timeout-minutes: 2
-    permissions: {}
-    steps:
-      - name: Require checks and the applicable image lane
-        env:
-          EVENT: ${{ github.event_name }}
-          CHANGES: ${{ needs.changes.result }}
-          WORKFLOW_LINT: ${{ needs.workflow-lint.result }}
-          STORYBOOK_NEEDED: ${{ needs.changes.outputs.storybook }}
-          STORYBOOK: ${{ needs.storybook.result }}
-          PRIVACY: ${{ needs.privacy.result }}
-          CHECKS: ${{ needs.checks.result }}
-          FULL_UNIT: ${{ needs.full-unit.result }}
-          REVIEW: ${{ needs.dependency-review.result }}
-          IMAGES: ${{ needs.images.result }}
-          INSTALLER_PORTAL_NEEDED: ${{ needs.changes.outputs.installer-portal }}
-          INSTALLER_PORTAL: ${{ needs.installer-portal.result }}
-          INTEGRATION_NEEDED: ${{ needs.changes.outputs.integration }}
-          INTEGRATION: ${{ needs.integration.result }}
-          PORTAL_INTEGRATION: ${{ needs.portal-integration.result }}
-          APPLICATION_NEEDED: ${{ needs.changes.outputs.application-e2e }}
-          APPLICATION_E2E: ${{ needs.application-e2e.result }}
-          INTEGRATION_COVERAGE: ${{ needs.integration-coverage.result }}
-          INFRA_NEEDED: ${{ needs.changes.outputs.infra }}
-          INFRA: ${{ needs.infra-validate.result }}
-          DEV_INSTALL_NEEDED: ${{ needs.changes.outputs.dev-install }}
-          DEV_INSTALL: ${{ needs.dev-install-dryrun.result }}
-          ZAMMAD_NEEDED: ${{ needs.changes.outputs.zammad }}
-          ZAMMAD_COMPATIBILITY: ${{ needs.zammad-compatibility.result }}
-        run: |
-          test "$WORKFLOW_LINT" = success || exit 1
-          case "$EVENT:$STORYBOOK_NEEDED:$STORYBOOK" in
-            *:*:success|pull_request:false:skipped) ;;
-            *) echo 'Storybook did not pass.'; exit 1 ;;
-          esac
-          case "$EVENT:$APPLICATION_NEEDED:$APPLICATION_E2E" in
-            *:*:success|pull_request:false:skipped) ;;
-            *) echo 'Application browser tests did not pass.'; exit 1 ;;
-          esac
-          case "$EVENT:$PRIVACY" in
-            pull_request:success|merge_group:success|push:success|workflow_dispatch:skipped) ;;
-            *) echo 'Privacy scan did not pass.'; exit 1 ;;
-          esac
-          case "$EVENT:$ZAMMAD_NEEDED:$ZAMMAD_COMPATIBILITY" in
-            *:*:success) ;;
-            pull_request:false:skipped)
-              echo 'Zammad compatibility skipped because its inputs did not change.' >> "$GITHUB_STEP_SUMMARY" ;;
-            *) echo "::error::Zammad compatibility result: $ZAMMAD_COMPATIBILITY"; exit 1 ;;
-          esac
-          if [[ "$EVENT" == push || "$EVENT" == workflow_dispatch ]]; then
-            test "$CHANGES:$CHECKS:$REVIEW:$IMAGES:$DEV_INSTALL:$INSTALLER_PORTAL" = skipped:skipped:skipped:skipped:skipped:skipped || exit 1
-            test "$FULL_UNIT" = success || exit 1
-            test "$INTEGRATION:$PORTAL_INTEGRATION:$INTEGRATION_COVERAGE" = success:success:success || exit 1
-            case "$EVENT:$INFRA" in push:success|workflow_dispatch:skipped) ;; *) exit 1 ;; esac
-            echo "Event $EVENT ran both full unit shards. Infrastructure validation: $INFRA (skipped on manual dispatch)." >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-          test "$CHANGES:$CHECKS:$FULL_UNIT" = success:success:skipped || exit 1
-          case "$EVENT:$INSTALLER_PORTAL_NEEDED:$INSTALLER_PORTAL" in
-            pull_request:false:skipped|pull_request:true:success|merge_group:true:success) ;;
-            *) echo 'Installer portal build did not pass.'; exit 1 ;;
-          esac
-          case "$EVENT:$REVIEW:$IMAGES" in
-            pull_request:success:skipped)
-              echo 'See PR image results (advisory) for image build outcomes.' >> "$GITHUB_STEP_SUMMARY"
-              ;;
-            merge_group:skipped:success) ;;
-            *) exit 1 ;;
-          esac
-          case "$EVENT:$INTEGRATION_NEEDED:$INTEGRATION:$PORTAL_INTEGRATION:$INTEGRATION_COVERAGE" in
-            pull_request:false:skipped:skipped:skipped|pull_request:*:success:success:success|merge_group:*:success:success:success) ;;
-            *) exit 1 ;;
-          esac
-          case "$EVENT:$DEV_INSTALL_NEEDED:$DEV_INSTALL" in
-            pull_request:*:success|pull_request:false:skipped|merge_group:*:skipped) ;;
-            *) exit 1 ;;
-          esac
-          test "$INFRA" = success || {
-            test "$EVENT" = pull_request && test "$INFRA_NEEDED" = false && test "$INFRA" = skipped
-          }
+          # Read the version only after the observed first replay.
+          version = "unavailable"
+          try:
+              query = subprocess.run(
+                  ["docker", "compose", "version", "--short"], capture_output=True, timeout=3,
+                  env={**os.environ, "DOCKER_CONTEXT": "", "DOCKER_HOST": "tcp://127.0.0.1:0",
+                       "DOCKER_TLS": "", "DOCKER_TLS_VERIFY": ""},
+              )
+              observed = query.stdout.strip()
+              if query.returncode == 0 and re.fullmatch(rb"v?\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)*", observed):
+                  version = observed.decode("ascii")
+          except (OSError, subprocess.TimeoutExpired):
+              pass
+          print(f"compose_version={version}")
+          raise SystemExit(0 if passed else 1)
+          PY
