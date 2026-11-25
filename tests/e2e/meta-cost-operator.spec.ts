@@ -123,6 +123,7 @@ test('operator cost drafts, accepted activation and every bounded reassessment p
   expect(h.writes[3]!.body.items).toEqual([{deliveryId:h.rows[100]!.deliveryId,expectedHeadId:h.rows[100]!.id,selectorEvidence:selector}]);
  });
  await test.step("Withdraw cost selector evidence",async()=>{
+  await expect(last).not.toBeChecked();
   await last.check();await reassess.getByLabel(t('cost.manage.clearSelector'),{exact:true}).check();await selectedButton().click();await expect.poll(()=>h.writes.length).toBe(5);
   expect(h.writes[4]!.body.items).toEqual([{deliveryId:h.rows[100]!.deliveryId,expectedHeadId:h.rows[100]!.id,selectorEvidence:null}]);
  });
