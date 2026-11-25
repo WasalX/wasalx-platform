@@ -211,7 +211,10 @@ export function rehearsalImageSource(project, commit, runGit) {
     "rehearsal image source must be in the checkout's first-parent history");
   const tree = runGit(["rev-parse", `${commit}^{tree}`]);
   assert.match(tree, shaPattern, "rehearsal main tree is invalid");
-  return { commit, tree };
+  const sourceCatalog = JSON.parse(runGit(["show", `${commit}:release/installer-images.json`]));
+  const packageSha256 = sourceCatalog.tenantProvisioning?.package?.sha256;
+  assert.match(packageSha256 ?? "", /^[0-9a-f]{64}$/u, "rehearsal image source lacks a valid Zammad package pin");
+  return { commit, tree, packageSha256 };
 }
 
 // Explicit, nonsecret DEV origin admission. No arbitrary Env, URL path or proxy trust.
@@ -367,6 +370,29 @@ export function assertSmokePorts(compose) {
 
 class FreshHoldStateError extends Error {}
 
+class StackVerificationError extends Error {
+  constructor(check, reason) {
+    super(reason);
+    this.check = check;
+  }
+}
+
+export function stackVerificationDiagnostic(error) {
+  if (error instanceof StackVerificationError) return `check=${error.check} reason=${error.message}`;
+
+  // Command arguments, parsed input and assertion operands can contain private data.
+  const location = error.stack?.match(/\n\s+at [^\r\n]*[\\/]scripts[\\/]release[\\/](installer-stack\.mjs:[0-9]+):[0-9]+/u)?.[1];
+  const check = location ?? "stack-verification";
+  const variable = ["WASALX_INSTALL_EXPECTED_HOSTNAME", "WASALX_DEV_REVIEW_ORIGIN_SUFFIX"].find((name) => error.message?.includes(name));
+  const reason = error instanceof FreshHoldStateError ? "fresh hold must be in the created state"
+    : [devWebhookPreflightOnly, devGuestOnly, devSimulatorSmokeOnly].find(message => error.message === message)
+      ?? (variable ? `check ${variable}`
+        : error instanceof SyntaxError ? "input could not be decoded"
+        : error.code === "ERR_ASSERTION" ? "stack assertion failed"
+        : "stack verification could not complete");
+  return `check=${check} reason=${reason}`;
+}
+
 export function projectStack({ compose, containers, imageInspections, catalog, candidateImages, candidateSha, candidateTree, imageSource, activeServices: selectedServices, repositoryRoot = root, fullCatalog = false, devPreimages = null, devFreshHeld = false }) {
   assert.match(candidateSha, shaPattern);
   assert.match(candidateTree, shaPattern);
@@ -508,8 +534,11 @@ export function projectStack({ compose, containers, imageInspections, catalog, c
     assert.equal(image.Config?.Labels?.["org.opencontainers.image.revision"], imageSource?.commit ?? candidateSha, `${candidateId} has another source revision`);
     assert.equal(image.Config?.Labels?.["io.wasalx.source.tree"], imageSource?.tree ?? candidateTree, `${candidateId} has another source tree`);
     if (candidateId === "zammad") {
-      assert.equal(image.Config?.Labels?.["com.wasalx.zammad.package.sha256"], catalog.tenantProvisioning.package.sha256,
-        "zammad has another WasalX package digest");
+      const expectedPackageSha256 = imageSource ? imageSource.packageSha256 : catalog.tenantProvisioning.package.sha256;
+      if (!/^[0-9a-f]{64}$/u.test(expectedPackageSha256 ?? "") ||
+          image.Config?.Labels?.["com.wasalx.zammad.package.sha256"] !== expectedPackageSha256) {
+        throw new StackVerificationError("zammad-package-digest", "image package digest differs from the source catalog pin");
+      }
     }
     addImage(image, { reference, candidateId });
   }
@@ -768,12 +797,7 @@ export async function verifyStack({ repositoryRoot: verificationRoot = root } = 
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   verifyStack().catch((error) => {
-    // Parser and subprocess errors can contain private captured input.
-    const variable = ["WASALX_INSTALL_EXPECTED_HOSTNAME", "WASALX_DEV_REVIEW_ORIGIN_SUFFIX"].find((name) => error.message?.includes(name));
-    const reason = error instanceof FreshHoldStateError ? error.message
-      : [devWebhookPreflightOnly, devGuestOnly, devSimulatorSmokeOnly].find(message => error.message === message)
-        ?? (variable ? `check ${variable}` : "");
-    process.stderr.write(`exact stack verification failed${reason ? `: ${reason}` : ""}\n`);
+    process.stderr.write(`exact stack verification reason: ${stackVerificationDiagnostic(error)}\n`);
     process.exitCode = 1;
   });
 }

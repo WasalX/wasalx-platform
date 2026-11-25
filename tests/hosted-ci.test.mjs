@@ -333,6 +333,26 @@ test("nightly installer refuses an invalid runner with a command, status and rea
   assert.match(result.stderr, /command=bash scripts\/release\/installer-nightly\.sh exit=1 reason=requires a GitHub-hosted Actions runner/u);
 });
 
+test("nightly smoke surfaces the redacted verifier reason and keeps raw output private", async t => {
+  const directory = await mkdtemp(join(tmpdir(), "nightly-smoke-diagnostic-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const script = await read("scripts/release/installer-nightly.sh");
+  const phase = script.match(/^phase\(\) \{\n[\s\S]*?^\}/mu)?.[0];
+  assert.ok(phase, "nightly phase is missing");
+  const diagnostic = "exact stack verification reason: check=zammad-package-digest reason=image package digest differs from the source catalog pin";
+  const result = runWorkflowScript(`
+work=$PWD
+diagnostics=$PWD
+failure() { printf 'exit=%s reason=%s\\n' "$1" "$3" >&2; }
+timeout() { printf '%s\\n' 'private captured input' "$DIAGNOSTIC"; return 1; }
+${phase}
+phase fresh-smoke 3m node scripts/release/installer-stages.mjs smoke
+`, { DIAGNOSTIC: diagnostic }, directory);
+  assert.equal(result.status, 1);
+  assert.equal(result.stderr.trim(), `exit=1 reason=${diagnostic}`);
+  assert.equal((await readFile(join(directory, "installer.log"), "utf8")).trim(), diagnostic);
+});
+
 test("PR installer skips only when the publication migration tree differs", async t => {
   const { jobs } = parse(await read(".github/workflows/nightly-install.yml"));
   const steps = jobs["nightly-install"].steps;
@@ -682,17 +702,20 @@ test("CI gate requires each event's jobs and rejects unplanned skips, failures, 
     INTEGRATION_NEEDED: "true", INTEGRATION: "success", PORTAL_INTEGRATION: "success",
     INTEGRATION_COVERAGE: "success", INFRA_NEEDED: "true", INFRA: "success",
     DEV_INSTALL_NEEDED: "true", DEV_INSTALL: "success", STORYBOOK_NEEDED: "true", STORYBOOK: "success",
+    ZAMMAD_NEEDED: "true", ZAMMAD_COMPATIBILITY: "success",
     INSTALLER_PORTAL_NEEDED: "true", INSTALLER_PORTAL: "success",
   };
   const unselected = {
     ...pr, INTEGRATION_NEEDED: "false", INTEGRATION: "skipped", PORTAL_INTEGRATION: "skipped",
     INTEGRATION_COVERAGE: "skipped", INFRA_NEEDED: "false", INFRA: "skipped",
     DEV_INSTALL_NEEDED: "false", DEV_INSTALL: "skipped", STORYBOOK_NEEDED: "false", STORYBOOK: "skipped",
+    ZAMMAD_NEEDED: "false", ZAMMAD_COMPATIBILITY: "skipped",
     INSTALLER_PORTAL_NEEDED: "false", INSTALLER_PORTAL: "skipped",
   };
   const queue = {
     ...pr, EVENT: "merge_group", REVIEW: "skipped", IMAGES: "success",
     INTEGRATION_NEEDED: "", INFRA_NEEDED: "", DEV_INSTALL_NEEDED: "", DEV_INSTALL: "skipped", STORYBOOK_NEEDED: "",
+    ZAMMAD_NEEDED: "",
   };
   const push = { ...queue, EVENT: "push", CHANGES: "skipped", CHECKS: "skipped", FULL_UNIT: "success", IMAGES: "skipped",
     INSTALLER_PORTAL_NEEDED: "", INSTALLER_PORTAL: "skipped" };
@@ -706,6 +729,10 @@ test("CI gate requires each event's jobs and rejects unplanned skips, failures, 
     ["PR with Storybook skipped without selection evidence", unselected, { STORYBOOK_NEEDED: "" }, 1],
     ["PR without a recorded skip reason", unselected, { INTEGRATION_NEEDED: "" }, 1],
     ["PR with cancelled queue images", pr, { IMAGES: "cancelled" }, 1],
+    ["PR with failed Zammad compatibility", pr, { ZAMMAD_COMPATIBILITY: "failure" }, 1],
+    ["PR with cancelled Zammad compatibility", pr, { ZAMMAD_COMPATIBILITY: "cancelled" }, 1],
+    ["PR with missing Zammad selection", unselected, { ZAMMAD_NEEDED: "" }, 1],
+    ["PR with a selected Zammad job skipped", pr, { ZAMMAD_COMPATIBILITY: "skipped" }, 1],
     ["PR with a privacy finding", pr, { PRIVACY: "failure" }, 1],
     ["PR with a skipped privacy scan", pr, { PRIVACY: "skipped" }, 1],
     ["merge queue with a cancelled privacy scan", queue, { PRIVACY: "cancelled" }, 1],
@@ -718,12 +745,14 @@ test("CI gate requires each event's jobs and rejects unplanned skips, failures, 
     ["merge queue", queue, {}, 0],
     ["merge queue with Storybook skipped", queue, { STORYBOOK: "skipped" }, 1],
     ["merge queue with failed images", queue, { IMAGES: "failure" }, 1],
+    ["merge queue with Zammad compatibility skipped", queue, { ZAMMAD_COMPATIBILITY: "skipped" }, 1],
     ["merge queue missing the installer portal build", queue, { INSTALLER_PORTAL_NEEDED: "false", INSTALLER_PORTAL: "skipped" }, 1],
     ["main push", push, {}, 0],
     ["main push with skipped units", push, { FULL_UNIT: "skipped" }, 1],
     ["main push with failed units", push, { FULL_UNIT: "failure" }, 1],
     ["main push with cancelled units", push, { FULL_UNIT: "cancelled" }, 1],
     ["main push with failed integration", push, { INTEGRATION: "failure" }, 1],
+    ["main push with failed Zammad compatibility", push, { ZAMMAD_COMPATIBILITY: "failure" }, 1],
     ["main push with skipped infrastructure", push, { INFRA: "skipped" }, 1],
     ["main push with cancelled selection", push, { CHANGES: "cancelled" }, 1],
     ["manual dispatch", dispatch, {}, 0],
@@ -833,10 +862,15 @@ test("signing, promotion and nightly workflows use the same Cosign pin", async (
   assert.match(pin.version, /^v\d+\.\d+\.\d+$/u);
   assert.match(pin.linuxAmd64Sha256, /^[0-9a-f]{64}$/u);
 
-  const installJobs = { "branch-image": ["publish"], release: ["stg", "prod"], "nightly-install": ["nightly-install"] };
+  const installJobs = {
+    "branch-image": ["publish"],
+    release: ["stg", "prod"],
+    "nightly-install": ["nightly-install"],
+    "zammad-compatibility": [],
+  };
   for (const [workflow, expectedJobs] of Object.entries(installJobs)) {
     const { jobs } = parse(await read(`.github/workflows/${workflow}.yml`));
-    for (const [job, { steps }] of Object.entries(jobs)) {
+    for (const [job, { steps = [] }] of Object.entries(jobs)) {
       const installs = steps.filter(step => step.uses === cosignAction || step.uses?.startsWith("sigstore/cosign-installer@"));
       assert.deepEqual(installs.map(step => step.uses), expectedJobs.includes(job) ? [cosignAction] : [], `${workflow}/${job}`);
     }
@@ -899,6 +933,7 @@ test("PR image results are advisory while the merge queue requires the full imag
       EVENT: "merge_group", CHANGES: "success", PRIVACY: "success", WORKFLOW_LINT: "success", STORYBOOK: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: "skipped",
       IMAGES: imageResult, INTEGRATION: "success", PORTAL_INTEGRATION: "success",
       INTEGRATION_COVERAGE: "success", DEV_INSTALL: "skipped", INFRA: "success",
+      ZAMMAD_COMPATIBILITY: "success",
       INSTALLER_PORTAL_NEEDED: "true", INSTALLER_PORTAL: "success",
     });
     assert.equal(result.status, imageResult === "success" ? 0 : 1, `merge_group/${imageResult}: ${result.stderr}`);
@@ -910,6 +945,7 @@ test("PR image results are advisory while the merge queue requires the full imag
     PORTAL_INTEGRATION: "skipped", INTEGRATION_COVERAGE: "skipped", DEV_INSTALL_NEEDED: "false", DEV_INSTALL: "skipped",
     INSTALLER_PORTAL_NEEDED: "false", INSTALLER_PORTAL: "skipped",
     INFRA_NEEDED: "false", INFRA: "skipped", GITHUB_STEP_SUMMARY: summary,
+    ZAMMAD_COMPATIBILITY: "success",
   });
   assert.equal(result.status, 0, result.stderr);
   assert((await readFile(summary, "utf8")).includes(report.name));
@@ -933,6 +969,7 @@ test("optional PR lanes run on diff errors and gate their applicable checks", as
   assert.equal(changes.outputs.infra, "${{ steps.infra.outputs.needed }}");
   assert.equal(changes.outputs["dev-install"], "${{ steps.dev-install.outputs.needed }}");
   assert.equal(changes.outputs.integration, "${{ steps.integration.outputs.needed }}");
+  assert.equal(changes.outputs.zammad, "${{ steps.zammad.outputs.needed }}");
   const paths = [
     "infra/helm/", "infra/terraform/", ":(glob)scripts/validate-*", "scripts/release/fetch-verified-asset.sh",
     "compose.full.yaml", "tests/fixtures/production-backup-alerts.yaml", "tests/secret-adapter-readiness.test.rb",
@@ -949,6 +986,17 @@ test("optional PR lanes run on diff errors and gate their applicable checks", as
     ["integration", [".github/workflows/ci.yml", "scripts/test-postgres-integration.mjs",
       "scripts/postgres-scenario-registry.mjs", ":(glob)tests/*postgres*.mjs",
       "tests/rendered-html.test.mjs", "tests/app-first-load-js-budget.json"].join(" ")],
+    ["zammad", [
+      "compose.full.yaml", ".dockerignore", "infra/docker/Dockerfile.zammad", "infra/docker/full/zammad/",
+      "zammad-addon.json", "zammad-package/", "build/zammad/", "release/installer-images.json",
+      ":(glob)scripts/*zammad*", ":(glob)scripts/contracts/*mailbox*", "scripts/release/operator-input.mjs",
+      "tests/zammad-image-browser-compat.test.mjs", "tests/fixtures/native-compat-cleanup.mjs", ":(glob)tests/**/*.rb",
+      "services/control-api/", "services/connector-worker/", "packages/", "lib/domain.ts", "lib/literal-matcher.ts",
+      "scripts/build-services.mjs", "tsconfig.json", ":(glob)services/*/tsconfig*.json", ".gitattributes",
+      "tests/outbound-media.test.mjs", "tests/helpers/operator-input-fixtures.mjs",
+      ":(glob)**/package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", ".npmrc", "patches/",
+      ".github/actions/ci-pnpm/", ".github/workflows/ci.yml", ".github/workflows/zammad-compatibility.yml",
+    ].join(" ")],
   ]) {
     const detector = changes.steps.find(step => step.id === id);
     assert.equal(detector.if, "github.event_name == 'pull_request'");
@@ -983,6 +1031,7 @@ ${detector.run}`, { GITHUB_OUTPUT: outputFile.replaceAll("\\", "/"), DIFF_PATHS:
       DEV_INSTALL_NEEDED: "false", DEV_INSTALL: "skipped",
       INSTALLER_PORTAL_NEEDED: pr ? "false" : "true", INSTALLER_PORTAL: pr ? "skipped" : "success",
       INFRA_NEEDED: needed, INFRA: jobResult, GITHUB_STEP_SUMMARY: summary,
+      ZAMMAD_COMPATIBILITY: "success",
     });
     assert.equal(result.status, status, `${event}/${needed}/${jobResult}: ${result.error?.message ?? result.stderr}`);
   }
@@ -995,6 +1044,7 @@ ${detector.run}`, { GITHUB_OUTPUT: outputFile.replaceAll("\\", "/"), DIFF_PATHS:
       IMAGES: "skipped", INTEGRATION_NEEDED: "false",
       INTEGRATION: "skipped", PORTAL_INTEGRATION: "skipped", INTEGRATION_COVERAGE: "skipped",
       DEV_INSTALL_NEEDED: needed, DEV_INSTALL: jobResult, INFRA_NEEDED: "false", INFRA: "skipped",
+      ZAMMAD_COMPATIBILITY: "success",
       INSTALLER_PORTAL_NEEDED: "false", INSTALLER_PORTAL: "skipped",
       GITHUB_STEP_SUMMARY: summary,
     });
@@ -1016,9 +1066,63 @@ ${detector.run}`, { GITHUB_OUTPUT: outputFile.replaceAll("\\", "/"), DIFF_PATHS:
       INSTALLER_PORTAL_NEEDED: pr ? "false" : "true", INSTALLER_PORTAL: pr ? "skipped" : "success",
       INFRA_NEEDED: "true", INFRA: "success", INTEGRATION_NEEDED: needed, GITHUB_STEP_SUMMARY: summary,
       INTEGRATION: postgres, PORTAL_INTEGRATION: portal, INTEGRATION_COVERAGE: coverage,
+      ZAMMAD_COMPATIBILITY: "success",
     });
     assert.equal(result.status, status, [event, needed, postgres, portal, coverage].join("/"));
   }
+});
+
+test("Zammad compatibility selects changes to outbound dependencies and service build inputs", async t => {
+  const { jobs } = parse(await read(".github/workflows/ci.yml"));
+  const { run } = jobs.changes.steps.find(step => step.id === "zammad");
+  const directory = await mkdtemp(join(tmpdir(), "zammad-compatibility-selection-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const git = (...args) => execFileSync("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", ...args], {
+    cwd: directory, encoding: "utf8", windowsHide: true,
+  });
+  git("init", "--quiet");
+  git("commit", "--quiet", "--allow-empty", "-m", "Base");
+  const output = join(directory, "selection");
+  for (const [path, expected] of [
+    ["services/control-api/src/ticket-reply-target.ts", true],
+    ["services/connector-worker/src/media-runtime.ts", true],
+    ["packages/core/src/outbound-text.ts", true],
+    ["lib/domain.ts", true],
+    ["lib/literal-matcher.ts", true],
+    ["scripts/build-services.mjs", true],
+    ["tsconfig.json", true],
+    ["services/invitation-mailer/tsconfig.json", true],
+    ["docs/release.md", false],
+  ]) {
+    await mkdir(join(directory, posix.dirname(path)), { recursive: true });
+    await writeFile(join(directory, path), "fixture\n");
+    git("add", "--", path);
+    git("commit", "--quiet", "-m", "Change one input");
+    await writeFile(output, "");
+    const result = runWorkflowScript(run, { GITHUB_OUTPUT: output.replaceAll("\\", "/") }, directory);
+    assert.equal(result.status, 0, result.error?.message ?? result.stderr);
+    assert.equal((await readFile(output, "utf8")).trim(), `needed=${expected}`, path);
+  }
+});
+
+test("Zammad compatibility gates CI and reuses the same job on the nightly schedule", async () => {
+  const workflow = ".github/workflows/zammad-compatibility.yml";
+  const { jobs } = parse(await read(".github/workflows/ci.yml"));
+  const nightly = parse(await read(".github/workflows/nightly-install.yml"));
+  const compatibility = parse(await read(workflow));
+  const job = jobs["zammad-compatibility"];
+  assert.equal(job.needs, "changes");
+  assert.equal(job.if, "${{ !cancelled() && (github.event_name != 'pull_request' || needs.changes.outputs.zammad != 'false') }}");
+  assert.equal(job.uses, `./${workflow}`);
+  assert(jobs["ci-gate"].needs.includes("zammad-compatibility"));
+  assert.equal(jobs["ci-gate"].steps[0].env.ZAMMAD_COMPATIBILITY, "${{ needs.zammad-compatibility.result }}");
+  assert.equal(jobs["ci-gate"].steps[0].env.ZAMMAD_NEEDED, "${{ needs.changes.outputs.zammad }}");
+  assert(nightly.on.schedule.length > 0);
+  assert.equal(nightly.jobs["zammad-compatibility"].uses, job.uses);
+  assert.match(nightly.jobs["zammad-compatibility"].if, /github\.event_name == 'schedule'/u);
+  assert(Object.hasOwn(compatibility.on, "workflow_call"));
+  assert.deepEqual(compatibility.permissions, { contents: "read" });
+  assert.equal(compatibility.jobs.compatibility["runs-on"], "ubuntu-24.04");
 });
 
 test("PostgreSQL coverage requires an exact report from every shard", async t => {
