@@ -257,7 +257,7 @@ volumes: { zammad-storage: {}, zammad-backup: {} }
 `;
 }
 
-test("package upgrade, route, and group workspace operate in the immutable Zammad image", { timeout: 1_800_000 }, async () => {
+test("package upgrade, route, and group workspace operate in the immutable Zammad image", { timeout: 1_800_000 }, async (t) => {
   const nativeCloseScenario = await readFile(join(process.cwd(), "tests", "native-close-rails-scenario.rb"), "utf8");
   const project = `wasalx-zammad-${randomUUID()}`;
   const admission = assertNativeCompatibilityProjectEmpty({ project,
@@ -1768,14 +1768,86 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
       await mobilePage.getByRole("dialog", { name: "Dialog window with selections", exact: true }).getByRole("option", { name: "WhatsApp", exact: true }).click();
       assert.ok((await reply.getByRole("combobox", { name: "Channel", exact: true }).innerText()).includes("WhatsApp"));
       const mobileDraft = "Mobile draft \u2014 do not send.";
-      const [preview] = await Promise.all([
-        mobilePage.waitForResponse(response => response.request().method() === "POST"
-          && new URL(response.url()).pathname === `/api/v1/wasalx/tickets/${state.ticketId}/reply-preview`
-          && response.request().postDataJSON()?.body?.trim() === mobileDraft),
-        reply.locator('[contenteditable="true"]').pressSequentially(mobileDraft, { delay: 20 }),
-      ]);
-      assert.equal(preview.status(), 200, "The pinned add-on must preview the unsent draft");
-      assert.equal((await preview.json()).text.trim(), mobileDraft);
+      const editorTrace = await mobilePage.evaluateHandle(draft => {
+        const listeners = new AbortController();
+        const started = performance.now();
+        let inputEvents = 0;
+        let fullDraftAtMs = null;
+        let editor;
+        document.addEventListener('input', event => {
+          const editable = event.target.closest?.('[contenteditable="true"]');
+          if (!editable?.closest('dialog, [role="dialog"]')) return;
+          editor = editable;
+          inputEvents = Math.min(inputEvents + 1, 100);
+          if (fullDraftAtMs === null && editor.textContent.trim() === draft) {
+            fullDraftAtMs = Math.round(performance.now() - started);
+          }
+        }, { capture: true, passive: true, signal: listeners.signal });
+        return () => {
+          listeners.abort();
+          return { inputEvents, fullDraftAtMs,
+            fullDraftAtStop: Boolean(editor?.isConnected && editor.textContent.trim() === draft) };
+        };
+      }, mobileDraft).catch(() => null);
+
+      const started = performance.now();
+      const elapsed = () => Math.round(performance.now() - started);
+      const previewPath = `/api/v1/wasalx/tickets/${state.ticketId}/reply-preview`;
+      const origin = new URL(zammadOrigin).origin;
+      const requests = new Map();
+      let omittedRequests = 0;
+      let waiterReturned = false;
+      const recordRequest = request => {
+        const { origin: requestOrigin, pathname } = new URL(request.url());
+        const previewRoute = /\/reply-preview\/?$/u.test(pathname);
+        if (!previewRoute && (requestOrigin !== origin || !['fetch', 'xhr'].includes(request.resourceType()))) return;
+        let draftKind = 'unreadable';
+        try {
+          const body = request.postDataJSON()?.body;
+          const trimmed = typeof body === 'string' ? body.trim() : null;
+          draftKind = trimmed === null ? 'missing' : trimmed === '' ? 'empty' : 'other';
+          if (trimmed === mobileDraft) draftKind = 'full';
+          else if (trimmed && mobileDraft.startsWith(trimmed)) draftKind = 'partial';
+        } catch { /* Record only the unreadable category. */ }
+        if (!previewRoute && draftKind !== 'full' && draftKind !== 'partial') return;
+        if (requests.size >= (draftKind === 'full' ? 24 : 16)) { omittedRequests += 1; return; }
+        requests.set(request, { startedAtMs: elapsed(), pathMatched: pathname === previewPath,
+          methodMatched: request.method() === 'POST', draftKind, outcome: 'pending' });
+      };
+      const recordResponse = response => {
+        const record = requests.get(response.request());
+        if (record) Object.assign(record, { responseAtMs: elapsed(), httpStatus: response.status() });
+      };
+      const finishRequest = outcome => request => {
+        const record = requests.get(request);
+        if (record) Object.assign(record, { endedAtMs: elapsed(), outcome: outcome(request) });
+      };
+      const recordFinished = finishRequest(() => 'finished');
+      const recordFailed = finishRequest(request => request.failure()?.errorText === 'net::ERR_ABORTED' ? 'aborted' : 'failed');
+      mobilePage.on('request', recordRequest);
+      mobilePage.on('response', recordResponse);
+      mobilePage.on('requestfinished', recordFinished);
+      mobilePage.on('requestfailed', recordFailed);
+      try {
+        const [preview] = await Promise.all([
+          mobilePage.waitForResponse(response => response.request().method() === "POST"
+            && new URL(response.url()).pathname === `/api/v1/wasalx/tickets/${state.ticketId}/reply-preview`
+            && response.request().postDataJSON()?.body?.trim() === mobileDraft),
+          reply.locator('[contenteditable="true"]').pressSequentially(mobileDraft, { delay: 20 }),
+        ]);
+        waiterReturned = true;
+        assert.equal(preview.status(), 200, "The pinned add-on must preview the unsent draft");
+        assert.equal((await preview.json()).text.trim(), mobileDraft);
+      } finally {
+        mobilePage.off('request', recordRequest);
+        mobilePage.off('response', recordResponse);
+        mobilePage.off('requestfinished', recordFinished);
+        mobilePage.off('requestfailed', recordFailed);
+        const editor = await editorTrace?.evaluate(stop => stop()).catch(() => null);
+        await editorTrace?.dispose().catch(() => {});
+        t.diagnostic(`native-mobile-reply-preview ${JSON.stringify({ editor: editor ?? null, waiterReturned,
+          omittedRequests, requests: [...requests.values()] })}`);
+      }
       // Native cancellation prompts only after FormKit recognizes an article change.
       await reply.getByRole("button", { name: "Done", exact: true }).click({ trial: true });
       const chooserPromise = mobilePage.waitForEvent("filechooser");
