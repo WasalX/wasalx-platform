@@ -1,0 +1,88 @@
+name: main image aliases
+
+on:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  aliases:
+    name: Advance main image aliases
+    if: >-
+      github.repository == 'WasalX/wasalx-platform' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      github.event.workflow_run.path == '.github/workflows/ci.yml' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    # Keep the registry check and update together, including across the rollout.
+    concurrency:
+      group: release-main
+      queue: max
+    permissions:
+      actions: read
+      contents: read
+      packages: write
+    steps:
+      - name: Require GitHub-hosted execution
+        env:
+          HOSTED_KIND: ${{ runner.environment }}
+        run: test "$HOSTED_KIND" = github-hosted
+      - name: Record source publication
+        env:
+          SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+          SOURCE_RUN: ${{ github.event.workflow_run.id }}
+          SOURCE_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+        run: |
+          printf 'Alias trigger for %s, CI run %s attempt %s\n' \
+            "$SOURCE_SHA" "$SOURCE_RUN" "$SOURCE_ATTEMPT" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Resolve the immutable publication artifact ID
+        id: artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN: ${{ github.event.workflow_run.id }}
+        run: |
+          artifacts=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN/artifacts?name=images-manifest")
+          artifact_id=$(jq -r 'select(.total_count == 1 and (.artifacts | length) == 1) | .artifacts[0] |
+            select(.name == "images-manifest" and .expired == false) | .id' <<< "$artifacts")
+          if ! [[ "$artifact_id" =~ ^[1-9][0-9]*$ ]]; then
+            echo '::error::Expected one available immutable image manifest artifact for this CI run.'
+            exit 1
+          fi
+          echo "id=$artifact_id" >> "$GITHUB_OUTPUT"
+          printf 'Candidate manifest artifact `%s`\n' "$artifact_id" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          artifact-ids: ${{ steps.artifact.outputs.id }}
+          path: ${{ runner.temp }}/publication
+          github-token: ${{ github.token }}
+          run-id: ${{ github.event.workflow_run.id }}
+      - name: Validate the publishing attempt and full source receipt
+        id: publication
+        run: python3 scripts/release/advance-main-image-aliases.py --validate-only "$RUNNER_TEMP/publication/images-manifest.json"
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        if: steps.publication.outputs.ready == 'true'
+        with:
+          version: v0.30.1
+          driver: docker
+          cache-binary: false
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        if: steps.publication.outputs.ready == 'true'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Move only fast-forward aliases
+        if: steps.publication.outputs.ready == 'true'
+        run: python3 scripts/release/advance-main-image-aliases.py "$RUNNER_TEMP/publication/images-manifest.json"

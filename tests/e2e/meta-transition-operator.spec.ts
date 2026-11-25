@@ -13,7 +13,8 @@ const text = (key: string) => t(`platform.metaTransition.${key}`);
 const state = process.env.WASALX_E2E_PLATFORM_STORAGE_STATE, url = process.env.WASALX_E2E_PLATFORM_URL;
 const tenant = process.env.WASALX_E2E_PLATFORM_TENANT_ID ?? "", tenantName = process.env.WASALX_E2E_PLATFORM_TENANT_NAME ?? "";
 const ready = Boolean(state && url && tenantName && /^[0-9a-f-]{36}$/u.test(tenant) && process.env.WASALX_E2E_REUSE_SERVER === "1");
-test.use({ storageState: state ?? { cookies: [], origins: [] } });
+const browserLocale = locale === "ar" ? "en-US" : "ar-SA";
+test.use({ locale: browserLocale, storageState: state ?? { cookies: [], origins: [] } });
 const id = (n: number) => `64000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const plan = id(2), other = id(8), root = () => `/api/platform-console/operations/tenants/${tenant}/meta/account-transitions`;
 function review(): MetaTransitionOperatorReview { return { id: plan, tenantId: tenant, name: "Transition account", revision: 3, requestedMode: "CUSTOMER", sourceCurrency: "USD", targetCurrency: "SAR", phase: "RESERVED", evidenceMode: "SIMULATED", reviewSha256: "a".repeat(64), connectionNames: ["اتصال المبيعات (Sales)"], connectionCount: 1, providerStatus: null, checkpoints: [], proof: { sourceScope: "CURRENT", targetAccess: "NONE", payment: "VERIFIED", renewedObserver: "ABSENT", prerequisiteApproval: "MISSING", targetReview: "MISSING" }, actions: { PREREQUISITES: true, TARGET: false, COMPLETION: false }, reasons: [], arrangements: [], originalGrant: null, pendingCommand: null }; }
@@ -27,7 +28,7 @@ async function setup(page: Page) {
   const gate: { wait: Promise<void> | null; entered: boolean } = { wait: null, entered: false };
   const listGate: { wait: Promise<void> | null; entered: boolean; omitSelected: boolean } = { wait: null, entered: false, omitSelected: false };
   const h = { current: review(), gate, listGate, writes, reads, errors, expected, deny: false, write: async (route: Route, value: Write) => { h.current.pendingCommand = terminal(value); h.current.actions[value.action] = false; h.current.revision++; h.current.reviewSha256 = "d".repeat(64); await route.fulfill({ json: h.current.pendingCommand }); } };
-  await page.route(`**${root()}**`, async route => {
+  await page.route(target => target.pathname === root() || target.pathname.startsWith(root() + "/"), async route => {
     const request = route.request(), target = new URL(request.url());
     expect(request.headers()["x-wasalx-platform-recovery-scope"]).toMatch(/^[a-f0-9]{64}$/u);
     if (request.method() === "GET") {
@@ -46,15 +47,29 @@ async function setup(page: Page) {
     const value = { path: target.pathname, key: request.headers()["idempotency-key"] ?? "", scope: request.headers()["x-wasalx-platform-recovery-scope"] ?? "", action, body: request.postDataJSON() as MetaTransitionOperatorRequest };
     expect(value.key).toMatch(/^[0-9a-f-]{36}$/u); writes.push(structuredClone(value)); await h.write(route, value);
   });
-  await page.context().addCookies([{ name: "wasalx_locale", value: locale, url: new URL(url!).origin }]);
+  const origin = new URL(url!).origin;
+  const localeCookies = [{ name: "wasalx_locale", value: locale, url: origin }];
+  if (origin.startsWith("https:")) localeCookies.push({ name: "__Host-wasalx_locale", value: locale, url: origin });
+  await page.context().addCookies(localeCookies);
   const dialog = () => page.getByRole("dialog").filter({ has: page.getByRole("heading", { name: text("title"), exact: true }) });
-  const open = async (navigate = true) => { if (navigate) await page.goto(url!); const row = page.getByRole("row").filter({ has: page.getByText(tenantName, { exact: true }) }); await expect(row).toHaveCount(1); await row.getByRole("button", { name: text("open"), exact: true }).click(); await dialog().getByLabel(text("plan"), { exact: true }).selectOption(h.current.id); await expect(dialog().getByRole("heading", { name: h.current.name, exact: true })).toBeVisible(); };
+  const open = async (navigate = true) => {
+    if (navigate) await test.step("Navigate to platform tenants", () => page.goto(url!));
+    const row = page.getByRole("row").filter({ has: page.getByText(tenantName, { exact: true }) });
+    await test.step("Find tenant row", () => expect(row).toHaveCount(1));
+    await test.step("Open transition dialog", async () => {
+      await row.getByRole("button", { name: text("open"), exact: true }).click();
+      await expect(dialog()).toBeVisible();
+    });
+    await test.step("Select transition plan", () => dialog().getByRole("combobox", { name: text("plan"), exact: true }).selectOption(h.current.id));
+    await test.step("Read transition review", () => expect(dialog().getByRole("heading", { name: h.current.name, exact: true })).toBeVisible());
+  };
   await open(); return { ...h, h, dialog, open };
 }
 async function prepare(page: Page, action: MetaTransitionOperatorAction) {
-  const dialog = page.getByRole("dialog"); await dialog.getByLabel(text("reviewKind"), { exact: true }).selectOption(action);
+  const dialog = page.getByRole("dialog");
+  await test.step(`Select ${action} review`, () => dialog.getByRole("combobox", { name: text("reviewKind"), exact: true }).selectOption(action));
   await dialog.getByLabel(text("evidence"), { exact: true }).fill("b".repeat(64));
-  if (action === "PREREQUISITES") { const payment = dialog.getByLabel(text("sourcePayment"), { exact: true }); if (await payment.isEnabled()) await payment.selectOption("CARD"); }
+  if (action === "PREREQUISITES") { const payment = dialog.getByRole("combobox", { name: text("sourcePayment"), exact: true }); if (await payment.isEnabled()) await payment.selectOption("CARD"); }
   if (action === "TARGET") { await dialog.getByLabel(text("templates"), { exact: true }).fill("c".repeat(64)); await dialog.getByLabel(text("flows"), { exact: true }).fill("e".repeat(64)); }
   const checked = dialog.getByLabel(text("confirmEvidence"), { exact: true }); await checked.focus(); await page.keyboard.press("Space");
 }
@@ -64,28 +79,74 @@ async function screenshot(page: Page, info: TestInfo, label: string) { expect(aw
 test("operator records three explicit local reviews and independently selected managed target terms", async ({ page }, info) => {
   admitted(); const x = await setup(page), h = x.h;
   await prepare(page, "PREREQUISITES"); expect(h.writes).toHaveLength(0); await record(page); await expect(x.dialog().getByText(text("result.APPLIED"), { exact: true })).toBeVisible();
-  await expect(x.dialog().getByLabel(text("reviewKind"), { exact: true }).locator('option[value="PREREQUISITES"]')).toHaveCount(0);
+  await expect(x.dialog().getByRole("combobox", { name: text("reviewKind"), exact: true }).locator('option[value="PREREQUISITES"]')).toHaveCount(0);
   expect(h.writes[0]!.body).toEqual({ expectedRevision: 3, expectedReviewSha256: "a".repeat(64), evidenceSha256: "b".repeat(64), confirmed: true, sourcePayment: "CARD" });
   for (const action of ["TARGET", "COMPLETION"] as const) {
     h.current.actions[action] = true; h.current.proof.targetAccess = "CLONE"; h.current.proof.renewedObserver = "CURRENT"; h.current.proof.prerequisiteApproval = "CURRENT"; if (action === "COMPLETION") h.current.proof.targetReview = "CURRENT";
-    await x.dialog().getByRole("button", { name: text("refresh"), exact: true }).click(); await prepare(page, action); await record(page); await expect.poll(() => h.writes.length).toBe(action === "TARGET" ? 2 : 3); await expect(x.dialog().getByLabel(text("reviewKind"), { exact: true }).locator(`option[value="${action}"]`)).toHaveCount(0);
+    await x.dialog().getByRole("button", { name: text("refresh"), exact: true }).click(); await prepare(page, action); await record(page); await expect.poll(() => h.writes.length).toBe(action === "TARGET" ? 2 : 3); await expect(x.dialog().getByRole("combobox", { name: text("reviewKind"), exact: true }).locator(`option[value="${action}"]`)).toHaveCount(0);
   }
   expect(h.writes[1]!.body.templateEvidenceSha256).toBe("c".repeat(64)); expect(h.writes[1]!.body.flowEvidenceSha256).toBe("e".repeat(64)); expect(Object.keys(h.writes[2]!.body).sort()).toEqual(["confirmed", "evidenceSha256", "expectedReviewSha256", "expectedRevision"]);
   // A distinct server-supplied managed plan is seeded for the separate grant form.
   await x.dialog().getByRole("button", { name: t("platform.actions.closeDialog"), exact: true }).click();
   h.current = { ...review(), id: id(30), name: "Managed transition", revision: 10, requestedMode: "WASALX_MANAGED", arrangements: [{ id: id(20), label: "Approved arrangement", expiresAt: "2099-01-01T00:00:00Z" }] };
   await x.open(false); await prepare(page, "PREREQUISITES");
-  await x.dialog().getByLabel(text("arrangement"), { exact: true }).selectOption(id(20)); await x.dialog().getByLabel(text("receiver"), { exact: true }).fill("9"); await x.dialog().getByLabel(text("termsVersion"), { exact: true }).fill("2026.10"); await x.dialog().getByLabel(text("terms"), { exact: true }).fill("Approved target terms / الشروط المعتمدة");
-  await x.dialog().getByRole("button", { name: text("review"), exact: true }).click(); await expect(x.dialog().getByRole("button", { name: text("record"), exact: true })).toHaveCount(0); expect(h.writes).toHaveLength(3);
-  await x.dialog().getByLabel(text("acceptTerms"), { exact: true }).check(); await screenshot(page, info, "managed-form");
+  await x.dialog().getByRole("combobox", { name: text("arrangement"), exact: true }).selectOption(id(20)); await x.dialog().getByLabel(text("receiver"), { exact: true }).fill("9"); await x.dialog().getByLabel(text("termsVersion"), { exact: true }).fill("2026.10"); await x.dialog().getByLabel(text("terms"), { exact: true }).fill("Approved target terms / الشروط المعتمدة");
+  await expect(page.locator("html")).toHaveAttribute("lang", locale);
+  expect(await page.evaluate(() => navigator.language)).toBe(browserLocale);
+
+  const dialog = x.dialog(), reviewApproval = dialog.getByRole("button", { name: text("review"), exact: true });
+  const recordApproval = dialog.getByRole("button", { name: text("record"), exact: true });
+  const termsConfirmation = dialog.getByRole("checkbox", { name: text("acceptTerms"), exact: true });
+  const evidenceConfirmation = dialog.getByRole("checkbox", { name: text("confirmEvidence"), exact: true });
+  const evidence = dialog.getByLabel(text("evidence"), { exact: true });
+  const alert = dialog.getByRole("alert").filter({ hasText: /\S/u });
+  await test.step("Validate required evidence field", async () => {
+    await evidenceConfirmation.uncheck();
+    await evidence.fill("");
+    await reviewApproval.press("Enter");
+    await expect(evidence).toBeFocused();
+    await expect(alert).toHaveCount(0);
+    await expect(recordApproval).toHaveCount(0);
+    expect(h.writes).toHaveLength(3);
+    await evidence.fill("b".repeat(64));
+  });
+
+  for (const [checkbox, message] of [[termsConfirmation, "acceptTermsRequired"], [evidenceConfirmation, "confirmEvidenceRequired"]] as const) {
+    await test.step(`Validate and recover ${message}`, async () => {
+      await reviewApproval.press("Enter");
+      await expect(checkbox).toBeFocused();
+      await expect(checkbox).toHaveAttribute("aria-invalid", "true");
+      await expect(checkbox).toHaveAccessibleDescription(text(message));
+      await expect(alert).toHaveText(text(message));
+      await expect(alert).toBeInViewport();
+      await expect(recordApproval).toHaveCount(0);
+      expect(h.writes).toHaveLength(3);
+      await screenshot(page, info, message);
+
+      await page.keyboard.press("Space");
+      await expect(checkbox).toBeChecked();
+      await expect(checkbox).toHaveAccessibleDescription("");
+      await expect(alert).toHaveCount(0);
+    });
+  }
+  await screenshot(page, info, "managed-form");
   for (const checkbox of await x.dialog().getByRole("checkbox").all()) { const box = await checkbox.boundingBox(); expect(box).not.toBeNull(); expect(box!.width).toBeLessThan(30); expect(box!.height).toBeLessThan(30); }
-  expect((await new AxeBuilder({ page }).include('[role="dialog"]').analyze()).violations).toEqual([]); await record(page); await expect.poll(() => h.writes.length).toBe(4); await expect(x.dialog().getByLabel(text("reviewKind"), { exact: true }).locator('option[value="PREREQUISITES"]')).toHaveCount(0);
-  expect(h.writes[3]!.body.managed).toEqual({ arrangementVersionId: id(20), targetReceivingBusinessId: "9", targetTermsDocumentText: "Approved target terms / الشروط المعتمدة", targetTermsVersion: "2026.10" });
-  h.current.originalGrant = { sourcePayment: "CARD", managed: h.writes[3]!.body.managed! }; h.current.actions.PREREQUISITES = true; h.current.revision++;
-  await x.dialog().getByRole("button", { name: text("refresh"), exact: true }).click(); await prepare(page, "PREREQUISITES"); await expect(x.dialog().getByLabel(text("sourcePayment"), { exact: true })).toBeDisabled(); await expect(x.dialog().getByLabel(text("arrangement"), { exact: true })).toBeDisabled(); await expect(x.dialog().getByLabel(text("receiver"), { exact: true })).toHaveAttribute("readonly", "");
-  const savedTerms = x.dialog().getByRole("textbox", { name: text("terms"), exact: true });
-  await expect(savedTerms).toHaveAttribute("readonly", "");
-  await expect(savedTerms).toHaveValue("Approved target terms / الشروط المعتمدة");
+  await test.step("Audit open transition dialog", async () => {
+    expect((await new AxeBuilder({ page }).include("dialog[open]").analyze()).violations).toEqual([]);
+  });
+  await test.step("Record managed approval", async () => {
+    await record(page);
+    await expect.poll(() => h.writes.length).toBe(4);
+    await expect(x.dialog().getByRole("combobox", { name: text("reviewKind"), exact: true }).locator('option[value="PREREQUISITES"]')).toHaveCount(0);
+    expect(h.writes[3]!.body.managed).toEqual({ arrangementVersionId: id(20), targetReceivingBusinessId: "9", targetTermsDocumentText: "Approved target terms / الشروط المعتمدة", targetTermsVersion: "2026.10" });
+  });
+  await test.step("Read back saved approval terms", async () => {
+    h.current.originalGrant = { sourcePayment: "CARD", managed: h.writes[3]!.body.managed! }; h.current.actions.PREREQUISITES = true; h.current.revision++;
+    await x.dialog().getByRole("button", { name: text("refresh"), exact: true }).click(); await prepare(page, "PREREQUISITES"); await expect(x.dialog().getByRole("combobox", { name: text("sourcePayment"), exact: true })).toBeDisabled(); await expect(x.dialog().getByRole("combobox", { name: text("arrangement"), exact: true })).toBeDisabled(); await expect(x.dialog().getByLabel(text("receiver"), { exact: true })).toHaveAttribute("readonly", "");
+    const savedTerms = x.dialog().getByRole("textbox", { name: text("terms"), exact: true });
+    await expect(savedTerms).toHaveAttribute("readonly", "");
+    await expect(savedTerms).toHaveValue("Approved target terms / الشروط المعتمدة");
+  });
   expect(new Set(h.writes.map(write => write.key)).size).toBe(4); expect(h.expected).toEqual([]); expect(h.errors).toEqual([]);
 });
 

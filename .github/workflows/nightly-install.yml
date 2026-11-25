@@ -98,16 +98,12 @@ jobs:
             .github/workflows/nightly-install.yml; then
             echo 'pull=true' >> "$GITHUB_OUTPUT"
           fi
-      - name: Resolve and download a complete main publication manifest
+      - name: Resolve published images for qualification or PR fixtures
         id: publication
         if: steps.changes.outputs.needed != 'false'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          base=$GITHUB_SHA
-          if [[ "$GITHUB_EVENT_NAME" == pull_request ]]; then
-            base=$(git rev-parse HEAD^1)
-          fi
           work="$RUNNER_TEMP/wasalx-nightly"
           install -d -m 0700 "$work/diagnostics"
           source scripts/release/image-manifest.sh
@@ -115,8 +111,11 @@ jobs:
             commit=$(git rev-parse HEAD)
             require_tag_commit "$GITHUB_REF" "$commit"
             download_main_image_manifest "$commit" "$work"
+          elif [[ "$GITHUB_EVENT_NAME" == pull_request ]]; then
+            base=$(git rev-parse HEAD^1)
+            commit=$(download_nightly_image_manifest "$base" "$work" pr-fixture)
           else
-            commit=$(download_nightly_image_manifest "$base" "$work")
+            commit=$(download_nightly_image_manifest "$GITHUB_SHA" "$work")
           fi
           echo "commit=$commit" >> "$GITHUB_OUTPUT"
       - name: Check whether the publication represents the PR migrations

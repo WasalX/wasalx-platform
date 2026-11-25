@@ -35,7 +35,7 @@ async function setup(page:Page){
  const rows=Array.from({length:101},(_,i)=>row(i)),tariffs:Tariff[]=[],writes:Write[]=[];
  let onWrite:(route:Route,write:Write)=>Promise<void>=async route=>{await route.fulfill({json:{ok:true}});};
  await page.route(`**/api/platform-console/metering/tenants/${tenant}`,route=>route.fulfill({json:{tenant:{id:tenant,name:tenantName},from,to,usage:[],quotas:[]}}));
- await page.route(`**${root()}**`,async route=>{
+ await page.route(url=>url.pathname===root()||url.pathname.startsWith(root()+"/"),async route=>{
   const url=new URL(route.request().url());
   if(route.request().method()!=='GET'){
    const write={path:url.pathname,key:route.request().headers()['idempotency-key']??'',body:route.request().postDataJSON() as Record<string,unknown>};
@@ -52,7 +52,7 @@ async function setup(page:Page){
  const tenantRow=page.getByRole('row').filter({has:page.getByText(tenantName,{exact:true})});await expect(tenantRow).toHaveCount(1);
  await tenantRow.getByRole('button',{name:t('platform.navigation.usage'),exact:true}).click();
  const dialog=page.getByRole('dialog').filter({has:page.getByRole('heading',{name:tenantName,exact:true})});await expect(dialog).toBeVisible();
- await dialog.getByLabel(t('cost.account'),{exact:true}).selectOption(account);
+ await dialog.getByRole('combobox',{name:t('cost.account'),exact:true}).selectOption(account);
  await dialog.getByLabel(t('cost.from'),{exact:true}).fill(from.slice(0,16));await dialog.getByLabel(t('cost.to'),{exact:true}).fill(to.slice(0,16));
  const management=dialog.getByRole('region',{name:t('cost.manage.title'),exact:true});await expect(management).toBeVisible();
  const statement=dialog.getByRole('region',{name:t('cost.statement.manage'),exact:true});
@@ -64,6 +64,8 @@ async function keyboardClick(page:Page,locator:Locator){await locator.focus();aw
 test('operator cost drafts, accepted activation and every bounded reassessment page remain reachable',async({page},info)=>{
  test.skip(!ready,'Requires root-supplied authenticated platform session and reused control-plane server');
  const h=await setup(page);const reassess=h.management.getByRole('group',{name:t('cost.manage.reassess'),exact:true});
+ await expect(h.dialog.getByRole('navigation',{name:t('cost.pages'),exact:true})).toHaveCount(1);
+ await expect(reassess.getByRole('navigation',{name:t('cost.manage.reassessPages'),exact:true})).toBeVisible();
  h.setWrite(async(route,write)=>{
   if(write.path===`${root()}/tariffs`){expect(write.body).toEqual({definition:tariff(),supersedesId:null});h.tariffs.push({id:tariffId,state:'DRAFT',definition:tariff(),definition_sha256:'2'.repeat(64),supersedes_id:null,created_at:from,accepted_policies:[{id:policyA,createdAt:from},{id:policyB,createdAt:to}]});}
   else if(write.path.endsWith('/activate')){expect(write.body).toEqual({expectedDefinitionSha256:'2'.repeat(64),policyVersionId:policyB});h.tariffs[0]!.state='ACTIVE';}
@@ -82,10 +84,10 @@ test('operator cost drafts, accepted activation and every bounded reassessment p
   await expect.poll(()=>tableScroll.evaluate(element=>element.scrollLeft)).not.toBe(scroll.left);
  }
  await info.attach(`cost-preview-keyboard-${locale}-${info.project.name}`,{body:await page.screenshot(),contentType:"image/png"});
- expect((await new AxeBuilder({page}).include('[role="dialog"]').analyze()).violations).toEqual([]);
+ expect((await new AxeBuilder({page}).include("dialog[open]").analyze()).violations).toEqual([]);
  expect(h.writes).toHaveLength(0);await keyboardClick(page,h.management.getByRole('button',{name:t('cost.manage.saveDraft'),exact:true}));
  const activation=h.management.getByRole('button',{name:t('cost.manage.activate'),exact:true});await expect(activation).toBeDisabled();
- await h.management.getByLabel(t('cost.manage.acceptance'),{exact:true}).selectOption(policyB);await keyboardClick(page,activation);await expect(activation).toHaveCount(0);
+ await h.management.getByRole('combobox',{name:t('cost.manage.acceptance'),exact:true}).selectOption(policyB);await keyboardClick(page,activation);await expect(activation).toHaveCount(0);
  const checks=()=>reassess.getByRole('checkbox');
  const selectedButton=()=>reassess.getByRole('button',{name:new RegExp(t('cost.manage.reassessSelected',{count:'\\d+'}).replace('\\d+','.+'))});
  // First page: 100 effects, plus the explicit withdraw checkbox outside selection.
@@ -107,7 +109,7 @@ test('operator cost drafts, accepted activation and every bounded reassessment p
  let rejected=false;h.setWrite(async(route,write)=>{expect((write.body.items as Array<{expectedHeadId:string}>)[0]!.expectedHeadId).toBe(unchanged);rejected=true;h.expected.push({url:route.request().url(),status:409});await route.fulfill({status:409,json:{error:'PRIVATE_HEAD_CONFLICT'}});});
  await selectedButton().click();await expect(h.dialog.getByRole('alert')).toContainText(t('cost.manage.failed'));expect(rejected).toBe(true);await expect(page.getByText('PRIVATE_HEAD_CONFLICT')).toHaveCount(0);
  expect(h.writes.filter(x=>x.path.endsWith('/reassess')).every(x=>(x.body.items as unknown[]).length<=100)).toBe(true);
- expect((await new AxeBuilder({page}).include('[role="dialog"]').analyze()).violations).toEqual([]);
+ expect((await new AxeBuilder({page}).include("dialog[open]").analyze()).violations).toEqual([]);
  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth+1)).toBe(true);
  await info.attach(`cost-operator-${locale}-${info.project.name}`,{body:await page.screenshot(),contentType:'image/png'});expect(h.expected).toEqual([]);expect(h.errors).toEqual([]);
 });
@@ -152,7 +154,7 @@ for(const kind of ['tariff','statement'] as const)test(`operator ${kind} uncerta
  if(kind==='tariff'){await h.management.getByLabel(t('cost.manage.rateFile'),{exact:true}).setInputFiles(file(tariff()));await h.management.getByRole('button',{name:t('cost.manage.saveDraft'),exact:true}).click();}
  else{await h.statement.getByLabel(t('cost.statement.descriptionFile'),{exact:true}).setInputFiles(file(description()));await h.statement.getByRole('button',{name:t('cost.statement.reserve'),exact:true}).click();}
  const reconcile=h.dialog.getByRole('button',{name:t('cost.manage.reconcile'),exact:true});await expect(reconcile).toBeVisible();expect(h.writes).toHaveLength(1);
- await h.dialog.getByLabel(t('cost.account'),{exact:true}).selectOption(otherAccount);await h.dialog.getByLabel(t('cost.from'),{exact:true}).fill('2026-09-01T00:00');
+ await h.dialog.getByRole('combobox',{name:t('cost.account'),exact:true}).selectOption(otherAccount);await h.dialog.getByLabel(t('cost.from'),{exact:true}).fill('2026-09-01T00:00');
  await expect(h.dialog.getByLabel(t('cost.manage.rateFile'),{exact:true})).toBeDisabled();expect(h.writes).toHaveLength(1);
  await keyboardClick(page,reconcile);await expect(reconcile).toHaveCount(0);expect(h.writes).toHaveLength(2);expect(h.writes[1]).toEqual(h.writes[0]);
  expect(original?.path).toBe(`${root()}/${kind==='tariff'?'tariffs':'statements'}`);expect(original?.body).toEqual(kind==='tariff'?{definition:tariff(),supersedesId:null}:description());expect(h.expected).toEqual([]);expect(h.errors).toEqual([]);
