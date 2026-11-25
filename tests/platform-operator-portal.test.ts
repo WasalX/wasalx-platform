@@ -469,7 +469,7 @@ test("operator shell remains operable on mobile and protects in-progress work", 
   assert.doesNotMatch(componentSource, /aria-current="page"/u);
   assert.match(cssSource, /\.sidebar\[data-mobile-navigation-open="false"\] \.navigation \{ display: none; \}/u);
   assert.match(cssSource, /\.navigation a \{ display: flex; min-height: 44px;/u);
-  assert.match(componentSource, /role="region"[\s\S]{0,320}tabIndex=\{0\}[\s\S]{0,160}platform\.tenants\.tableLabel/u);
+  assert.match(componentSource, /<ScrollRegion\s+className=\{styles\.tableScroll\}\s+aria-label=\{t\("platform\.tenants\.tableLabel"\)\}/u);
   assert.match(cssSource, /\.tableScroll:focus-visible/u);
   assert.match(cssSource, /@media \(pointer: coarse\)/u);
   assert.match(componentSource, /data-unsaved=\{dirty \|\| undefined\}/u);

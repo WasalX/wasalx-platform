@@ -41,7 +41,7 @@ export async function metaGroupsRoute(
       return noStore(
         {
           error:
-            "Official Meta Groups requires the persistent control plane and cannot be simulated.",
+            "Official Meta Groups requires the managed service and cannot be simulated.",
         },
         501,
       );

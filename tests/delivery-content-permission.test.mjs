@@ -10,6 +10,7 @@ import {
   AuthorizationError,
   can as canPortal,
 } from "../lib/request-auth.ts";
+import { readTenantPortalSource } from "./helpers/tenant-portal-source.mjs";
 
 const operationalRoles = ["tenant_owner", "tenant_admin", "supervisor", "agent"];
 const permission = "delivery:content:read";
@@ -216,7 +217,7 @@ test("both portal and control API content endpoints require the explicit permiss
     readFile(new URL("services/control-api/src/deliveries.controller.ts", root), "utf8"),
     readFile(new URL("lib/control-plane-data.ts", root), "utf8"),
     readFile(new URL("lib/data.ts", root), "utf8"),
-    readFile(new URL("app/WasalXApp.tsx", root), "utf8"),
+    readTenantPortalSource(),
   ]);
   assert.match(portalRoute, /authenticatePortalRequest\(request, "delivery:content:read"\)/u);
   assert.match(controlController, /@Post\(":id\/content"\)[\s\S]*?@Requires\("delivery:content:read"\)/u);

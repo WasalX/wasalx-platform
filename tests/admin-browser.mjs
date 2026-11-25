@@ -203,6 +203,8 @@ async function teamsJourney(locale) {
     const grantStyle = await member.evaluate(fieldset => { const probe=document.createElement("span");probe.style.borderRadius="var(--wx-radius-control)";fieldset.append(probe);const radius=getComputedStyle(probe).borderTopLeftRadius;probe.remove();return {border:getComputedStyle(fieldset).borderTopStyle,radius:getComputedStyle(fieldset).borderTopLeftRadius,expectedRadius:radius}; });
     assert.equal(grantStyle.border, "solid"); assert.equal(grantStyle.radius,grantStyle.expectedRadius);
     await button("teamsAdmin.cancelMissing").click();
+    await expect(page.getByRole("status").filter({ hasText: t("teamsAdmin.cancelled") })).toBeVisible();
+    await expect(button("teamsAdmin.createTeam")).toBeEnabled();
     // Pending read after confirmed denial must never repopulate the old team's data.
     await page.reload({ waitUntil: "networkidle" });
     const held = fixture.hold("TEAM_SHOW", input => input.team_id === "2");

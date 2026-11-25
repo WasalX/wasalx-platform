@@ -7,7 +7,6 @@ import {englishCommonMessages} from "../../lib/i18n/messages/en/common";
 import {arabicCommonMessages} from "../../lib/i18n/messages/ar/common";
 
 test("Meta payment diagnostics preserve access boundaries and show only observed setup",async({page},testInfo)=>{
- test.skip(testInfo.project.name==="tablet-820");
  const locale=process.env.WASALX_E2E_LOCALE??"en",role=process.env.WASALX_E2E_ROLE??"tenant_owner";
  const messages:Record<string,string>=locale==="ar"?{...arabicTenantMessages,...arabicCommonMessages}:{...englishTenantMessages,...englishCommonMessages};
  const t=(key:string)=>messages[key]!;

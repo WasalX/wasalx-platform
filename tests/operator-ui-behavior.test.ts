@@ -1,5 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFile } from "node:fs/promises";
+import * as React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import ts from "typescript";
+import type { ScrollRegion as ScrollRegionComponent } from "../app/tenant-ui.tsx";
 
 import {
   confirmUnsavedNavigation,
@@ -90,4 +95,35 @@ test("review notification dedupe prefers the friendly ticket number", () => {
     { id: "ticketless" },
   ];
   assert.deepEqual(unmatchedReviewItems(failed, reviews).map((row) => row.id), ["other", "ticketless"]);
+});
+
+type ScrollRegionProps = Parameters<typeof ScrollRegionComponent>[0];
+
+// @ts-expect-error A scroll region needs an accessible name.
+const unnamed: ScrollRegionProps = { className: "wrap" };
+// @ts-expect-error A scroll region takes its name from one source.
+const twoNames: ScrollRegionProps = { "aria-label": "Rates", "aria-labelledby": "rates-title" };
+void unnamed; void twoNames;
+
+test("ScrollRegion renders a named region that keyboard users can focus", async () => {
+  const source = await readFile(new URL("../app/tenant-ui.tsx", import.meta.url), "utf8");
+  const ast = ts.createSourceFile("tenant-ui.tsx", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const declaration = ast.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === "ScrollRegion");
+  assert.ok(declaration, "tenant-ui exports the shared ScrollRegion");
+  const compiled = ts.transpileModule(declaration.getText(ast).replace(/^export /u, ""), { compilerOptions: { jsx: ts.JsxEmit.React } }).outputText;
+  const ScrollRegion = new Function("React", `${compiled};return ScrollRegion;`)(React) as typeof ScrollRegionComponent;
+  const render = (props: ScrollRegionProps) => renderToStaticMarkup(React.createElement(ScrollRegion, props, "rows"));
+
+  const labelled = render({ "aria-label": "Rates", className: "wrap" });
+  assert.match(labelled, /^<div [^>]*role="region"[^>]*>rows<\/div>$/u);
+  assert.match(labelled, /tabindex="0"/u);
+  assert.match(labelled, /aria-label="Rates"/u);
+  assert.match(labelled, /class="wrap"/u);
+  const byHeading = render({ "aria-labelledby": "drawer-title" });
+  assert.match(byHeading, /aria-labelledby="drawer-title"/u);
+  assert.match(byHeading, /role="region"/u);
+  // Callers cannot turn the region into something unfocusable or unnamed by role.
+  const overridden = render({ "aria-label": "Rates", ...({ role: "presentation", tabIndex: -1 } as object) });
+  assert.match(overridden, /role="region"/u);
+  assert.match(overridden, /tabindex="0"/u);
 });

@@ -1,9 +1,12 @@
 "use client";
-import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useEffectEvent, useLayoutEffect, useRef, useState, type FormEvent } from "react";
+import { flushSync } from "react-dom";
 import { parseMetaTransitionOperatorRequest, type MetaTransitionOperatorAction, type MetaTransitionOperatorRequest, type MetaTransitionOperatorReview, type MetaTransitionOperatorSummary } from "../../packages/core/src/meta-transition-operator-contract.ts";
 import { isOperatorReview, isOperatorReviewSummary, operatorReviewActions, operatorReviewSettled, operatorReviewStorageKey, parseOperatorReviewIntent, type OperatorReviewIntent } from "../../lib/meta-transition-operator-intent.ts";
 import { formatDateTime, formatNumber } from "../../lib/i18n/format.ts";
+import { createLatestRequestFence } from "../../lib/operator-ui.ts";
 import { useI18n } from "../I18nProvider";
+import { MarketingIcon } from "../MarketingIcon";
 import { InlineConfirmation, ModalDialog } from "../ModalDialog";
 import { useVisibleRefresh } from "../use-visible-refresh";
 import styles from "./PlatformConsole.module.css";
@@ -18,7 +21,7 @@ export function MetaTransitionOperator(props: Props) {
   const { t } = useI18n();
   const [plans, setPlans] = useState<MetaTransitionOperatorSummary[]>([]), [selected, setSelected] = useState("");
   const [loading, setLoading] = useState(true), [failed, setFailed] = useState(false), [busy, setBusy] = useState(false);
-  const generation = useRef(0), alive = useRef(false);
+  const loadFence = useRef(createLatestRequestFence()), alive = useRef(false);
   const pending = useRef<"list" | "write" | null>(null);
   // A completed list is admissible only after its selected-plan render commits.
   useLayoutEffect(() => { if (!loading && pending.current === "list") pending.current = null; }, [loading]);
@@ -32,7 +35,7 @@ export function MetaTransitionOperator(props: Props) {
     if (alive.current) setBusy(false);
   }
   function loseAuthority() {
-    generation.current++;
+    loadFence.current.invalidate();
     if (pending.current === "list") { pending.current = null; setLoading(false); }
     setPlans([]); setSelected(""); setFailed(true);
   }
@@ -40,20 +43,21 @@ export function MetaTransitionOperator(props: Props) {
   async function read(signal?: AbortSignal) {
     if (!alive.current || signal?.aborted || pending.current !== null) return;
     pending.current = "list"; setLoading(true);
-    const version = ++generation.current;
+    const version = loadFence.current.begin();
+    const isCurrent = () => !signal?.aborted && loadFence.current.isCurrent(version);
     try {
       const value = await props.request<{ tenantId: string; plans: unknown[] }>(base, { signal: deadline(signal) });
       if (value.tenantId !== props.tenantId || !Array.isArray(value.plans) || value.plans.length > 50 || !value.plans.every(isOperatorReviewSummary) || new Set(value.plans.map(x => x.id)).size !== value.plans.length) throw Error("Invalid plan list");
-      if (alive.current && version === generation.current && !signal?.aborted) { setPlans(value.plans); setFailed(false); }
-    } catch { if (alive.current && version === generation.current && !signal?.aborted) { setPlans([]); setSelected(""); setFailed(true); } }
-    finally { if (alive.current && version === generation.current && !signal?.aborted) setLoading(false); }
+      if (isCurrent()) { setPlans(value.plans); setFailed(false); }
+    } catch { if (isCurrent()) { setPlans([]); setSelected(""); setFailed(true); } }
+    finally { if (isCurrent()) setLoading(false); }
   }
+  // Parent keys this dialog to tenant and authenticated operator context, so the first read runs once per lifetime.
+  const readOnMount = useEffectEvent(read);
   useEffect(() => {
-    alive.current = true; const controller = new AbortController(), counter = generation;
-    Promise.resolve().then(() => { if (!controller.signal.aborted) void read(controller.signal); });
-    return () => { alive.current = false; counter.current++; controller.abort(); };
-    // Parent keys this dialog to tenant and authenticated operator context.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    alive.current = true; const controller = new AbortController(), fence = loadFence.current;
+    Promise.resolve().then(() => { if (!controller.signal.aborted) void readOnMount(controller.signal); });
+    return () => { alive.current = false; fence.invalidate(); controller.abort(); };
   }, []);
   const close = () => { if (pending.current !== "write") props.close(); };
   return <ModalDialog close={close} className={styles.backdrop} aria-labelledby="transition-operator-title"><section className={styles.dialog}>
@@ -74,7 +78,7 @@ function ReviewSession({ planId, base, parentLoading, beginWrite, endWrite, auth
   const [recoverable, setRecoverable] = useState(false);
   const [saving, setSaving] = useState(false), [held, setHeld] = useState(false), [storageFailed, setStorageFailed] = useState(false);
   const [error, setError] = useState<string | null>(null), [notice, setNotice] = useState<string | null>(null);
-  const intent = useRef<OperatorReviewIntent | null>(null), alive = useRef(false), writing = useRef(false), generation = useRef(0);
+  const intent = useRef<OperatorReviewIntent | null>(null), writing = useRef(false), loadFence = useRef(createLatestRequestFence());
   function settle(value: unknown) {
     if (!intent.current || !operatorReviewSettled(intent.current, value)) return false;
     try { window.sessionStorage.removeItem(storageKey); intent.current = null; setRecoverable(false); setHeld(false); setNotice(value.state); return true; }
@@ -82,40 +86,41 @@ function ReviewSession({ planId, base, parentLoading, beginWrite, endWrite, auth
   }
   async function read(signal?: AbortSignal) {
     if (writing.current) return;
-    const version = ++generation.current;
+    const version = loadFence.current.begin();
+    const isCurrent = () => !signal?.aborted && loadFence.current.isCurrent(version);
     try {
       const query = intent.current ? `?requestKey=${encodeURIComponent(intent.current.key)}` : "";
       const value = await props.request<unknown>(base + query, { signal: deadline(signal) });
       if (!isOperatorReview(value, props.tenantId, planId)) throw Error("Invalid current review");
-      if (alive.current && version === generation.current && !signal?.aborted) { setView(value); setError(null); settle(value.pendingCommand); }
-    } catch (failure) { if (alive.current && version === generation.current && !signal?.aborted) {
+      if (isCurrent()) { setView(value); setError(null); settle(value.pendingCommand); }
+    } catch (failure) { if (isCurrent()) {
       setView(null); setError(status(failure) === 401 || status(failure) === 403 ? "authority" : "unavailable");
       if (status(failure) === 401 || status(failure) === 403) authorityLost();
     } }
-    finally { if (alive.current && version === generation.current && !signal?.aborted) setLoading(false); }
+    finally { if (isCurrent()) setLoading(false); }
   }
+  // Parent unmounts on tenant, plan or authenticated operator context change, so recovery runs once per lifetime.
+  const restoreAndRead = useEffectEvent((signal: AbortSignal) => {
+    try { const saved = window.sessionStorage.getItem(storageKey); intent.current = saved === null ? null : parseOperatorReviewIntent(saved, props.recoveryScope, props.tenantId, planId); setHeld(saved !== null); setRecoverable(intent.current !== null); if (saved !== null && !intent.current) setStorageFailed(true); }
+    catch { setStorageFailed(true); }
+    void read(signal);
+  });
   useEffect(() => {
-    alive.current = true; const controller = new AbortController(), counter = generation;
-    Promise.resolve().then(() => {
-      if (controller.signal.aborted) return;
-      try { const saved = window.sessionStorage.getItem(storageKey); intent.current = saved === null ? null : parseOperatorReviewIntent(saved, props.recoveryScope, props.tenantId, planId); setHeld(saved !== null); setRecoverable(intent.current !== null); if (saved !== null && !intent.current) setStorageFailed(true); }
-      catch { setStorageFailed(true); }
-      void read(controller.signal);
-    });
-    return () => { alive.current = false; counter.current++; controller.abort(); };
-    // Parent unmounts on tenant, plan or authenticated operator context change.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    const controller = new AbortController(), fence = loadFence.current;
+    Promise.resolve().then(() => { if (!controller.signal.aborted) restoreAndRead(controller.signal); });
+    return () => { fence.invalidate(); controller.abort(); };
   }, []);
   useVisibleRefresh(read, !saving);
   async function submit(action: MetaTransitionOperatorAction, body: MetaTransitionOperatorRequest, resolve = false) {
-    if (!view || loading || parentLoading || writing.current || storageFailed || !alive.current) return;
+    if (!view || loading || parentLoading || writing.current || storageFailed) return;
     if (!resolve && (held || intent.current || !view.actions[action] || body.expectedRevision !== view.revision || body.expectedReviewSha256 !== view.reviewSha256)) return;
     let saved = intent.current;
     if (resolve && (!saved || saved.scope !== props.recoveryScope || saved.tenantId !== props.tenantId || saved.planId !== planId)) return;
     // The synchronous parent admission also covers a list request whose loading
     // render has not committed yet. The parent owns release after child removal.
     if (!beginWrite()) return;
-    writing.current = true; generation.current++; setSaving(true); setError(null); setNotice(null);
+    writing.current = true; const version = loadFence.current.begin(), isCurrent = () => loadFence.current.isCurrent(version);
+    setSaving(true); setError(null); setNotice(null);
     try {
       if (!resolve) {
         saved = { scope: props.recoveryScope, tenantId: props.tenantId, planId, key: crypto.randomUUID(), action, request: body };
@@ -125,11 +130,11 @@ function ReviewSession({ planId, base, parentLoading, beginWrite, endWrite, auth
       }
       if (!saved) return;
       const result = await props.request<unknown>(`${base}/${saved.action.toLowerCase()}${resolve ? "/resolve" : ""}`, { method: "POST", body: { ...saved.request }, idempotencyKey: saved.key, signal: deadline() });
-      if (alive.current && !settle(result)) setError("uncertain");
-    } catch (failure) { if (alive.current) { setError(status(failure) === 401 || status(failure) === 403 ? "authority" : "uncertain"); if (status(failure) === 401 || status(failure) === 403) { setView(null); authorityLost(); } } }
-    finally { writing.current = false; endWrite(); if (alive.current) setSaving(false); }
+      if (isCurrent() && !settle(result)) setError("uncertain");
+    } catch (failure) { if (isCurrent()) { setError(status(failure) === 401 || status(failure) === 403 ? "authority" : "uncertain"); if (status(failure) === 401 || status(failure) === 403) { setView(null); authorityLost(); } } }
+    finally { writing.current = false; endWrite(); if (isCurrent()) setSaving(false); }
     // Authenticated read only; a POST is never automatically repeated or resolved.
-    if (alive.current) await read();
+    if (isCurrent()) await read();
   }
   return <section className={styles.detailSection} aria-busy={loading || saving || parentLoading}>
     {loading ? <p role="status">{t(`${prefix}loading`)}</p> : null}{error ? <p role="alert">{t(`${prefix}${error}`)}</p> : null}
@@ -137,7 +142,7 @@ function ReviewSession({ planId, base, parentLoading, beginWrite, endWrite, auth
     {held ? <p role="status">{t(`${prefix}held`)}</p> : null}{storageFailed ? <p role="alert">{t(`${prefix}storage`)}</p> : null}
     {view ? <>
       <h3><bdi>{view.name}</bdi></h3><p>{t(`${prefix}phase.${view.phase}`)}</p>
-      <dl className={styles.detailGrid}><div><dt>{t(`${prefix}mode`)}</dt><dd>{t(`${prefix}mode.${view.requestedMode}`)}</dd></div><div><dt>{t(`${prefix}currencies`)}</dt><dd><bdi>{view.sourceCurrency ?? t(`${prefix}unknown`)}</bdi> <span className="reading-arrow" aria-hidden="true">→</span> <bdi>{view.targetCurrency}</bdi></dd></div><div><dt>{t(`${prefix}connections`)}</dt><dd>{formatNumber(view.connectionCount, locale)}</dd></div></dl>
+      <dl className={styles.detailGrid}><div><dt>{t(`${prefix}mode`)}</dt><dd>{t(`${prefix}mode.${view.requestedMode}`)}</dd></div><div><dt>{t(`${prefix}currencies`)}</dt><dd><bdi>{view.sourceCurrency ?? t(`${prefix}unknown`)}</bdi> <span className="reading-arrow" aria-hidden="true"><MarketingIcon name="arrow" /></span> <bdi>{view.targetCurrency}</bdi></dd></div><div><dt>{t(`${prefix}connections`)}</dt><dd>{formatNumber(view.connectionCount, locale)}</dd></div></dl>
       <ul>{view.connectionNames.map((name, i) => <li key={i}><bdi>{name}</bdi></li>)}</ul>
       <dl className={styles.detailGrid}>{Object.entries(view.proof).map(([name, value]) => <div key={name}><dt>{t(`${prefix}proof.${name}`)}</dt><dd>{t(`${prefix}proofState.${value}`)}</dd></div>)}</dl>
       {view.checkpoints.length ? <ul>{view.checkpoints.map(item => <li key={item.stage}>{t(`${prefix}stage.${item.stage}`)}: {t(`${prefix}outcome.${item.outcome}`)}</li>)}</ul> : null}
@@ -155,7 +160,27 @@ function ReviewForm({ view, busy, submit }: { view: MetaTransitionOperatorReview
   const [payment, setPayment] = useState(view.originalGrant?.sourcePayment ?? ""), [arrangement, setArrangement] = useState(view.originalGrant?.managed?.arrangementVersionId ?? "");
   const [receiver, setReceiver] = useState(view.originalGrant?.managed?.targetReceivingBusinessId ?? ""), [terms, setTerms] = useState(view.originalGrant?.managed?.targetTermsDocumentText ?? ""), [version, setVersion] = useState(view.originalGrant?.managed?.targetTermsVersion ?? "");
   const [accepted, setAccepted] = useState(false), [reviewed, setReviewed] = useState(false), [invalid, setInvalid] = useState(false);
+  const [confirmationError, setConfirmationError] = useState<"acceptTerms" | "reviewed" | null>(null);
+  const termsError = confirmationError === "acceptTerms", evidenceError = confirmationError === "reviewed";
   const managed = view.requestedMode === "WASALX_MANAGED", fixed = view.originalGrant !== null;
+
+  function showInvalid(event: FormEvent<HTMLFormElement>) {
+    const field = event.target;
+    const checkbox = field instanceof HTMLInputElement && field.type === "checkbox";
+    if (checkbox) event.preventDefault();
+    if (field !== event.currentTarget.querySelector(":is(input, select, textarea):invalid")) return;
+    if (!checkbox) {
+      setConfirmationError(null);
+      return;
+    }
+    // Render the associated description before moving focus to the checkbox.
+    flushSync(() => {
+      setInvalid(false);
+      setConfirmationError(field.name === "acceptTerms" ? "acceptTerms" : "reviewed");
+    });
+    field.focus();
+  }
+
   function prepare(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); if (!action || busy || !reviewed || !view.actions[action]) return;
     const data = new FormData(event.currentTarget), parsed = parseMetaTransitionOperatorRequest(action, { expectedRevision: view.revision, expectedReviewSha256: view.reviewSha256, evidenceSha256: data.get("evidence"), confirmed: true,
@@ -165,8 +190,8 @@ function ReviewForm({ view, busy, submit }: { view: MetaTransitionOperatorReview
     setInvalid(false); setConfirmation(parsed);
   }
   const changeCommercial = (change: () => void) => { change(); setAccepted(false); setConfirmation(null); };
-  return <form onSubmit={prepare} onChangeCapture={() => setConfirmation(null)}>
-    <div className={styles.transitionFields}><label>{t(`${prefix}reviewKind`)}<select required value={action} disabled={busy} onChange={e => { setAction(e.target.value as typeof action); setAccepted(false); setReviewed(false); setInvalid(false); }}><option value="">{t(`${prefix}choose`)}</option>{operatorReviewActions.filter(a => view.actions[a]).map(a => <option key={a} value={a}>{t(`${prefix}action.${a}`)}</option>)}</select></label>
+  return <form onSubmit={prepare} onInvalid={showInvalid} onChangeCapture={() => setConfirmation(null)}>
+    <div className={styles.transitionFields}><label>{t(`${prefix}reviewKind`)}<select required value={action} disabled={busy} onChange={e => { setAction(e.target.value as typeof action); setAccepted(false); setReviewed(false); setInvalid(false); setConfirmationError(null); }}><option value="">{t(`${prefix}choose`)}</option>{operatorReviewActions.filter(a => view.actions[a]).map(a => <option key={a} value={a}>{t(`${prefix}action.${a}`)}</option>)}</select></label>
       {action ? <>
         <p>{t(`${prefix}help.${action}`)}</p>
         <label>{t(`${prefix}evidence`)}<input name="evidence" required pattern="[a-f0-9]{64}" minLength={64} maxLength={64} dir="ltr" autoComplete="off" disabled={busy} /></label>
@@ -178,11 +203,27 @@ function ReviewForm({ view, busy, submit }: { view: MetaTransitionOperatorReview
             <label>{t(`${prefix}receiver`)}<input required value={receiver} onChange={e => changeCommercial(() => setReceiver(e.target.value))} pattern="[0-9]{1,32}" maxLength={32} dir="ltr" inputMode="numeric" readOnly={fixed} disabled={busy} /></label>
             <label>{t(`${prefix}termsVersion`)}<input required value={version} onChange={e => changeCommercial(() => setVersion(e.target.value))} pattern="[A-Za-z0-9._\-]{1,128}" maxLength={128} dir="ltr" readOnly={fixed} disabled={busy} /></label>
             <label>{t(`${prefix}terms`)}<textarea required value={terms} onChange={e => changeCommercial(() => setTerms(e.target.value))} maxLength={32768} dir="auto" readOnly={fixed} disabled={busy} /></label>
-            <label className={styles.transitionCheck}><input type="checkbox" required checked={accepted} disabled={busy} onChange={e => setAccepted(e.target.checked)} /><span>{t(`${prefix}acceptTerms`)}</span></label>
+            <div>
+              <label className={styles.transitionCheck}>
+                <input type="checkbox" name="acceptTerms" required checked={accepted} disabled={busy}
+                  aria-invalid={termsError || undefined} aria-describedby={termsError ? "transition-terms-error" : undefined}
+                  onChange={e => { setAccepted(e.target.checked); if (termsError) setConfirmationError(null); }} />
+                <span>{t(`${prefix}acceptTerms`)}</span>
+              </label>
+              <span id="transition-terms-error" role="alert">{termsError ? t(`${prefix}acceptTermsRequired`) : ""}</span>
+            </div>
           </> : null}
         </> : null}
         {action === "TARGET" ? <><label>{t(`${prefix}templates`)}<input name="templates" required pattern="[a-f0-9]{64}" minLength={64} maxLength={64} dir="ltr" disabled={busy} /></label><label>{t(`${prefix}flows`)}<input name="flows" required pattern="[a-f0-9]{64}" minLength={64} maxLength={64} dir="ltr" disabled={busy} /></label></> : null}
-        <label className={styles.transitionCheck}><input type="checkbox" name="reviewed" required checked={reviewed} onChange={e => setReviewed(e.target.checked)} disabled={busy} /><span>{t(`${prefix}confirmEvidence`)}</span></label>
+        <div>
+          <label className={styles.transitionCheck}>
+            <input type="checkbox" name="reviewed" required checked={reviewed} disabled={busy}
+              aria-invalid={evidenceError || undefined} aria-describedby={evidenceError ? "transition-evidence-error" : undefined}
+              onChange={e => { setReviewed(e.target.checked); if (evidenceError) setConfirmationError(null); }} />
+            <span>{t(`${prefix}confirmEvidence`)}</span>
+          </label>
+          <span id="transition-evidence-error" role="alert">{evidenceError ? t(`${prefix}confirmEvidenceRequired`) : ""}</span>
+        </div>
       </> : null}
     </div>
     {invalid ? <p role="alert">{t(`${prefix}invalid`)}</p> : null}

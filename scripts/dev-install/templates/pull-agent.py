@@ -29,7 +29,8 @@ DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 # Keep this grammar identical to the D1 consumer's RC tag grammar.
 RC = re.compile(r"v[A-Za-z0-9_.-]{0,108}-rc\.[A-Za-z0-9_.-]{1,16}")
 IMAGE_NAME = r"[a-z0-9]+(?:[._-][a-z0-9]+)*(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)*"
-REF = re.compile(rf"(?!docker\.io/){IMAGE_NAME}@{DIGEST.pattern}")
+DOCKER_HUB_PREFIX = r"(?:(?:docker|index\.docker|registry-1\.docker)\.io/(?:library/)?|library/)"
+REF = re.compile(rf"(?!{DOCKER_HUB_PREFIX}){IMAGE_NAME}@{DIGEST.pattern}")
 COMPOSE_REF = re.compile(
     rf"({IMAGE_NAME})(?::[A-Za-z0-9_][A-Za-z0-9_.-]{{0,127}})?@((?ai:{DIGEST.pattern}))"
 )
@@ -53,6 +54,10 @@ TOOLS = ROOT / "scripts/dev-install"
 
 class Pending(Exception):
     """Public evidence has yet to qualify this release."""
+
+
+class TrustedRootMismatch(Exception):
+    """The installed Sigstore trusted root does not match the packet."""
 
 
 class RateLimit(Exception):
@@ -324,11 +329,18 @@ def command_env(work):
             "DOCKER_CONFIG": str(work / "docker"), "SSH_ASKPASS_REQUIRE": "never"}
 
 
-def verify(manifest, commit, tree, config):
+def verify(manifest, commit, tree, config, *, staged=False):
+    # The verifier also checks the exact root bytes it passes to Cosign.
+    root_digest = content_digest(Path(config["trusted_root"]).read_bytes())
+    if root_digest != f"sha256:{config['trusted_root_sha256']}":
+        raise TrustedRootMismatch
     tools = ["node", TOOLS / "pull-verify.mjs", manifest, commit, tree, config["cosign"],
              config["trusted_root"], config["trusted_root_sha256"]]
+    if staged:
+        tools.append("--staged")
+    # The verifier reports redacted diagnostics on stderr and writes only references to stdout.
     return json.loads(subprocess.check_output(
-        tools, stdin=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=command_env(manifest.parent), timeout=300))
+        tools, stdin=subprocess.DEVNULL, env=command_env(manifest.parent), timeout=300))
 
 
 def compose_refs(api, commit, product_refs):
@@ -346,7 +358,7 @@ def compose_refs(api, commit, product_refs):
             pinned = COMPOSE_REF.fullmatch(ref)
             require(pinned is not None)
             image, digest = pinned.groups()
-            image = image.removeprefix("docker.io/library/").removeprefix("docker.io/")
+            image = re.sub(rf"^{DOCKER_HUB_PREFIX}", "", image, count=1)
             ref = f"{image}@{digest.lower()}"
             require(bool(REF.fullmatch(ref)) and not ref.startswith(PRODUCT_PREFIX))
             refs.add(ref)
@@ -477,8 +489,11 @@ def main():
                 print("PENDING")
             except (URLError, TimeoutError):
                 print("PUBLIC_INPUT_UNAVAILABLE")
+    except TrustedRootMismatch:
+        print("<3>REPORT_TRUST_ROOT_MISMATCH: Re-pin Sigstore trust via TUF", file=sys.stderr)
+        return 1
     except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError):
-        print("REPORT_FAILED", file=sys.stderr)
+        print("<3>REPORT_FAILED", file=sys.stderr)
         return 1
     return 0
 

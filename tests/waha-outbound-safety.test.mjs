@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { readTenantPortalSource } from "./helpers/tenant-portal-source.mjs";
 import { BadRequestException } from "../services/control-api/node_modules/@nestjs/common/index.js";
 import { DeliveryProcessor } from "../services/connector-worker/dist/services/connector-worker/src/processor.js";
 import { wahaDeferralExpired } from "../services/connector-worker/dist/services/connector-worker/src/repository.js";
@@ -71,7 +72,7 @@ test("WAHA replies expire at the configured response-window boundary",()=>{
 test("a WAHA authorization database failure becomes a durable retry instead of a stuck claim",async()=>{
   const failures=[];
   const delivery={id:"16000000-0000-4000-8000-000000000001",tenantId:"10000000-0000-4000-8000-000000000001",connectionId:"12000000-0000-4000-8000-000000000001",groupBindingId:"15000000-0000-4000-8000-000000000001",groupId:"fixture-0019@example.test",ticketId:"42",articleId:"9",text:"Reply",contentType:"text/plain",idempotencyKey:"delivery-a",attempts:1,provider:"waha",sessionId:"session-a",connectionSecretReference:"secret://connection",providerBaseUrl:"https://waha.example",wahaWorkerId:"worker-a",wahaAssignmentFencingToken:1,zammadBaseUrl:"https://zammad.example",zammadSecretReference:"secret://zammad",mediaEnabled:true,retentionDays:30};
-  const repository={claimBotActions:async()=>[],claimDeliveries:async()=>[delivery],beginSend:async()=>{throw new Error("WAHA authorization database failure")},complete:async()=>{},fail:async(_job,_lease,retryable,error,availableAt,manualRetryAllowed)=>failures.push({retryable,error,availableAt,manualRetryAllowed}),outcomeUnknown:async()=>{},claimStatuses:async()=>[],completeStatus:async()=>{},retryStatus:async()=>{},failStatus:async()=>{}};
+  const repository={claimBotActions:async()=>[],whatsAppMarketingOptedOut:async()=>false,claimDeliveries:async()=>[delivery],beginSend:async()=>{throw new Error("WAHA authorization database failure")},complete:async()=>{},fail:async(_job,_lease,retryable,error,availableAt,manualRetryAllowed)=>failures.push({retryable,error,availableAt,manualRetryAllowed}),outcomeUnknown:async()=>{},claimStatuses:async()=>[],completeStatus:async()=>{},retryStatus:async()=>{},failStatus:async()=>{}};
   const originalFetch=globalThis.fetch;globalThis.fetch=async()=>{throw new Error("network must not be called")};
   try{await new DeliveryProcessor(repository,{resolve:async()=>({apiKey:"key"})},{metaGraphVersion:"v24.0"}).drainTenant(delivery.tenantId)}finally{globalThis.fetch=originalFetch}
   assert.equal(failures.length,1);assert.equal(failures[0].retryable,true);assert.match(failures[0].error,/authorization database failure/);assert.ok(failures[0].availableAt);assert.equal(failures[0].manualRetryAllowed,true);
@@ -80,7 +81,7 @@ test("a WAHA authorization database failure becomes a durable retry instead of a
 test("a durable WAHA safety deferral never reaches the provider network boundary",async()=>{
   const calls=[];
   const delivery={id:"16000000-0000-4000-8000-000000000001",tenantId:"10000000-0000-4000-8000-000000000001",connectionId:"12000000-0000-4000-8000-000000000001",groupBindingId:"15000000-0000-4000-8000-000000000001",groupId:"fixture-0019@example.test",ticketId:"42",articleId:"9",text:"Reply",contentType:"text/plain",idempotencyKey:"delivery-a",attempts:1,provider:"waha",sessionId:"session-a",connectionSecretReference:"secret://connection",providerBaseUrl:"https://waha.example",wahaWorkerId:"worker-a",wahaAssignmentFencingToken:1,zammadBaseUrl:"https://zammad.example",zammadSecretReference:"secret://zammad",mediaEnabled:true,retentionDays:30};
-  const repository={claimBotActions:async()=>[],claimDeliveries:async()=>[delivery],beginSend:async()=>{calls.push("safety-deferred");return false},complete:async()=>calls.push("complete"),fail:async()=>calls.push("fail"),outcomeUnknown:async()=>calls.push("unknown"),claimStatuses:async()=>[],completeStatus:async()=>{},retryStatus:async()=>{},failStatus:async()=>{}};
+  const repository={claimBotActions:async()=>[],whatsAppMarketingOptedOut:async()=>false,claimDeliveries:async()=>[delivery],beginSend:async()=>{calls.push("safety-deferred");return false},complete:async()=>calls.push("complete"),fail:async()=>calls.push("fail"),outcomeUnknown:async()=>calls.push("unknown"),claimStatuses:async()=>[],completeStatus:async()=>{},retryStatus:async()=>{},failStatus:async()=>{}};
   const originalFetch=globalThis.fetch;globalThis.fetch=async()=>{calls.push("network");throw new Error("network must not be called")};
   try{const processor=new DeliveryProcessor(repository,{resolve:async()=>({apiKey:"key"})},{metaGraphVersion:"v24.0"});assert.deepEqual(await processor.drainTenant(delivery.tenantId),{actions:0,deliveries:1,statuses:0})}finally{globalThis.fetch=originalFetch}
   assert.deepEqual(calls,["safety-deferred"]);
@@ -125,7 +126,7 @@ test("tenant operators can change only the existing audited group-initiation pol
   const [route,portal,screen,service,controller,permissions]=await Promise.all([
     readFile(new URL("../app/api/waha-outbound-safety/route.ts",import.meta.url),"utf8"),
     readFile(new URL("../lib/control-plane-data.ts",import.meta.url),"utf8"),
-    readFile(new URL("../app/WasalXApp.tsx",import.meta.url),"utf8"),
+    readTenantPortalSource(),
     readFile(new URL("../services/control-api/src/waha-outbound-safety.service.ts",import.meta.url),"utf8"),
     readFile(new URL("../services/control-api/src/waha-outbound-safety.controller.ts",import.meta.url),"utf8"),
     readFile(new URL("../packages/core/src/tenant-permissions.ts",import.meta.url),"utf8"),

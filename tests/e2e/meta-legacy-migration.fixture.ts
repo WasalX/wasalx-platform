@@ -93,7 +93,7 @@ export async function metaLegacyMigrationJourney(page: Page, locale: 'en' | 'ar'
   });
   const section = () => page.getByRole('region', { name: t('title'), exact: true });
   const button = (key: string) => section().getByRole('button', { name: t(key), exact: true });
-  const open = async () => { await page.goto(`/app?view=connections&connection=${source}`); await expect(page.locator('[data-application-ready="true"]')).toBeVisible(); await button('open').click(); await expect(button('refresh')).toBeEnabled(); };
+  const open = async () => { await page.goto(`/app?view=connections&connection=${source}`, { waitUntil: "commit" }); await expect(page.locator('[data-application-ready="true"]')).toBeVisible(); await button('open').click(); await expect(button('refresh')).toBeEnabled(); };
   const capture = async (name: string) => { await section().getByRole('heading', { name: t('title'), exact: true }).scrollIntoViewIfNeeded(); await page.screenshot({ path: info.outputPath(`${name}-top.png`) }); await button('refresh').scrollIntoViewIfNeeded(); await page.screenshot({ path: info.outputPath(`${name}-actions.png`) }); expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true); };
   await open(); await expect(section().getByText(t('boundary'), { exact: true })).toBeVisible(); await expect(button('reviewRegister')).toBeDisabled();
   if (!writable) { await expect(section().getByText(t('readOnly'), { exact: true })).toBeVisible(); expect(writes).toEqual([]); expect((await new AxeBuilder({ page }).include('.meta-legacy-migration').analyze()).violations).toEqual([]); await capture('legacy-read-only'); return; }

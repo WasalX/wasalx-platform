@@ -6,7 +6,6 @@ import {arabicTenantMessages} from '../../lib/i18n/messages/ar/tenant';
 import type {MetaTransitionPreviewView} from '../../packages/core/src/meta-account-transition-contract';
 
 test('Account preview preserves both payer intentions, recovers saved reads and never exposes an apply action',async({page},testInfo)=>{
-  test.skip(testInfo.project.name==='tablet-820');
   const locale=process.env.WASALX_E2E_LOCALE??'en',role=process.env.WASALX_E2E_ROLE??'tenant_owner';
   const copy:Record<string,string>=locale==='ar'?arabicTenantMessages:englishTenantMessages;
   const t=(key:string)=>copy[`tenant.connection.accountPreview.${key}`]!;

@@ -47,7 +47,7 @@ export async function metaNumberReleaseJourney(page:Page,locale:'en'|'ar',role:s
     return route.continue();
   });
   await installMetaRoutingReadFixture(page);
-  const open=async()=>{await page.goto(`/app?view=connections&connection=${id}`);await expect(page.locator('[data-application-ready="true"]')).toBeVisible();return page.locator(`section[aria-labelledby="number-release-${id}"]`);};
+  const open=async()=>{await page.goto(`/app?view=connections&connection=${id}`,{waitUntil:"commit"});await expect(page.locator('[data-application-ready="true"]')).toBeVisible();return page.locator(`section[aria-labelledby="number-release-${id}"]`);};
   let section=await open();const act=()=>section.getByRole('button',{name:t('action'),exact:true}),refresh=()=>section.getByRole('button',{name:t('refresh'),exact:true});
   const dialog=()=>page.getByRole('dialog',{name:t('confirmTitle'),exact:true}),confirm=()=>dialog().getByRole('button',{name:t('action'),exact:true});
   const retiredAccess=async()=>{
@@ -68,7 +68,23 @@ export async function metaNumberReleaseJourney(page:Page,locale:'en'|'ar',role:s
   await expect(section.getByRole('heading',{name:t('title'),exact:true})).toBeInViewport();
   await act().click();await expect(dialog().getByRole('button',{name:t('cancel'),exact:true})).toBeFocused();await page.keyboard.press('Escape');await expect(dialog()).toHaveCount(0);await expect(act()).toBeFocused();expect(writes).toHaveLength(0);
   await act().click();await info.attach('release-number-confirmation',{body:await page.screenshot(),contentType:'image/png'});
-  const bounds=await dialog().locator('.modal').boundingBox(),viewport=page.viewportSize()!;expect(bounds).not.toBeNull();expect(bounds!.x).toBeGreaterThanOrEqual(19);expect(bounds!.x+bounds!.width).toBeLessThanOrEqual(viewport.width-19);
+  const {inlineStart,inlineEnd,blockStart,blockEnd,paddingStart,paddingEnd}=await dialog().locator('.modal').evaluate(modal=>{
+    const style=getComputedStyle(modal.closest('.modal-backdrop')!);
+    const bounds=modal.getBoundingClientRect();
+    const left=bounds.left,right=window.innerWidth-bounds.right;
+    const rtl=style.direction==='rtl';
+    return {
+      inlineStart:rtl?right:left,
+      inlineEnd:rtl?left:right,
+      blockStart:bounds.top,
+      blockEnd:window.innerHeight-bounds.bottom,
+      paddingStart:Number.parseFloat(style.paddingInlineStart),
+      paddingEnd:Number.parseFloat(style.paddingInlineEnd),
+    };
+  });
+  expect(Math.min(inlineStart,inlineEnd,blockStart,blockEnd)).toBeGreaterThan(0);
+  expect(inlineStart).toBeGreaterThanOrEqual(paddingStart);
+  expect(inlineEnd).toBeGreaterThanOrEqual(paddingEnd);
   expect((await new AxeBuilder({page}).include('dialog').withTags(['wcag2a','wcag2aa','wcag21aa']).analyze()).violations).toEqual([]);
   await confirm().click();await expect(dialog().getByRole('link',{name:copy['tenant.connection.reauthenticate'],exact:true})).toHaveAttribute('href',`/auth/login?step_up=privileged&return_to=${encodeURIComponent(`/app?view=connections&connection=${id}`)}`);await expect(confirm()).toBeDisabled();
   section=await open();expect(writes).toHaveLength(1);mode='forbidden';await act().click();await confirm().click();await expect(dialog().getByText(t('error.forbidden'),{exact:true})).toBeVisible();await expect(dialog().getByRole('link')).toHaveCount(0);await expect(confirm()).toBeDisabled();

@@ -4,6 +4,7 @@ import test from "node:test";
 
 import { getBoundaryMessages } from "../lib/i18n/messages/boundary.ts";
 import { arabicMessages, englishMessages } from "../lib/i18n/messages/index.ts";
+import { readTenantPortalSource, tenantPortalFiles } from "./helpers/tenant-portal-source.mjs";
 
 const read = (path) => readFile(new URL(`../${path}`, import.meta.url), "utf8");
 
@@ -28,7 +29,7 @@ test("automation and tenant screens show no raw flow definition or developer ter
   assert.match(source, /<details className="routing-raw">\s*<summary>\{t\("bot\.flow\.schema\.title"\)\}<\/summary>\s*<p>\{t\("bot\.flow\.schema\.help"\)\}<\/p>\s*<pre aria-label=\{t\("bot\.flow\.schema\.label"\)\}><code>\{JSON\.stringify\(definition/u);
   assert.doesNotMatch(source, /<details className="routing-raw"[^>]*\sopen/u);
   // Example input values come from the catalogues, never a literal in code.
-  for (const file of ["app/WasalXApp.tsx", "app/ClientRouting.tsx", "app/BotAutomation.tsx", "app/CaseLifecycle.tsx", "app/platform/PlatformConsole.tsx"]) {
+  for (const file of [...tenantPortalFiles, "app/ClientRouting.tsx", "app/BotAutomation.tsx", "app/CaseLifecycle.tsx", "app/platform/PlatformConsole.tsx"]) {
     assert.doesNotMatch(await read(file), /placeholder="/u, file);
   }
   const values = (text) => [...text.matchAll(/^ {2}"[^"]+": "((?:[^"\\]|\\.)*)",\r?$/gmu)].map((match) => match[1].replace(/\{[^}]+\}/gu, ""));
@@ -43,7 +44,7 @@ test("automation and tenant screens show no raw flow definition or developer ter
 });
 
 test("audit filtering searches only the role-safe presentation already shown on screen", async () => {
-  const source = await read("app/WasalXApp.tsx");
+  const source = readTenantPortalSource();
   assert.match(source, /const filteredEntries = normalizedQuery\s*\? entries\.filter\(\(row\) => Object\.values\(presentation\(row\)\)/u);
   assert.match(source, /<Toolbar query=\{query\} setQuery=\{setQuery\} placeholder=\{t\("tenant\.audit\.search"\)\}>/u);
   assert.match(source, /filteredEntries\.map\(\(row\) =>/u);

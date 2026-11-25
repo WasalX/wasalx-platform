@@ -67,7 +67,7 @@
 .rowActions button { padding: var(--wx-space-2); font-size: var(--wx-font-size-1); }
 .rowActions .dangerAction { color: var(--wx-color-danger); }
 .progress { min-width: 8rem; }
-.progress>span { display: block; overflow: hidden; height: var(--wx-space-1); margin-bottom: var(--wx-space-2); border-radius: var(--wx-space-1); background: var(--wx-color-surface-selected); }
+.progress>span { display: block; overflow: hidden; height: var(--wx-space-1); margin-bottom: var(--wx-space-2); border-radius: var(--wx-radius-control); background: var(--wx-color-surface-selected); }
 .progress i { display: block; height: 100%; border-radius: inherit; background: var(--wx-color-accent); }
 .progress small { color: var(--wx-color-text-muted); font-size: var(--wx-font-size-1); }
 .progress .progressError { max-width: 22rem; margin-block-start: var(--wx-space-1); color: var(--wx-color-danger); overflow-wrap: anywhere; }
@@ -187,19 +187,19 @@
 .routingActions { grid-column: 1/-1; }
 
 /* Scoped review controls: preserve the incumbent forms and checkbox geometry. */
-.transitionFields { display: grid; gap: 1rem; margin-block: 1rem; min-inline-size: 0; }
-.transitionFields label, .transitionSelect { display: grid; gap: .45rem; min-inline-size: 0; }
-.transitionFields input:not([type="checkbox"]), .transitionFields select, .transitionFields textarea, .transitionSelect select { box-sizing: border-box; inline-size: 100%; min-inline-size: 0; max-inline-size: 100%; padding: .65rem; border: 1px solid var(--wx-color-border); border-radius: .5rem; background: var(--wx-color-surface); color: inherit; font: inherit; }
+.transitionFields { display: grid; gap: var(--wx-space-4); margin-block: var(--wx-space-4); min-inline-size: 0; }
+.transitionFields label, .transitionSelect { display: grid; gap: var(--wx-space-2); min-inline-size: 0; }
+.transitionFields input:not([type="checkbox"]), .transitionFields select, .transitionFields textarea, .transitionSelect select { box-sizing: border-box; inline-size: 100%; min-inline-size: 0; max-inline-size: 100%; padding: var(--wx-space-3); border: 1px solid var(--wx-color-border); border-radius: var(--wx-radius-panel); background: var(--wx-color-surface); color: inherit; font: inherit; }
 .transitionFields textarea { min-block-size: 9rem; resize: vertical; }
-.transitionFields .transitionCheck { display: flex; align-items: flex-start; gap: .6rem; }
-.transitionFields .transitionCheck input { flex: 0 0 auto; inline-size: 1.1rem; block-size: 1.1rem; margin-block-start: .2rem; }
-.transitionActions { display: flex; flex-wrap: wrap; gap: .75rem; margin-block-start: 1rem; }
+.transitionFields .transitionCheck { display: flex; align-items: flex-start; gap: var(--wx-space-2); }
+.transitionFields .transitionCheck input { flex: 0 0 auto; inline-size: 1.1rem; block-size: 1.1rem; margin-block-start: var(--wx-space-1); }
+.transitionActions { display: flex; flex-wrap: wrap; gap: var(--wx-space-3); margin-block-start: var(--wx-space-4); }
 .transitionFields input:focus-visible, .transitionFields select:focus-visible, .transitionFields textarea:focus-visible, .transitionSelect select:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
 
-.deletionForm { display:grid; gap:1rem; margin:var(--wx-space-4); max-inline-size:42rem; }
-.deletionForm label { display:grid; gap:.5rem; }
+.deletionForm { display:grid; gap:var(--wx-space-4); margin:var(--wx-space-4); max-inline-size:42rem; }
+.deletionForm label { display:grid; gap:var(--wx-space-2); }
 .deletionForm :is(select,input,button) { min-inline-size:0; max-inline-size:100%; min-block-size:2.75rem; }
-.deletionRow { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:1rem; margin:var(--wx-space-4); }
+.deletionRow { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:var(--wx-space-4); margin:var(--wx-space-4); }
 .deletionForm :is(input,select) { border:1px solid var(--wx-color-border-strong); border-radius:var(--wx-radius-control); padding:var(--wx-space-2); background:var(--wx-color-surface-raised); color:var(--wx-color-text); }
 
 .brand > span { font-family: var(--font-geist-sans), sans-serif; }

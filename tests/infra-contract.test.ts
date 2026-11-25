@@ -123,6 +123,7 @@ test("release assets use one bounded mirror attempt and reject corrupt bytes bef
     const source = await read("scripts/release/fetch-verified-asset.sh");
     assert.match(source, /--retry 0[\s\S]*--connect-timeout 3 --max-time 8/u);
     assert.match(source, /--proto '=https' --proto-redir '=https'[\s\S]*--retry-max-time 120/u);
+    assert.doesNotMatch(source, /--retry-all-errors/u);
     const infra = await read("scripts/validate-infra.sh");
     const prepare = infra.split("prepare_verified_archive() {")[1].split("prepare_pinned_provider() {")[0];
     assert(prepare.indexOf('"$checksum_url"') < prepare.indexOf("fetch-verified-asset.sh"), "Helm/Tofu metadata must come directly from upstream before mirror bytes");
@@ -170,7 +171,8 @@ test("infrastructure validation keeps Docker on fullruntime and pins native clou
   const script = await read("scripts/validate-infra.sh");
   assert.match(script, /\.wasalx-infra-tool-cache/);
   assert.match(script, /cached infrastructure tool failed checksum verification/);
-  assert.match(script, /--retry 3 --retry-all-errors/);
+  assert.match(script, /--retry 3 --retry-delay 2 --retry-max-time 120/u);
+  assert.doesNotMatch(script, /--retry-all-errors/u);
   assert.match(script, /NATIVE_INFRA=false/);
   assert.match(script, /\bdocker\s+run/);
   assert.match(script, /TOFU_IMAGE="ghcr\.io\/opentofu\/opentofu@sha256:[0-9a-f]{64}"/);
@@ -1177,6 +1179,23 @@ test("all WasalX deployables have pinned, non-root, health-checked container ima
   assert.match(compose, /DEV_SECRET_STORE_JSON: \$\{DEV_SECRET_STORE_JSON:-\{\}\}/);
 });
 
+test("Dockerfiles pin the Node base image at most once", async () => {
+  const files = spawnSync("git", ["ls-files", "-z", "--", ":(glob)**/Dockerfile*"], {
+    cwd: new URL("../", import.meta.url),
+    encoding: "utf8",
+  });
+  assert.ifError(files.error);
+  assert.equal(files.status, 0, files.stderr);
+  const dockerfiles = files.stdout.split("\0").filter(Boolean);
+  assert.ok(dockerfiles.includes("Dockerfile.portal"), "Dockerfile discovery must include the repository root");
+  const nodePin = /(?<![\w.-])node(?::[\w.-]+)?@sha256:[a-f0-9]{64}\b/giu;
+  for (const file of dockerfiles) {
+    const dockerfile = (await read(file)).replace(/^[ \t]*#.*$/gm, "");
+    const pins = dockerfile.match(nodePin) ?? [];
+    assert.ok(pins.length <= 1, `${file} has ${pins.length} Node base pins: ${pins.join(", ")}`);
+  }
+});
+
 test("Docker dependency stages coalesce safely and keep pnpm trust checks enabled", async () => {
   assert.doesNotMatch(await read("Dockerfile.connector-worker"), /^#\s*syntax=/m);
   const backendDockerfiles = [
@@ -1298,6 +1317,11 @@ test("Docker smoke may reuse only a complete, explicitly verified local image se
 
 
 
+
+test("Helm explicitly leaves invitation mail unrestricted in staging and production", async () => {
+  const workloads = await read("infra/helm/wasalx/templates/workloads.yaml");
+  assert.match(workloads, /\{\{- if and \(eq \$name "invitation-mailer"\) \(has \$root\.Values\.environment \(list "staging" "production"\)\) \}\}\s+- \{ name: WASALX_TEST_EMAIL_RECIPIENT_ALLOWLIST, value: "\*" \}\s+\{\{- end \}\}/u);
+});
 
 test("Helm and Terraform keep workload, migration, and secret-cleanup credentials isolated", async () => {
   const workloads = await read("infra/helm/wasalx/templates/workloads.yaml");

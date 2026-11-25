@@ -1,6 +1,6 @@
 import {currentMetaRuntimeCandidate} from "./meta-request-provenance.js";
 import {currentMetaTransportBinding} from "./meta-transport-binding.js";
-import {verifyMetaInheritedTemplateSend} from "./meta-template-send.js";
+import {isVerifiedNonMarketingTemplate,verifyMetaInheritedTemplateSend} from "./meta-template-send.js";
 import {parseMetaBillingSnapshot} from "../../../packages/core/src/meta-account-policy.js";
 import {assertMetaLifecycleAccess} from "../../../packages/core/src/meta-account-relation.js";
 import {assertMetaCredentialProof} from "../../../packages/core/src/meta-account-relation.js";
@@ -8,6 +8,7 @@ import {MetaDirectEffectNotAttempted,assertMetaDirectAccountProof,MetaDirectIden
 import { renderNumberedChoices, renderOutboundText } from "../../../packages/core/src/outbound-text.js";
 import type { MessagingProviderAdapter } from "../../../packages/connectors/src/types.js";
 import { Buffer } from "node:buffer";
+import timers from "node:timers/promises";
 import { MetaGroupsAdapter, assertMetaTestOutboundAllowed } from "../../../packages/connectors/src/meta.js";
 import { parseWahaTestRecipientAllowlist } from "../../../packages/core/src/waha-test-recipient-scope.js";
 import { ProviderError } from "../../../packages/connectors/src/types.js";
@@ -27,6 +28,7 @@ import { executeBotAction } from "./bot-action.js";
 import { SecretResolutionError, type SecretResolver } from "./secrets.js";
 import type { BotActionJob, BotHandoffJob, ConversationStateJob, DirectCustomerCloseJob, DeliveryJob, StatusJob } from "./types.js";
 import {
+  currentTraceCarrier,
   observeDuration,
   recordDeliveryState,
   recordMetric,
@@ -35,11 +37,13 @@ import {
 } from "@wasalx/observability";
 
 const GROUP_REACTION_CONTENT_TYPE="application/vnd.wasalx.whatsapp-reaction";
+const AGENT_REPLY_SIGNAL_TIMEOUT_MS = 2_000;
+const AGENT_REPLY_SIGNAL_MAX_ATTEMPTS = 3;
 
 export class DeliveryProcessor{
   private readonly repository:OutboxRepository;private readonly secrets:SecretResolver;private readonly providerConfig:{wahaBaseUrl?:string;metaGraphVersion:string;metaAppId?:string};private readonly retryPolicy:Required<DeliveryRetryPolicy>;private readonly outboundMedia?:OutboundMediaPipeline;private readonly mediaSlots:AsyncSemaphore;
   constructor(repository:OutboxRepository,secrets:SecretResolver,providerConfig:{wahaBaseUrl?:string;metaGraphVersion:string;metaAppId?:string},retryPolicy:number|DeliveryRetryPolicy=DEFAULT_RETRY_POLICY,outboundMedia?:OutboundMediaPipeline,maxConcurrentMedia=2){if(!Number.isInteger(maxConcurrentMedia)||maxConcurrentMedia<1||maxConcurrentMedia>10)throw new Error("Outbound media concurrency is invalid");this.repository=repository;this.secrets=secrets;this.providerConfig=providerConfig;this.retryPolicy=normalizeRetryPolicy(retryPolicy);this.outboundMedia=outboundMedia;this.mediaSlots=new AsyncSemaphore(maxConcurrentMedia)}
-  async drainTenant(tenantId:string,metaTransitionEventIds:string[]=[]){if(metaTransitionEventIds.length>32||metaTransitionEventIds.some(id=>!(/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/u).test(id)))throw new Error("Invalid transition wake");const actionLease=crypto.randomUUID();const actions=await this.repository.claimBotActions(tenantId,actionLease);await Promise.all(actions.map(job=>this.runBotAction(job,actionLease)));const deliveryLease=crypto.randomUUID();const jobs=await this.repository.claimDeliveries(tenantId,deliveryLease);await Promise.all(groupDeliveriesByDestination(jobs).map(async destination=>{for(const job of destination)if(!await(job.media?this.mediaSlots.run(()=>this.deliver(job,deliveryLease)):this.deliver(job,deliveryLease)))break}));const handoffLease=crypto.randomUUID();const handoffs=(await this.repository.claimBotHandoffs?.(tenantId,handoffLease))??[];await Promise.all(handoffs.map(job=>this.runBotHandoff(job,handoffLease)));const closeLease=crypto.randomUUID();const closes=(await this.repository.claimDirectCustomerCloses?.(tenantId,closeLease))??[];for(const job of closes)await this.runDirectCustomerClose(job,closeLease);const conversationStateLease=crypto.randomUUID();const conversationStates=(await this.repository.claimConversationStates?.(tenantId,conversationStateLease))??[];await Promise.all(conversationStates.map(job=>this.reportConversationState(job,conversationStateLease)));const statusLease=crypto.randomUUID();const statuses=await this.repository.claimStatuses(tenantId,statusLease);await Promise.all(statuses.map(job=>this.reportStatus(job,statusLease)));await this.repository.reconsiderMetaIdentityTransitions?.(tenantId,{conversationIds:[...new Set([...actions.filter(job=>job.origin==="DIRECT_FLOW").map(job=>job.conversationId),...handoffs.map(job=>job.conversationId),...conversationStates.map(job=>job.conversationId)])],deliveryIds:[...new Set([...jobs.map(job=>job.id),...statuses.map(job=>job.deliveryId)])],ticketIds:closes.map(job=>job.ticketId),sourceEventIds:metaTransitionEventIds},this.providerConfig.metaAppId??"");return{actions:actions.length,deliveries:jobs.length,statuses:statuses.length}}
+  async drainTenant(tenantId:string,metaTransitionEventIds:string[]=[]){if(metaTransitionEventIds.length>32||metaTransitionEventIds.some(id=>!(/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/u).test(id)))throw new Error("Invalid transition wake");const actionLease=crypto.randomUUID();const actions=await this.repository.claimBotActions(tenantId,actionLease);await Promise.all(actions.map(job=>this.runBotAction(job,actionLease)));const deliveryLease=crypto.randomUUID();const jobs=await this.repository.claimDeliveries(tenantId,deliveryLease);const replySignals:Promise<void>[]=[];await Promise.all(groupDeliveriesByDestination(jobs).map(async destination=>{for(const job of destination)if(!await(job.media?this.mediaSlots.run(()=>this.deliver(job,deliveryLease,replySignals)):this.deliver(job,deliveryLease,replySignals)))break}));const handoffLease=crypto.randomUUID();const handoffs=(await this.repository.claimBotHandoffs?.(tenantId,handoffLease))??[];await Promise.all(handoffs.map(job=>this.runBotHandoff(job,handoffLease)));const closeLease=crypto.randomUUID();const closes=(await this.repository.claimDirectCustomerCloses?.(tenantId,closeLease))??[];for(const job of closes)await this.runDirectCustomerClose(job,closeLease);const conversationStateLease=crypto.randomUUID();const conversationStates=(await this.repository.claimConversationStates?.(tenantId,conversationStateLease))??[];await Promise.all(conversationStates.map(job=>this.reportConversationState(job,conversationStateLease)));const statusLease=crypto.randomUUID();const statuses=await this.repository.claimStatuses(tenantId,statusLease);await Promise.all(statuses.map(job=>this.reportStatus(job,statusLease)));await this.repository.reconsiderMetaIdentityTransitions?.(tenantId,{conversationIds:[...new Set([...actions.filter(job=>job.origin==="DIRECT_FLOW").map(job=>job.conversationId),...handoffs.map(job=>job.conversationId),...conversationStates.map(job=>job.conversationId)])],deliveryIds:[...new Set([...jobs.map(job=>job.id),...statuses.map(job=>job.deliveryId)])],ticketIds:closes.map(job=>job.ticketId),sourceEventIds:metaTransitionEventIds},this.providerConfig.metaAppId??"");await Promise.all(replySignals);return{actions:actions.length,deliveries:jobs.length,statuses:statuses.length}}
   private async runBotAction(job:BotActionJob,leaseId:string){
     const retriesRemain = job.attempts < this.retryPolicy.botAction;
     let result:Awaited<ReturnType<typeof executeBotAction>>=job.recordedResult??{state:"FAILED_TERMINAL",safeError:"Bot action result is unavailable"};
@@ -110,8 +114,8 @@ export class DeliveryProcessor{
     };
     // Reject invalid metadata before staging any source/article/provider work.
     assertProof();
-    const beforeRequest=async()=>{
-      try{await this.repository.assertMetaDeliveryContextCurrent(job,leaseId);}
+    const beforeRequest=async(purpose?: "agent-reply-signal")=>{
+      try{if(purpose!=="agent-reply-signal")await this.repository.assertMetaDeliveryContextCurrent(job,leaseId);}
       catch(error){if(error instanceof ProviderError)throw error;throw new ProviderError("Meta credential context could not be checked.",true,"META_CREDENTIAL_CONTEXT_UNAVAILABLE",undefined,true);}
       await checkTestRecipient?.();
       assertProof();
@@ -126,7 +130,9 @@ export class DeliveryProcessor{
         // A failed/missing local descriptor is UNKNOWN, never a caller-selected mode.
         let runtime;
         try{runtime=await currentMetaRuntimeCandidate({...await currentMetaTransportBinding(this.providerConfig.metaGraphVersion),graphVersion:this.providerConfig.metaGraphVersion});}catch{/* UNKNOWN */}
-        await this.repository.admitMetaMessageRequest(job,leaseId,hash,runtime,phoneNumberId,templateProof);assertProof();
+        const nonMarketing=Boolean(job.template&&await this.repository.whatsAppMarketingOptedOut(job)
+          &&await isVerifiedNonMarketingTemplate(job,adapter));
+        await this.repository.admitMetaMessageRequest(job,leaseId,hash,runtime,phoneNumberId,templateProof,nonMarketing);assertProof();
         await checkTestRecipient?.();
       }
       catch(error){if(error instanceof ProviderError)throw error;throw new ProviderError("Message request admission is unavailable.",true,"META_MESSAGE_ADMISSION_UNAVAILABLE",undefined,true);}
@@ -135,7 +141,7 @@ export class DeliveryProcessor{
       wabaIdFor:()=>job.metaCredentialContext?.wabaId??"",beforeRequest,beforeMessageSend,authorizeTestRecipient});
     return adapter;
   }
-  private async deliver(job:DeliveryJob,leaseId:string){
+  private async deliver(job:DeliveryJob,leaseId:string,replySignals:Promise<void>[]){
     let adapter:MessagingProviderAdapter;
     let sendInput!:Parameters<MessagingProviderAdapter["send"]>[0];
     let checkTestRecipient=async()=>{};
@@ -247,8 +253,12 @@ export class DeliveryProcessor{
       return false;
     }
     const sendStartedAt=Date.now();let result:Awaited<ReturnType<MessagingProviderAdapter["send"]>>;
+    let replySending = true;
+    if (job.directOrigin==="HUMAN"&&job.botConversationId&&job.ticketId&&job.articleId&&(job.batchSequence??0)===0) {
+      replySignals.push(this.signalAgentReply(job, leaseId, adapter, sendInput, () => replySending));
+    }
     try{
-      result=await adapter.send(sendInput);
+      result=await adapter.send(sendInput).finally(() => { replySending = false; });
     }catch(error){
       const detail=safeError(error);
       if(!(error instanceof ProviderError)||!error.outcomeKnown){await this.repository.outcomeUnknown(job,leaseId,detail,error instanceof ProviderError?error.code:undefined);observeDuration("wasalx_provider_send_seconds",sendStartedAt,{provider:job.provider,result:"outcome_unknown"});observeOutboundToProvider(job,"outcome_unknown");recordDeliveryState(job.provider,"OUTCOME_UNKNOWN",telemetryErrorCode(error));return false}
@@ -265,6 +275,62 @@ export class DeliveryProcessor{
     observeOutboundToProvider(job,"succeeded");
     recordDeliveryState(job.provider,result.state);
     return true;
+  }
+  private async signalAgentReply(
+    job: DeliveryJob,
+    leaseId: string,
+    adapter: MessagingProviderAdapter,
+    input: Parameters<MessagingProviderAdapter["send"]>[0],
+    replySending: () => boolean,
+  ) {
+    const { traceparent, requestId } = currentTraceCarrier();
+    const record = (signal: string, result: string) =>
+      recordMetric("wasalx_agent_reply_signal_total", 1, { provider: job.provider, operation: signal, result });
+    const recordFailure = (signal: string, error: unknown) => {
+      record(signal, "failed");
+      recordStructuredLog("warn", "delivery.agent_reply_signal_failed", {
+        request_id: traceparent?.split("-")[1] ?? requestId,
+        tenant_id: job.tenantId, delivery_id: job.id, provider: job.provider,
+        signal, error_code: telemetryErrorCode(error),
+      });
+    };
+    try {
+      const source = await this.repository.admitAgentReplySignal(job, leaseId);
+      if (!source) return;
+      const operations = adapter.agentReplySignals?.({
+        connectionId: input.connectionId,
+        groupId: input.groupId,
+        metaDirectRecipient: input.metaDirectRecipient,
+        inboundMessageId: source.messageId,
+      });
+      if (!operations?.length) {
+        record("read-and-typing", "unsupported");
+        return;
+      }
+      await Promise.all(operations.map(async operation => {
+        for (let attempt = 1; attempt <= AGENT_REPLY_SIGNAL_MAX_ATTEMPTS; attempt++) {
+          try {
+            const current = await this.repository.admitAgentReplySignal(job, leaseId, source.id);
+            if (!current) {
+              record(operation.kind, "no-longer-eligible");
+              return;
+            }
+            const result = await operation.send(AbortSignal.timeout(AGENT_REPLY_SIGNAL_TIMEOUT_MS),
+              () => current.canType && replySending());
+            record(operation.kind, result);
+            return;
+          } catch (error) {
+            if (!(error instanceof ProviderError && error.retryable) || attempt === AGENT_REPLY_SIGNAL_MAX_ATTEMPTS) {
+              recordFailure(operation.kind, error);
+              return;
+            }
+            await timers.setTimeout(backoffMs(attempt));
+          }
+        }
+      }));
+    } catch (error) {
+      recordFailure("read-and-typing", error);
+    }
   }
   private async runDirectCustomerClose(job:DirectCustomerCloseJob,leaseId:string){
     let attempted=job.state==='OUTCOME_UNKNOWN';let context:Awaited<ReturnType<ZammadClient['readDirectCustomerCloseContext']>>|undefined;

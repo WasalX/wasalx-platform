@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { readTenantPortalSource } from "./helpers/tenant-portal-source.mjs";
 import { BadRequestException } from "../services/control-api/node_modules/@nestjs/common/index.js";
 import { DeliveriesController } from "../services/control-api/dist/deliveries.controller.js";
 import { QuarantineController } from "../services/control-api/dist/quarantine.controller.js";
@@ -105,7 +106,7 @@ test("delivery claims are reclaimable only before the provider network boundary"
 test("a WAHA network interruption after begin-send becomes outcome unknown and is never auto-rescheduled", async () => {
   const calls = [];
   const repository = {
-    claimBotActions:async()=>[],claimDeliveries: async () => [delivery],
+    claimBotActions:async()=>[],whatsAppMarketingOptedOut:async()=>false,claimDeliveries: async () => [delivery],
     beginSend: async () => calls.push("begin-send"),
     complete: async () => calls.push("complete"),
     fail: async () => calls.push("fail"),
@@ -135,7 +136,7 @@ test("a WAHA network interruption after begin-send becomes outcome unknown and i
 test("a projection failure after provider acceptance never rewrites known success as outcome unknown", async () => {
   const calls = [];
   const repository = {
-    claimBotActions:async()=>[],claimDeliveries: async () => [delivery],
+    claimBotActions:async()=>[],whatsAppMarketingOptedOut:async()=>false,claimDeliveries: async () => [delivery],
     beginSend: async () => calls.push("begin-send"),
     complete: async () => { calls.push("complete-attempt"); throw new Error("database unavailable"); },
     fail: async () => calls.push("fail"),
@@ -268,7 +269,7 @@ test("the internal Zammad retry endpoint enforces the same durable retry policy"
 
 test("portal requires a visible typed review path for unknown sends", async () => {
   const [portal, messages] = await Promise.all([
-    readFile(new URL("../app/WasalXApp.tsx", import.meta.url), "utf8"),
+    readTenantPortalSource(),
     readFile(new URL("../lib/i18n/messages/en/tenant.ts", import.meta.url), "utf8"),
   ]);
   assert.match(portal, /tenant\.deliveries\.actions\.reviewOutcome/);

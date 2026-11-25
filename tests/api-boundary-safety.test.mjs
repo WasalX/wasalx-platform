@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import test from "node:test";
+import { readTenantPortalSource } from "./helpers/tenant-portal-source.mjs";
+import * as React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import ts from "typescript";
+import { formatNumber } from "../lib/i18n/format.ts";
+import { arabicPlatformMessages } from "../lib/i18n/messages/ar/platform.ts";
+import { englishPlatformMessages } from "../lib/i18n/messages/en/platform.ts";
+import { createTranslator } from "../lib/i18n/translate.ts";
 
 const read = (path) => readFile(new URL(`../${path}`, import.meta.url), "utf8");
 
@@ -27,7 +35,7 @@ test("logical UI retries retain one idempotency key through every bridge", async
 test("group mutations are revision fenced, immutable, and reject missing keys", async () => {
   const [migration, controller, drawer, bindingRoute, workspaceSettings, workspaceGroup, grants, revoke] = await Promise.all([
     read("services/control-api/migrations/0113_group_binding_revision_and_operation_receipts.sql"),
-    read("services/control-api/src/groups.controller.ts"), read("app/WasalXApp.tsx"),
+    read("services/control-api/src/groups.controller.ts"), readTenantPortalSource(),
     read("app/api/groups/[id]/binding/route.ts"), read("app/api/group-workspace/settings/route.ts"),
     read("app/api/group-workspace/groups/[id]/route.ts"), read("app/api/group-workspace/groups/[id]/grants/route.ts"),
     read("app/api/group-workspace/groups/[id]/grants/[grantId]/route.ts"),
@@ -56,7 +64,7 @@ test("group, case, and rule lists expose bounded cursor pagination without chang
     read("services/control-api/src/groups.controller.ts"), read("services/control-api/src/cases.controller.ts"),
     read("services/control-api/src/rule-governance.service.ts"), read("services/control-api/src/rules.controller.ts"),
     read("app/api/groups/route.ts"), read("app/api/cases/route.ts"), read("app/api/rule-sets/route.ts"),
-    read("app/WasalXApp.tsx"),read("app/CaseLifecycle.tsx"),
+    readTenantPortalSource(),read("app/CaseLifecycle.tsx"),
   ]);
   assert.match(groups,/@Query\("after"\)[\s\S]*@Query\("q"\)[\s\S]*position\(lower\(\$4\)[\s\S]*LIMIT \$3/u);
   assert.match(cases,/@Query\("before"\)[\s\S]*LIMIT \$3/u);
@@ -72,4 +80,62 @@ test("group, case, and rule lists expose bounded cursor pagination without chang
   assert.match(shell,/window\.setTimeout\([\s\S]*\/api\/groups\?\$\{params\}[\s\S]*controller\.abort\(\)/u);
   assert.match(shell,/\/api\/rule-sets\?limit=200&before=/u);
   assert.match(caseUi,/\/api\/cases\?limit=200&before=/u);
+});
+
+test("operator-visible API errors never name the control plane (#339)", async () => {
+  // Portal routes and their server libraries return these messages to operator screens; the catalogues have their own test.
+  // Identifiers and module paths have no spaces; a message that never reaches an operator is listed here.
+  const internal = new Set(["lib/data.ts: Use the managed control-plane webhook ingress"]);
+  const files = [
+    ...(await readdir(new URL("../app/api", import.meta.url), { recursive: true })).map((path) => `app/api/${path.replaceAll("\\", "/")}`),
+    ...(await readdir(new URL("../lib", import.meta.url))).map((path) => `lib/${path}`),
+  ].filter((path) => /\.tsx?$/u.test(path));
+  assert.ok(files.length > 50);
+  const findings = [];
+  for (const path of files) {
+    for (const line of (await read(path)).split("\n")) {
+      if (/^\s*(?:\/\/|\*)/u.test(line)) continue;
+      for (const [, double, single, template] of line.matchAll(/"([^"\n]* [^"\n]*)"|'([^'\n]* [^'\n]*)'|`([^`\n]* [^`\n]*)`/gu)) {
+        const text = double ?? single ?? template;
+        if (/control[ -]plane/iu.test(text) && !internal.has(`${path}: ${text}`)) findings.push(`${path}: ${text}`);
+      }
+    }
+  }
+  assert.deepEqual(findings, [], "use operator words such as \"the managed service\"");
+});
+
+test("a view given an unmapped API error shows the translated fallback, never the API text (#358)", async () => {
+  const source = await read("app/platform/PlatformConsole.tsx");
+  const parsed = ts.createSourceFile("PlatformConsole.tsx", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const component = parsed.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === "Progress");
+  assert.ok(component);
+  const compiled = ts.transpileModule(component.getText(parsed), { compilerOptions: { jsx: ts.JsxEmit.React } }).outputText;
+  const apiText = "Provisioning step failed after the upstream returned 502";
+  for (const [locale, dictionary] of [["en", englishPlatformMessages], ["ar", arabicPlatformMessages]]) {
+    const t = createTranslator(dictionary);
+    const Progress = new Function("React", "useI18n", "formatNumber", "stateLabel", "styles", `${compiled};return Progress;`)(React, () => ({ locale, t }), formatNumber, (value) => value, {});
+    const html = renderToStaticMarkup(React.createElement(Progress, { tenant: { progress_percent: 40, error_code: "UNMAPPED_PROVISIONING_FAILURE", safe_error: apiText } }));
+    assert.ok(dictionary["platform.tenants.operationFailed"], `${locale} catalogue has the fallback`);
+    assert.ok(html.includes(dictionary["platform.tenants.operationFailed"]), `${locale} shows the fallback`);
+    assert.ok(!html.includes(apiText), `${locale} hides the API text`);
+  }
+});
+
+test("views never render or rethrow an API's own error text (#358)", async () => {
+  // API error text is English only. Views show catalogue text: operatorFailureMessage, apiError or a t() key.
+  const files = (await readdir(new URL("../app", import.meta.url), { recursive: true }))
+    .map((path) => `app/${path.replaceAll("\\", "/")}`)
+    .filter((path) => /\.tsx?$/u.test(path) && !path.startsWith("app/api/") && !/\.stories\.tsx$/u.test(path));
+  assert.ok(files.length > 40);
+  const raw = [
+    /\b(?:result|body|payload)\??\.(?:error|message)\b/u, // a parsed response body's own text
+    /\{\s*(?:String\()?[\w.?]+\.(?:\w*safe_error|error_message)\)?\s*\}/u, // a stored API error rendered as is
+  ];
+  const findings = [];
+  for (const path of files) {
+    (await read(path)).split("\n").forEach((line, index) => {
+      if (raw.some((pattern) => pattern.test(line))) findings.push(`${path}:${index + 1}`);
+    });
+  }
+  assert.deepEqual(findings, [], "map the code with operatorFailureMessage or show a catalogue key instead");
 });

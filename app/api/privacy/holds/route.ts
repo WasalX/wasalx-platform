@@ -29,5 +29,5 @@ export async function POST(request: Request) {
 }
 
 function unavailable() {
-  return NextResponse.json({ error: "Privacy lifecycle requires the production control plane" }, { status: 503 });
+  return NextResponse.json({ error: "Privacy lifecycle requires the managed service" }, { status: 503 });
 }
