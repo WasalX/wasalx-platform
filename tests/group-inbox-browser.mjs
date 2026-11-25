@@ -220,7 +220,23 @@ try {
     await expect(group().getByRole("heading", { name: "Customers A" })).toBeFocused();
     await page.locator("#wx-group-message").fill("Draft A");
     await row(M).getByRole("button", { name: t("groups.quoteReply"), exact: true }).click();
+    const historyFixture = state.messages.get(B);
+    state.messages.set(B, [...historyFixture, ...Array.from({ length: 12 }, (_, index) =>
+      message(`history-${index}`, `Earlier operations update ${index + 1}`, {
+        provider_timestamp: new Date(Date.parse(stamp) - (index + 1) * 60_000).toISOString(),
+      }))]);
     await choose("Operations B");
+    const history = group().getByRole("region", { name: t("groups.history"), exact: true });
+    await expect(history.locator("li")).toHaveCount(13);
+    state.messages.set(B, historyFixture);
+    await expect(group().getByRole("heading", { name: "Operations B" })).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(history).toBeFocused();
+    const { top, max } = await history.evaluate(element => ({ top: element.scrollTop, max: element.scrollHeight - element.clientHeight }));
+    expect(max).toBeGreaterThan(1);
+    await page.keyboard.press(top > 1 ? "ArrowUp" : "ArrowDown");
+    await expect.poll(() => history.evaluate(element => element.scrollTop)).not.toBe(top);
+    await page.screenshot({ path: `${output}/group-history-keyboard-${locale}.png` });
     await page.locator("#wx-group-message").fill("Draft B");
     await choose("Customers A");
     await expect(page.locator("#wx-group-message")).toHaveValue("Draft A");

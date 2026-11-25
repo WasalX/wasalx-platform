@@ -17,6 +17,7 @@ import { consumeExpectedDirectSetupDenial, metaDirectConsentJourney } from "./me
 import { consumeExpectedSignupDenial, metaSignupJourney } from "./meta-signup.fixture";
 import { ticketEventWorkflowJourney } from "./ticket-event-workflows.fixture";
 import { expectAxeClean } from "../helpers/axe";
+import { captureTenantDesign, verifyRuleModalLabels } from "./design-evidence.fixture";
 import { expect, test, type Page } from "@playwright/test";
 import { arabicMessages } from "../../lib/i18n/messages/ar/index.ts";
 
@@ -124,13 +125,21 @@ const titleKey: Record<string, keyof typeof arabicMessages> = {
   settings: "tenant.title.settings",
 };
 
+const expectedBackendErrors = new WeakMap<Page, Array<{ url: string; status: number }>>();
 const problems = new WeakMap<Page, string[]>();
 test.beforeEach(async ({ page }) => {
   await installMetaRoutingReadFixture(page);
   await installWorkspaceReadFixture(page, role);
   const observed: string[] = [];
+  const backendErrors: Array<{ url: string; status: number }> = [];
   problems.set(page, observed);
+  expectedBackendErrors.set(page, backendErrors);
   page.on("console", (message) => {
+    if (message.text().startsWith("Failed to load resource:")) {
+      const index = backendErrors.findIndex(({ url, status }) =>
+        url === message.location().url && message.text().includes(String(status)));
+      if (index >= 0) { backendErrors.splice(index, 1); return; }
+    }
     if (message.type() === "error" && !consumeExpectedNumberReleaseDenial(page, message) && !consumeExpectedActivationDenial(page, message) && !consumeExpectedDirectSetupDenial(page, message) && !consumeExpectedSignupDenial(page, message) && !consumeExpectedReconnectDenial(page, message) && !consumeExpectedCoexistenceDenial(page, message) && !consumeExpectedAddAccessDenial(page, message) && !consumeExpectedRoutingDenial(page, message) && !consumeExpectedTemplateDenial(page, message) && !consumeExpectedLegacyDenial(page, message) && !consumeExpectedObservationFailure(page, message)) observed.push(message.text());
   });
   page.on("pageerror", (error) => observed.push(error.message));
@@ -145,6 +154,65 @@ async function open(page: Page, view: string) {
   const title = arabicMessages[titleKey[view]];
   await expect(page.getByRole("heading", { level: 1, name: title })).toBeVisible();
   await expect(page).toHaveTitle(`${title} · WasalX`);
+}
+
+if (role === "tenant_owner") {
+  test("owner captures tenant surfaces in light and dark", async ({ page }, testInfo) => {
+    await captureTenantDesign(page, testInfo, "ar", open);
+  });
+  test("Arabic rule modal labels every visible field in RTL", async ({ page }, testInfo) => {
+    await open(page, "rules");
+    await verifyRuleModalLabels(page, testInfo, "ar");
+  });
+
+  for (const [status, expected] of [
+    [409, arabicMessages["common.errors.conflict"]],
+    [502, arabicMessages["common.errors.unavailable"]],
+  ] as const) {
+    test(`Arabic groups bulk pause localizes HTTP ${status}`, async ({ page }, testInfo) => {
+      const englishError = "The selected groups could not be updated.";
+      await page.route("**/api/groups/bulk-toggle", async (route) => {
+        expect(route.request().method()).toBe("POST");
+        expect(route.request().postDataJSON()).toMatchObject({ enabled: false });
+        expectedBackendErrors.get(page)!.push({ url: route.request().url(), status });
+        await route.fulfill({ status, json: { error: englishError } });
+      });
+      await open(page, "groups");
+      await page.getByRole("checkbox", { name: arabicMessages["tenant.group.selection.selectVisible"], exact: true }).check();
+      await page.getByRole("region", { name: arabicMessages["tenant.group.bulk.actionsLabel"], exact: true })
+        .getByRole("button", { name: arabicMessages["tenant.group.bulk.pauseSelectedOpen"], exact: true }).click();
+      const dialog = page.getByRole("dialog");
+      await dialog.getByRole("button", { name: arabicMessages["tenant.group.bulk.pauseSelected"], exact: true }).click();
+      await expect(page.locator(".bulk-feedback")).toContainText(expected);
+      await page.keyboard.press("Escape");
+      await expect(dialog).toBeHidden();
+      await expect(page.getByRole("alert").getByText(expected, { exact: true })).toBeVisible();
+      await expect(page.getByText(englishError, { exact: false })).toHaveCount(0);
+      await testInfo.attach(`groups-bulk-error-${status}-ar-${testInfo.project.name}`, { body: await page.screenshot(), contentType: "image/png" });
+    });
+  }
+
+  for (const [view, operation, title, expected] of [
+    ["team", "TEAM_LIST", arabicMessages["teamsAdmin.title"], arabicMessages["teamsAdmin.failed"]],
+    ["settings", "MAILBOX_LIST", arabicMessages["mailboxes.title"], arabicMessages["mailboxes.failed"]],
+  ] as const) {
+    test(`Arabic ${operation} failure uses catalogue text`, async ({ page }, testInfo) => {
+      const englishError = "Could not load the administration records.";
+      const status = 500;
+      await page.route("**/api/inbox", async (route) => {
+        const request = route.request();
+        if (request.method() !== "POST" || request.postDataJSON().operation !== operation) return route.fallback();
+        expectedBackendErrors.get(page)!.push({ url: request.url(), status });
+        await route.fulfill({ status, json: { error: englishError } });
+      });
+      await open(page, view);
+      const panel = page.getByRole("region", { name: title, exact: true });
+      await expect(panel.getByRole("alert")).toHaveText(expected);
+      await expect(page.getByText(englishError, { exact: false })).toHaveCount(0);
+      await panel.scrollIntoViewIfNeeded();
+      await testInfo.attach(`${view}-load-error-ar-${testInfo.project.name}`, { body: await page.screenshot(), contentType: "image/png" });
+    });
+  }
 }
 
 test("all authorized tenant routes render public Arabic copy and RTL", async ({ page }, testInfo) => {

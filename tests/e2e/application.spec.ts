@@ -18,6 +18,7 @@ import { consumeExpectedSignupDenial, metaSignupJourney } from "./meta-signup.fi
 import { ticketEventWorkflowJourney } from "./ticket-event-workflows.fixture";
 import type { TeamAccessData } from "../../lib/control-plane-data";
 import { expectAxeClean } from "../helpers/axe";
+import { captureTenantDesign, verifyRuleModalLabels } from "./design-evidence.fixture";
 import { expect, test, type Page } from "@playwright/test";
 
 const role = process.env.WASALX_E2E_ROLE ?? "tenant_owner";
@@ -318,6 +319,16 @@ async function open(page: Page, view = "overview") {
   // vinext optimization and prefetch traffic.
   await expect(page.locator('[data-application-ready="true"]')).toBeVisible();
   await expect(page).toHaveTitle(`${titles[view]} · WasalX`);
+}
+
+if (role === "tenant_owner") {
+  test("owner captures tenant surfaces in light and dark", async ({ page }, testInfo) => {
+    await captureTenantDesign(page, testInfo, "en", open);
+  });
+  test("rule modal labels every visible field", async ({ page }, testInfo) => {
+    await open(page, "rules");
+    await verifyRuleModalLabels(page, testInfo, "en");
+  });
 }
 
 function escapeRegExp(value: string) {
@@ -967,19 +978,34 @@ test("mobile and tablet navigation keep content bounded and role-appropriate", {
 
   await open(page, "deliveries");
   await page.locator("html").evaluate((element) => { element.style.fontSize = "200%"; });
+  await page.route("**/api/deliveries/*", async (route) => {
+    const response = await route.fetch();
+    expect(response.ok()).toBe(true);
+    const detail = await response.json();
+    await route.fulfill({ response, json: { ...detail, delivery_attempts: Array.from({ length: 8 }, (_, index) => ({
+      ...detail.delivery_attempts[0], id: `fixture-attempt-${index + 1}`, attempt_number: index + 1,
+    })) } });
+  });
   await page.getByRole("button", { name: "Inspect" }).first().click();
   const drawer = page.getByRole("dialog", { name: "Delivery timeline" });
-  const body = drawer.locator(".operational-drawer-body");
+  const body = drawer.getByRole("region", { name: "Delivery timeline", exact: true });
+  await expect(body).toBeVisible();
   const geometry = await body.evaluate((element) => ({
     clientWidth: element.clientWidth, scrollWidth: element.scrollWidth,
     clientHeight: element.clientHeight, scrollHeight: element.scrollHeight,
   }));
   expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.clientWidth + 1);
   expect(geometry.scrollHeight).toBeGreaterThan(geometry.clientHeight);
-  await body.evaluate((element) => { element.scrollTop = element.scrollHeight; });
+  const close = drawer.getByRole("button", { name: "Close delivery details" });
+  await expect(close).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(body).toBeFocused();
+  const top = await body.evaluate((element) => element.scrollTop);
+  await page.keyboard.press("ArrowDown");
+  await expect.poll(() => body.evaluate((element) => element.scrollTop)).toBeGreaterThan(top);
+  await page.keyboard.press("End");
   await expect(body.locator(":scope > section").last()).toBeInViewport();
-  await drawer.getByRole("button", { name: "Close delivery details" }).focus();
-  await expect(drawer.getByRole("button", { name: "Close delivery details" })).toBeFocused();
+  await testInfo.attach("delivery-timeline-keyboard", { body: await page.screenshot(), contentType: "image/png" });
   await expectAxeClean(page);
 });
 
