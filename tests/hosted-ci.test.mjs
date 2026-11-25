@@ -1183,7 +1183,7 @@ test("optional PR lanes run on diff errors and gate their applicable checks", as
   const paths = [
     "infra/helm/", "infra/terraform/", ":(glob)scripts/validate-*", "scripts/release/fetch-verified-asset.sh",
     "compose.full.yaml", "tests/fixtures/production-backup-alerts.yaml", "tests/secret-adapter-readiness.test.rb",
-    ".github/workflows/ci.yml",
+    "docs/runbooks/alert-response.md", "infra/docker/full/prometheus/alerts.yaml", ".github/workflows/ci.yml",
   ].join(" ");
   const directory = await mkdtemp(join(tmpdir(), "wasalx-infra-validate-changes-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
