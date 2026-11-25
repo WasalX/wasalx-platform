@@ -20,23 +20,36 @@ The [Helm backup job](../../infra/helm/wasalx/templates/control-plane-backup.yam
 
 ## Rehearse recovery
 
-1. On the approved isolated Linux recovery host, stage the reviewed checkout, Node.js 22.23.4 or newer (see [package.json](../../package.json)) and AWS CLI v2. Pre-pull the [pinned PostgreSQL image](../../scripts/dr/rehearse-postgres-restore.mjs) into the Docker engine at `/run/docker.sock`. Use encrypted storage for the service cache and Docker data. Create the dedicated `wasalx-restore` account with access to that Docker engine. Reserve the engine for this service while it is installed because its cleanup sweeps rehearsal containers by label. Use the service for manual drills while the timer is installed. Running `rehearse-postgres-restore.mjs` directly can race with the cleanup. For client-envelope backups, install `age` and `age-keygen` and make the matching identity file readable only to the restore account.
+1. On the approved isolated Linux recovery host, stage the reviewed checkout, Node.js 22.23.4 or newer (see [package.json](../../package.json)), util-linux `flock` and AWS CLI v2. Pre-pull the [pinned PostgreSQL image](../../scripts/dr/rehearse-postgres-restore.mjs) into the Docker engine at `/run/docker.sock`. Use encrypted storage for the service cache and Docker data. Create the dedicated `wasalx-restore` account with access to that Docker engine. For client-envelope backups, install `age` and `age-keygen` and make the matching identity file readable only to the restore account.
 2. Set `BACKUP_S3_BUCKET`, `BACKUP_S3_ENDPOINT` and `BACKUP_S3_REGION` in the service's root-owned environment file at `/etc/wasalx/control-plane-restore.env`. Set `BACKUP_AGE_IDENTITY` to the protected identity file path for client-envelope backups. Configure the AWS CLI credential chain on the host for the service account. Grant read-only listing for the control-plane prefix, reads for manifests and reads for versioned archives, with KMS decryption where required. Configure the trusted CA for private S3 endpoints.
-3. Install the matching units. If the reviewed checkout or Node.js lives at a different path, set the service's `WorkingDirectory` or `ExecStart` in a host drop-in. Run the first drill before activating the timer.
+3. Have the Servers lead confirm any previous drill has stopped and stage the matching units and scripts together. If the reviewed checkout or Node.js lives at a different path, set the service's `WorkingDirectory` or `ExecStart` in a host drop-in. Verify the loaded unit and run the first drill before activating the timer.
 
    ```bash
    sudo install -m 0644 scripts/dr/wasalx-control-plane-restore.{service,timer} /etc/systemd/system/
    sudo systemd-analyze verify /etc/systemd/system/wasalx-control-plane-restore.{service,timer}
    sudo systemctl daemon-reload
+   systemctl cat wasalx-control-plane-restore.service
    sudo systemctl start wasalx-control-plane-restore.service
    sudo systemctl show wasalx-control-plane-restore.service -p Result -p ExecMainStatus -p ExecMainStartTimestamp -p ExecMainExitTimestamp
    sudo journalctl -u wasalx-control-plane-restore.service -n 20 --no-pager
+   ```
+
+4. Match the journal's backup ID, manifest version and archive version to the backup receipt. Retain the evidence JSON path printed by the service and verify that it reports `PASSED`, the matching manifest and archive digests, the restored schema checks, and a destroyed, network-isolated target. Capture its SHA-256, UTC start and finish, and restore duration. After Delivery accepts that evidence and authorizes the recurring run, enable the timer and read back its state and next firing. Record the sanitized first successful rehearsal and timer readback in [DELIVERY.md](../../DELIVERY.md#deviations). Route a failed service or a missed quarterly run to Delivery.
+
+   ```bash
    sudo systemctl enable --now wasalx-control-plane-restore.timer
+   systemctl is-enabled wasalx-control-plane-restore.timer
    systemctl list-timers --all wasalx-control-plane-restore.timer
    ```
 
-4. Match the journal's backup ID, manifest version and archive version to the backup receipt. Retain the evidence JSON path printed by the service and verify that it reports `PASSED`, the matching manifest and archive digests, the restored schema checks, and a destroyed, network-isolated target. Capture its SHA-256, UTC start and finish, restore duration and next timer firing. Record the sanitized first successful rehearsal and the recurring schedule in [DELIVERY.md](../../DELIVERY.md#deviations). Route a failed service or a missed quarterly run to Delivery.
-
 The service selects the last manifest key in lexicographic order. The [backup writer](../../services/workspace-configurator/src/backup-runtime.ts) prefixes each filename with the backup's UTC start timestamp, so keep the original object names. The selected manifest must be within the [backup freshness objective](../../scripts/dr/contracts.mjs). The service verifies the artifact version and digest before starting PostgreSQL.
 
-The service removes scratch directories, labeled rehearsal containers and their anonymous volumes before starting and after stopping. After an interrupted run, check the unit journal and run `docker --host unix:///run/docker.sock ps -aq --filter label=wasalx.io/purpose=dr-rehearsal`. An empty result confirms the containers are gone. After an abrupt shutdown or failed cleanup, clear any leftover rehearsal containers and their anonymous volumes through the same Docker engine before making the host available. Keep archive contents, identities, host paths and raw logs in private custody.
+The service and direct runner use the same host-local lock and Docker socket. Run either entrypoint as `wasalx-restore`, with the unit's private state and cache directories provisioned at their standard locations. Leave the lock file in place. A concurrent invocation fails without touching the active drill. Each drill checks its UUID, container name, purpose and full container ID before removing the target and its anonymous volumes. The service also removes that drill's scratch directory. Cleanup must finish before a successful receipt can be written.
+
+An interrupted drill or failed cleanup leaves a pending ownership record in the private state directory and blocks new drills. Check the journal and the pending record, confirm the old drill and its Docker commands have stopped, then run the scoped recovery as `wasalx-restore` from the reviewed checkout using the recorded drill UUID.
+
+```bash
+node scripts/dr/rehearse-postgres-restore.mjs --cleanup-interrupted "$rehearsal_id"
+```
+
+Recovery uses the same lock and refuses a stale UUID, a malformed record, or ambiguous container ownership. Escalate those failures to Delivery. Keep archive contents, identities, host paths and raw logs in private custody.
