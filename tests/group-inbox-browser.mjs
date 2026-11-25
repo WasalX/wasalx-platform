@@ -546,6 +546,14 @@ try {
       for (const [name, width, height] of [["desktop", 1440, 1000], ["mobile", 390, 844], ["zoom-equivalent", 720, 500]]) {
         await page.setViewportSize({ width, height });
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false, `${locale}:${theme}:${name}: overflow`);
+        const ticketsMode = page.getByRole("button", { name: t("inbox.conversations"), exact: true });
+        await ticketsMode.focus();
+        await page.keyboard.press("Tab");
+        await expect(groupsMode).toBeFocused();
+        await expect(groupsMode).toHaveAttribute("aria-pressed", "true");
+        await expect(groupsMode).toHaveCSS("display", "inline-flex");
+        await expect(groupsMode).toHaveCSS("outline-width", "2px");
+        await expect(groupsMode).toHaveCSS("outline-style", "solid");
         await page.screenshot({ path: `${output}/group-${locale}-${theme}-${name}.png`, fullPage: true });
         const accessibility = await new AxeBuilder({ page }).include(".wx-group").withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze();
         assert.deepEqual(accessibility.violations.map(item => ({ id: item.id, impact: item.impact })), [], `${locale}:${theme}:${name}: axe`);
@@ -586,9 +594,16 @@ try {
     await expect(page.locator(".wx-group")).toHaveCount(0);
     await context.close();
   }
-  const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+  const context = await browser.newContext({ hasTouch: true, viewport: { width: 1440, height: 1000 } });
   const page = await context.newPage(), state = await fixture(page);
   await page.goto(`${base}/iframe.html?id=product-group-inbox--read-only`, { waitUntil: "networkidle" });
+  assert.equal(await page.evaluate(() => matchMedia("(any-pointer: coarse)").matches), true);
+  const switchButtons = page.locator(".wx-inbox-switch").getByRole("button");
+  await expect(switchButtons).toHaveCount(2);
+  for (const button of await switchButtons.all()) {
+    await expect(button).toHaveCSS("min-inline-size", "44px");
+    await expect(button).toHaveCSS("min-block-size", "44px");
+  }
   await page.locator(".wx-group-choice").filter({ hasText: "Customers A" }).click();
   await expect(page.locator(".wx-group-header h2")).toHaveText("Customers A");
   await expect(page.locator("#wx-group-message")).toHaveCount(0);
