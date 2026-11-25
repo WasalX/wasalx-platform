@@ -86,7 +86,7 @@ try {
     credentials: [
       { type: "password", value: actor.password, temporary: false },
       { type: "otp", secretData: JSON.stringify({ value: actor.secret }),
-        credentialData: JSON.stringify({ type: realm.otpPolicyType, algorithm: realm.otpPolicyAlgorithm,
+        credentialData: JSON.stringify({ subType: realm.otpPolicyType, algorithm: realm.otpPolicyAlgorithm,
           digits: realm.otpPolicyDigits, period: realm.otpPolicyPeriod, counter: realm.otpPolicyInitialCounter }) },
     ],
   }));
