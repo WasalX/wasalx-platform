@@ -13,6 +13,10 @@ test("the WasalX compiler delegates package frontend validation to Zammad", asyn
     tsconfig.exclude?.includes("zammad-package/app/frontend/**/*"),
     "Zammad-only aliases must be compiled by Zammad's pinned frontend toolchain",
   );
+  assert.ok(
+    tsconfig.exclude?.includes("tests/fixtures/zammad-*/app/frontend/**/*"),
+    "Staged upstream snapshots are add-on fixtures, not platform TypeScript inputs",
+  );
 });
 
 test("native expected denials reject timeout, signal and unknown process failures", async () => {
