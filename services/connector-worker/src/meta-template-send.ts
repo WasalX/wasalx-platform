@@ -18,6 +18,7 @@ export type MetaTemplateSendProof = {
   targetSafetyRevision: number; targetTemplateId: string; semanticSha256: string;
   inventoryResponseSha256: string; observedAt: string;
 };
+export type TicketTemplateSafetyProof = { providerAccountId: string; revision: string; nonMarketing: boolean };
 export interface MetaTemplateSendStore {
   /** null means this exact current delivery has no inherited legacy template.
    * Missing/stale mapping or an old birth account throws; it is not null. */
@@ -59,18 +60,21 @@ export async function verifyMetaInheritedTemplateSend(job: DeliveryJob, leaseId:
 }
 
 /** Read the same account inventory again under the final delivery lease. */
-export async function verifyApprovedTicketTemplateSend(job: DeliveryJob, adapter: Pick<MetaGroupsAdapter, 'templatePreparationCalls'>) {
+export async function verifyApprovedTicketTemplateSend(job: DeliveryJob, adapter: Pick<MetaGroupsAdapter, 'templatePreparationCalls'>,
+  safetyRevision: () => Promise<string | null>): Promise<TicketTemplateSafetyProof | undefined> {
   if (!job.ticketTemplate) return;
   const held = () => new ProviderError('The selected template is no longer approved or has changed.', false,
     'META_TEMPLATE_SEND_HELD', undefined, true);
   const accountId = job.metaCredentialContext?.wabaId;
   if (job.directOrigin !== 'HUMAN' || job.recipientType !== 'DIRECT' || job.articleId || !accountId || !job.template) throw held();
+  const revision = await safetyRevision();
+  if (revision === null) throw held();
   const inventory = await adapter.templatePreparationCalls().inventory(accountId);
   const found = inventory.complete && inventory.items.find(item => item.id === job.ticketTemplate?.id);
   const approval = found ? approvedTicketTemplate(found) : null;
   if (!found || !approval || approval.semanticSha256 !== job.ticketTemplate.semanticSha256 || approval.name !== job.template.name ||
     approval.language !== job.template.languageCode || approval.parameterCount !== job.template.bodyParameters.length) throw held();
-  return found.category !== 'MARKETING';
+  return { providerAccountId: accountId, revision, nonMarketing: found.category !== 'MARKETING' };
 }
 
 export async function isVerifiedNonMarketingTemplate(job: DeliveryJob, adapter: MetaGroupsAdapter): Promise<boolean> {

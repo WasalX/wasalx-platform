@@ -706,7 +706,8 @@ export async function verifyMetaDirectIdentityPostgres(adminUrl,workerConfig,app
       : c.query(sql,values);
     const db={rows:async(scope,sql,values)=>{assert.equal(scope,tenantId);return (await query(sql,values)).rows},
       withTenant:async(scope,fn)=>{assert.equal(scope,tenantId);return fn({query})}};
-    const signed={verify:async()=>({tenantId,instanceId,userId:'3',groupIds:['2'],groupAdmin:false})};
+    let agentId='3';
+    const signed={verify:async()=>({tenantId,instanceId,userId:agentId,groupIds:['2'],groupAdmin:false})};
     const clients={create:(token,phoneId,beforeRequest)=>{
       assert.equal(token,templateAccessToken);
       assert.equal(phoneId,phoneNumberId);
@@ -732,6 +733,7 @@ export async function verifyMetaDirectIdentityPostgres(adminUrl,workerConfig,app
     await assert.rejects(service.sendTicketTemplate('Synthetic native claims',{...selection,template_id:'342'}),{status:409});
     await assert.rejects(service.outbound('Synthetic native claims',{...target,article_id:9988,body:'Free text',
       agent:{id:'3'},idempotency_key:randomUUID()}),{status:409});
+    const earlier=await service.sendTicketTemplate('Synthetic native claims',{...selection,request_token:randomUUID()});
     const queued=await service.sendTicketTemplate('Synthetic native claims',selection);
     assert.equal(queued.state,'QUEUED');
     const readsAfterSend=inventoryReads;
@@ -744,11 +746,15 @@ export async function verifyMetaDirectIdentityPostgres(adminUrl,workerConfig,app
     assert.equal(delivery.zammad_article_id,null);
     assert.equal(delivery.bot_content.type,'template');
     assert.deepEqual(delivery.bot_content.bodyParameters,['42']);
-    const context=await service.ticketContext('Synthetic native claims',ticketId);
-    assert.equal(context.delivery_id,queued.id);
-    assert.equal(context.delivery_state,'QUEUED');
-    assert.equal(context.zammad_article_id,null);
-    assert.equal(context.delivery_retry_allowed,false);
+    assert.equal((await c.query("UPDATE delivery_outbox SET updated_at=updated_at+interval '1 hour' WHERE id=$1",[earlier.id])).rowCount,1);
+    const receipt={...target,request_token:selection.request_token};
+    assert.deepEqual(await service.ticketTemplateStatus('Synthetic native claims',receipt),{delivery:queued});
+    assert.deepEqual(await service.ticketTemplateStatus('Synthetic native claims',{...receipt,delivery_id:queued.id}),{delivery:queued});
+    assert.deepEqual(await service.ticketTemplateStatus('Synthetic native claims',{...receipt,delivery_id:earlier.id}),{delivery:null});
+    assert.deepEqual(await service.ticketTemplateStatus('Synthetic native claims',{...receipt,ticket_id:'98232'}),{delivery:null});
+    agentId='4';
+    assert.deepEqual(await service.ticketTemplateStatus('Synthetic native claims',receipt),{delivery:null});
+    agentId='3';
     assert.equal((await c.query("SELECT count(*)::int AS count FROM audit_events WHERE tenant_id=$1 AND target_id=$2 AND action='delivery.template_queued'",
       [tenantId,queued.id])).rows[0].count,1);
    },apiPool);

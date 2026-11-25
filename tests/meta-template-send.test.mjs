@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { verifyApprovedTicketTemplateSend, verifyMetaInheritedTemplateSend } from '../services/connector-worker/dist/services/connector-worker/src/meta-template-send.js';
+import { OutboxRepository } from '../services/connector-worker/dist/services/connector-worker/src/repository.js';
 import { buildMetaTemplateMapping } from '../packages/core/dist/meta-template-mapping.js';
 import { parseMetaTemplateInventoryItem } from '../packages/core/dist/meta-template-inventory.js';
 
@@ -66,20 +67,36 @@ test('only an authoritative non-inherited context skips the extra GET; unavailab
 });
 
 
-test('approved ticket template checks the current account before the simulated message dispatch', async () => {
+test('ticket approval must survive the final Messages admission after the simulated inventory read', async () => {
   const { MetaGroupsAdapter } = await import('../services/connector-worker/dist/packages/connectors/src/meta.js');
   const { approvedTicketTemplate } = await import('../packages/core/dist/meta-template-continuity.js');
   const inv=inventory('222','444');
   const approved=approvedTicketTemplate(inv.items[0]);
-  const job={provider:'meta',directOrigin:'HUMAN',recipientType:'DIRECT',metaCredentialContext:{wabaId:'222'},
+  const job={id:id(5),tenantId:id(6),connectionId:id(7),sessionId:'111',attempts:1,
+    provider:'meta',directOrigin:'HUMAN',recipientType:'DIRECT',metaCredentialContext:{wabaId:'222'},
     ticketTemplate:{id:approved.id,semanticSha256:approved.semanticSha256},
     template:{name:approved.name,languageCode:approved.language,bodyParameters:['42']}};
   const wire=[];
   const originalFetch=globalThis.fetch;
-  let row=inv.items[0].definition;
+  let row=inv.items[0].definition,revision='0',invalidatesDuringGet=false,stamps=0;
+  const repository=new OutboxRepository({connect:async()=>({release(){},async query(sql){
+    if(sql.includes('lock_meta_ticket_template_safety'))return {rows:[{revision}]};
+    if(sql.includes(' AS acquired'))return {rows:[{acquired:true}]};
+    if(sql.includes(' AS active'))return {rows:[{active:true}]};
+    if(sql.includes('FROM delivery_outbox delivery JOIN delivery_attempts'))
+      return {rows:[{id:id(9),meta_billing_snapshot:null}]};
+    if(sql.startsWith('UPDATE delivery_attempts'))stamps++;
+    if(sql.includes('record_meta_inherited_template_admission'))return {rows:[{admitted:true}]};
+    return {rows:[]};
+  }})});
+  repository.metaDeliveryContextCurrent=async()=>true;
+  repository.metaBillingCurrent=async()=>{};
   globalThis.fetch=async (url,init)=>{
     const path=new URL(url).pathname;
-    if(path==='/v24.0/222/message_templates')return Response.json({data:[row]});
+    if(path==='/v24.0/222/message_templates'){
+      if(invalidatesDuringGet)revision='1';
+      return Response.json({data:[row]});
+    }
     assert.equal(path,'/v24.0/111/messages');
     wire.push(JSON.parse(init.body));
     return Response.json({messages:[{id:'simulated-delivery'}]});
@@ -87,18 +104,29 @@ test('approved ticket template checks the current account before the simulated m
   try {
     const adapter=new MetaGroupsAdapter({accessToken:'synthetic-template-token',graphVersion:'v24.0',
       phoneNumberIdFor:()=> '111',baseUrl:'https://graph.example.test',
-      beforeMessageSend:()=>verifyApprovedTicketTemplateSend(job,adapter)});
+      beforeMessageSend:async(hash,phone)=>{
+        const lease=id(8);
+        const proof=await verifyApprovedTicketTemplateSend(job,adapter,()=>repository.metaTicketTemplateSafetyRevision(job,lease));
+        await repository.admitMetaMessageRequest(job,lease,hash,undefined,phone,null,false,proof);
+      }});
     const send=()=>adapter.send({connectionId:'synthetic',groupId:'12025550173',recipientType:'DIRECT',text:'order_update',
       idempotencyKey:'synthetic-ticket-template',template:job.template});
     await send();
     assert.equal(wire.length,1);
     assert.equal(wire[0].type,'template');
     assert.deepEqual(wire[0].template.components,[{type:'body',parameters:[{type:'text',text:'42'}]}]);
+    assert.equal(stamps,1);
+    invalidatesDuringGet=true;
+    await assert.rejects(send,{code:'META_TEMPLATE_SEND_HELD'});
+    assert.equal(stamps,1);
+    assert.equal(wire.length,1);
+    invalidatesDuringGet=false;
     row={...row,status:'PAUSED'};
     await assert.rejects(send,{code:'META_TEMPLATE_SEND_HELD'});
     row=inventory('222','444','Order {{1}} moved.').items[0].definition;
     await assert.rejects(send,{code:'META_TEMPLATE_SEND_HELD'});
     assert.equal(wire.length,1);
+    assert.equal(stamps,1);
   } finally {
     globalThis.fetch=originalFetch;
   }

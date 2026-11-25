@@ -3,7 +3,7 @@ import {reconsiderMetaIdentityTransitions} from "./meta-direct-identity.js";
 import { metaTestRecipientAdmission, resolveMetaTestRecipientLink } from "../../../packages/core/src/meta-test-recipient-link.js";
 import { parseWahaTestRecipientAllowlist } from "../../../packages/core/src/waha-test-recipient-scope.js";
 import type {MetaRuntimeEvidenceCandidate} from "./meta-request-provenance.js";
-import type {MetaTemplateSendContext,MetaTemplateSendProof} from "./meta-template-send.js";
+import type {MetaTemplateSendContext,MetaTemplateSendProof,TicketTemplateSafetyProof} from "./meta-template-send.js";
 import {assertMetaDirectEffectCurrent,MetaDirectEffectNotAttempted,parseMetaDirectRecipientSnapshot} from "../../../packages/core/src/meta-direct-identity.js";
 import {metaLifecyclePayloadSha256,parseMetaLifecycleState} from "../../../packages/core/src/meta-account-relation.js";
 import {ProviderError} from "../../../packages/connectors/src/types.js";
@@ -574,7 +574,15 @@ export class OutboxRepository{
   async whatsAppMarketingOptedOut(job:DeliveryJob){
     return this.tenant(job.tenantId,client=>whatsappMarketingOptedOut(client,job.tenantId,job.connectionId,job.metaDirectRecipientSnapshot));
   }
-  async admitMetaMessageRequest(job:DeliveryJob,leaseId:string,requestSha256:string,runtime?:MetaRuntimeEvidenceCandidate,requestPhoneNumberId=job.sessionId,templateProof:MetaTemplateSendProof|null=null,nonMarketing=false) {
+  private async lockMetaTicketTemplateSafety(client:PoolClient,job:DeliveryJob,leaseId:string) {
+    return (await client.query<{revision:string|null}>(
+      'SELECT app.lock_meta_ticket_template_safety($1,$2,$3) AS revision',
+      [job.id,leaseId,job.metaCredentialContext?.wabaId??null])).rows[0]?.revision??null;
+  }
+  async metaTicketTemplateSafetyRevision(job:DeliveryJob,leaseId:string) {
+    return this.tenant(job.tenantId,client=>this.lockMetaTicketTemplateSafety(client,job,leaseId));
+  }
+  async admitMetaMessageRequest(job:DeliveryJob,leaseId:string,requestSha256:string,runtime?:MetaRuntimeEvidenceCandidate,requestPhoneNumberId=job.sessionId,templateProof:MetaTemplateSendProof|null=null,nonMarketing=false,ticketTemplateProof?:TicketTemplateSafetyProof) {
     if(job.provider!=='meta')return;
     await this.tenant(job.tenantId,async client=>{
       if((await client.query<{acquired:boolean}>("SELECT pg_try_advisory_xact_lock_shared(hashtextextended('privacy:'||$1::text,0)) AS acquired",[job.tenantId])).rows[0]?.acquired!==true)
@@ -602,9 +610,13 @@ export class OutboxRepository{
           AND delivery.content_redacted_at IS NULL AND NOT app.delivery_has_active_privacy_target(delivery.id)
           AND attempt.state='SENDING' AND attempt.finished_at IS NULL AND attempt.meta_billing_admission IS NULL FOR UPDATE OF delivery,attempt`,[job.tenantId,job.id,leaseId])).rows[0];
       if(!row||!/^[a-f0-9]{64}$/u.test(requestSha256))throw new ProviderError('Message request admission is unavailable.',false,'META_MESSAGE_NOT_ATTEMPTED',undefined,true);
+      if(job.ticketTemplate&&(!ticketTemplateProof||ticketTemplateProof.providerAccountId!==job.metaCredentialContext?.wabaId
+        ||await this.lockMetaTicketTemplateSafety(client,job,leaseId)!==ticketTemplateProof.revision))
+        throw new ProviderError('Template approval changed before dispatch.',false,'META_TEMPLATE_SEND_HELD',undefined,true);
       if(job.template){
         await client.query("SELECT pg_advisory_xact_lock_shared(hashtextextended('whatsapp-marketing:'||$1::uuid::text,0))",[job.tenantId]);
-        if(await whatsappMarketingOptedOut(client,job.tenantId,job.connectionId,job.metaDirectRecipientSnapshot)&&!nonMarketing)
+        if(await whatsappMarketingOptedOut(client,job.tenantId,job.connectionId,job.metaDirectRecipientSnapshot)
+          &&!(job.ticketTemplate?ticketTemplateProof?.nonMarketing===true:nonMarketing))
           throw new ProviderError("The contact has stopped WhatsApp marketing messages. Only verified non-marketing templates can be sent.",
             false,"WHATSAPP_MARKETING_OPTED_OUT",undefined,true);
       }

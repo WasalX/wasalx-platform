@@ -1297,8 +1297,10 @@ test("marketing opt-outs block unverified templates before POST and preserve ser
     const repository={
       claimBotActions:async()=>[],claimDeliveries:async()=>[delivery],beginSend:async()=>true,
       assertMetaDeliveryContextCurrent:async()=>{},metaInheritedTemplateContext:async()=>null,
-      whatsAppMarketingOptedOut:async()=>optedOut,admitMetaMessageRequest:async(_job,_lease,_hash,_runtime,_phone,_proof,nonMarketing)=>{
+      metaTicketTemplateSafetyRevision:async()=>"0",
+      whatsAppMarketingOptedOut:async()=>optedOut,admitMetaMessageRequest:async(_job,_lease,_hash,_runtime,_phone,_proof,nonMarketing,ticketProof)=>{
         assert.equal(nonMarketing,Boolean(optedOut&&category==="UTILITY"));
+        assert.equal(ticketProof?.revision,ticketTemplate?"0":undefined);
         if(delivery.template&&optedOut&&!nonMarketing)throw new ProviderError("Marketing is stopped",false,"WHATSAPP_MARKETING_OPTED_OUT");
       },
       fail:async(...args)=>failures.push(args[6]),complete:async()=>{},claimStatuses:async()=>[],

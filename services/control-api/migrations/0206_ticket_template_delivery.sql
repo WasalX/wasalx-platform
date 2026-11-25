@@ -255,6 +255,34 @@ $$;
 REVOKE ALL ON FUNCTION app.meta_customer_window_open(uuid,text,timestamptz) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.meta_customer_window_open(uuid,text,timestamptz) TO wasalx_app,wasalx_connector_worker;
 
+-- Use the same safety row as signed template invalidations. Generation zero
+-- must also have a row so the final request transaction can lock it.
+CREATE FUNCTION app.lock_meta_ticket_template_safety(delivery_value uuid,lease_value uuid,provider_account text)
+ RETURNS text LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public,app,pg_temp SET row_security=on AS $$
+DECLARE account_value uuid;revision_value bigint;
+BEGIN
+ SELECT account.id INTO STRICT account_value
+ FROM public.delivery_outbox delivery
+ JOIN public.provider_sessions session ON session.tenant_id=delivery.tenant_id AND session.connection_id=delivery.connection_id
+ JOIN public.meta_messaging_accounts account ON account.tenant_id=delivery.tenant_id
+  AND account.provider_account_id=provider_account AND account.provider_account_id=session.provider_state_data->>'wabaId'
+ WHERE delivery.tenant_id=app.current_tenant_id() AND delivery.id=delivery_value AND delivery.lease_id=lease_value
+  AND delivery.state='SENDING' AND delivery.lease_expires_at>clock_timestamp() AND delivery.content_redacted_at IS NULL
+  AND NOT app.delivery_has_active_privacy_target(delivery.id)
+  AND delivery.direct_origin='HUMAN' AND delivery.delivery_origin='TICKET' AND delivery.zammad_article_id IS NULL
+  AND app.is_ticket_template(delivery.bot_content) AND session.ownership_state='ACTIVE' AND session.state='WORKING'
+ FOR SHARE OF account;
+ INSERT INTO public.meta_template_account_safety(tenant_id,account_id)
+ VALUES(app.current_tenant_id(),account_value) ON CONFLICT DO NOTHING;
+ SELECT revision INTO STRICT revision_value FROM public.meta_template_account_safety
+  WHERE tenant_id=app.current_tenant_id() AND account_id=account_value FOR SHARE;
+ RETURN revision_value::text;
+EXCEPTION WHEN no_data_found OR too_many_rows THEN RETURN NULL;
+END $$;
+ALTER FUNCTION app.lock_meta_ticket_template_safety(uuid,uuid,text) OWNER TO wasalx_meta_transition_executor;
+REVOKE ALL ON FUNCTION app.lock_meta_ticket_template_safety(uuid,uuid,text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.lock_meta_ticket_template_safety(uuid,uuid,text) TO wasalx_connector_worker;
+
 CREATE OR REPLACE FUNCTION app.meta_inherited_template_send_context(delivery_value uuid,lease_value uuid) RETURNS jsonb
  LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public,app,pg_temp AS $$
 DECLARE d public.delivery_outbox;b public.meta_connection_account_bindings;a public.meta_messaging_accounts;

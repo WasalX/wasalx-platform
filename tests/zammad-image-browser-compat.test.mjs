@@ -379,6 +379,7 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
   const template = { id: "341", name: "order_update", language: "ar", text: "طلب {{1}}",
     parameterCount: 1, semanticSha256: "a".repeat(64) };
   const templateDeliveryId = "14000000-0000-4000-8000-000000000098";
+  const earlierDeliveryId = "14000000-0000-4000-8000-000000000097";
   try {
     const replyPreviewPath = "/internal/v1/zammad/reply-preview";
     const handleFixtureRequest = async (request, response) => {
@@ -423,7 +424,7 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
         value = { available: true };
       }
       else if (request.method === "POST" && ["/internal/v1/zammad/ticket-templates/catalog",
-        "/internal/v1/zammad/ticket-templates/send"].includes(url.pathname)) {
+        "/internal/v1/zammad/ticket-templates/send", "/internal/v1/zammad/ticket-templates/status"].includes(url.pathname)) {
         const payload = JSON.parse(raw);
         assert.equal(claims.scope, "zammad:outbound");
         assert.equal(String(claims.zammad_user_id), state.templateAgentId);
@@ -433,12 +434,17 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
         assert.equal(payload.group_id, "12125550104");
         if (url.pathname.endsWith("/catalog")) {
           value = { window: "CLOSED", templates: [template] };
+        } else if (url.pathname.endsWith("/status")) {
+          assert.equal(payload.request_token, state.templateToken);
+          if (payload.delivery_id !== undefined) assert.equal(payload.delivery_id, templateDeliveryId);
+          value = { delivery: { id: templateDeliveryId, state: state.templateStatus } };
         } else {
           assert.match(payload.request_token, /^[a-f0-9-]{36}$/u);
           assert.equal(payload.template_id, template.id);
           assert.equal(payload.template_sha256, template.semanticSha256);
           assert.deepEqual(payload.parameters, ["42"]);
-          state.templateSent = true;
+          state.templateToken = payload.request_token;
+          state.templateStatus = "QUEUED";
           value = { id: templateDeliveryId, state: "QUEUED" };
         }
       }
@@ -478,8 +484,10 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
         last_provider_event_at: "2026-08-20T10:03:00.000Z", delivery_updated_at: "2026-08-20T10:03:00.000Z",
         ...(url.pathname === `/internal/v1/zammad/tickets/${state.templateTicketId}/context` ? {
           provider: "META", service_window_expires_at: "2020-01-01T00:00:00.000Z",
-          delivery_id: state.templateSent ? templateDeliveryId : null,
-          delivery_state: state.templateSent ? "DELIVERED" : null, zammad_article_id: null,
+          // An unrelated older send updates the general panel while the
+          // selected template is still queued.
+          delivery_id: state.templateToken ? earlierDeliveryId : null,
+          delivery_state: state.templateToken ? "FAILED_TERMINAL" : null, zammad_article_id: null,
         } : {}),
       };
       else if (request.method === "GET" && url.pathname === `/internal/v1/zammad/group-workspace/tickets/${state.ticketId}/message-context`) value = {
@@ -1545,6 +1553,9 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
     await articleBubble.getByRole("button", { name: "Reply on WhatsApp" }).waitFor({ state: "visible" });
     const wasalxSidebar = page.getByRole("button", { name: "WasalX operations" });
     await wasalxSidebar.waitFor({ state: "visible" });
+    // Native sidebar selection can survive navigation. Select the other tab
+    // first so this click cannot close an already-selected WasalX sidebar.
+    await page.getByRole("button", { name: "Ticket", exact: true }).click();
     await wasalxSidebar.click();
     await page.getByRole("region", { name: "Riyadh Operations" }).filter({ hasText: `#${state.ticketNumber}` }).waitFor({ state: "visible" });
     await page.getByRole("link", { name: "Show triggering message" }).waitFor({ state: "visible" });
@@ -1792,7 +1803,8 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
 
     // Exercise the installed composer and signed Rails endpoint against the simulated control API.
     await dockerAsync(directory, project, 'exec', '-T', 'zammad-railsserver', 'bundle', 'exec', 'rails', 'runner', `
-      Ticket.find(${directFixture.id}).update_columns(wasalx_provider: 'META', wasalx_group_id: '12125550104')
+      Ticket.find(${directFixture.id}).update_columns(wasalx_provider: 'META', wasalx_group_id: '12125550104',
+        state_id: Ticket::State.find_by!(name: 'open').id)
     `);
     state.templateTicketId = directFixture.id;
     state.templateAgentId = String(firstIdentityProof.agent_id);
@@ -1805,30 +1817,41 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
       await directBubble.hover();
       await directBubble.getByRole('button', { name: replyLabel, exact: true }).click();
       await templateButton.click();
-      await templateDialog.getByRole('combobox').selectOption(template.id);
-      await templateDialog.getByText(template.text, { exact: true }).waitFor();
     };
     await openTemplateComposer('Reply on WhatsApp');
+    await templateDialog.getByRole('combobox').selectOption(template.id);
+    await templateDialog.getByText(template.text, { exact: true }).waitFor();
     assert.equal(await templateDialog.getAttribute('dir'), 'ltr');
     await templateDialog.getByRole('textbox', { name: 'Template parameter 1' }).fill('42');
-    const [templateResponse] = await Promise.all([
-      page.waitForResponse(response => new URL(response.url()).pathname === `/api/v1/wasalx/tickets/${state.templateTicketId}/templates`
-        && response.request().method() === 'POST'),
-      templateDialog.getByRole('button', { name: 'Send template', exact: true }).click(),
-    ]);
-    assert.equal(templateResponse.status(), 202);
-    assert.deepEqual(await templateResponse.json(), { id: templateDeliveryId, state: 'QUEUED' });
-    await templateDialog.getByText('Template queued. Follow its delivery status on this ticket.', { exact: true }).waitFor();
+    let templateReceipt;
+    await page.route(`${zammadOrigin}/api/v1/wasalx/tickets/${state.templateTicketId}/templates`, async route => {
+      const response = await route.fetch();
+      templateReceipt = { status: response.status(), body: await response.json() };
+      await route.abort();
+    }, { times: 1 });
+    await templateDialog.getByRole('button', { name: 'Send template', exact: true }).click();
+    await templateDialog.getByText('Could not confirm the send. Retry this same template to check.', { exact: true }).waitFor();
+    assert.deepEqual(templateReceipt, { status: 202, body: { id: templateDeliveryId, state: 'QUEUED' } });
     await templateDialog.getByRole('button', { name: 'Close', exact: true }).click();
     await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.getByRole("button", { name: "Ticket", exact: true }).click();
     await wasalxSidebar.click();
-    await page.getByText('Delivered', { exact: true }).waitFor();
+    await page.getByRole('button', { name: 'Track template delivery', exact: true }).click();
+    await templateDialog.getByText('Queued', { exact: true }).waitFor();
+    state.templateStatus = 'DELIVERED';
+    await templateDialog.getByRole('button', { name: 'Check template delivery status', exact: true }).click();
+    await templateDialog.getByText('Delivered', { exact: true }).waitFor();
+    const exactStatus = state.requests.filter(item => item.path.endsWith('/ticket-templates/status')).at(-1);
+    assert.equal(exactStatus.body.delivery_id, templateDeliveryId);
+    await templateDialog.getByRole('button', { name: 'Close', exact: true }).click();
 
     await setNativeLocale(agentEmail, 'ar');
     try {
       await openTemplateComposer('الرد عبر واتساب');
       await templateDialog.getByRole('heading', { name: 'إرسال قالب واتساب', exact: true }).waitFor();
       assert.equal(await templateDialog.evaluate(dialog => getComputedStyle(dialog).direction), 'rtl');
+      await templateDialog.getByRole('button', { name: 'إرسال قالب آخر', exact: true }).click();
+      await templateDialog.getByRole('combobox').selectOption(template.id);
       assert.equal(await templateDialog.getByRole('textbox').getAttribute('dir'), 'auto');
       await page.keyboard.press('Escape');
       await templateDialog.waitFor({ state: 'hidden' });
@@ -1836,7 +1859,7 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
       await setNativeLocale(agentEmail, 'en-us');
     }
     const templateRequests = state.requests.slice(templateStart).filter(request => request.path.includes('/ticket-templates/'));
-    assert.deepEqual(templateRequests.map(request => request.path.split('/').at(-1)), ['catalog', 'send', 'catalog']);
+    assert.deepEqual(templateRequests.map(request => request.path.split('/').at(-1)), ['catalog', 'send', 'status', 'status', 'status', 'catalog']);
 
     await page.goto(`${zammadOrigin}/desktop/tickets/${state.ticketId}`, { waitUntil: 'domcontentloaded' });
     await page.getByRole('heading', { name: 'Existing shipment SHIP-41', exact: true }).first().waitFor();
@@ -2299,7 +2322,7 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
       requestPaths: state.requests.map((request) => `${request.method} ${request.path}${request.query}`),
       seriousAccessibilityViolations: 0,
       compiledPlugins: { workspaceRoute: true, ticketSidebar: true, ticketArticleAction: true },
-      ticketTemplate: { catalogAndSend: true, deliveryState: "DELIVERED", arabicDirection: "rtl", provider: "simulated",
+      ticketTemplate: { catalogAndSend: true, lostResponseRecovered: true, deliveryState: "DELIVERED", arabicDirection: "rtl", provider: "simulated",
         addonSource: packagePin.commit, packageVersion: packagePin.packageVersion, packageSha256: packagePin.packageSha256 },
       legacyNativeUsersQueueGrant: legacyGrantUiProofs[0],
       nativeLocaleViewportAcceptance: { permissionSaves: legacyGrantUiProofs, groups: followLatestProofs },

@@ -9,13 +9,13 @@ ADD https://github.com/zammad/zammad.git#8facd9250f4e1634124965eb0ba79a78a3fcdc1
 FROM ${NODE_IMAGE} AS node-toolchain
 RUN npm install --global pnpm@10.33.3 && npm cache clean --force
 WORKDIR /src
-ADD https://github.com/WasalX/wasalx-zammad-addon.git#39dc5f2edcfadc854a486f8645fd40adc3d251c4 /src
+ADD https://github.com/WasalX/wasalx-zammad-addon.git#6eca6ee16e5ea0687298f6a28a65397090623a8b /src
 COPY scripts/build-zammad-package.mjs ./scripts/build-zammad-package.mjs
 RUN node scripts/build-zammad-package.mjs
 
 FROM ${ZAMMAD_BASE_IMAGE} AS package-source
 ARG WASALX_PACKAGE_VERSION=0.5.86
-ARG WASALX_PACKAGE_SHA256=e569457480505547aafb9de429f791184cac0e4b5ad7c282894ac23412eed3c9
+ARG WASALX_PACKAGE_SHA256=cb05551c71bd027d6a943093e9e0d2829c889328968f7ef8f504532642d42913
 USER 0:0
 COPY --from=node-toolchain /usr/local/lib/node_modules /usr/local/lib/node_modules
 COPY --from=node-toolchain /usr/local/bin /usr/local/bin
@@ -78,7 +78,7 @@ RUN rm -rf \
 
 FROM cgr.dev/chainguard/ruby:latest-dev@sha256:a3687c10cbff6873ed5401da21b8902e270e813ce807a9f4a2df57613ba4121d
 ARG WASALX_PACKAGE_VERSION=0.5.86
-ARG WASALX_PACKAGE_SHA256=e569457480505547aafb9de429f791184cac0e4b5ad7c282894ac23412eed3c9
+ARG WASALX_PACKAGE_SHA256=cb05551c71bd027d6a943093e9e0d2829c889328968f7ef8f504532642d42913
 
 USER 0:0
 RUN apk update && apk add --no-cache \

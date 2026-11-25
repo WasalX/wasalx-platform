@@ -27,7 +27,7 @@ import {ticketCommandAdmission,assertTicketCommandBarrier,lockTicketCommand} fro
 type OutboundAttachment={id?:string|number;filename?:string;content_type?:string;size?:string|number};
 type OutboundBody={native_reply_intent_id?:string;tenant_id?:string;connection_id?:string;group_id?:string;ticket_id?:string|number;article_id?:string|number;body?:string;content_type?:string;reply_to_message_id?:string;reply_to_article_id?:string|number;idempotency_key?:string;internal?:boolean;agent?:{id?:string|number;display_name?:string};attachments?:OutboundAttachment[]};
 type TicketTemplateBody={tenant_id?:string;connection_id?:string;group_id?:string;ticket_id?:string|number;
-  request_token?:string;template_id?:string;template_sha256?:string;parameters?:unknown};
+  request_token?:string;delivery_id?:string;template_id?:string;template_sha256?:string;parameters?:unknown};
 type ValidAttachment={id:number;filename:string;mimeType:string;byteSize:number};
 export type QueuedOutboundAttachment=
   |{source:"ARTICLE";id:number;filename:string;mimeType:string;byteSize:number}
@@ -278,8 +278,7 @@ export class ZammadInternalController{
           SELECT delivery.id,delivery.zammad_article_id,delivery.state,delivery.updated_at,delivery.manual_retry_allowed
             FROM delivery_outbox delivery
            WHERE delivery.tenant_id=$1 AND delivery.zammad_ticket_id=$2
-             AND (delivery.zammad_article_id ~ '^[1-9][0-9]*$' OR
-               (delivery.bot_conversation_id=conversation.id AND app.is_ticket_template(delivery.bot_content)))
+             AND delivery.zammad_article_id ~ '^[1-9][0-9]*$'
              AND delivery.content_redacted_at IS NULL
            ORDER BY delivery.updated_at DESC,delivery.id DESC LIMIT 1
         ) latest_delivery ON true
@@ -308,7 +307,7 @@ export class ZammadInternalController{
       zammad_article_id:context.zammad_article_id,
       delivery_state:context.delivery_state===null?null:contextEnum(context.delivery_state,DELIVERY_CONTEXT_STATES,"delivery state"),
       delivery_updated_at:isoOrNull(context.delivery_updated_at),
-      delivery_retry_allowed:context.zammad_article_id!==null&&retryAllowed(context.delivery_state,context.manual_retry_allowed),
+      delivery_retry_allowed:retryAllowed(context.delivery_state,context.manual_retry_allowed),
       delivery_retry_requires_confirmation:false,
     };
   }
@@ -515,7 +514,7 @@ async quotedCommandAdmission(@Headers('authorization') authorization:string|unde
       ||typeof sha256!=="string"||!/^[a-f0-9]{64}$/u.test(sha256)||!Array.isArray(parameters)||parameters.length>20
       ||parameters.some(value=>typeof value!=="string"||value!==value.trim()||!value||[...value].length>1024||hasControl(value))
       ||Buffer.byteLength(JSON.stringify(parameters))>12_000)throw new BadRequestException("Invalid ticket template selection");
-    const idempotencyKey=`ticket-template:${claims.instanceId}:${input.ticketId}:${claims.userId}:${token.toLowerCase()}`;
+    const idempotencyKey=ticketTemplateKey(claims,input.ticketId,token);
     const requestSha256=createHash("sha256").update(JSON.stringify([input.connectionId,input.groupId,id,sha256,parameters])).digest("hex");
     const result=await this.database.withTenant(claims.tenantId,async client=>{
       await lockTicketCommand(client,{tenantId:claims.tenantId,ticketId:input.ticketId,instanceId:claims.instanceId});
@@ -543,6 +542,26 @@ async quotedCommandAdmission(@Headers('authorization') authorization:string|unde
     });
     await this.drain.wake(claims.tenantId);
     return result;
+  }
+
+  @Post("ticket-templates/status")
+  async ticketTemplateStatus(@Headers("authorization")authorization:string|undefined,@Body()body:TicketTemplateBody,@Req()request?:ZammadServiceRequest){
+    const claims=await this.claims(authorization,"zammad:outbound",request);
+    const input=validateTicketTemplateTarget(body,claims);
+    const {request_token:token,delivery_id:id}=body;
+    if(typeof token!=="string"||!UUID.test(token)||(id!==undefined&&(typeof id!=="string"||!UUID.test(id))))
+      throw new BadRequestException("Invalid ticket template receipt");
+    return this.database.withTenant(claims.tenantId,async client=>{
+      const receipt=(await client.query<{id:string;state:string}>(`
+        SELECT delivery.id,delivery.state FROM delivery_outbox delivery
+        WHERE delivery.tenant_id=$1 AND delivery.zammad_ticket_id=$2 AND delivery.connection_id=$3 AND delivery.external_chat_id=$4
+          AND delivery.idempotency_key=$5 AND ($6::uuid IS NULL OR delivery.id=$6)
+          AND delivery.content_redacted_at IS NULL AND NOT app.delivery_has_active_privacy_target(delivery.id)
+          AND delivery.delivery_origin='TICKET' AND delivery.direct_origin='HUMAN' AND delivery.zammad_article_id IS NULL
+          AND app.is_ticket_template(delivery.bot_content)`,
+        [claims.tenantId,input.ticketId,input.connectionId,input.groupId,ticketTemplateKey(claims,input.ticketId,token),id??null])).rows[0];
+      return {delivery:receipt??null};
+    });
   }
 
   private async ticketTemplateContext(client:PoolClient,claims:ZammadClaims,input:ReturnType<typeof validateTicketTemplateTarget>){
@@ -895,6 +914,10 @@ async function resolveOutboundRoute(client:PoolClient,claims:ZammadClaims,input:
          FOR SHARE OF c,conversation`,[claims.tenantId,input.connectionId,input.groupId,input.ticketId,allowBotPreview])).rows[0];
       if(!route)throw new NotFoundException("WhatsApp destination was not found");
   return route;
+}
+
+function ticketTemplateKey(claims:ZammadClaims,ticketId:string,token:string){
+  return `ticket-template:${claims.instanceId}:${ticketId}:${claims.userId}:${token.toLowerCase()}`;
 }
 
 function validateTicketTemplateTarget(body:TicketTemplateBody,claims:ZammadClaims){

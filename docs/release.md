@@ -49,8 +49,9 @@ For direct tickets in human handoff, WasalX checks the 24-hour window against
 the last retained customer message. Free-text replies require an open window.
 The Zammad template action lists approved templates that the outbound path can
 send with positional body parameters. WasalX checks approval and content again
-before dispatch, applies WhatsApp marketing preferences, and reports delivery
-state through the ticket's WasalX panel.
+before dispatch and holds the send when signed template safety changes before
+admission. Marketing preferences are checked at the same boundary. The ticket
+tracks the exact delivery, including after a lost response or tab reload.
 
 ## Nightly installer evidence
 
