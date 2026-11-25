@@ -1339,8 +1339,8 @@ test("Zammad compatibility gates CI and reuses the same job on the nightly sched
   assert(dockerfile.includes("FROM scratch AS typecheck-source\nADD https://github.com/zammad/zammad.git#"
     + manifest.revision + ":app/frontend /app/frontend/"));
   const typecheck = dockerfile.split(/^RUN /mu).find(run => run.includes("pnpm lint:ts"));
-  assert.match(typecheck, /^--mount=type=bind,from=typecheck-source,target=\/tmp\/typecheck-upstream /u);
-  assert.match(typecheck, /prepare-zammad-typecheck\.mjs restore \/opt\/zammad \/tmp\/typecheck-upstream\.json \/tmp\/typecheck-upstream [\s\S]+pnpm lint:ts[\s\S]+prepare-zammad-typecheck\.mjs remove/u);
+  assert(dockerfile.includes("COPY --chown=1000:1000 --from=typecheck-source / /tmp/typecheck-upstream/"));
+  assert.match(typecheck, /prepare-zammad-typecheck\.mjs restore \/opt\/zammad \/tmp\/typecheck-upstream\.json \/tmp\/typecheck-upstream [\s\S]+rm -rf \/tmp\/typecheck-upstream[\s\S]+pnpm lint:ts[\s\S]+prepare-zammad-typecheck\.mjs remove/u);
 });
 
 test("PostgreSQL coverage requires an exact report from every shard", async t => {

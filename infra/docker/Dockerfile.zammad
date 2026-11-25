@@ -38,9 +38,10 @@ RUN --mount=type=cache,id=wasalx-zammad-pnpm-v10,target=/opt/zammad/.local/share
 # WasalX packages only app/frontend files, so rebuild the Vite bundle that can
 # actually reference those plugins. A full `assets:precompile` needlessly
 # recompiles the entire legacy application and is not required for this package.
-RUN --mount=type=bind,from=typecheck-source,target=/tmp/typecheck-upstream \
-    --mount=type=cache,id=wasalx-zammad-pnpm-v10,target=/opt/zammad/.local/share/pnpm/store,uid=1000,gid=1000,sharing=locked \
+COPY --chown=1000:1000 --from=typecheck-source / /tmp/typecheck-upstream/
+RUN --mount=type=cache,id=wasalx-zammad-pnpm-v10,target=/opt/zammad/.local/share/pnpm/store,uid=1000,gid=1000,sharing=locked \
     node /tmp/prepare-zammad-typecheck.mjs restore /opt/zammad /tmp/typecheck-upstream.json /tmp/typecheck-upstream \
+    && rm -rf /tmp/typecheck-upstream \
     && NODE_OPTIONS=--max-old-space-size=4096 pnpm lint:ts \
     && node /tmp/prepare-zammad-typecheck.mjs remove /opt/zammad /tmp/typecheck-upstream.json \
     && bundle exec vite clobber \
