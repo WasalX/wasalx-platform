@@ -12,6 +12,7 @@ export function ServiceAccess({ execute, scope, teamId }: { execute: IdentityExe
   const [pending, setPending] = useState<IdentityIntent | null>(null);
   const [ready, setReady] = useState(false), [broken, setBroken] = useState(false), [denied, setDenied] = useState(false);
   const [busy, setBusy] = useState(false), [error, setError] = useState<"failed" | "unknown" | "storage" | "corrupt" | null>(null);
+  const [applyingGrant, setApplyingGrant] = useState(false);
   const [reauthenticate, setReauthenticate] = useState(false);
   const [review, setReview] = useState<Review | null>(null), [acknowledged, setAcknowledged] = useState(false), [enabled, setEnabled] = useState(false);
   const lifecycle = useRef({ mounted: false, generation: 0, request: 0, busy: false });
@@ -24,7 +25,7 @@ export function ServiceAccess({ execute, scope, teamId }: { execute: IdentityExe
     const problem = cause as { status?: number; code?: string };
     if (problem.code === "REAUTHENTICATION_REQUIRED") { setReauthenticate(true); setError("failed"); return; }
     if (problem.status === 401 || problem.status === 403) {
-      lifecycle.current.generation++; lifecycle.current.busy = false; setBusy(false); setStatus(null); setReview(null); setAcknowledged(false); setDenied(true);
+      lifecycle.current.generation++; lifecycle.current.busy = false; setBusy(false); setApplyingGrant(false); setStatus(null); setReview(null); setAcknowledged(false); setDenied(true);
     }
     setError("failed");
   }, []);
@@ -42,7 +43,7 @@ export function ServiceAccess({ execute, scope, teamId }: { execute: IdentityExe
     const state = lifecycle.current; state.mounted = true; state.generation++;
     const controller = new AbortController();
     const timer = window.setTimeout(() => {
-      setReady(false); setBroken(false); setReview(null); setStatus(null); setDenied(false); setPending(null);
+      setReady(false); setBroken(false); setReview(null); setStatus(null); setDenied(false); setPending(null); setApplyingGrant(false);
       try { setPending(parseIdentityRecovery(sessionStorage.getItem(key))); setReady(true); }
       catch { setBroken(true); setError("corrupt"); }
       void load(controller.signal).catch(cause => { if (!controller.signal.aborted) failure(cause); });
@@ -79,12 +80,13 @@ export function ServiceAccess({ execute, scope, teamId }: { execute: IdentityExe
       : review.team ? { request_id: intent.request_id, team_id: review.team.id, expected_version: review.team.version, enabled }
       : { request_id: intent.request_id, operation_id: review.status.operation_id ?? crypto.randomUUID(), expected_status_version: review.status.status_version, ...(review.kind === "IDENTITY_COMPLETE" ? { retire_legacy: true } : {}) };
     lifecycle.current.busy = true; setBusy(true); setPending(intent); setError(null);
+    setApplyingGrant(review.kind === "IDENTITY_GRANT");
     try { const receipt = await executor.current<IdentityReceipt>(review.kind, input); if (live(generation)) await finish(receipt); }
     catch (cause) {
       if (!live(generation)) return;
       const problem = cause as { status?: number; code?: string };
       if (problem.code === "REAUTHENTICATION_REQUIRED" || problem.status === 401 || problem.status === 403) failure(cause); else setError("unknown");
-    } finally { if (live(generation)) { lifecycle.current.busy = false; setBusy(false); } }
+    } finally { if (live(generation)) { lifecycle.current.busy = false; setBusy(false); setApplyingGrant(false); } }
   };
   const open = (kind: IdentityKind, team?: IdentityTeam) => {
     if (!status || busy || pending || !ready || broken || denied) return;
@@ -112,7 +114,8 @@ export function ServiceAccess({ execute, scope, teamId }: { execute: IdentityExe
       <label className="check" htmlFor="service-access-confirm"><input id="service-access-confirm" type="checkbox" checked={acknowledged} disabled={blocked} onChange={event => setAcknowledged(event.target.checked)}/>{t("serviceAccess.confirm")}</label>
       {error ? <p role="alert" className="settings-feedback error">{t(`serviceAccess.${error}`)}</p> : null}
       {reauthenticate ? <a className="button secondary wx-button" href="/auth/login?step_up=privileged&return_to=%2Fapp%3Fview%3Dteam">{t("tenant.privacy.action.reauthenticate")}</a> : null}
-      {pending ? <div className="settings-validation"><p role="status">{t("serviceAccess.unknown")}</p><button type="button" className="button secondary" disabled={busy || denied || broken} onClick={() => void reconcile(false)}>{t("serviceAccess.check")}</button><button type="button" className="button secondary" disabled={busy || denied || broken} onClick={() => void reconcile(true)}>{t("serviceAccess.cancelMissing")}</button></div> : null}
+      {review.kind === "IDENTITY_GRANT" ? <div role="status" className={applyingGrant ? "settings-feedback" : undefined}>{applyingGrant ? t("serviceAccess.applyingGrant") : null}</div> : null}
+      {pending && !applyingGrant ? <div className="settings-validation"><p role="status">{t("serviceAccess.unknown")}</p><button type="button" className="button secondary" disabled={busy || denied || broken} onClick={() => void reconcile(false)}>{t("serviceAccess.check")}</button><button type="button" className="button secondary" disabled={busy || denied || broken} onClick={() => void reconcile(true)}>{t("serviceAccess.cancelMissing")}</button></div> : null}
       <div className="modal-actions"><button type="button" className="button secondary" disabled={busy} onClick={close}>{t("tenant.team.actions.cancel")}</button><button className="button primary" disabled={blocked || !acknowledged || Boolean(review.team && enabled === review.team.enabled)}>{t("serviceAccess.apply")}</button></div>
     </form></ModalDialog> : null}
   </section>;

@@ -421,4 +421,5 @@ export const arabicCaseMessages = {
   "serviceAccess.fullTeamAccess": "السماح لأتمتة وصل إكس بوصول كامل إلى الفريق",
   "serviceAccess.confirm": "راجعت هذا التغيير وأوافق عليه بصفتي مالك مساحة العمل.",
   "serviceAccess.apply": "تطبيق التغيير بعد مراجعته",
+  "serviceAccess.applyingGrant": "جارٍ تطبيق تغيير وصول الأتمتة…",
 } as const satisfies DictionaryFor<typeof englishCaseMessages>;

@@ -420,4 +420,5 @@ export const englishCaseMessages = {
   "serviceAccess.fullTeamAccess": "Allow full team access for WasalX automations",
   "serviceAccess.confirm": "I reviewed this change and approve it as the workspace owner.",
   "serviceAccess.apply": "Apply reviewed change",
+  "serviceAccess.applyingGrant": "Applying automation access change…",
 } as const satisfies MessageDictionary;

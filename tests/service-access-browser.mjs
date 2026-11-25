@@ -45,11 +45,12 @@ try {
       legacy_member: { name: "Synthetic earlier service", email: "earlier-service@example.invalid" }, groups: [{ id: "2", name: "Synthetic customer support operations team with a long supported display name", active: true, enabled: false, version: "1" }], groups_next_cursor: "2" };
     const secondTeam = { id: "3", name: "Synthetic accounts", active: true, enabled: false, version: "1" };
     const receipts = new Map(), writes = [], reads = [];
-    let lose = false, reject = null, denied = false, holdGrant = null;
+    let lose = false, reject = null, denied = false, holdGrant = null, dropGrant = false;
     const bridge = async route => {
       const { operation, input } = route.request().postDataJSON();
       if (operation === "TEAM_LIST") { await route.fulfill({ status: 403, json: { code: "FORBIDDEN", error: "SYNTHETIC_PRIVATE_ERROR" } }); return; }
       if (denied || reject === operation) { const code = denied ? "FORBIDDEN" : "REAUTHENTICATION_REQUIRED"; reject = null; await route.fulfill({ status: 403, json: { code, error: "SYNTHETIC_PRIVATE_ERROR" } }); return; }
+      if (operation === "IDENTITY_GRANT" && dropGrant) { dropGrant = false; await route.abort("failed"); return; }
       if (operation === "IDENTITY_STATUS") { reads.push(operation); await route.fulfill({ json: { ...state, groups: input.teams_after ? [secondTeam] : state.groups, groups_next_cursor: input.teams_after ? null : state.groups_next_cursor } }); return; }
       if (operation === "IDENTITY_RECEIPT") {
         reads.push(operation); let result = receipts.get(input.request_id);
@@ -76,6 +77,10 @@ try {
     await page.route("**/api/inbox", bridge);
     const open = () => page.goto(`${base}/iframe.html?id=product-service-access--${locale === "ar" ? "arabic" : "english"}`, { waitUntil: "networkidle" });
     const dialog = page.getByRole("dialog");
+    const applying = dialog.getByRole("status").filter({ hasText: t("serviceAccess.applyingGrant") });
+    const recoveryText = dialog.getByRole("status").filter({ hasText: t("serviceAccess.unknown") });
+    const recoveryCheck = dialog.getByRole("button", { name: t("serviceAccess.check"), exact: true });
+    const recoveryCancel = dialog.getByRole("button", { name: t("serviceAccess.cancelMissing"), exact: true });
     const approve = async () => { await dialog.getByRole("checkbox", { name: t("serviceAccess.confirm"), exact: true }).check(); await dialog.getByRole("button", { name: t("serviceAccess.apply"), exact: true }).click(); };
     const reload = async () => { const response = page.waitForResponse(response => response.request().postDataJSON()?.operation === "IDENTITY_STATUS"); await button("common.actions.refresh").click(); await response; };
     try {
@@ -99,13 +104,46 @@ try {
       await captureReview(page, dialog, locale, "grant-checked");
       let releaseGrant; holdGrant=new Promise(resolve=>{releaseGrant=resolve;});
       try {
-        await approve(); await expect(dialog.getByRole("checkbox").last()).toBeDisabled();
+        const grantRequest = page.waitForRequest(request => request.url().endsWith("/api/inbox") && request.postDataJSON()?.operation === "IDENTITY_GRANT");
+        await approve();
+        const { input } = (await grantRequest).postDataJSON();
+        assert.equal(input.expected_version, "1");
+        assert.deepEqual(await page.evaluate(key => JSON.parse(sessionStorage.getItem(key)), storageKey), {
+          request_id: input.request_id, kind: "IDENTITY_GRANT", team_id: input.team_id,
+        });
+        await expect(applying).toBeVisible();
+        await expect(recoveryText).toHaveCount(0);
+        await expect(recoveryCheck).toHaveCount(0);
+        await expect(recoveryCancel).toHaveCount(0);
+        for (const control of await dialog.getByRole("button").all()) await expect(control).toBeDisabled();
         await captureReview(page, dialog, locale, "grant-busy", true);
-      } finally { holdGrant=null; releaseGrant(); } await expect(page.getByText(t("serviceAccess.granted"), { exact: true })).toBeVisible();
+      } finally { holdGrant=null; releaseGrant(); }
+      await expect(dialog).toHaveCount(0);
+      await expect(page.getByText(t("serviceAccess.granted"), { exact: true })).toBeVisible();
+      for (const [size, width, height] of [["desktop", 1440, 1000], ["mobile", 390, 844]]) {
+        await page.setViewportSize({ width, height });
+        await page.screenshot({ path: `${output}/service-access-${locale}-grant-success-${size}.png`, fullPage: true });
+      }
+      await page.setViewportSize({ width: 1440, height: 1000 });
       await button("serviceAccess.bind").click(); await approve(); await expect(button("serviceAccess.complete")).toBeDisabled(); await expect(page.getByText(t("serviceAccess.removeLegacyFirst"), { exact: true })).toBeVisible();
       assert.equal(writes.filter(row => row.operation === "IDENTITY_COMPLETE").length, 0);
       state.legacy_retirement_ready = true; await reload(); await button("serviceAccess.complete").click(); await approve(); await expect(page.getByText(t("serviceAccess.ready"), { exact: true })).toBeVisible();
       await button("serviceAccess.more").click(); await page.getByRole("button", { name: "Synthetic selection change", exact: true }).click(); await expect(page.getByText("Synthetic accounts", { exact: true })).toBeVisible();
+      await button("serviceAccess.reviewGrant").click();
+      await dialog.getByRole("checkbox", { name: t("serviceAccess.fullTeamAccess"), exact: true }).check();
+      dropGrant = true; await approve();
+      await expect(recoveryText).toBeVisible();
+      await expect(applying).toHaveCount(0);
+      await expect(recoveryCheck).toBeEnabled();
+      await expect(recoveryCancel).toBeEnabled();
+      await captureReview(page, dialog, locale, "grant-unknown", true);
+      await recoveryCheck.click();
+      await expect(recoveryCancel).toBeEnabled();
+      await recoveryCancel.click();
+      await expect(dialog).toHaveCount(0);
+      await button("serviceAccess.more").click();
+      await expect(page.getByText(t("serviceAccess.notGranted"), { exact: true })).toBeVisible();
+
       await button("serviceAccess.reviewGrant").click(); await dialog.getByRole("checkbox", { name: t("serviceAccess.fullTeamAccess"), exact: true }).check(); reject = "IDENTITY_GRANT"; await approve();
       await expect(dialog.getByRole("link", { name: t("tenant.privacy.action.reauthenticate"), exact: true })).toBeVisible(); await expect(dialog.getByRole("checkbox", { name: t("serviceAccess.fullTeamAccess"), exact: true })).toBeChecked();
       const reauthLink=dialog.getByRole("link", { name:t("tenant.privacy.action.reauthenticate"),exact:true }); await page.keyboard.press("Tab"); await reauthLink.focus();
