@@ -92,12 +92,13 @@ export function ServiceAccess({ execute, scope, teamId }: { execute: IdentityExe
   };
   const blocked = busy || Boolean(pending) || !ready || broken || denied;
   const team = status?.groups.find(row => row.id === teamId);
+  const visibleError = pending && error === "unknown" ? null : error;
   const close = () => { if (!busy) { setReview(null); setAcknowledged(false); } };
   return <section className="settings-section" aria-labelledby="service-access-title">
     <div className="panel-heading"><div><h3 id="service-access-title">{t("serviceAccess.title")}</h3><p>{t("serviceAccess.body")}</p></div><button type="button" className="button secondary" disabled={busy} onClick={() => void reload()}>{t("common.actions.refresh")}</button></div>
-    {error ? <p role="alert" className="settings-feedback error">{t(`serviceAccess.${error}`)}</p> : null}
+    {visibleError ? <p role="alert" className="settings-feedback error">{t(`serviceAccess.${visibleError}`)}</p> : null}
     {reauthenticate ? <a className="button secondary wx-button" href="/auth/login?step_up=privileged&return_to=%2Fapp%3Fview%3Dteam">{t("tenant.privacy.action.reauthenticate")}</a> : null}
-    {pending && !review ? <div className="settings-validation"><p>{t("serviceAccess.unknown")}</p><button type="button" className="button secondary" disabled={busy || denied || broken} onClick={() => void reconcile(false)}>{t("serviceAccess.check")}</button><button type="button" className="button secondary" disabled={busy || denied || broken} onClick={() => void reconcile(true)}>{t("serviceAccess.cancelMissing")}</button></div> : null}
+    {pending && !review ? <div className="settings-validation"><p role="status">{t("serviceAccess.unknown")}</p><button type="button" className="button secondary" disabled={busy || denied || broken} onClick={() => void reconcile(false)}>{t("serviceAccess.check")}</button><button type="button" className="button secondary" disabled={busy || denied || broken} onClick={() => void reconcile(true)}>{t("serviceAccess.cancelMissing")}</button></div> : null}
     {status ? <><p role="status">{t(status.portal_ready === true && status.access_required === false ? "serviceAccess.ready" : `serviceAccess.phase.${status.phase}`)}</p>
       {status.can_initialize ? <div className="save-bar"><p>{t("serviceAccess.initializeHelp")}</p><button type="button" className="button primary" disabled={blocked} onClick={() => open("IDENTITY_INITIALIZE")}>{t("serviceAccess.initialize")}</button></div> : null}
       {(!status.portal_ready || status.access_required) && !status.can_initialize && status.mode === "FRESH" ? <p>{t("serviceAccess.fresh")}</p> : null}
@@ -110,7 +111,7 @@ export function ServiceAccess({ execute, scope, teamId }: { execute: IdentityExe
       <p>{t(review.kind === "IDENTITY_INITIALIZE" ? "serviceAccess.initializeDetail" : review.kind === "IDENTITY_GRANT" ? "serviceAccess.grantDetail" : review.kind === "IDENTITY_COMPLETE" ? "serviceAccess.completeDetail" : review.kind === "IDENTITY_BIND" ? "serviceAccess.bindDetail" : "serviceAccess.prepareDetail")}</p>
       {review.team ? <><p><bdi>{review.team.name}</bdi></p><label className="check" htmlFor="service-team-enabled"><input id="service-team-enabled" type="checkbox" checked={enabled} disabled={blocked} onChange={event => { setEnabled(event.target.checked); setAcknowledged(false); }}/>{t("serviceAccess.fullTeamAccess")}</label></> : null}
       <label className="check" htmlFor="service-access-confirm"><input id="service-access-confirm" type="checkbox" checked={acknowledged} disabled={blocked} onChange={event => setAcknowledged(event.target.checked)}/>{t("serviceAccess.confirm")}</label>
-      {error ? <p role="alert" className="settings-feedback error">{t(`serviceAccess.${error}`)}</p> : null}
+      {visibleError ? <p role="alert" className="settings-feedback error">{t(`serviceAccess.${visibleError}`)}</p> : null}
       {reauthenticate ? <a className="button secondary wx-button" href="/auth/login?step_up=privileged&return_to=%2Fapp%3Fview%3Dteam">{t("tenant.privacy.action.reauthenticate")}</a> : null}
       {pending ? <div className="settings-validation"><p role="status">{t("serviceAccess.unknown")}</p><button type="button" className="button secondary" disabled={busy || denied || broken} onClick={() => void reconcile(false)}>{t("serviceAccess.check")}</button><button type="button" className="button secondary" disabled={busy || denied || broken} onClick={() => void reconcile(true)}>{t("serviceAccess.cancelMissing")}</button></div> : null}
       <div className="modal-actions"><button type="button" className="button secondary" disabled={busy} onClick={close}>{t("tenant.team.actions.cancel")}</button><button className="button primary" disabled={blocked || !acknowledged || Boolean(review.team && enabled === review.team.enabled)}>{t("serviceAccess.apply")}</button></div>
