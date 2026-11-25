@@ -62,7 +62,7 @@ The [public privacy workflow](.github/workflows/privacy.yml) scans newly introdu
 
 ## Releases
 
-- The [image publication workflow](.github/workflows/branch-image.yml) runs once per eligible `main` commit with `max-parallel: 21`. After the complete manifest is published, a serialized job advances the `:main` aliases only when it can verify a fast-forward. The job annotates skipped moves as warnings and retries registry errors during tag creation or digest inspection. A digest mismatch fails the job.
+- The [image publication workflow](.github/workflows/branch-image.yml) runs once per eligible `main` commit with `max-parallel: 21` and records manifest completeness in the CI run summary. The [main image aliases workflow](.github/workflows/main-image-aliases.yml) uses that CI run's manifest after a successful push run. See the [image publication runbook](docs/runbooks/images-by-digest.md) for retry and alias outcomes.
 - The manual [image mirror workflow](.github/workflows/mirror-images.yml) runs only from `main`. It copies the installer's pinned object-storage images to the project registry and fails on any digest mismatch.
 - Publish one GitHub Release per release milestone. Cut immutable, annotated `vMAJOR.MINOR.PATCH-rc.N` and `vMAJOR.MINOR.PATCH` tags using the identity authorized by the release tag ruleset. Promote the same image digests across environments. PR builds never publish release images.
 - Follow the [release criteria and nightly installer evidence rules](docs/release.md) for digest promotion, installer rehearsals, and stable release.

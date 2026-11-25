@@ -508,7 +508,10 @@ gh() {
       local commit=$READY images='{"zammad":{}}' pending='{}' complete=true
       [[ "$3" != 102 ]] || { commit=$INCOMPLETE; images='{}'; pending='{"zammad":{}}'; complete=false; }
       [[ "$INVALID" != true ]] || commit=$SIDE
+      local downloaded_run=$3
       while [[ "$1" != --dir ]]; do shift; done
+      [[ ! -e "$2/images-manifest.json" && ! -e "$2/images-manifest-attempt.json" ]] || return 18
+      printf '%s\n' "$downloaded_run" > "$2/images-manifest-attempt.json"
       printf '{"schemaVersion":1,"repository":"%s","platform":"linux/amd64","commit":"%s","tree":"%s","images":%s,"pending":%s,"publicationComplete":%s}\n' \
         "$GITHUB_REPOSITORY" "$commit" "$(git rev-parse "$commit^{tree}")" "$images" "$pending" "$complete" > "$2/images-manifest.json"
       ;;
@@ -568,6 +571,7 @@ gh() {
     if (selected) {
       const manifest = join(directory, "wasalx-nightly", "images-manifest.json");
       assert.equal(JSON.parse(await readFile(manifest, "utf8")).commit, selected);
+      assert.equal((await readFile(join(directory, "wasalx-nightly", "images-manifest-attempt.json"), "utf8")).trim(), "101");
     }
     assert.deepEqual((await readFile(join(directory, "lookups"), "utf8")).trim().split(/\r?\n/u), lookups);
   }
@@ -1040,8 +1044,7 @@ test("PR image results are advisory while the merge queue requires the full imag
   assert.equal(branch.publish.strategy["max-parallel"], 21);
   assert.equal(branch.manifest.needs, "publish");
   assert.equal(branch.manifest.concurrency, undefined);
-  assert.equal(branch.aliases.needs, "manifest");
-  assert.deepEqual(branch.aliases.concurrency, { group: "release-main", queue: "max" });
+  assert.equal(branch.aliases, undefined);
 
   const directory = await mkdtemp(join(tmpdir(), "wasalx-ci-image-results-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
@@ -1072,6 +1075,90 @@ test("PR image results are advisory while the merge queue requires the full imag
   });
   assert.equal(result.status, 0, result.stderr);
   assert((await readFile(summary, "utf8")).includes(report.name));
+});
+
+test("main alias updates report independently and use the exact successful CI attempt's manifest", async t => {
+  const workflow = parse(await read(".github/workflows/main-image-aliases.yml"));
+  const { aliases } = workflow.jobs;
+  assert.deepEqual(workflow.on, { workflow_run: { workflows: ["ci"], types: ["completed"], branches: ["main"] } });
+  assert.match(aliases.if, /github\.repository == 'WasalX\/wasalx-platform'/u);
+  assert.match(aliases.if, /head_repository\.full_name == github\.repository/u);
+  assert.match(aliases.if, /path == '\.github\/workflows\/ci\.yml'/u);
+  assert.match(aliases.if, /event == 'push'/u);
+  assert.match(aliases.if, /head_branch == 'main'/u);
+  assert.match(aliases.if, /conclusion == 'success'/u);
+  assert.deepEqual(aliases.concurrency, { group: "release-main", queue: "max" });
+  assert.equal(aliases["continue-on-error"], undefined);
+  assert.deepEqual(aliases.steps.find(step => step.uses?.startsWith("actions/checkout@")).with,
+    { ref: "${{ github.sha }}", "fetch-depth": 0, "persist-credentials": false });
+  const resolve = aliases.steps.find(step => step.id === "artifact");
+  const download = aliases.steps.find(step => step.uses?.startsWith("actions/download-artifact@"));
+  assert.deepEqual(download.with,
+    { "artifact-ids": "${{ steps.artifact.outputs.id }}", path: "${{ runner.temp }}/publication",
+      "github-token": "${{ github.token }}", "run-id": "${{ github.event.workflow_run.id }}" });
+  const validate = aliases.steps.find(step => step.id === "publication");
+  assert.equal(validate.run,
+    'python3 scripts/release/advance-main-image-aliases.py --validate-only "$RUNNER_TEMP/publication/images-manifest.json"');
+  assert(aliases.steps.indexOf(resolve) < aliases.steps.indexOf(download));
+  assert(aliases.steps.indexOf(download) < aliases.steps.indexOf(validate));
+  assert.deepEqual(aliases.steps.slice(aliases.steps.indexOf(validate) + 1).map(step => step.if),
+    Array(3).fill("steps.publication.outputs.ready == 'true'"));
+  assert.equal(aliases.steps.at(-1).run,
+    'python3 scripts/release/advance-main-image-aliases.py "$RUNNER_TEMP/publication/images-manifest.json"');
+  assert.equal(aliases.steps.at(-1)["continue-on-error"], undefined);
+
+  const { manifest } = parse(await read(".github/workflows/branch-image.yml")).jobs;
+  const report = manifest.steps.find(step => step.id === "complete").run;
+  const bind = manifest.steps.find(step => step.name === "Bind manifest bytes to this publishing attempt");
+  const upload = manifest.steps.find(step => step.uses?.startsWith("actions/upload-artifact@"));
+  assert.equal(upload.with.name, "images-manifest");
+  assert.deepEqual(upload.with.path.trim().split("\n"), ["images-manifest.json", "images-manifest-attempt.json"]);
+  assert(manifest.steps.indexOf(bind) < manifest.steps.indexOf(upload));
+  const directory = await mkdtemp(join(tmpdir(), "wasalx-publication-outcome-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const commit = "a".repeat(40);
+  for (const publicationComplete of [true, false]) {
+    const summary = join(directory, String(publicationComplete));
+    const output = summary + ".output";
+    const manifestPath = join(directory, "images-manifest.json");
+    const raw = JSON.stringify({ commit, publicationComplete }, null, 2) + "\n";
+    await writeFile(manifestPath, raw);
+    const binding = runWorkflowScript(bind.run, { GITHUB_RUN_ID: "123", GITHUB_RUN_ATTEMPT: "2" }, directory);
+    assert.equal(binding.status, 0, binding.stderr);
+    assert.equal(await readFile(manifestPath, "utf8"), raw);
+    assert.deepEqual(JSON.parse(await readFile(join(directory, "images-manifest-attempt.json"), "utf8")), {
+      runId: "123", runAttempt: "2", manifestSha256: "sha256:" + createHash("sha256").update(raw).digest("hex"),
+    });
+    const result = runWorkflowScript(report, {
+      GITHUB_SHA: commit, GITHUB_OUTPUT: output, GITHUB_STEP_SUMMARY: summary,
+    }, directory);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal((await readFile(output, "utf8")).trim(), `complete=${publicationComplete}`);
+    assert.equal((await readFile(summary, "utf8")).trim(),
+      `Immutable image publication complete for \`${commit}\`: ${publicationComplete}`);
+  }
+  const wrongSource = runWorkflowScript(report, {
+    GITHUB_SHA: "b".repeat(40), GITHUB_OUTPUT: join(directory, "wrong.output"),
+    GITHUB_STEP_SUMMARY: join(directory, "wrong.summary"),
+  }, directory);
+  assert.notEqual(wrongSource.status, 0);
+
+  const output = join(directory, "artifact.output");
+  const available = { id: 412, name: "images-manifest", expired: false };
+  for (const artifacts of [[], [available], [available, { ...available, id: 413 }], [{ ...available, expired: true }]]) {
+    await writeFile(output, "");
+    const result = runWorkflowScript(`gh() {
+      [[ "$*" == 'api repos/WasalX/wasalx-platform/actions/runs/123/artifacts?name=images-manifest' ]] || return 1
+      printf '%s' "$ARTIFACTS"
+    }\n${resolve.run}`, {
+      SOURCE_RUN: "123", GITHUB_REPOSITORY: "WasalX/wasalx-platform", GITHUB_OUTPUT: output,
+      GITHUB_STEP_SUMMARY: join(directory, "artifact.summary"),
+      ARTIFACTS: JSON.stringify({ total_count: artifacts.length, artifacts }),
+    }, directory);
+    const accepted = artifacts.length === 1 && !artifacts[0].expired;
+    assert.equal(result.status, accepted ? 0 : 1, result.stderr);
+    assert.equal(await readFile(output, "utf8"), accepted ? "id=412\n" : "");
+  }
 });
 
 test("optional PR lanes run on diff errors and gate their applicable checks", async t => {

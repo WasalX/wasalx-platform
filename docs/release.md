@@ -34,6 +34,9 @@ criteria below.
 Before requesting `prod` approval, the release workflow checks for a successful,
 published RC for the exact commit and a successful `ci.yml` run from that
 commit's push to `main`.
+The [image publication runbook](runbooks/images-by-digest.md) describes the
+independent `:main` discovery alias workflow. Release admission uses the
+exact commit's immutable publication and CI evidence.
 
 Live-provider qualification with real WhatsApp or Meta services and real
 customers is a separate milestone that requires the owner's approval for the

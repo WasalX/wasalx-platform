@@ -42,7 +42,7 @@ if [[ -z "$mirror" ]] || ! mirror_status=$(curl --proto '=http,https' --max-redi
   [[ ! "$mirror_status" =~ ^2[0-9]{2}$ ]]; then
   rm -f "$pending"
   curl --proto '=https' --proto-redir '=https' --tlsv1.2 --http1.1 \
-    --fail --location --silent --show-error --retry 3 --retry-all-errors \
+    --fail --location --silent --show-error --retry 3 \
     --retry-delay 2 --retry-max-time 120 --connect-timeout 20 --max-time 120 \
     --output "$pending" "$url" || exit 1
 fi

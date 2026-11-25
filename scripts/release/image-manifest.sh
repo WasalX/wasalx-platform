@@ -86,6 +86,7 @@ download_nightly_image_manifest() {
       reason='images-manifest is incomplete'
       echo "Nightly publication unavailable for $commit ($reason)" >&2
       rm -- "$manifest" || return
+      rm -f -- "$directory/images-manifest-attempt.json" || return
       continue
     fi
 

@@ -67,7 +67,7 @@ prepare_verified_archive() {
     local pending_archive="$TOOLS_DIR/$filename.pending"
     local pending_checksum="$TOOLS_DIR/$filename.sha256.pending"
     if ! curl --proto '=https' --proto-redir '=https' --tlsv1.2 --http1.1 --fail --location --silent --show-error \
-      --retry 3 --retry-all-errors --retry-delay 2 --connect-timeout 20 --max-time 120 \
+      --retry 3 --retry-delay 2 --retry-max-time 120 --connect-timeout 20 --max-time 120 \
       --output "$pending_checksum" "$checksum_url"; then
       rm -f "$pending_archive" "$pending_checksum"
       return 1
@@ -115,7 +115,7 @@ prepare_pinned_provider() {
       local status=$?
       [[ "$status" == 1 && -n "$release_proxy" ]] || return "$status"
       curl --http1.1 --fail --location --silent --show-error \
-        --retry 3 --retry-all-errors --retry-delay 2 --connect-timeout 20 --max-time 120 \
+        --retry 3 --retry-delay 2 --retry-max-time 120 --connect-timeout 20 --max-time 120 \
         --output "$pending" "${release_proxy%/}/${release_url}"
     fi
     actual=$(shasum -a 256 "$pending" | awk '{print $1}')
@@ -178,7 +178,7 @@ prepare_pinned_archive() {
     local pending_archive="$TOOLS_DIR/$filename.pending"
     local pending_checksum="$TOOLS_DIR/$filename.sha256.pending"
     curl --proto '=https' --proto-redir '=https' --tlsv1.2 --http1.1 --fail --location --silent --show-error \
-      --retry 3 --retry-all-errors --retry-delay 2 --connect-timeout 20 --max-time 120 \
+      --retry 3 --retry-delay 2 --retry-max-time 120 --connect-timeout 20 --max-time 120 \
       --output "$pending_checksum" "$checksum_url"
     upstream=$(awk -v file="$filename" 'NF == 1 || $2 == file { print $1; exit }' "$pending_checksum")
     [[ "$upstream" == "$expected" ]] || {
