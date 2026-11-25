@@ -175,7 +175,7 @@ test("operator authority loss removes loaded evidence and storage failure preven
   await record(page); await expect(x.dialog().getByText(text("storage"), { exact: true })).toBeVisible(); expect(h.writes).toHaveLength(0);
   // Read-only refresh may restore visibility but never bypasses storage admission.
   await x.dialog().getByRole("button", { name: text("refresh"), exact: true }).click(); await expect(x.dialog().getByRole("button", { name: text("review"), exact: true })).toHaveCount(0);
-  h.deny = true; await x.dialog().getByRole("button", { name: text("refresh"), exact: true }).click(); await expect(x.dialog().getByRole("heading", { name: "Transition account", exact: true })).toHaveCount(0); await expect(x.dialog().getByText("اتصال المبيعات (Sales)", { exact: true })).toHaveCount(0); await expect(page.getByText("PRIVATE_AUTHORITY_DETAIL")).toHaveCount(0); await expect(x.dialog().getByLabel(text("plan"), { exact: true }).locator("option")).toHaveCount(1);
+  h.deny = true; await x.dialog().getByRole("button", { name: text("refresh"), exact: true }).click(); await expect(x.dialog().getByRole("heading", { name: "Transition account", exact: true })).toHaveCount(0); await expect(x.dialog().getByText("اتصال المبيعات (Sales)", { exact: true })).toHaveCount(0); await expect(page.getByText("PRIVATE_AUTHORITY_DETAIL")).toHaveCount(0); await expect(x.dialog().getByRole("combobox", { name: text("plan"), exact: true }).locator("option")).toHaveCount(1);
   expect(h.writes).toHaveLength(0); await screenshot(page, info, "authority-loss"); expect(h.expected).toEqual([]); expect(h.errors).toEqual([]);
 });
 
@@ -183,9 +183,9 @@ test("operator late review reads cannot cross a plan boundary; exact GET proof s
   admitted(); const x = await setup(page), h = x.h;
   let release = () => {}; h.gate.wait = new Promise<void>(resolve => { release = resolve; }); h.gate.entered = false;
   await x.dialog().getByRole("button", { name: text("refresh"), exact: true }).click(); await expect.poll(() => h.gate.entered).toBe(true);
-  await x.dialog().getByLabel(text("plan"), { exact: true }).selectOption(other); await expect(x.dialog().getByRole("heading", { name: "Other plan", exact: true })).toBeVisible();
+  await x.dialog().getByRole("combobox", { name: text("plan"), exact: true }).selectOption(other); await expect(x.dialog().getByRole("heading", { name: "Other plan", exact: true })).toBeVisible();
   release(); await expect(x.dialog().getByRole("heading", { name: "Transition account", exact: true })).toHaveCount(0); await expect(x.dialog().getByRole("button", { name: text("review"), exact: true })).toBeDisabled();
-  await x.dialog().getByLabel(text("plan"), { exact: true }).selectOption(plan); await expect(x.dialog().getByRole("heading", { name: "Transition account", exact: true })).toBeVisible();
+  await x.dialog().getByRole("combobox", { name: text("plan"), exact: true }).selectOption(plan); await expect(x.dialog().getByRole("heading", { name: "Transition account", exact: true })).toBeVisible();
   h.write = async (route, write) => { h.current.pendingCommand = terminal(write); h.current.actions.PREREQUISITES = false; h.expected.push({ url: route.request().url(), status: 502 }); await route.fulfill({ status: 502, json: { error: "Private lost response" } }); };
   await prepare(page, "PREREQUISITES"); await record(page); await expect(x.dialog().getByText(text("result.APPLIED"), { exact: true })).toBeVisible(); await expect(x.dialog().getByText(text("held"), { exact: true })).toHaveCount(0);
   expect(h.writes).toHaveLength(1); expect(h.reads.some(value => value.endsWith(`?requestKey=${h.writes[0]!.key}`))).toBe(true); expect(h.expected).toEqual([]); expect(h.errors).toEqual([]);
@@ -195,7 +195,7 @@ test("pending plan-list reads exclude approval writes and removed reviews retain
   admitted(); const x = await setup(page), h = x.h;
   const refreshPlans = () => x.dialog().getByRole("button", { name: text("refreshList"), exact: true });
   const close = () => x.dialog().getByRole("button", { name: t("platform.actions.closeDialog"), exact: true });
-  const choosePlan = () => x.dialog().getByLabel(text("plan"), { exact: true });
+  const choosePlan = () => x.dialog().getByRole("combobox", { name: text("plan"), exact: true });
   await prepare(page, "PREREQUISITES");
   const reviewApproval = () => x.dialog().getByRole("button", { name: text("review"), exact: true }); await expect(reviewApproval()).toBeEnabled();
   let releaseList = () => {}; h.listGate.wait = new Promise<void>(resolve => { releaseList = resolve; }); h.listGate.entered = false; h.listGate.omitSelected = true;
