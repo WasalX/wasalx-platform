@@ -29,26 +29,21 @@ test("retryable human handoff has a fenced operator retry without resume or clos
 });
 
 test("native routing sync keeps explicit queue policies separate from native readback", async ({ page }, testInfo) => {
-  test.setTimeout(90_000);
   await nativeRoutingSyncJourney(page, testInfo, "en", role);
 });
 test("fixed handoff agent selection preserves explicit and omitted immutable draft behavior", async ({ page }, testInfo) => {
   test.skip(role !== "tenant_owner");
-  test.setTimeout(90_000);
   await fixedHandoffOwnerJourney(page, testInfo, "en");
 });
 (role !== "agent" ? test : test.skip)("linked account observations warn without changing Source membership", async ({ page }, testInfo) => {
-  test.setTimeout(90_000);
   await accountObservationJourney(page, testInfo, "en");
 });
 
 test("Meta saved access enables receiving only after current checks", async ({page},testInfo)=>{
- test.setTimeout(90_000);
  await metaSavedActivationJourney(page,"en",role,testInfo);
 });
 
 test("Meta number release preserves reservation review and exact uncertain recovery",async({page},testInfo)=>{
- test.setTimeout(120_000);
  await metaNumberReleaseJourney(page,'en',role,testInfo);
 });
 
@@ -57,7 +52,6 @@ test("Meta existing-number access stays paused and recovers without registration
 });
 
 test("Meta external routing preserves exact lost-response recovery and separate bot state", async ({ page }, testInfo) => {
-  test.setTimeout(120_000);
   await metaRoutingJourney(page, "en", role, testInfo);
 });
 
@@ -66,13 +60,11 @@ test("Meta Business app consent and inert imports preserve unknown and stopped s
 });
 
 test("Meta legacy move retains original requests, one-use access and paused completion", async ({ page }, testInfo) => {
-  test.setTimeout(180_000);
   test.skip(!["tenant_owner", "tenant_admin"].includes(role) && testInfo.project.name !== "desktop");
   await metaLegacyMigrationJourney(page, "en", role, testInfo);
 });
 
 test("Meta template preparation retains original requests and never grants number transfer", async ({ page }, testInfo) => {
-  test.setTimeout(150_000);
   test.skip(!["tenant_owner", "tenant_admin"].includes(role) && testInfo.project.name !== "desktop");
   await metaTemplatePreparationJourney(page, "en", role, testInfo);
 });
@@ -80,14 +72,12 @@ test("Meta template preparation retains original requests and never grants numbe
 
 
 test("Meta reconnect renews exact paused access without activating the connection", async ({ page }, testInfo) => {
-  test.setTimeout(120_000);
   await metaReconnectJourney(page, "en", role, testInfo);
 });
 
 
 
 test("Meta signup keeps callback, selection and recovery bound to the active attempt", async ({ page }, testInfo) => {
-  test.setTimeout(90_000);
   await metaSignupJourney(page, "en", role, testInfo);
 });
 
@@ -237,7 +227,6 @@ const expectedNetworkErrors = new WeakMap<Page, RegExp[]>();
 
 (role === "tenant_owner" ? test : test.skip)("alpha repair union loads pinned execution detail and fences stale same-target requests", async ({ page }, testInfo) => {
   test.skip(!["desktop", "mobile-390"].includes(testInfo.project.name));
-  test.setTimeout(60_000);
   await open(page, "automation");
   await page.getByRole("tab", { name: "Conversations", exact: true }).click();
   const opener = page.getByRole("article").filter({ hasText: /Support case.*#10421/u }).getByRole("button", { name: "View execution history" });
@@ -376,7 +365,6 @@ function expectNetworkFailure(page: Page, pattern: RegExp) {
 
 test("role navigation, history, titles, profile, and persisted theme behave as one application", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "desktop owns the exhaustive navigation transaction");
-  test.setTimeout(90_000);
   await open(page);
 
   const persona = personas[role];
@@ -466,7 +454,6 @@ test("role navigation, history, titles, profile, and persisted theme behave as o
 });
 
 test("data-service connections remain truthful, recoverable, and draft-safe", async ({ page }, testInfo) => {
-  test.setTimeout(90_000);
   const canWrite = ["tenant_owner", "tenant_admin"].includes(role);
   const pendingKey = "wasalx:pending-data-connection";
   const connectedId = "87000000-0000-4000-8000-000000000010";
@@ -883,7 +870,6 @@ test("WAHA group messaging policy follows settings permissions and preserves ret
 
 test("mobile and tablet navigation keep content bounded and role-appropriate", { tag: "@tablet" }, async ({ page }, testInfo) => {
   test.skip(testInfo.project.name === "desktop", "responsive projects own this transaction");
-  test.setTimeout(90_000);
   await open(page);
   const viewport = testInfo.project.name === "mobile-390" ? 390 : 820;
   expect(await page.evaluate(() => window.innerWidth)).toBe(viewport);
@@ -984,7 +970,6 @@ test("mobile and tablet navigation keep content bounded and role-appropriate", {
 });
 
 test("one-to-one bot configuration, simulation, handoff, and role boundaries stay usable", async ({ page }, testInfo) => {
-  test.setTimeout(90_000);
   const clonedFlowVersions = new Map<number, string>();
   const saveClonedVersion = async (expectedVersion: number) => {
     const pending = page.waitForResponse(response => response.request().method() === "POST" && /^\/api\/bot-flows\/[^/]+\/clone$/u.test(new URL(response.url()).pathname));
@@ -1832,7 +1817,6 @@ test("duplicate cleanup reconciles the connection list immediately on close", as
 
 (role === "tenant_owner" ? test : test.skip)("owner configures a group and validates normalized identifiers", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop");
-  test.setTimeout(75_000);
 
   await open(page, "groups");
   await page.getByRole("button", { name: "Configure Riyadh · Last mile" }).click();
@@ -1936,7 +1920,6 @@ test("duplicate cleanup reconciles the connection list immediately on close", as
 
 (role === "tenant_owner" ? test : test.skip)("owner inspects delivery receipts and bounded review evidence", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop");
-  test.setTimeout(75_000);
 
   await open(page, "deliveries");
   await page.getByRole("button", { name: "Inspect" }).first().click();
@@ -2224,7 +2207,6 @@ test("duplicate cleanup reconciles the connection list immediately on close", as
 
 (role === "tenant_owner" ? test : test.skip)("owner completes team, support, privacy, and audit governance workflows", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop");
-  test.setTimeout(90_000);
 
   await open(page, "team");
   await expect(page.getByRole("region", { name: "Team access summary" })).toContainText("Tenant owner");
@@ -2493,14 +2475,12 @@ test("duplicate cleanup reconciles the connection list immediately on close", as
 
 (role === "tenant_owner" ? test : test.skip)("ticket event workflows edit publish and bind with pinned versions", async ({ page }, testInfo) => {
   test.skip(!["desktop","mobile-390"].includes(testInfo.project.name));
-  test.setTimeout(90_000);
   await ticketEventWorkflowJourney(page, testInfo, "en");
 });
 
 
 (role === "tenant_owner" ? test : test.skip)("keep-open bot policy preserves legacy and immutable draft settings", async ({ page }, testInfo) => {
   test.skip(!["desktop", "mobile-390"].includes(testInfo.project.name));
-  test.setTimeout(120_000);
   await keepOpenPolicyJourney(page, testInfo, "en");
 });
 test("en deletion receipt status stays truthful and out of URL queries", async ({ page }, testInfo) => {

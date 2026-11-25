@@ -6,8 +6,6 @@ import {arabicTenantMessages} from '../../lib/i18n/messages/ar/tenant';
 import {englishCommonMessages} from '../../lib/i18n/messages/en/common';
 import {arabicCommonMessages} from '../../lib/i18n/messages/ar/common';
 test('approved managed terms record intent without a funding or send-ready claim',async({page},testInfo)=>{
- // This scenario exercises several acknowledged and uncertain retries under the bounded CI CPU cap.
- test.setTimeout(90_000);
  const locale=process.env.WASALX_E2E_LOCALE??'en',role=process.env.WASALX_E2E_ROLE??'tenant_owner';
  const messages:Record<string,string>=locale==='ar'?{...arabicTenantMessages,...arabicCommonMessages}:{...englishTenantMessages,...englishCommonMessages};
  const t=(key:string)=>messages[key]!,id='12000000-0000-4000-8000-000000000081',choiceId='23000000-0000-4000-8000-000000000081';
