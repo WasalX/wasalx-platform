@@ -1333,6 +1333,14 @@ test("Zammad compatibility gates CI and reuses the same job on the nightly sched
   assert(Object.hasOwn(compatibility.on, "workflow_call"));
   assert.deepEqual(compatibility.permissions, { contents: "read" });
   assert.equal(compatibility.jobs.compatibility["runs-on"], "ubuntu-24.04");
+  const manifest = JSON.parse(await read("infra/docker/full/zammad/typecheck-upstream.json"));
+  const dockerfile = (await read("infra/docker/Dockerfile.zammad")).replaceAll("\r\n", "\n");
+  assert.match(manifest.revision, /^[a-f0-9]{40}$/u);
+  assert(dockerfile.includes("FROM scratch AS typecheck-source\nADD https://github.com/zammad/zammad.git#"
+    + manifest.revision + ":app/frontend /app/frontend/"));
+  const typecheck = dockerfile.split(/^RUN /mu).find(run => run.includes("pnpm lint:ts"));
+  assert(dockerfile.includes("COPY --chown=1000:1000 --from=typecheck-source / /tmp/typecheck-upstream/"));
+  assert.match(typecheck, /prepare-zammad-typecheck\.mjs restore \/opt\/zammad \/tmp\/typecheck-upstream\.json \/tmp\/typecheck-upstream [\s\S]+rm -rf \/tmp\/typecheck-upstream[\s\S]+pnpm lint:ts[\s\S]+prepare-zammad-typecheck\.mjs remove/u);
 });
 
 test("PostgreSQL coverage requires an exact report from every shard", async t => {
