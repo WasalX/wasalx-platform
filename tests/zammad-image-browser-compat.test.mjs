@@ -291,16 +291,17 @@ async function observeNativeDom(page, install, input) {
 }
 
 function observeNativeRequests(page, classify) {
-  let latest;
   let matched;
+  let nonmatching;
   let count = 0;
+  let nonmatchingCount = 0;
   let obsoletePreviewAborts = 0;
   const classifySafely = request => {
     try { return classify(request); } catch { return null; }
   };
   const stateFor = request => {
-    if (request === latest?.request) return latest.state;
     if (request === matched?.request) return matched.state;
+    if (request === nonmatching?.request) return nonmatching.state;
     return null;
   };
   const listeners = [
@@ -308,8 +309,12 @@ function observeNativeRequests(page, classify) {
       const state = classifySafely(request);
       if (!state) return;
       count = Math.min(count + 1, 99);
-      latest = { request, state: { ...state, httpStatus: null, outcome: 'pending' } };
-      if (state.matched) matched = latest;
+      const entry = { request, state: { ...state, httpStatus: null, outcome: 'pending' } };
+      if (state.matched) matched = entry;
+      else {
+        nonmatching = entry;
+        nonmatchingCount = Math.min(nonmatchingCount + 1, 99);
+      }
     }],
     ['response', response => {
       const state = stateFor(response.request());
@@ -331,7 +336,8 @@ function observeNativeRequests(page, classify) {
   for (const [event, listener] of listeners) page.on(event, listener);
   return () => {
     for (const [event, listener] of listeners) page.off(event, listener);
-    return { count, request: (matched ?? latest)?.state ?? null, obsoletePreviewAborts };
+    return { count, request: matched?.state ?? null, nonmatchingCount,
+      nonmatchingRequest: nonmatching?.state ?? null, obsoletePreviewAborts };
   };
 }
 
@@ -1534,8 +1540,9 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
       `);
       return JSON.parse(raw.split('\n').find(line => line.startsWith('{')) ?? '');
     };
+    const ticketUpdateOperation = /^ticketUpdate$/iu;
     const isTicketUpdate = (request, url = request.url()) => new URL(url).pathname.endsWith('/graphql')
-      && request.method() === 'POST' && /^ticketUpdate$/iu.test(request.postDataJSON()?.operationName ?? '');
+      && request.method() === 'POST' && ticketUpdateOperation.test(request.postDataJSON()?.operationName ?? '');
     const submitReplyTicket = async (articleExpected) => {
       const [response] = await Promise.all([
         page.waitForResponse(response => isTicketUpdate(response.request(), response.url()), { timeout: 60_000 }),
@@ -1638,6 +1645,7 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
     const directAction = directBubble.getByRole('button', { name: 'Reply on WhatsApp', exact: true });
     const directBefore = await replySnapshot(state.directReplyTicketId, directBody);
     assert.equal(directBefore.state, 'open'); assert.equal(directBefore.rows.length, 0);
+    const directOrigin = new URL(zammadOrigin).origin;
     const submitDirectReply = async articleExpected => {
       const collectForm = await observeNativeDom(page, formId => {
         const listener = new AbortController();
@@ -1683,8 +1691,20 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
             defaultPrevented: expectedSubmit?.defaultPrevented ?? null, nativeInvalid, validationMarked };
         };
       }, `form-ticket-edit-${directFixture.id}`);
-      const collectRequest = observeNativeRequests(page, request => isTicketUpdate(request)
-        ? { matched: true, articlePresent: request.postDataJSON()?.variables?.input?.article != null } : null);
+      const collectRequest = observeNativeRequests(page, request => {
+        const url = new URL(request.url());
+        if (!url.pathname.endsWith('/graphql')) return null;
+        const methodMatched = request.method() === 'POST';
+        let payload;
+        let bodyReadable = true;
+        try { payload = request.postDataJSON(); } catch { bodyReadable = false; }
+        const operationMatched = ticketUpdateOperation.test(payload?.operationName ?? '');
+        const matched = methodMatched && operationMatched;
+        if (!matched && url.origin !== directOrigin) return null;
+        const updateInBatch = Array.isArray(payload) && payload.some(entry => ticketUpdateOperation.test(entry?.operationName ?? ''));
+        return { matched, methodMatched, operationMatched, bodyReadable, updateInBatch,
+          articlePresent: operationMatched ? payload?.variables?.input?.article != null : null };
+      });
       await withNativeDiagnostic(t, 'direct reply', async () => ({ articleExpected, ...collectRequest(), form: await collectForm() }),
         () => submitReplyTicket(articleExpected), articleExpected);
     };
