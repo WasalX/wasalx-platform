@@ -90,6 +90,7 @@ test("application ownership rejects a shared spec moved out of hosted fixture mo
   const shared = "tests/e2e/meta-cost-statements.spec.ts";
   const english = "tests/e2e/application.spec.ts";
   const arabic = "tests/e2e/arabic.spec.ts";
+  const identityRunner = await read("tests/hosted-keycloak-identity.mjs");
   const fixtureSpecs = new Map([["en", new Set([english, shared])], ["ar", new Set([arabic, shared])]]);
   assert(hostedApplicationOwns(english, fixtureSpecs));
   assert(hostedApplicationOwns(arabic, fixtureSpecs));
@@ -212,8 +213,9 @@ test("tracked tests belong to a named CI runner or the test allowlist", async ()
           && referencesFile(applicationRunner, "playwright.application.config.ts")
           && referencesFile(application, "./tests/e2e")
           && posix.dirname(file) === "tests/e2e" && referencesFile(application, posix.basename(file));
-      case "playwright.identity.config.ts":
-        return referencesFile(identity, "./tests/e2e")
+      case "keycloak-identity":
+        return runsFile(command, "tests/hosted-keycloak-identity.mjs")
+          && referencesFile(identityRunner, "playwright.identity.config.ts") && referencesFile(identity, "./tests/e2e")
           && posix.dirname(file) === "tests/e2e" && referencesFile(identity, posix.basename(file));
       case "storybook":
         return referencesFile(storybookRunner, "playwright.storybook.config.ts")
@@ -787,6 +789,21 @@ test("Application browser CI shards roles and locales and reuses the portal buil
   }
 });
 
+test("Hosted Keycloak identity job builds the project image and requires the isolated cases", async () => {
+  const { jobs } = parse(await read(".github/workflows/ci.yml"));
+  const job = jobs["keycloak-identity"];
+  assert.equal(job.needs, "changes");
+  assert.match(job.if, /needs\.changes\.outputs\.keycloak-identity != 'false'/u);
+  assert.equal(jobs.changes.outputs["keycloak-identity"], "${{ steps.keycloak-identity.outputs.needed }}");
+  const run = job.steps.find(step => runsFile(step.run ?? "", "tests/hosted-keycloak-identity.mjs"));
+  assert.match(run.run, /docker build --file Dockerfile\.foundation-keycloak/u);
+  assert(!job.steps.some(step => step.uses?.startsWith("actions/upload-artifact@")));
+  const gate = jobs["ci-gate"];
+  assert(gate.needs.includes("keycloak-identity"));
+  assert.equal(gate.steps[0].env.KEYCLOAK_IDENTITY, "${{ needs.keycloak-identity.result }}");
+  assert.equal(gate.steps[0].env.KEYCLOAK_IDENTITY_NEEDED, "${{ needs.changes.outputs.keycloak-identity }}");
+});
+
 test("Hosted browser jobs retain Playwright diagnostics on failure or cancellation", async () => {
   const { jobs } = parse(await read(".github/workflows/ci.yml"));
   const diagnostics = {
@@ -822,7 +839,7 @@ test("CI gate requires each event's jobs and rejects unplanned skips, failures, 
     DEV_INSTALL_NEEDED: "true", DEV_INSTALL: "success", STORYBOOK_NEEDED: "true", STORYBOOK: "success",
     ZAMMAD_NEEDED: "true", ZAMMAD_COMPATIBILITY: "success",
     INSTALLER_PORTAL_NEEDED: "true", INSTALLER_PORTAL: "success",
-    APPLICATION_NEEDED: "true", APPLICATION_E2E: "success",
+    APPLICATION_NEEDED: "true", APPLICATION_E2E: "success", KEYCLOAK_IDENTITY: "success",
   };
   const unselected = {
     ...pr, INTEGRATION_NEEDED: "false", INTEGRATION: "skipped", PORTAL_INTEGRATION: "skipped",
@@ -830,7 +847,7 @@ test("CI gate requires each event's jobs and rejects unplanned skips, failures, 
     DEV_INSTALL_NEEDED: "false", DEV_INSTALL: "skipped", STORYBOOK_NEEDED: "false", STORYBOOK: "skipped",
     ZAMMAD_NEEDED: "false", ZAMMAD_COMPATIBILITY: "skipped",
     INSTALLER_PORTAL_NEEDED: "false", INSTALLER_PORTAL: "skipped",
-    APPLICATION_NEEDED: "false", APPLICATION_E2E: "skipped",
+    APPLICATION_NEEDED: "false", APPLICATION_E2E: "skipped", KEYCLOAK_IDENTITY_NEEDED: "false", KEYCLOAK_IDENTITY: "skipped",
   };
   const queue = {
     ...pr, EVENT: "merge_group", REVIEW: "skipped", IMAGES: "success",
@@ -844,6 +861,9 @@ test("CI gate requires each event's jobs and rejects unplanned skips, failures, 
   for (const [lane, result, override, expected] of [
     ["PR with selected jobs", pr, {}, 0],
     ["PR with unselected jobs", unselected, {}, 0],
+    ["PR with a failed Keycloak identity job", pr, { KEYCLOAK_IDENTITY: "failure" }, 1],
+    ["PR with Keycloak identity skipped without selection evidence", unselected, { KEYCLOAK_IDENTITY_NEEDED: "" }, 1],
+    ["merge queue with Keycloak identity skipped", queue, { KEYCLOAK_IDENTITY: "skipped" }, 1],
     ["PR with a failed application shard", pr, { APPLICATION_E2E: "failure" }, 1],
     ["PR with a cancelled application shard", pr, { APPLICATION_E2E: "cancelled" }, 1],
     ["PR with application skipped without selection evidence", unselected, { APPLICATION_NEEDED: "" }, 1],
@@ -1056,7 +1076,7 @@ test("PR image results are advisory while the merge queue requires the full imag
     if (imageResult === "failure") assert.match(advisory.stdout, /::warning::Advisory PR image builds: failure/u);
 
     const result = runWorkflowScript(gate.steps[0].run, {
-      EVENT: "merge_group", CHANGES: "success", PRIVACY: "success", WORKFLOW_LINT: "success", STORYBOOK: "success", APPLICATION_E2E: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: "skipped",
+      EVENT: "merge_group", CHANGES: "success", PRIVACY: "success", WORKFLOW_LINT: "success", STORYBOOK: "success", APPLICATION_E2E: "success", KEYCLOAK_IDENTITY: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: "skipped",
       IMAGES: imageResult, INTEGRATION: "success", PORTAL_INTEGRATION: "success",
       INTEGRATION_COVERAGE: "success", DEV_INSTALL: "skipped", INFRA: "success",
       ZAMMAD_COMPATIBILITY: "success",
@@ -1066,7 +1086,7 @@ test("PR image results are advisory while the merge queue requires the full imag
   }
   const summary = join(directory, "gate").replaceAll("\\", "/");
   const result = runWorkflowScript(gate.steps[0].run, {
-    EVENT: "pull_request", CHANGES: "success", PRIVACY: "success", WORKFLOW_LINT: "success", STORYBOOK: "success", APPLICATION_E2E: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: "success",
+    EVENT: "pull_request", CHANGES: "success", PRIVACY: "success", WORKFLOW_LINT: "success", STORYBOOK: "success", APPLICATION_E2E: "success", KEYCLOAK_IDENTITY: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: "success",
     IMAGES: "skipped", INTEGRATION_NEEDED: "false", INTEGRATION: "skipped",
     PORTAL_INTEGRATION: "skipped", INTEGRATION_COVERAGE: "skipped", DEV_INSTALL_NEEDED: "false", DEV_INSTALL: "skipped",
     INSTALLER_PORTAL_NEEDED: "false", INSTALLER_PORTAL: "skipped",
@@ -1234,7 +1254,7 @@ ${detector.run}`, { GITHUB_OUTPUT: outputFile.replaceAll("\\", "/"), DIFF_PATHS:
   ]) {
     const pr = event === "pull_request";
     const result = runWorkflowScript(gateStep.run, {
-      EVENT: event, CHANGES: "success", PRIVACY: "success", WORKFLOW_LINT: "success", STORYBOOK: "success", APPLICATION_E2E: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: pr ? "success" : "skipped",
+      EVENT: event, CHANGES: "success", PRIVACY: "success", WORKFLOW_LINT: "success", STORYBOOK: "success", APPLICATION_E2E: "success", KEYCLOAK_IDENTITY: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: pr ? "success" : "skipped",
       IMAGES: pr ? "skipped" : "success", INTEGRATION_NEEDED: "false",
       INTEGRATION: pr ? "skipped" : "success", PORTAL_INTEGRATION: pr ? "skipped" : "success",
       INTEGRATION_COVERAGE: pr ? "skipped" : "success",
@@ -1250,7 +1270,7 @@ ${detector.run}`, { GITHUB_OUTPUT: outputFile.replaceAll("\\", "/"), DIFF_PATHS:
     ["true", "failure", 1], ["true", "cancelled", 1],
   ]) {
     const result = runWorkflowScript(gateStep.run, {
-      EVENT: "pull_request", CHANGES: "success", PRIVACY: "success", WORKFLOW_LINT: "success", STORYBOOK: "success", APPLICATION_E2E: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: "success",
+      EVENT: "pull_request", CHANGES: "success", PRIVACY: "success", WORKFLOW_LINT: "success", STORYBOOK: "success", APPLICATION_E2E: "success", KEYCLOAK_IDENTITY: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: "success",
       IMAGES: "skipped", INTEGRATION_NEEDED: "false",
       INTEGRATION: "skipped", PORTAL_INTEGRATION: "skipped", INTEGRATION_COVERAGE: "skipped",
       DEV_INSTALL_NEEDED: needed, DEV_INSTALL: jobResult, INFRA_NEEDED: "false", INFRA: "skipped",
@@ -1271,7 +1291,7 @@ ${detector.run}`, { GITHUB_OUTPUT: outputFile.replaceAll("\\", "/"), DIFF_PATHS:
   ]) {
     const pr = event === "pull_request";
     const result = runWorkflowScript(gateStep.run, {
-      EVENT: event, CHANGES: "success", PRIVACY: "success", WORKFLOW_LINT: "success", STORYBOOK: "success", APPLICATION_E2E: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: pr ? "success" : "skipped",
+      EVENT: event, CHANGES: "success", PRIVACY: "success", WORKFLOW_LINT: "success", STORYBOOK: "success", APPLICATION_E2E: "success", KEYCLOAK_IDENTITY: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: pr ? "success" : "skipped",
       IMAGES: pr ? "skipped" : "success", DEV_INSTALL_NEEDED: "false", DEV_INSTALL: "skipped",
       INSTALLER_PORTAL_NEEDED: pr ? "false" : "true", INSTALLER_PORTAL: pr ? "skipped" : "success",
       INFRA_NEEDED: "true", INFRA: "success", INTEGRATION_NEEDED: needed, GITHUB_STEP_SUMMARY: summary,
