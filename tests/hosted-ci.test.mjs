@@ -861,6 +861,23 @@ test("Hosted browser jobs retain Playwright diagnostics on failure or cancellati
   }
 });
 
+test("Successful owner fixture shards retain only the named workspace and invitation PNGs", async () => {
+  const { jobs } = parse(await read(".github/workflows/ci.yml"));
+  const uploads = jobs["application-e2e"].steps.filter(step =>
+    step.uses?.startsWith("actions/upload-artifact@") && step.if !== "failure() || cancelled()");
+  assert.equal(uploads.length, 1);
+  const [upload] = uploads;
+  assert.equal(upload.if, "success() && matrix.roles == 'tenant_owner'");
+  assert.equal(upload.with.name, "workspace-invitation-${{ matrix.locale }}");
+  const expected = ["desktop", "mobile-390"].flatMap(viewport => [
+    `workspace-access-ready-${viewport}-light`,
+    `workspace-access-ready-${viewport}-dark`,
+    `invitation-incomplete-${viewport}-light`,
+    `invitation-incomplete-${viewport}-dark-preview`,
+  ]).map(name => "output/playwright/workspace-invitation/" + name + "-${{ matrix.locale }}.png");
+  assert.deepEqual(upload.with.path.trim().split("\n").sort(), expected.sort());
+});
+
 test("CI gate requires each event's jobs and rejects unplanned skips, failures, and cancellations", async t => {
   const { jobs } = parse(await read(".github/workflows/ci.yml"));
   const [{ run }] = jobs["ci-gate"].steps;

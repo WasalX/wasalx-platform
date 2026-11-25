@@ -210,9 +210,19 @@ export async function workspaceAccessJourney(page: Page, testInfo: TestInfo, loc
   expect(Math.abs(nameEdge - emailEdge)).toBeLessThanOrEqual(1);
   const width = await page.evaluate(() => ({ viewport: innerWidth, document: document.documentElement.scrollWidth }));
   expect(width.document).toBeLessThanOrEqual(width.viewport);
-  const screenshot = testInfo.outputPath(`workspace-access-${locale}.png`);
-  await section.screenshot({ path: screenshot });
-  await testInfo.attach(`workspace-access-${locale}`, { path: screenshot, contentType: "image/png" });
+  const application = page.locator('[data-application-ready="true"]');
+  const capture = (theme: "light" | "dark") => section.screenshot({
+    path: `output/playwright/workspace-invitation/workspace-access-ready-${testInfo.project.name}-${theme}-${locale}.png`,
+    animations: "disabled",
+    caret: "hide",
+    scale: "css",
+  });
+  await expect(application).toHaveClass("theme-dark");
+  const dark = await capture("dark");
+  await testInfo.attach(`workspace-access-${locale}`, { body: dark, contentType: "image/png" });
+  await page.getByRole("button", { name: t("tenant.theme.switchLight"), exact: true }).click();
+  await expect(application).toHaveClass("theme-light");
+  await capture("light");
 }
 
 export async function supportScopeJourney(page: Page, testInfo: TestInfo, locale: "en" | "ar") {

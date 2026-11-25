@@ -546,6 +546,21 @@ jobs:
           WASALX_E2E_LOCALES: ${{ matrix.locale }}
           WASALX_E2E_ROLES: ${{ matrix.roles }}
         run: node scripts/run-application-e2e.mjs
+      - name: Upload synthetic workspace and invitation screenshots
+        if: success() && matrix.roles == 'tenant_owner'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: workspace-invitation-${{ matrix.locale }}
+          path: |
+            output/playwright/workspace-invitation/workspace-access-ready-desktop-light-${{ matrix.locale }}.png
+            output/playwright/workspace-invitation/workspace-access-ready-desktop-dark-${{ matrix.locale }}.png
+            output/playwright/workspace-invitation/workspace-access-ready-mobile-390-light-${{ matrix.locale }}.png
+            output/playwright/workspace-invitation/workspace-access-ready-mobile-390-dark-${{ matrix.locale }}.png
+            output/playwright/workspace-invitation/invitation-incomplete-desktop-light-${{ matrix.locale }}.png
+            output/playwright/workspace-invitation/invitation-incomplete-desktop-dark-preview-${{ matrix.locale }}.png
+            output/playwright/workspace-invitation/invitation-incomplete-mobile-390-light-${{ matrix.locale }}.png
+            output/playwright/workspace-invitation/invitation-incomplete-mobile-390-dark-preview-${{ matrix.locale }}.png
+          retention-days: 7
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure() || cancelled()
         with:
