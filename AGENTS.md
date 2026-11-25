@@ -86,7 +86,7 @@ Everything else, such as features, fixes, docs, `DESIGN.md`, UI, added or change
 ### Personal data
 
 - **Staff identity** — Users, memberships, invitations, operator requests, and audit actor IDs in the control database. Redis stores staff sessions for the workspace and platform portals until logout or expiry.
-- **Customer contacts** — WhatsApp participant IDs and phone numbers, group participants, and coexistence contacts in the control database.
+- **Customer contacts** — WhatsApp participant IDs and phone numbers, group participants, coexistence contacts, and WhatsApp marketing preferences in the control database. Marketing preferences stay until tenant or applicable contact deletion so later template delivery can honor stops.
 - **Messages and media references** — Normalized messages, raw webhooks in the event inbox, delivery outbox payloads, media references, bot conversations, and group history in the control database.
 - **Privacy records and email routing** — Privacy requests, holds, export records, and email-routing applications in the control database.
 - **WhatsApp data-deletion callback receipts** — The control database stores receipts with a hashed subject identifier. Public status expires after the number of days set by `META_DELETION_RECEIPT_RETENTION_DAYS` (required, 1 to 365 days). After status expiry, cleanup removes the subject and review-evidence digests from refused receipts and purges those receipts after the replay window. Unresolved receipts stay available for review. Held receipts keep their subject digest for as long as they remain held, even after public status expires.

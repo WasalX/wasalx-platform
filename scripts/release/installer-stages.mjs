@@ -20,6 +20,7 @@ const repository = resolve(fileURLToPath(new URL("../../", import.meta.url)));
 const preflight = fileURLToPath(new URL("./preflight-full-env.mjs", import.meta.url));
 const verifier = fileURLToPath(new URL("./installer-stack.mjs", import.meta.url));
 const shaPattern = /^[0-9a-f]{40}$/u;
+const imageIdPattern = /^sha256:[0-9a-f]{64}$/u;
 const stages = ["preflight", "build", "verify-hosted", "preload-hosted", "admit-hosted", "replace", "smoke", "qualify", "rollback", "rollback-safety", "release-held"];
 const migrationVerifierScript = `const fs=require('node:fs'),crypto=require('node:crypto');
     console.log(JSON.stringify(fs.readdirSync('/app/migrations').filter(n=>/^\\d{4}_[a-z0-9_]+\\.sql$/.test(n)).sort().map(name=>{
@@ -163,7 +164,7 @@ export async function verifyMigrationInputs(context, imageId) {
 }
 
 export function matchesCandidate(image, sha, tree, dockerfile, buildContextSha256) {
-  return /^sha256:[0-9a-f]{64}$/u.test(image?.Id ?? "")
+  return imageIdPattern.test(image?.Id ?? "")
     && image.Config?.Labels?.["org.opencontainers.image.revision"] === sha
     && image.Config?.Labels?.["io.wasalx.source.tree"] === tree
     && image.Config?.Labels?.["io.wasalx.build.dockerfile"] === dockerfile
@@ -416,8 +417,26 @@ export async function executeStage(action, context) {
     });
   };
   const inspectImage = async (reference) => {
-    try { return JSON.parse(await execute("docker", ["image", "inspect", reference], environment))[0]; }
-    catch { return null; }
+    let output;
+    try { output = await execute("docker", ["image", "inspect", reference], environment); }
+    catch (error) {
+      if (error instanceof DockerImageNotFoundError) return null;
+      throw error;
+    }
+    let images;
+    try { images = JSON.parse(output); }
+    catch { assert.fail("docker image inspect returned malformed JSON"); }
+    assert.ok(Array.isArray(images) && images.length === 1 && typeof images[0]?.Id === "string"
+      && imageIdPattern.test(images[0].Id), "docker image inspect did not return exactly one valid image ID");
+    const [image] = images;
+    const { Config: config } = image;
+    const labels = config?.Labels;
+    assert.ok(config === null || config === undefined || (typeof config === "object" && !Array.isArray(config)),
+      "docker image inspect returned invalid configuration");
+    assert.ok(labels === null || labels === undefined || (typeof labels === "object" && !Array.isArray(labels)
+      && Object.values(labels).every(value => typeof value === "string")),
+    "docker image inspect returned invalid labels");
+    return image;
   };
   const dependencies = [...new Set(active.filter((name) => !model.services[name].build)
     .map((name) => model.services[name].image))];
@@ -491,7 +510,9 @@ export async function executeStage(action, context) {
       if (model.services.migrate) {
         const migrationImage = plan.find(({ id }) => id === "control-api");
         assert.ok(migrationImage, "migration image missing from candidate plan");
-        await verifyMigrationInputs(context, (await inspectImage(migrationImage.reference)).Id);
+        const details = await inspectImage(migrationImage.reference);
+        assert.ok(details, "migration image missing after build");
+        await verifyMigrationInputs(context, details.Id);
       }
       await verifyDependencies(true);
       manifest.state = "PASS";
@@ -698,6 +719,8 @@ function commandStderrTail(stderr, environment) {
   return Buffer.from(detail).subarray(-2048).toString("utf8").replace(/^\uFFFD+/u, "");
 }
 
+class DockerImageNotFoundError extends assert.AssertionError {}
+
 export function run(command, arguments_, environment, inherit = false, input) {
   if (inherit) {
     return new Promise((resolvePromise, rejectPromise) => {
@@ -712,13 +735,27 @@ export function run(command, arguments_, environment, inherit = false, input) {
     });
   }
   const result = spawnSync(command, arguments_, { cwd: repository, env: environment, encoding: "utf8", windowsHide: true });
+  assert.ok(!result.error, `${command} subprocess failed`);
   if (result.status !== 0) {
     const tail = commandStderrTail(result.stderr, environment);
+    const message = tail ? `${command} failed: ${tail}` : `${command} failed`;
     if (command === "docker" && arguments_[0] === "pull") {
       const ref = arguments_.at(-1);
       assert.equal(result.status, 0, `docker pull ${ref} exit=${result.status ?? 1}: ${tail || "no Docker diagnostic"}`);
     }
-    assert.equal(result.status, 0, tail ? `${command} failed: ${tail}` : `${command} failed`);
+    if (command === "docker" && arguments_[0] === "image" && arguments_[1] === "inspect" && arguments_.length === 3
+        && result.status === 1 && result.stdout?.trim() === "[]") {
+      const reference = arguments_[2];
+      // Moby reports missing images using the familiar name and adds the default tag when omitted.
+      let familiar = reference.replace(/^(?:docker\.io|index\.docker\.io)\//u, "").replace(/^library\/([^/]+)$/u, "$1");
+      if (!familiar.slice(familiar.lastIndexOf("/") + 1).includes(":")) familiar += ":latest";
+      const missing = "Error response from daemon: No such image: ";
+      const diagnostic = result.stderr?.trim();
+      if (diagnostic === missing + reference || diagnostic === missing + familiar) {
+        throw new DockerImageNotFoundError({ actual: result.status, expected: 0, operator: "strictEqual", message });
+      }
+    }
+    assert.equal(result.status, 0, message);
   }
   return result.stdout.trim();
 }

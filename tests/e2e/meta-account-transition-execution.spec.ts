@@ -360,8 +360,6 @@ async function readbackFixture(page:Page,f:Awaited<ReturnType<typeof fixture>>){
 // Four owner contexts: EN/AR desktop1440 and mobile390; one EN auditor negative.
 // Root selects these finite contexts using the existing application config.
 test('Account recovery renews exact source read access without replaying or approving migration',async({page},testInfo)=>{
- // Multiple reloads and recovery phases need a bounded scenario budget on shared CI runners.
- test.setTimeout(90_000);
   await page.clock.install();
   const f=await fixture(page),r=await readbackFixture(page,f);
   const messages=(locale()==='ar'?arabicTenantMessages:englishTenantMessages) as Record<string,string>;

@@ -45,7 +45,6 @@
   { "path": "scripts/fetch-zammad-addon.mjs", "literal": "https://github.com/", "reason": "The add-on fetcher checks and uses canonical GitHub source URLs." },
   { "path": "scripts/prepare-zammad-previous-stable-image.mjs", "literal": "postgresql://zammad:/zammad", "reason": "Uses the canonical GitHub source or the local database reference in the compatibility build." },
   { "path": "scripts/prepare-zammad-previous-stable-image.mjs", "literal": "https://github.com/", "reason": "Uses the canonical GitHub source or the local database reference in the compatibility build." },
-  { "path": "scripts/prepare-zammad-typecheck.mjs", "literal": "https://raw.githubusercontent.com/zammad/zammad/", "reason": "Downloads the upstream file from the add-on typecheck source pin." },
   { "path": "scripts/release/access-ui.mjs", "literal": "https://connect.facebook.net/en_US/sdk.js", "reason": "Matches the provider SDK request in the browser fixture." },
   { "path": "scripts/release/artifact-contract.mjs", "literal": "https://github.com/", "reason": "Canonical GitHub source or issuer used for provenance verification." },
   { "path": "scripts/release/artifact-contract.mjs", "literal": "https://token.actions.githubusercontent.com", "reason": "Canonical GitHub source or issuer used for provenance verification." },

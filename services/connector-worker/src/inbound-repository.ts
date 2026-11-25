@@ -1,3 +1,4 @@
+import { recordWhatsAppMarketingRejection } from "./whatsapp-marketing-preferences.js";
 import { createHash, randomUUID } from "node:crypto";
 import { applyMetaLifecycleObservation, assertMetaLifecycleAccess, classifyMetaLifecycleValue, metaLifecycleAccountId, metaLifecycleBlockingReasons, metaLifecyclePayloadSha256, MetaLifecycleError, normalizeMetaDisplayPhoneNumber, parseMetaLifecycleObservation, parseMetaLifecycleState } from "../../../packages/core/src/meta-account-relation.js";
 import {assertDirectNativeBarrier,assertDirectEffectsClear} from '../../../packages/core/src/direct-keep-open.js';
@@ -32,7 +33,7 @@ type TicketIdentity={id:string;number:string;articleId?:string;feedbackQueued?:b
 type ProviderStatusRow={connection_state:string;provider_session_id:string;opaque_session_id:string;provider_state:string|null;provider_state_data:Record<string,unknown>|null;last_provider_status_at:string|Date|null;waha_worker_id:string|null};
 type WahaIdentityContextRow={provider_session_id:string;opaque_session_id:string;waha_worker_id:string;base_url:string;secret_reference:string};
 function metaCredentialContext(row:MetaCredentialRow){return{providerSessionId:row.provider_session_id,phoneNumberId:row.opaque_session_id,wabaId:row.meta_waba_id,proof:row.meta_account_proof,...(row.meta_lifecycle_present?{lifecycle:row.meta_lifecycle}:{})}}
-type DeliveryReceiptRow={id:string;state:string;zammad_ticket_id:string;content_redacted_at?:string|Date|null};
+type DeliveryReceiptRow={id:string;state:string;zammad_ticket_id:string;content_redacted_at?:string|Date|null;meta_direct_recipient?:unknown};
 type MutationTargetRow={id:string;external_message_id:string;provider_metadata:Record<string,unknown>};
 type GroupActionDefinitionRow={id:string;action_revision_id:string;action_key:string;revision:number|string;kind:"HTTP_JSON"|"NOTION_CREATE_PAGE";endpoint_url:string;http_method:"GET"|"POST";auth_scheme:"NONE"|"BEARER";secret_reference:string|null;headers:Record<string,string>;response_mapping:Record<string,string>;timeout_ms:number;max_response_bytes:number};
 type GroupActionExecutionRow={id:string;state:GroupActionExecution["state"];attempts:number;action_snapshot:unknown;request_input:Record<string,string>;response_variables:Record<string,string>|null;safe_error:string|null;request_sha256:string};
@@ -1431,7 +1432,7 @@ export class InboundRepository{
         FOR UPDATE`,[event.tenantId,candidate.id])).rowCount);
       if(!outcomeReviewLocked)throw new Error("Provider-outcome review is missing");
     }
-    const delivery=(await client.query<DeliveryReceiptRow>(`SELECT id,state,zammad_ticket_id
+    const delivery=(await client.query<DeliveryReceiptRow>(`SELECT id,state,zammad_ticket_id,meta_direct_recipient
       FROM delivery_outbox
       WHERE tenant_id=$1 AND id=$2 AND connection_id=$3 AND external_message_id=$4
         AND content_redacted_at IS NULL
@@ -1455,6 +1456,9 @@ export class InboundRepository{
       pricing?.observedEnvelopeAccountId??null,pricing?.observedPhoneNumberId??null,
     ])).rows[0];
     if(!inserted)return"DUPLICATE";
+    if(event.provider==="meta"&&receipt.status==="FAILED"&&errorCodes.includes("131050")&&delivery.meta_direct_recipient){
+      await recordWhatsAppMarketingRejection(client,event.tenantId,event.connectionId,delivery.meta_direct_recipient,providerTimestamp,event.id);
+    }
     // WAHA group receipts are explicitly per-participant. Retain the evidence
     // but never present one participant's acknowledgement as an aggregate group
     // delivery/read/failure state.

@@ -1,5 +1,7 @@
 import { defineConfig } from '@playwright/test';
 
+const browserPath = process.env.WASALX_AUTH_TEST_BROWSER_PATH;
+
 // Isolated native Keycloak coverage; never supplies or records production credentials.
 export default defineConfig({
   testDir: './tests/e2e',
@@ -9,5 +11,5 @@ export default defineConfig({
   retries: 0,
   timeout: 180_000,
   reporter: [['list'], ['json', { outputFile: 'output/playwright/identity-tests.json' }]],
-  use: { channel: 'chrome', headless: true, contextOptions: { reducedMotion: 'reduce' }, actionTimeout: 10_000, trace: 'off', video: 'off', screenshot: 'off' },
+  use: { ...(browserPath ? { launchOptions: { executablePath: browserPath } } : { channel: 'chrome' }), headless: true, contextOptions: { reducedMotion: 'reduce' }, actionTimeout: 10_000, trace: 'off', video: 'off', screenshot: 'off' },
 });

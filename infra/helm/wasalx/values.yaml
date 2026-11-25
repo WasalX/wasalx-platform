@@ -40,7 +40,7 @@ observability:
     enabled: false
     namespace: observability
     labels: { release: kube-prometheus-stack }
-    runbookBaseUrl: "https://github.com/WasalX/wasalx-platform/tree/main/docs/runbooks"
+    runbookBaseUrl: "https://github.com/WasalX/wasalx-platform/blob/main/docs/runbooks/alert-response.md"
 wahaBaseUrl: "http://waha.wasalx.svc.cluster.local:3000"
 wahaAdminSecretReference: "secret://platform/waha-admin"
 # Public HTTPS origin accepted by Meta and WAHA. The connector appends the

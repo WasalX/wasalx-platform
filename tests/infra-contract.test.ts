@@ -123,6 +123,7 @@ test("release assets use one bounded mirror attempt and reject corrupt bytes bef
     const source = await read("scripts/release/fetch-verified-asset.sh");
     assert.match(source, /--retry 0[\s\S]*--connect-timeout 3 --max-time 8/u);
     assert.match(source, /--proto '=https' --proto-redir '=https'[\s\S]*--retry-max-time 120/u);
+    assert.doesNotMatch(source, /--retry-all-errors/u);
     const infra = await read("scripts/validate-infra.sh");
     const prepare = infra.split("prepare_verified_archive() {")[1].split("prepare_pinned_provider() {")[0];
     assert(prepare.indexOf('"$checksum_url"') < prepare.indexOf("fetch-verified-asset.sh"), "Helm/Tofu metadata must come directly from upstream before mirror bytes");
@@ -170,7 +171,8 @@ test("infrastructure validation keeps Docker on fullruntime and pins native clou
   const script = await read("scripts/validate-infra.sh");
   assert.match(script, /\.wasalx-infra-tool-cache/);
   assert.match(script, /cached infrastructure tool failed checksum verification/);
-  assert.match(script, /--retry 3 --retry-all-errors/);
+  assert.match(script, /--retry 3 --retry-delay 2 --retry-max-time 120/u);
+  assert.doesNotMatch(script, /--retry-all-errors/u);
   assert.match(script, /NATIVE_INFRA=false/);
   assert.match(script, /\bdocker\s+run/);
   assert.match(script, /TOFU_IMAGE="ghcr\.io\/opentofu\/opentofu@sha256:[0-9a-f]{64}"/);

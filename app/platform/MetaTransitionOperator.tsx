@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useEffectEvent, useLayoutEffect, useRef, useState, type FormEvent } from "react";
+import { flushSync } from "react-dom";
 import { parseMetaTransitionOperatorRequest, type MetaTransitionOperatorAction, type MetaTransitionOperatorRequest, type MetaTransitionOperatorReview, type MetaTransitionOperatorSummary } from "../../packages/core/src/meta-transition-operator-contract.ts";
 import { isOperatorReview, isOperatorReviewSummary, operatorReviewActions, operatorReviewSettled, operatorReviewStorageKey, parseOperatorReviewIntent, type OperatorReviewIntent } from "../../lib/meta-transition-operator-intent.ts";
 import { formatDateTime, formatNumber } from "../../lib/i18n/format.ts";
@@ -159,7 +160,27 @@ function ReviewForm({ view, busy, submit }: { view: MetaTransitionOperatorReview
   const [payment, setPayment] = useState(view.originalGrant?.sourcePayment ?? ""), [arrangement, setArrangement] = useState(view.originalGrant?.managed?.arrangementVersionId ?? "");
   const [receiver, setReceiver] = useState(view.originalGrant?.managed?.targetReceivingBusinessId ?? ""), [terms, setTerms] = useState(view.originalGrant?.managed?.targetTermsDocumentText ?? ""), [version, setVersion] = useState(view.originalGrant?.managed?.targetTermsVersion ?? "");
   const [accepted, setAccepted] = useState(false), [reviewed, setReviewed] = useState(false), [invalid, setInvalid] = useState(false);
+  const [confirmationError, setConfirmationError] = useState<"acceptTerms" | "reviewed" | null>(null);
+  const termsError = confirmationError === "acceptTerms", evidenceError = confirmationError === "reviewed";
   const managed = view.requestedMode === "WASALX_MANAGED", fixed = view.originalGrant !== null;
+
+  function showInvalid(event: FormEvent<HTMLFormElement>) {
+    const field = event.target;
+    const checkbox = field instanceof HTMLInputElement && field.type === "checkbox";
+    if (checkbox) event.preventDefault();
+    if (field !== event.currentTarget.querySelector(":is(input, select, textarea):invalid")) return;
+    if (!checkbox) {
+      setConfirmationError(null);
+      return;
+    }
+    // Render the associated description before moving focus to the checkbox.
+    flushSync(() => {
+      setInvalid(false);
+      setConfirmationError(field.name === "acceptTerms" ? "acceptTerms" : "reviewed");
+    });
+    field.focus();
+  }
+
   function prepare(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); if (!action || busy || !reviewed || !view.actions[action]) return;
     const data = new FormData(event.currentTarget), parsed = parseMetaTransitionOperatorRequest(action, { expectedRevision: view.revision, expectedReviewSha256: view.reviewSha256, evidenceSha256: data.get("evidence"), confirmed: true,
@@ -169,8 +190,8 @@ function ReviewForm({ view, busy, submit }: { view: MetaTransitionOperatorReview
     setInvalid(false); setConfirmation(parsed);
   }
   const changeCommercial = (change: () => void) => { change(); setAccepted(false); setConfirmation(null); };
-  return <form onSubmit={prepare} onChangeCapture={() => setConfirmation(null)}>
-    <div className={styles.transitionFields}><label>{t(`${prefix}reviewKind`)}<select required value={action} disabled={busy} onChange={e => { setAction(e.target.value as typeof action); setAccepted(false); setReviewed(false); setInvalid(false); }}><option value="">{t(`${prefix}choose`)}</option>{operatorReviewActions.filter(a => view.actions[a]).map(a => <option key={a} value={a}>{t(`${prefix}action.${a}`)}</option>)}</select></label>
+  return <form onSubmit={prepare} onInvalid={showInvalid} onChangeCapture={() => setConfirmation(null)}>
+    <div className={styles.transitionFields}><label>{t(`${prefix}reviewKind`)}<select required value={action} disabled={busy} onChange={e => { setAction(e.target.value as typeof action); setAccepted(false); setReviewed(false); setInvalid(false); setConfirmationError(null); }}><option value="">{t(`${prefix}choose`)}</option>{operatorReviewActions.filter(a => view.actions[a]).map(a => <option key={a} value={a}>{t(`${prefix}action.${a}`)}</option>)}</select></label>
       {action ? <>
         <p>{t(`${prefix}help.${action}`)}</p>
         <label>{t(`${prefix}evidence`)}<input name="evidence" required pattern="[a-f0-9]{64}" minLength={64} maxLength={64} dir="ltr" autoComplete="off" disabled={busy} /></label>
@@ -182,11 +203,27 @@ function ReviewForm({ view, busy, submit }: { view: MetaTransitionOperatorReview
             <label>{t(`${prefix}receiver`)}<input required value={receiver} onChange={e => changeCommercial(() => setReceiver(e.target.value))} pattern="[0-9]{1,32}" maxLength={32} dir="ltr" inputMode="numeric" readOnly={fixed} disabled={busy} /></label>
             <label>{t(`${prefix}termsVersion`)}<input required value={version} onChange={e => changeCommercial(() => setVersion(e.target.value))} pattern="[A-Za-z0-9._\-]{1,128}" maxLength={128} dir="ltr" readOnly={fixed} disabled={busy} /></label>
             <label>{t(`${prefix}terms`)}<textarea required value={terms} onChange={e => changeCommercial(() => setTerms(e.target.value))} maxLength={32768} dir="auto" readOnly={fixed} disabled={busy} /></label>
-            <label className={styles.transitionCheck}><input type="checkbox" required checked={accepted} disabled={busy} onChange={e => setAccepted(e.target.checked)} /><span>{t(`${prefix}acceptTerms`)}</span></label>
+            <div>
+              <label className={styles.transitionCheck}>
+                <input type="checkbox" name="acceptTerms" required checked={accepted} disabled={busy}
+                  aria-invalid={termsError || undefined} aria-describedby={termsError ? "transition-terms-error" : undefined}
+                  onChange={e => { setAccepted(e.target.checked); if (termsError) setConfirmationError(null); }} />
+                <span>{t(`${prefix}acceptTerms`)}</span>
+              </label>
+              <span id="transition-terms-error" role="alert">{termsError ? t(`${prefix}acceptTermsRequired`) : ""}</span>
+            </div>
           </> : null}
         </> : null}
         {action === "TARGET" ? <><label>{t(`${prefix}templates`)}<input name="templates" required pattern="[a-f0-9]{64}" minLength={64} maxLength={64} dir="ltr" disabled={busy} /></label><label>{t(`${prefix}flows`)}<input name="flows" required pattern="[a-f0-9]{64}" minLength={64} maxLength={64} dir="ltr" disabled={busy} /></label></> : null}
-        <label className={styles.transitionCheck}><input type="checkbox" name="reviewed" required checked={reviewed} onChange={e => setReviewed(e.target.checked)} disabled={busy} /><span>{t(`${prefix}confirmEvidence`)}</span></label>
+        <div>
+          <label className={styles.transitionCheck}>
+            <input type="checkbox" name="reviewed" required checked={reviewed} disabled={busy}
+              aria-invalid={evidenceError || undefined} aria-describedby={evidenceError ? "transition-evidence-error" : undefined}
+              onChange={e => { setReviewed(e.target.checked); if (evidenceError) setConfirmationError(null); }} />
+            <span>{t(`${prefix}confirmEvidence`)}</span>
+          </label>
+          <span id="transition-evidence-error" role="alert">{evidenceError ? t(`${prefix}confirmEvidenceRequired`) : ""}</span>
+        </div>
       </> : null}
     </div>
     {invalid ? <p role="alert">{t(`${prefix}invalid`)}</p> : null}

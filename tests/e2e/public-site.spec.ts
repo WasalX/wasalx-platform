@@ -595,7 +595,6 @@ test("ticket status, status views and multiple email threads stay consistent wit
 });
 
 test("every sample group and ticket shows its own conversation and latest reply target", async ({ page }) => {
-  test.setTimeout(120_000);
   const state = createDemoWorkspace(createTranslator(arabic ? arabicMarketingMessages : englishMarketingMessages));
   await page.goto("/");
   const demo = page.locator("#product"), thread = demo.locator(".inbox-messages"), draft = demo.locator("#demo-reply");
@@ -757,7 +756,6 @@ test("landing uses bundled language fonts and centers its Riyadh footer", async 
 });
 
 test("landing motion can pause, respects reduced motion and yields to inbox interaction", async ({ page }, testInfo) => {
-  test.setTimeout(testInfo.project.name === "desktop" ? 75_000 : 45_000);
   const start = new Date("2026-01-01T00:00:00Z");
   await page.clock.install({ time: start });
   await page.clock.pauseAt(new Date(start.getTime() + 60_000));
