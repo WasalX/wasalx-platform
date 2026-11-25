@@ -221,7 +221,7 @@ export function SupportTeams({ execute, scope, owner = false }: { execute: <T>(o
   };
 
   return <section className="panel" aria-labelledby="support-teams-heading" data-unsaved={dirty || undefined}>
-    <div className="panel-heading"><div><h2 id="support-teams-heading">{t("teamsAdmin.title")}</h2><p>{t("teamsAdmin.body")}</p></div>{teams !== null ? <button type="button" className="button primary" disabled={blocked} onClick={() => void open("new")}>{t("teamsAdmin.createTeam")}</button> : null}</div>
+    <div className="panel-heading"><div><h2 id="support-teams-heading">{t("teamsAdmin.title")}</h2><p>{t("teamsAdmin.body")}</p></div>{teams !== null || denied ? <button type="button" className="button primary" disabled={blocked} onClick={() => void open("new")}>{t("teamsAdmin.createTeam")}</button> : null}</div>
     {error ? <div className={`settings-feedback error ${styles.feedback}`}>
       <p role="alert">{listUnavailable ? t("teamsAdmin.listFailed") : error}</p>
       <button type="button" className={listUnavailable ? "wx-button wx-button-primary" : "button secondary"} disabled={busy || !recoveryReady || recoveryCorrupt} onClick={() => void reload()}>{t("common.actions.retry")}</button>
