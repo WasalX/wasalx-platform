@@ -368,11 +368,12 @@ def cleanup_sandbox(suite, name, create_timed_out):
     try:
         while time.monotonic() < deadline:
             cleanup = docker_phase(suite, "cleanup", deadline, "rm", "--force", "--volumes", name)
-            if cleanup.returncode == 0:
-                sandbox_log(suite, "cleanup removed")
-                return
+            # Forced removal can exit successfully while reporting an absent container.
             if cleanup.stderr.strip() != absent:
-                sandbox_log(suite, "cleanup unconfirmed" if create_timed_out else "cleanup failed")
+                if cleanup.returncode == 0:
+                    sandbox_log(suite, "cleanup removed")
+                else:
+                    sandbox_log(suite, "cleanup unconfirmed" if create_timed_out else "cleanup failed")
                 return
             if not create_timed_out:
                 sandbox_log(suite, "cleanup container absent")
@@ -466,7 +467,7 @@ class SandboxTest(unittest.TestCase):
                 results = [mock.Mock(returncode=0)]  # Local image hit.
                 if phase == "start-attach":
                     results.append(mock.Mock(returncode=0))
-                results.extend((timeout, mock.Mock(returncode=0)))
+                results.extend((timeout, mock.Mock(returncode=0, stderr=b"")))
                 output = io.StringIO()
                 with (
                     redirect_stdout(output),
@@ -516,9 +517,9 @@ class SandboxTest(unittest.TestCase):
                         raise subprocess.TimeoutExpired(args, options["timeout"])
                     removals += 1
                     if appears and removals == 2:
-                        return subprocess.CompletedProcess(args, 0)
+                        return subprocess.CompletedProcess(args, 0, stderr=b"")
                     absent = f"Error response from daemon: No such container: {args[-1]}".encode()
-                    return subprocess.CompletedProcess(args, 1, stderr=absent)
+                    return subprocess.CompletedProcess(args, 0, stderr=absent)
 
                 with (
                     redirect_stdout(output),
