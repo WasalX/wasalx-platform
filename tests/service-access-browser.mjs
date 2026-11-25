@@ -9,26 +9,53 @@ const base = process.env.WASALX_STORYBOOK_URL ?? "http://127.0.0.1:6227";
 await mkdir(output, { recursive: true });
 const browser = await chromium.launch({ ...(process.env.WASALX_VISUAL_BROWSER_PATH ? { executablePath: process.env.WASALX_VISUAL_BROWSER_PATH } : {}), headless: true });
 
-async function captureReview(page, dialog, locale, state, disabled = false) {
+async function captureReview(page, dialog, locale, state, disabled = false, theme) {
+  if (theme) await expect(page.locator("#storybook-root > .wx-story-canvas")).toHaveClass(new RegExp(`\\btheme-${theme}\\b`, "u"));
+  const captureState = theme === "dark" ? `${state}-dark` : state;
   for (const [size,width,height] of [["desktop",1440,1000],["mobile",390,844],["zoom-equivalent",720,500]]) {
     await page.setViewportSize({width,height}); await page.evaluate(()=>document.fonts.ready);
     const check=dialog.getByRole("checkbox").last(); if (!disabled) { await page.keyboard.press("Tab"); await check.focus(); }
-    await page.screenshot({path:`${output}/service-access-${locale}-${state}-${size}.png`,fullPage:true,animations:"disabled"});
+    await page.screenshot({path:`${output}/service-access-${locale}-${captureState}-${size}.png`,fullPage:true,animations:"disabled"});
     const result=await dialog.evaluate((root, disabled)=>{
       const errors=[],box=root.querySelector(".modal")??root,r=box.getBoundingClientRect();
+      if (r.width > 520 || r.left < 0 || r.right > innerWidth || r.top < 0 || r.bottom > innerHeight || box.scrollWidth > box.clientWidth + 1) errors.push(`dialog outer size or overflow (${r.width}px wide)`);
       const probe=document.createElement("span");probe.style.color="var(--accent)";box.append(probe);const accent=getComputedStyle(probe).color;probe.remove();
       for(const input of box.querySelectorAll('input[type="checkbox"]')) {
         const label=input.closest("label"),a=input.getBoundingClientRect(),b=label.getBoundingClientRect(),s=getComputedStyle(input),l=getComputedStyle(label);
         if(a.width<12||a.width>24||a.height<12||a.height>24||a.left<b.left-1||a.right>b.right+1||b.height<43||l.display!=="flex"||l.flexDirection!=="row"||s.accentColor!==accent||parseFloat(s.paddingInlineStart)!==0)errors.push("checkbox native size/row/token/target");
       }
-      for(const element of box.querySelectorAll("label,button,p")) { const a=element.getBoundingClientRect();if(a.width<=0||a.height<=0||a.left<r.left-1||a.right>r.right+1||a.left<0||a.right>innerWidth+1)errors.push("dialog control/copy containment"); }
+      for (const element of box.querySelectorAll("label,button,p")) {
+        const rect = element.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0 || rect.left < r.left - 1 || rect.right > r.right + 1 || rect.left < 0 || rect.right > innerWidth + 1) errors.push("dialog control/copy containment");
+        if (element.scrollWidth > element.clientWidth + 1) errors.push("dialog copy does not fit its control");
+      }
+      for (const action of box.querySelectorAll(".modal-actions button")) {
+        const rect = action.getBoundingClientRect();
+        if (rect.top < r.top || rect.bottom > r.bottom) errors.push("dialog action clipped vertically");
+      }
       const focused=document.activeElement,s=getComputedStyle(focused);
       if(!disabled && (!focused.matches(":focus-visible")||s.outlineStyle!=="solid"||parseFloat(s.outlineWidth)<2))errors.push("checkbox focus-visible");
       if(disabled && [...box.querySelectorAll('input[type="checkbox"]')].some(input=>!input.disabled))errors.push("busy checkboxes must stay disabled");
       return {errors,checks:box.querySelectorAll('input[type="checkbox"]').length};
     }, disabled);
-    assert.ok(result.checks>0);assert.deepEqual(result.errors,[],`${locale}/${state}/${size}: open service dialog coherence`);
-    if(!disabled){const audit=await new AxeBuilder({page}).include("dialog[open]").withTags(["wcag2a","wcag2aa","wcag21aa"]).analyze();assert.deepEqual(audit.violations,[],`${locale}/${state}/${size}: open dialog accessibility`);}
+    assert.ok(result.checks>0);assert.deepEqual(result.errors,[],`${locale}/${captureState}/${size}: open service dialog coherence`);
+    if(!disabled){const audit=await new AxeBuilder({page}).include("dialog[open]").withTags(["wcag2a","wcag2aa","wcag21aa"]).analyze();assert.deepEqual(audit.violations,[],`${locale}/${captureState}/${size}: open dialog accessibility`);}
+  }
+  if (theme) {
+    await page.setViewportSize({ width: 390, height: 220 });
+    const scrolled = await dialog.locator(".modal").evaluate(box => {
+      const bounds = box.getBoundingClientRect();
+      const actions = [...box.querySelectorAll(".modal-actions button")];
+      const actionsFit = () => actions.every(action => {
+        const rect = action.getBoundingClientRect();
+        return rect.top >= bounds.top && rect.bottom <= bounds.bottom;
+      });
+      box.scrollTop = 0;
+      const initiallyVisible = actionsFit();
+      box.scrollTop = box.scrollHeight;
+      return { initiallyVisible, scrolled: box.scrollTop > 0, stillVisible: actionsFit() };
+    });
+    assert.deepEqual(scrolled, { initiallyVisible: true, scrolled: true, stillVisible: true }, `${locale}/${theme}: short phone scroll and action visibility`);
   }
   await page.setViewportSize({width:1440,height:1000});
 }
@@ -75,7 +102,9 @@ try {
       if (lose) { lose = false; await route.abort("failed"); return; } await route.fulfill({ json: result });
     };
     await page.route("**/api/inbox", bridge);
-    const open = () => page.goto(`${base}/iframe.html?id=product-service-access--${locale === "ar" ? "arabic" : "english"}`, { waitUntil: "networkidle" });
+    const open = (theme = "light") => page.goto(`${base}/iframe.html?${new URLSearchParams({
+      id: `product-service-access--${locale === "ar" ? "arabic" : "english"}`, viewMode: "story", globals: `auditTheme:${theme}`,
+    })}`, { waitUntil: "networkidle" });
     const dialog = page.getByRole("dialog");
     const applying = dialog.getByRole("status").filter({ hasText: t("serviceAccess.applyingGrant") });
     const recoveryText = dialog.getByRole("status").filter({ hasText: t("serviceAccess.unknown") });
@@ -84,6 +113,17 @@ try {
     const approve = async () => { await dialog.getByRole("checkbox", { name: t("serviceAccess.confirm"), exact: true }).check(); await dialog.getByRole("button", { name: t("serviceAccess.apply"), exact: true }).click(); };
     const reload = async () => { const response = page.waitForResponse(response => response.request().postDataJSON()?.operation === "IDENTITY_STATUS"); await button("common.actions.refresh").click(); await response; };
     try {
+      const prepare = button("serviceAccess.prepare");
+      const cancel = dialog.getByRole("button", { name: t("tenant.team.actions.cancel"), exact: true });
+      await open("dark");
+      await prepare.focus(); await page.keyboard.press("Enter");
+      await expect(cancel).toBeFocused();
+      await dialog.getByRole("checkbox", { name: t("serviceAccess.confirm"), exact: true }).check();
+      await captureReview(page, dialog, locale, "consent-checked", false, "dark");
+      await page.keyboard.press("Escape");
+      await expect(dialog).toHaveCount(0);
+      await expect(prepare).toBeFocused();
+
       await open(); await expect(page.getByText(t("serviceAccess.notGranted"), { exact: true })).toBeVisible(); await expect(page.getByText("Synthetic earlier service", { exact: true })).toBeVisible(); assert.equal(writes.length, 0);
       for(const [size,width,height] of [["desktop",1440,1000],["mobile",390,844],["zoom-equivalent",720,500]]) {
         await page.setViewportSize({width,height}); await page.screenshot({path:`${output}/service-access-${locale}-legacy-summary-${size}.png`,fullPage:true});
@@ -91,10 +131,10 @@ try {
         for(const action of await page.locator(".settings-actions > button").all())assert.equal(await action.evaluate(button=>{const a=button.getBoundingClientRect(),b=button.parentElement.getBoundingClientRect();return a.left>=b.left-1&&a.right<=b.right+1;}),true);
       }
       await page.setViewportSize({width:1440,height:1000});
-      await button("serviceAccess.prepare").focus(); await page.keyboard.press("Enter"); await expect(dialog).toBeVisible(); await expect(dialog.getByRole("button", { name: t("serviceAccess.apply"), exact: true })).toBeDisabled();
+      await prepare.focus(); await page.keyboard.press("Enter"); await expect(cancel).toBeFocused(); await expect(dialog.getByRole("button", { name: t("serviceAccess.apply"), exact: true })).toBeDisabled();
       await captureReview(page, dialog, locale, "consent-unchecked");
       await dialog.getByRole("checkbox", { name: t("serviceAccess.confirm"), exact: true }).check();
-      await captureReview(page, dialog, locale, "consent-checked");
+      await captureReview(page, dialog, locale, "consent-checked", false, "light");
       lose = true; await approve(); await expect(dialog.getByRole("button", { name: t("serviceAccess.check"), exact: true })).toBeVisible();
       const stored = await page.evaluate(key => JSON.parse(sessionStorage.getItem(key)), storageKey); assert.deepEqual(Object.keys(stored).sort(), ["kind", "request_id"]);
       assert.equal(writes.length, 1); await page.reload({ waitUntil: "networkidle" }); await button("serviceAccess.check").click(); await expect(button("serviceAccess.bind")).toBeVisible(); assert.equal(writes.length, 1);
