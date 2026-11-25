@@ -65,7 +65,9 @@ try {
       status: 200, contentType: "application/octet-stream", body: "Synthetic customer attachment",
     }));
     await page.route("**/api/inbox/upload", route => {
-      const id = String(70 + uploads.size), file = { id, filename: "outgoing.txt", mime_type: "text/plain", size: 12 };
+      const filename = /filename="([^"]+)"/u.exec(route.request().postData() ?? "")?.[1];
+      assert.ok(filename, "expected a staged file");
+      const id = String(70 + uploads.size), file = { id, filename, mime_type: "text/plain", size: 12 };
       uploads.set(id, file); return route.fulfill({ status: 200, json: { items: [file] } });
     });
     await page.route("**/api/inbox", async route => {
@@ -289,8 +291,17 @@ try {
     await expect(attachFiles(page)).toHaveAccessibleDescription(noAttachments);
     const [chooser] = await Promise.all([page.waitForEvent("filechooser"), attachFiles(page).press("Enter")]);
     assert.equal(chooser.isMultiple(), true);
-    await chooser.setFiles({ name: "outgoing.txt", mimeType: "text/plain", buffer: Buffer.from("Synthetic UI") });
-    await expect(page.getByRole("button", { name: locale === "ar" ? "إزالة outgoing.txt" : "Remove outgoing.txt" })).toBeVisible();
+    await chooser.setFiles([
+      { name: "outgoing.txt", mimeType: "text/plain", buffer: Buffer.from("Synthetic UI") },
+      { name: "remove.txt", mimeType: "text/plain", buffer: Buffer.from("Remove this") },
+    ]);
+    const keepFile = page.getByRole("button", { name: locale === "ar" ? "إزالة outgoing.txt" : "Remove outgoing.txt" });
+    const removeFile = page.getByRole("button", { name: locale === "ar" ? "إزالة remove.txt" : "Remove remove.txt" });
+    await expect(keepFile).toBeVisible();
+    await expect(attachFiles(page)).not.toHaveAccessibleDescription(noAttachments);
+    await removeFile.click();
+    await expect(removeFile).toHaveCount(0);
+    await expect(keepFile).toBeVisible();
     await page.locator("#inbox-message").fill("");
     await expect(page.locator('form').last().locator(".wx-button-primary")).toBeDisabled();
     await page.getByRole("button", { name: locale === "ar" ? "معاينة الرد" : "Preview reply", exact: true }).click();
