@@ -3,7 +3,7 @@
 import { useEffect, useEffectEvent, useRef, useState } from "react";
 import type { MetaRoutingAction, MetaRoutingConfigurationDto, MetaRoutingRole, MetaThreadActionDto, MetaThreadControlCommand, MetaThreadRoutingDto } from "../lib/meta-routing-contract";
 import { metaThreadActionMatches, metaThreadIntentSettled, parseMetaThreadIntent, type MetaThreadIntent } from "../lib/meta-thread-intent";
-import { formatList } from "../lib/i18n/format";
+import { formatDateTime, formatList } from "../lib/i18n/format";
 import { localizedUiError } from "../lib/ui-error";
 import { createLatestRequestFence } from "../lib/operator-ui";
 import { InlineConfirmation, ModalDialog } from "./ModalDialog";
@@ -92,7 +92,7 @@ function ConnectionRouting({ connectionId, canConfigure, mutationHeaders }: Conn
       <p>{t("tenant.metaRouting.hold")}</p>
       {data.observed ? <dl className={styles.facts}>
         <div><dt>{t("tenant.metaRouting.review")}</dt><dd>{t(data.observed.disposition === "REVOKED" ? "tenant.metaRouting.revoked" : data.observed.current ? "tenant.metaRouting.current" : "tenant.metaRouting.superseded")}</dd></div>
-        <div><dt>{t("tenant.metaRouting.observedAt")}</dt><dd>{Number.isFinite(Date.parse(data.observed.observedAt)) ? new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" }).format(new Date(data.observed.observedAt)) : t("tenant.metaRouting.none")}</dd></div>
+        <div><dt>{t("tenant.metaRouting.observedAt")}</dt><dd>{Number.isFinite(Date.parse(data.observed.observedAt)) ? formatDateTime(data.observed.observedAt, locale) : t("tenant.metaRouting.none")}</dd></div>
         <div><dt>{t("tenant.metaRouting.provenance")}</dt><dd>{t(`tenant.metaRouting.mode.${data.observed.mode}`)}</dd></div>
         <div><dt>{t("tenant.metaRouting.roles")}</dt><dd>{data.observed.roles.length ? formatList(data.observed.roles.map(role => t(`tenant.metaRouting.role.${role}`)), locale) : t("tenant.metaRouting.none")}</dd></div>
       </dl> : <p>{t("tenant.metaRouting.noReview")}</p>}

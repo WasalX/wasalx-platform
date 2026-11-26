@@ -16,11 +16,13 @@ import { accountObservationJourney, consumeExpectedObservationFailure, workspace
 import { consumeExpectedDirectSetupDenial, metaDirectConsentJourney } from "./meta-direct-consent.fixture";
 import { consumeExpectedSignupDenial, metaSignupJourney } from "./meta-signup.fixture";
 import { ticketEventWorkflowJourney } from "./ticket-event-workflows.fixture";
+import { registerOperationsScreenshots } from "./operations-screenshots.fixture";
 import { expectAxeClean } from "../helpers/axe";
 import { expect, test, type Page } from "@playwright/test";
 import { arabicMessages } from "../../lib/i18n/messages/ar/index.ts";
 
 const role = process.env.WASALX_E2E_ROLE ?? "tenant_owner";
+if (role === "tenant_owner") registerOperationsScreenshots("ar");
 test("Audit uses localized workspace actions and truthful actors with permitted CSV export", { tag: "@tablet" }, async ({ page }, testInfo) => {
   await auditWorkspaceJourney(page, "ar", role, testInfo);
 });

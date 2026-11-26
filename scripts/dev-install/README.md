@@ -27,8 +27,8 @@ before invoking its scripts with `python3 -I -B`.
 - `receive.py` checks out the exact commit and tree from the transferred `signed-<tag>-dev-incoming-source.bundle` in the guest's home.
 - `probe.py` takes the native read-only preimage capture using the installed environment.
 
-The signed runbook owns approval, transport, and engine actions. These scripts provide the
-checkout and preflight steps for that runbook.
+The signed runbook owns approval and staging. The DEV host runs the install phases in a
+transient system service. See [Start the install on DEV](#start-the-install-on-dev).
 
 The read-only running-stack scan is `node scripts/dev-install/probe.mjs --project-name "$PROJECT" --env-file "$FULL_ENV"`.
 Run it as root from the candidate checkout, with the deployed Compose inputs in a separate tree.
@@ -102,11 +102,11 @@ python3 -I -B scripts/dev-install/render.py --host-identity "$HOST_IDENTITY" \
   --run-id "$RUN_ID" --commit "$COMMIT" --output "$HOST_PACKET"
 ```
 
-The host identity fields are in `fixtures/host-identity.example.json`. The signed
-launcher verifies the seal and stages the rendered host files with the approved
-guest payload and `DEV-SHA256SUMS`. Keep the host packet private and separate
-from the guest packet. Use a root-owned mode-0700 `DISK_STATE` directory that
-persists across runs, outside the support directories.
+The host identity fields are in `fixtures/host-identity.example.json`. Stage the
+rendered host files with the approved guest payload and `DEV-SHA256SUMS`. Keep
+the host packet private and separate from the guest packet. Use a root-owned
+mode-0700 `DISK_STATE` directory that persists across runs, outside the support
+directories.
 
 - The post-create, pre-boot gate requires the immutable flag, exact identity for TOP
   and every backing layer, `qemu-img check` and the pinned backing chain.
@@ -132,6 +132,48 @@ persists across runs, outside the support directories.
 The real-QEMU nightly uses a scratch ext4 filesystem and a boot-sector guard stub.
 Use the signed host qualification to measure the live phase budgets.
 
+## Start the install on DEV
+
+Transfer the sealed install bundle to the approved private staging location and
+request the unit start through the Servers maintenance entry point. The
+workstation performs only those two operations. Servers verifies the approved
+seal before starting any packet script and stages the host packet in a
+root-owned mode-0700 directory with the guest payload at the packet's `STAGING`
+path.
+
+Pass exactly three required arguments to `run-install.sh`.
+
+| Argument | Value |
+| --- | --- |
+| `DEV_UNIT_USER` | The configured unit user. The script checks that it is running as this user. |
+| `DEV_INSTALL_BUNDLE` | The absolute path to the verified host packet directory on DEV. |
+| `DEV_STEP_LOCK` | The canonical absolute lock marker path from the host identity. It must match the packet. |
+
+Use the existing install lease unit name and limits. Servers derives
+`LEASE_PREFIX`, `RUN_ID` and `INSTALL_RUNTIME` from the verified packet using its
+`host.env`, `run-id` and `host-maintenance.py lease-runtime install`. Start the
+unit on DEV with the configured identity and install lease properties:
+
+```sh
+systemd-run --unit="${LEASE_PREFIX}-install-$RUN_ID.service" --uid="$DEV_UNIT_USER" --wait \
+  -p RuntimeMaxSec="$INSTALL_RUNTIME" -p TimeoutStopSec=30 -p KillMode=control-group \
+  -p CPUQuota=800% -p MemoryMax=8G -p MemorySwapMax=0 -p CPUWeight=10 -p IOWeight=10 \
+  -p Nice=19 -p IOSchedulingClass=idle -p UMask=0077 \
+  /bin/bash "$DEV_INSTALL_BUNDLE/run-install.sh" "$DEV_UNIT_USER" "$DEV_INSTALL_BUNDLE" "$DEV_STEP_LOCK"
+```
+
+The service keeps running if the workstation disconnects. It holds descriptor
+7 across the existing guest preflight, overlay cutover and smoke. It then
+closes descriptor 7 and uses the lock helper to record and verify handback. A
+phase failure stops the service and preserves the run record. A smoke failure
+leaves the overlay for the authorized recovery path and runs no build or
+deployment again. Before recovery or another attempt, retain the unit journal
+and the private run evidence. For timing and archival, retain the service's
+message output as the raw install receipt after a successful unit exit and
+verified handback. If a phase fails after the overlay is armed, have Servers
+resolve the run record through the [DEV step handback](#dev-step-lock) before
+registering the authorized rollback with `register.sh rollback "$STATE"`.
+
 ## DEV step lock
 
 Set `DEV_STEP_LOCK` in the private host identity to the absolute path of the
@@ -139,6 +181,48 @@ host-provided marker. WasalX holds an exclusive, nonblocking `flock` on that
 path from before the first action until the step exits, including if it is killed.
 Lease units, install/discard, overlay actions and host-side guest phases share
 this lock. A competing step reports `HOLD_DEV_STEP_BUSY` and exits 75.
+After acquiring the lock, a writer records its run ID, step, UTC start time
+and lock device and inode in the adjacent `$DEV_STEP_LOCK.run` file. An
+interrupted writer leaves this record in place. A new acquisition reports
+`HOLD_DEV_STEP_UNRESOLVED run_id=<run-id>` and exits 75 while the record
+remains. Nested phases share the original locked descriptor.
+
+The controller run ID is the lowercase SHA-256 of the compact UTF-8 JSON
+array `[carrier_sha256, cutover_authority_json_sha256]`. Platform leases use
+their existing `YYYYMMDDTHHMMSSZ` run ID.
+
+Use the sealed host helper with the same exported host identity. Open and
+lock descriptor 7 in the caller. Keep it open for the entire action:
+
+```sh
+exec 7<"$DEV_STEP_LOCK" || exit 75
+flock -n -E 75 7 || { echo HOLD_DEV_STEP_BUSY; exit 75; }
+bash "$DEV_STEP_HELPER" acquire "$RUN_ID" "$STEP" || exit $?
+```
+
+Exit 0 admits the action. Exit 75 reports a named hold. If descriptor 7
+is missing, unlocked or points to another file, the helper reports
+`HOLD_DEV_STEP_DESCRIPTOR`. The action runs in the caller and keeps its own
+exit status.
+
+After the action releases descriptor 7, use
+`bash "$DEV_STEP_HELPER" handback "$RUN_ID" "$EVIDENCE_DIR"` to clear the
+record. The evidence directory holds four JSON files. Each contains the
+same `run_id`.
+
+| File | Additional fields |
+| --- | --- |
+| `terminal.json` | `status` is `terminal`. |
+| `stop.json` | `status` is `stopped` or `no-work`. |
+| `handback.json` | `released` is `true`. `lock_device` and `lock_inode` identify the released flock. `record_sha256`, `terminal_sha256` and `stop_sha256` hash the exact run record and evidence bytes. |
+| `completion.json` | `handback_sha256` hashes the exact handback record bytes. |
+
+The helper checks the evidence and acquires the same lock independently
+before clearing the record. Success prints `DEV_STEP_HANDBACK=PASS` and
+exits 0. Missing or invalid handback evidence prints
+`HOLD_DEV_STEP_HANDBACK` and exits 75. A terminal marker, owner exit or an
+old start time leaves the record in place.
+
 D1 uses the same path and treats a failed `flock -n "$DEV_STEP_LOCK" true` probe as busy.
 The host provisions the dedicated root-owned mode-0755 directory and empty
 root-owned marker via `tmpfiles.d`. Steps open the marker read-only. Leave it
