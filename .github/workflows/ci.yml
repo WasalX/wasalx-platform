@@ -26,7 +26,7 @@ jobs:
   changes:
     if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 1
     outputs:
       images: ${{ steps.matrix.outputs.images }}
       matrix: ${{ steps.matrix.outputs.matrix }}
@@ -70,7 +70,7 @@ jobs:
           if git diff --quiet --no-ext-diff --no-renames HEAD^1 HEAD -- \
             scripts/dev-install/ scripts/release/installer-stages.mjs scripts/release/installer-stack.mjs \
             scripts/release/compose-stage-lock.mjs scripts/release/compose-stage-config.json \
-            .github/workflows/ci.yml; then
+            scripts/release/image_registry_retry.py .github/workflows/ci.yml; then
             needed=false
           fi
           echo "needed=$needed" >> "$GITHUB_OUTPUT"
@@ -80,7 +80,14 @@ jobs:
           needed=true
           if git diff --quiet --no-ext-diff --no-renames HEAD^1 HEAD -- \
             .github/workflows/ci.yml scripts/test-postgres-integration.mjs scripts/postgres-scenario-registry.mjs \
-            ':(glob)tests/*postgres*.mjs' tests/rendered-html.test.mjs tests/app-first-load-js-budget.json; then
+            services/control-api/ services/connector-worker/ packages/ infra/docker/postgres/ infra/docker/full/postgres/ \
+            ':(glob)tests/*postgres*.mjs' tests/meta-routing-fixture.mjs tests/group-designation-evidence.mjs \
+            tests/fixtures/ tests/helpers/ tests/support/ \
+            app/auth/ app/platform/auth/ app/api/health/ app/WasalXApp.tsx lib/request-auth.ts \
+            ':(glob)lib/*portal-session*.ts' ':(glob)lib/*oidc*.ts' infra/docker/full/keycloak/bootstrap-user.mjs \
+            scripts/run-application-e2e.mjs scripts/release/ci-browser-runtime.mjs playwright.application.config.ts \
+            tests/multitenant-e2e.test.mjs tests/platform-invitation-e2e.test.mjs tests/portal-security-headers.test.mjs \
+            tests/rendered-html.test.mjs tests/app-first-load-js-budget.json; then
             needed=false
           fi
           echo "needed=$needed" >> "$GITHUB_OUTPUT"
@@ -126,17 +133,21 @@ jobs:
           fi
           echo "needed=$needed" >> "$GITHUB_OUTPUT"
       - id: zammad
-        if: github.event_name == 'pull_request'
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && 'HEAD^1' || github.event.merge_group.base_sha }}
         run: |
           needed=true
-          if git diff --quiet --no-ext-diff --no-renames HEAD^1 HEAD -- \
+          if [[ -n "$BASE" ]] && git merge-base --is-ancestor "$BASE" HEAD &&
+            git diff --quiet --no-ext-diff --no-renames "$BASE" HEAD -- \
             compose.full.yaml .dockerignore infra/docker/Dockerfile.zammad infra/docker/full/zammad/ \
             zammad-addon.json zammad-package/ build/zammad/ release/installer-images.json \
             ':(glob)scripts/*zammad*' ':(glob)scripts/contracts/*mailbox*' scripts/release/operator-input.mjs \
-            tests/zammad-image-browser-compat.test.mjs tests/fixtures/native-compat-cleanup.mjs ':(glob)tests/**/*.rb' \
+            app/AttachmentFilePicker.tsx app/Inbox.tsx app/TicketInbox.tsx app/GroupInbox.tsx app/api/inbox/attachment/ lib/i18n/ \
+            tests/zammad-image-browser-compat.test.mjs tests/fixtures/ tests/helpers/ tests/support/ ':(glob)tests/**/*.rb' \
             services/control-api/ services/connector-worker/ packages/ lib/domain.ts lib/literal-matcher.ts \
             scripts/build-services.mjs tsconfig.json ':(glob)services/*/tsconfig*.json' .gitattributes \
-            tests/outbound-media.test.mjs tests/helpers/operator-input-fixtures.mjs \
+            tests/outbound-media.test.mjs tests/simulation-portal-reply-browser.test.mjs \
+            scripts/release/simulation-portal-reply-browser.mjs \
             ':(glob)**/package.json' pnpm-lock.yaml pnpm-workspace.yaml .npmrc patches/ \
             .github/actions/ci-pnpm/ .github/workflows/ci.yml .github/workflows/zammad-compatibility.yml; then
             needed=false
@@ -167,27 +178,36 @@ jobs:
 
   workflow-lint:
     runs-on: ubuntu-24.04
-    timeout-minutes: 3
+    timeout-minutes: 1
+    env:
+      ACTIONLINT_URL: https://github.com/kjanat/actionlint/releases/download/v1.17.1/actionlint_1.17.1_linux_amd64.tar.gz
+      ACTIONLINT_SHA256: 6bfe0f49f0e108b9b23732baf7de63bfa4d89174fa40f9cb98feb9676df3318f
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/actionlint-release.tar.gz
+          key: actionlint-${{ env.ACTIONLINT_SHA256 }}
       - name: Lint workflows with actionlint
         env:
-          ACTIONLINT_URL: https://github.com/kjanat/actionlint/releases/download/v1.17.1/actionlint_1.17.1_linux_amd64.tar.gz
-          ACTIONLINT_SHA256: 6bfe0f49f0e108b9b23732baf7de63bfa4d89174fa40f9cb98feb9676df3318f
           SHELLCHECK_URL: https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.gz
           SHELLCHECK_SHA256: b7af85e41cc99489dcc21d66c6d5f3685138f06d34651e6d34b42ec6d54fe6f6
           PYFLAKES_URL: https://files.pythonhosted.org/packages/c2/2f/81d580a0fb83baeb066698975cb14a618bdbed7720678566f1b046a95fe8/pyflakes-3.4.0-py2.py3-none-any.whl
           PYFLAKES_SHA256: f742a7dbd0d9cb9ea41e9a24a918996e8170c799fa528688d40dd582c8265f4f
         run: |
+          archive="$RUNNER_TEMP/actionlint-release.tar.gz"
+          if [[ ! -f "$archive" ]]; then
+            bash scripts/release/fetch-verified-asset.sh "$ACTIONLINT_URL" "$archive" "$ACTIONLINT_SHA256"
+          fi
+          printf '%s  %s\n' "$ACTIONLINT_SHA256" "$archive" | sha256sum --check --strict
           scratch=$(mktemp -d)
           trap 'rm -rf "$scratch"' EXIT
           wheel="$scratch/${PYFLAKES_URL##*/}"
-          bash scripts/release/fetch-verified-asset.sh "$ACTIONLINT_URL" "$scratch/actionlint.tar.gz" "$ACTIONLINT_SHA256"
           bash scripts/release/fetch-verified-asset.sh "$SHELLCHECK_URL" "$scratch/shellcheck.tar.gz" "$SHELLCHECK_SHA256"
           bash scripts/release/fetch-verified-asset.sh "$PYFLAKES_URL" "$wheel" "$PYFLAKES_SHA256"
-          tar -xzf "$scratch/actionlint.tar.gz" -C "$scratch" actionlint
+          tar -xzf "$archive" -C "$scratch" actionlint
           tar -xzf "$scratch/shellcheck.tar.gz" -C "$scratch" shellcheck-v0.11.0/shellcheck
           python3 -m venv "$scratch/pyflakes-env"
           "$scratch/pyflakes-env/bin/python" -m pip --isolated install --disable-pip-version-check --no-index --no-deps "$wheel"
@@ -231,7 +251,7 @@ jobs:
       ${{ !cancelled() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch' ||
       needs.changes.result != 'success' || needs.changes.outputs.storybook != 'false') }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 6
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -252,7 +272,7 @@ jobs:
       - name: Audit and capture every story
         run: >-
           node scripts/storybook-visual-regression.mjs --require-browser tests/visual/storybook-ci.spec.ts
-          tests/visual/inbox-synthetic.spec.ts --fully-parallel --workers=2
+          tests/visual/inbox-synthetic.spec.ts --fully-parallel --workers=4
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure() || cancelled()
         with: &storybook-audit-artifact
@@ -273,7 +293,7 @@ jobs:
   dependency-review:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 1
     steps:
       - uses: actions/dependency-review-action@bbc44d14a204704ccc493733616cd1e93a0321ec # v5.0.1
         with:
@@ -283,7 +303,7 @@ jobs:
     needs: changes
     if: ${{ !cancelled() && github.event_name == 'pull_request' && needs.changes.outputs.dev-install != 'false' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 1
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -295,7 +315,7 @@ jobs:
     if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
     name: ${{ matrix.name }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 9
     env:
       PRE_COMMIT_VERSION: '4.6.2'
     strategy:
@@ -419,7 +439,7 @@ jobs:
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     name: Full ${{ matrix.name }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 3
     strategy:
       fail-fast: false
       matrix:
@@ -432,7 +452,7 @@ jobs:
     # Cache warm-up only; PRs and the queue gate lint, so a failure here must not make a published trunk commit unusable.
     continue-on-error: true
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 1
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -468,7 +488,7 @@ jobs:
       (github.event_name == 'pull_request' && (needs.changes.result != 'success' || needs.changes.outputs.integration != 'false'))) }}
     name: PostgreSQL ${{ matrix.shard }}/4
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 4
     permissions:
       contents: read
     strategy:
@@ -566,7 +586,7 @@ jobs:
       needs.changes.outputs.integration != 'false') }}
     env: *portal-browser-env
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 4
     steps:
       - *integration-checkout
       - name: dev-install-dryrun
@@ -634,6 +654,20 @@ jobs:
           WASALX_E2E_LOCALES: ${{ matrix.locale }}
           WASALX_E2E_ROLES: ${{ matrix.roles }}
         run: node scripts/run-application-e2e.mjs
+      - name: Verify every synthetic journey screenshot
+        id: journey-captures
+        if: success() && matrix.roles == 'tenant_owner'
+        env:
+          CAPTURE_LOCALE: ${{ matrix.locale }}
+        run: node tests/e2e/journey-captures.mjs "$CAPTURE_LOCALE"
+      - name: Upload synthetic journey screenshots
+        if: success() && matrix.roles == 'tenant_owner'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: application-journey-captures-${{ matrix.locale }}
+          path: ${{ steps.journey-captures.outputs.paths }}
+          if-no-files-found: error
+          retention-days: 7
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure() || cancelled()
         with:
@@ -696,7 +730,7 @@ jobs:
     needs: integration
     if: ${{ !cancelled() && needs.integration.result != 'skipped' }}
     runs-on: ubuntu-slim
-    timeout-minutes: 5
+    timeout-minutes: 2
     steps:
       - *integration-checkout
       - *integration-node
@@ -715,7 +749,7 @@ jobs:
       ((github.event_name == 'pull_request' || github.event_name == 'merge_group') &&
       (needs.changes.result != 'success' || needs.changes.outputs.infra != 'false'))) }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 1
     permissions:
       contents: read
     steps:
@@ -737,7 +771,7 @@ jobs:
     if: ${{ !cancelled() && github.event_name == 'merge_group' && needs.changes.outputs.images == 'true' }}
     name: Build ${{ matrix.image }}${{ matrix.pending && ' (pending add-on source)' || '' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 5
     strategy:
       fail-fast: false
       max-parallel: 21
@@ -759,7 +793,9 @@ jobs:
         with:
           version: v0.30.1
           driver-opts: image=moby/buildkit:v0.26.3
-          cache-binary: false
+          cache-binary: true
+          # The runner is verified as disposable before this builder is created.
+          cleanup: false
       - name: Build and inspect without publication
         if: ${{ !matrix.pending }}
         env:
@@ -781,12 +817,11 @@ jobs:
           if-no-files-found: error
 
   pr-images:
-    # Keep the PR matrix outside the required gate's dependency graph.
     needs: [changes]
     if: ${{ !cancelled() && github.event_name == 'pull_request' && needs.changes.outputs.images == 'true' }}
-    name: Build ${{ matrix.image }}${{ matrix.pending && ' (pending add-on source)' || '' }} (advisory)
+    name: Build ${{ matrix.image }}${{ matrix.pending && ' (pending add-on source)' || '' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 4
     strategy:
       fail-fast: false
       max-parallel: 8
@@ -794,21 +829,21 @@ jobs:
     steps: *image-steps
 
   pr-image-results:
-    name: PR image results (advisory)
+    name: PR image results
     if: always() && github.event_name == 'pull_request'
     needs: pr-images
     runs-on: ubuntu-slim
-    timeout-minutes: 2
+    timeout-minutes: 1
     permissions: {}
     steps:
       - name: Report PR image builds
         env:
           IMAGES: ${{ needs.pr-images.result }}
         run: |
-          echo "PR image builds (advisory): $IMAGES" >> "$GITHUB_STEP_SUMMARY"
+          echo "PR image builds: $IMAGES" >> "$GITHUB_STEP_SUMMARY"
           case "$IMAGES" in
             success|skipped) ;;
-            *) echo "::warning::Advisory PR image builds: $IMAGES"; exit 1 ;;
+            *) echo "::error::PR image builds: $IMAGES"; exit 1 ;;
           esac
 
   installer-portal:
@@ -857,14 +892,16 @@ jobs:
 
   zammad-compatibility:
     needs: changes
-    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.changes.outputs.zammad != 'false') }}
+    if: >-
+      ${{ !cancelled() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch' ||
+      needs.changes.result != 'success' || needs.changes.outputs.zammad != 'false') }}
     uses: ./.github/workflows/zammad-compatibility.yml
 
   ci-gate:
     if: always()
-    needs: [changes, workflow-lint, storybook, privacy, dependency-review, checks, full-unit, images, installer-portal, integration, portal-integration, application-e2e, platform-operator-e2e, keycloak-identity, integration-coverage, infra-validate, dev-install-dryrun, zammad-compatibility]
+    needs: [changes, workflow-lint, storybook, privacy, dependency-review, checks, full-unit, images, pr-images, installer-portal, integration, portal-integration, application-e2e, platform-operator-e2e, keycloak-identity, integration-coverage, infra-validate, dev-install-dryrun, zammad-compatibility]
     runs-on: ubuntu-slim
-    timeout-minutes: 2
+    timeout-minutes: 1
     permissions: {}
     steps:
       - name: Require checks and the applicable image lane
@@ -878,7 +915,8 @@ jobs:
           CHECKS: ${{ needs.checks.result }}
           FULL_UNIT: ${{ needs.full-unit.result }}
           REVIEW: ${{ needs.dependency-review.result }}
-          IMAGES: ${{ needs.images.result }}
+          IMAGES_NEEDED: ${{ needs.changes.outputs.images }}
+          IMAGES: ${{ github.event_name == 'pull_request' && needs.pr-images.result || needs.images.result }}
           INSTALLER_PORTAL_NEEDED: ${{ needs.changes.outputs.installer-portal }}
           INSTALLER_PORTAL: ${{ needs.installer-portal.result }}
           INTEGRATION_NEEDED: ${{ needs.changes.outputs.integration }}
@@ -916,7 +954,7 @@ jobs:
           esac
           case "$EVENT:$ZAMMAD_NEEDED:$ZAMMAD_COMPATIBILITY" in
             *:*:success) ;;
-            pull_request:false:skipped)
+            pull_request:false:skipped|merge_group:false:skipped)
               echo 'Zammad compatibility skipped because its inputs did not change.' >> "$GITHUB_STEP_SUMMARY" ;;
             *) echo "::error::Zammad compatibility result: $ZAMMAD_COMPATIBILITY"; exit 1 ;;
           esac
@@ -933,13 +971,13 @@ jobs:
             pull_request:false:skipped|merge_group:false:skipped|pull_request:true:success|merge_group:true:success) ;;
             *) echo 'Installer portal build did not pass.'; exit 1 ;;
           esac
-          case "$EVENT:$REVIEW:$IMAGES" in
-            pull_request:success:skipped)
-              echo 'See PR image results (advisory) for image build outcomes.' >> "$GITHUB_STEP_SUMMARY"
-              ;;
-            merge_group:skipped:success) ;;
-            *) exit 1 ;;
+          case "$EVENT:$REVIEW:$IMAGES_NEEDED:$IMAGES" in
+            pull_request:success:true:success|pull_request:success:false:skipped|merge_group:skipped:true:success) ;;
+            *) echo "::error::Image builds for $EVENT: selected=$IMAGES_NEEDED result=$IMAGES"; exit 1 ;;
           esac
+          if [[ "$EVENT" == pull_request ]]; then
+            echo 'See PR image results for image build outcomes.' >> "$GITHUB_STEP_SUMMARY"
+          fi
           case "$EVENT:$INTEGRATION_NEEDED:$INTEGRATION:$PORTAL_INTEGRATION:$INTEGRATION_COVERAGE" in
             pull_request:false:skipped:skipped:skipped|pull_request:*:success:success:success|merge_group:*:success:success:success) ;;
             *) exit 1 ;;

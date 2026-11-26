@@ -553,6 +553,18 @@ try {
     for (const theme of ["light", "dark"]) {
       if (theme === "dark") {
         await page.goto(`${story}&globals=theme:dark`, { waitUntil: "networkidle" });
+        // A group that finishes loading after the operator moved focus must not take focus back.
+        const lateShow = state.hold("GROUP_SHOW", input => input.group_id === B), showsBefore = state.count("GROUP_SHOW");
+        if (await group().locator(".wx-group-back").isVisible()) await button("groups.back").click();
+        await group().getByRole("button", { name: /Operations B/u }).click();
+        await expect.poll(() => state.count("GROUP_SHOW")).toBe(showsBefore + 1);
+        await groupsMode.focus();
+        lateShow.resolve();
+        await expect(group().getByRole("heading", { name: "Operations B" })).toBeVisible();
+        await expect(page.locator("#wx-group-message")).toBeEnabled();
+        await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+        await expect(groupsMode).toBeFocused();
+
         await choose("Operations B");
         await expect(group().getByRole("heading", { name: "Operations B" })).toBeFocused();
       }

@@ -164,7 +164,9 @@ echo 'COMMIT_FIXTURE=PASS'
 test_commit_registration() (
     local state="$mountpoint/registration" templates="$repo/scripts/dev-install/templates"
     local marker="$state/locks/active"
+    local record="$state/custody/lease.run"
     mkdir -p -- "$state/markers" "$state/staging"
+    mkdir -m 0700 -- "$state/custody"
     export LEASE_RECORD="$state/systemd-run.args"
     systemctl() { if [ "$1" = show ] && [ "${2:-}" = -p ]; then echo not-found; fi; }
     systemd-run() { printf '%s\n' "$@" > "$LEASE_RECORD"; }
@@ -188,7 +190,7 @@ SH
     cat > "$state/host.env" <<EOF
 export LEASE_PREFIX=fixture MARKER_PREFIX=fixture TOOLING_SHA=fixture
 export MARKER_DIRECTORY=$state/markers STAGING=$state/staging
-export DEV_STEP_LOCK=$marker
+export DEV_STEP_LOCK=$marker DEV_STEP_RECORD=$record
 export ENGINE_FREE=/bin/true ENGINE_RUN=$run_id ROOT_FLOOR_BYTES=1
 export INSTALL_NOT_BEFORE=$(date -u -d '1 hour ago' +%FT%TZ)
 export INSTALL_CUTOFF=$(date -u -d '+1 hour' +%FT%TZ)
@@ -222,6 +224,13 @@ EOF
     local -a lease
     mapfile -t lease < <(tail -n 4 "$LEASE_RECORD")
     test "${lease[3]}" = commit
+    local reserved_record
+    reserved_record="$(sha256sum -- "$record")"
+    result=0
+    output="$(LEASE_UNIT="fixture-wrong-$run_id.service" "${lease[@]}")" || result=$?
+    test "$result" = 75
+    test "$output" = "HOLD_DEV_STEP_UNRESOLVED run_id=$run_id"
+    test "$(sha256sum -- "$record")" = "$reserved_record"
     export LEASE_UNIT="fixture-commit-$run_id.service"
     output="$("${lease[@]}")"
     test "$output" = ACTION=commit

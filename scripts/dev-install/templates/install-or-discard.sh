@@ -18,8 +18,8 @@ case "$mode" in
 install)
     if bash "$action" install "$state"; then
         if grep -q '^DEV_OVERLAY_DONE .* held_smoke=PASS fence=PASS release=HELD$' "$state/install.done"; then
-            printf 'DEV_SIGNED_INSTALL=PASS release=HELD %s\n' "$(date -u +%FT%TZ)"
             finish_dev_step "$state"
+            printf 'DEV_SIGNED_INSTALL=PASS release=HELD %s\n' "$(date -u +%FT%TZ)"
             exit 0
         fi
         failure=75
@@ -27,6 +27,8 @@ install)
         failure=$?
     fi
     printf 'DEV_SIGNED_INSTALL=HOLD exit=%s %s\n' "$failure" "$(date -u +%FT%TZ)"
+    # The parent controller owns recovery and handback for a failed phase.
+    test -n "$DEV_STEP_OWNER" || exit "$failure"
     ;;
 rollback)
     if grep -sq '^DEV_OVERLAY_DONE .* held_smoke=PASS fence=PASS release=HELD$' "$state/install.done"; then
