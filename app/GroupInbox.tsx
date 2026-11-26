@@ -2,6 +2,7 @@
 import { operatorFailureMessage, operatorLocalFailure } from "../lib/operator-ui";
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
+import { AttachmentFilePicker } from "./AttachmentFilePicker";
 import { ModalDialog } from "./ModalDialog";
 import { isAbortError } from "../lib/bot-conversations";
 import { useI18n } from "./I18nProvider";
@@ -696,10 +697,9 @@ function GroupInboxSession({ selectedGroup, selectedMessage = null, selectGroup,
               value={draft?.text ?? ""} onChange={event => updateDraft(group.id, value => ({ ...value, text: event.target.value,
                 mentions: value.mentions.filter(person => groupMentionAppears(event.target.value, person.mention_token)) }))} /></label>
             <div className="wx-group-actions"><button type="button" className={button} disabled={!writable || recording} aria-expanded={participantOpen} onClick={() => setParticipantOpen(value => !value)}>{t("groups.mention")}</button>
-              {group.media_capabilities.accepted.length ? <label htmlFor="wx-group-files">{t("groups.attach")}<input id="wx-group-files" type="file" multiple disabled={!writable || recording}
-                accept={group.media_capabilities.accepted.map(rule => rule.mime_type).join(",")} onChange={event => {
-                  const files = Array.from(event.target.files ?? []); event.target.value = ""; if (files.length) void run(() => upload(files, group.id));
-                }} /></label> : null}
+              {group.media_capabilities.accepted.length ? <AttachmentFilePicker id="wx-group-files" disabled={!writable || recording} empty={!draft?.attachments.length && !busy}
+                accept={group.media_capabilities.accepted.map(rule => rule.mime_type).join(",")}
+                onSelect={files => void run(() => upload(files, group.id))} /> : null}
               {group.media_capabilities.voice_recording ? recording ? <><button type="button" className={button} onClick={() => stopRecording(false)}>{t("groups.stopVoice")}</button>
                 <button type="button" className={button} onClick={() => stopRecording(true)}>{t("groups.discardVoice")}</button></> : <button type="button" className={button} disabled={!writable} onClick={() => void startVoice()}>{t("groups.recordVoice")}</button> : null}
             </div>
