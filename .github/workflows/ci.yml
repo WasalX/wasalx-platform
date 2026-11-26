@@ -72,7 +72,14 @@ jobs:
           needed=true
           if git diff --quiet --no-ext-diff --no-renames HEAD^1 HEAD -- \
             .github/workflows/ci.yml scripts/test-postgres-integration.mjs scripts/postgres-scenario-registry.mjs \
-            ':(glob)tests/*postgres*.mjs' tests/rendered-html.test.mjs tests/app-first-load-js-budget.json; then
+            services/control-api/ infra/docker/postgres/ infra/docker/full/postgres/ \
+            ':(glob)tests/*postgres*.mjs' tests/meta-routing-fixture.mjs tests/group-designation-evidence.mjs \
+            tests/fixtures/ tests/helpers/ tests/support/ \
+            app/auth/ app/platform/auth/ app/api/health/ app/WasalXApp.tsx lib/request-auth.ts \
+            ':(glob)lib/*portal-session*.ts' ':(glob)lib/*oidc*.ts' infra/docker/full/keycloak/bootstrap-user.mjs \
+            scripts/run-application-e2e.mjs scripts/release/ci-browser-runtime.mjs playwright.application.config.ts \
+            tests/multitenant-e2e.test.mjs tests/platform-invitation-e2e.test.mjs tests/portal-security-headers.test.mjs \
+            tests/rendered-html.test.mjs tests/app-first-load-js-budget.json; then
             needed=false
           fi
           echo "needed=$needed" >> "$GITHUB_OUTPUT"
@@ -124,10 +131,12 @@ jobs:
             compose.full.yaml .dockerignore infra/docker/Dockerfile.zammad infra/docker/full/zammad/ \
             zammad-addon.json zammad-package/ build/zammad/ release/installer-images.json \
             ':(glob)scripts/*zammad*' ':(glob)scripts/contracts/*mailbox*' scripts/release/operator-input.mjs \
-            tests/zammad-image-browser-compat.test.mjs tests/fixtures/native-compat-cleanup.mjs ':(glob)tests/**/*.rb' \
+            app/AttachmentFilePicker.tsx app/Inbox.tsx app/GroupInbox.tsx app/api/inbox/attachment/ lib/i18n/ \
+            tests/zammad-image-browser-compat.test.mjs tests/fixtures/ tests/helpers/ tests/support/ ':(glob)tests/**/*.rb' \
             services/control-api/ services/connector-worker/ packages/ lib/domain.ts lib/literal-matcher.ts \
             scripts/build-services.mjs tsconfig.json ':(glob)services/*/tsconfig*.json' .gitattributes \
-            tests/outbound-media.test.mjs tests/helpers/operator-input-fixtures.mjs \
+            tests/outbound-media.test.mjs tests/simulation-portal-reply-browser.test.mjs \
+            scripts/release/simulation-portal-reply-browser.mjs \
             ':(glob)**/package.json' pnpm-lock.yaml pnpm-workspace.yaml .npmrc patches/ \
             .github/actions/ci-pnpm/ .github/workflows/ci.yml .github/workflows/zammad-compatibility.yml; then
             needed=false
@@ -768,10 +777,9 @@ jobs:
           if-no-files-found: error
 
   pr-images:
-    # Keep the PR matrix outside the required gate's dependency graph.
     needs: [changes]
     if: ${{ !cancelled() && github.event_name == 'pull_request' && needs.changes.outputs.images == 'true' }}
-    name: Build ${{ matrix.image }}${{ matrix.pending && ' (pending add-on source)' || '' }} (advisory)
+    name: Build ${{ matrix.image }}${{ matrix.pending && ' (pending add-on source)' || '' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     strategy:
@@ -781,7 +789,7 @@ jobs:
     steps: *image-steps
 
   pr-image-results:
-    name: PR image results (advisory)
+    name: PR image results
     if: always() && github.event_name == 'pull_request'
     needs: pr-images
     runs-on: ubuntu-slim
@@ -792,10 +800,10 @@ jobs:
         env:
           IMAGES: ${{ needs.pr-images.result }}
         run: |
-          echo "PR image builds (advisory): $IMAGES" >> "$GITHUB_STEP_SUMMARY"
+          echo "PR image builds: $IMAGES" >> "$GITHUB_STEP_SUMMARY"
           case "$IMAGES" in
             success|skipped) ;;
-            *) echo "::warning::Advisory PR image builds: $IMAGES"; exit 1 ;;
+            *) echo "::error::PR image builds: $IMAGES"; exit 1 ;;
           esac
 
   installer-portal:
@@ -849,7 +857,7 @@ jobs:
 
   ci-gate:
     if: always()
-    needs: [changes, workflow-lint, storybook, privacy, dependency-review, checks, full-unit, images, installer-portal, integration, portal-integration, application-e2e, platform-operator-e2e, keycloak-identity, integration-coverage, infra-validate, dev-install-dryrun, zammad-compatibility]
+    needs: [changes, workflow-lint, storybook, privacy, dependency-review, checks, full-unit, images, pr-images, installer-portal, integration, portal-integration, application-e2e, platform-operator-e2e, keycloak-identity, integration-coverage, infra-validate, dev-install-dryrun, zammad-compatibility]
     runs-on: ubuntu-slim
     timeout-minutes: 2
     permissions: {}
@@ -865,7 +873,8 @@ jobs:
           CHECKS: ${{ needs.checks.result }}
           FULL_UNIT: ${{ needs.full-unit.result }}
           REVIEW: ${{ needs.dependency-review.result }}
-          IMAGES: ${{ needs.images.result }}
+          IMAGES_NEEDED: ${{ needs.changes.outputs.images }}
+          IMAGES: ${{ github.event_name == 'pull_request' && needs.pr-images.result || needs.images.result }}
           INSTALLER_PORTAL_NEEDED: ${{ needs.changes.outputs.installer-portal }}
           INSTALLER_PORTAL: ${{ needs.installer-portal.result }}
           INTEGRATION_NEEDED: ${{ needs.changes.outputs.integration }}
@@ -920,13 +929,13 @@ jobs:
             pull_request:false:skipped|pull_request:true:success|merge_group:true:success) ;;
             *) echo 'Installer portal build did not pass.'; exit 1 ;;
           esac
-          case "$EVENT:$REVIEW:$IMAGES" in
-            pull_request:success:skipped)
-              echo 'See PR image results (advisory) for image build outcomes.' >> "$GITHUB_STEP_SUMMARY"
-              ;;
-            merge_group:skipped:success) ;;
-            *) exit 1 ;;
+          case "$EVENT:$REVIEW:$IMAGES_NEEDED:$IMAGES" in
+            pull_request:success:true:success|pull_request:success:false:skipped|merge_group:skipped:true:success) ;;
+            *) echo "::error::Image builds for $EVENT: selected=$IMAGES_NEEDED result=$IMAGES"; exit 1 ;;
           esac
+          if [[ "$EVENT" == pull_request ]]; then
+            echo 'See PR image results for image build outcomes.' >> "$GITHUB_STEP_SUMMARY"
+          fi
           case "$EVENT:$INTEGRATION_NEEDED:$INTEGRATION:$PORTAL_INTEGRATION:$INTEGRATION_COVERAGE" in
             pull_request:false:skipped:skipped:skipped|pull_request:*:success:success:success|merge_group:*:success:success:success) ;;
             *) exit 1 ;;
