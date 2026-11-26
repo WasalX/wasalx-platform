@@ -38,9 +38,9 @@ Use the [observability runbook](docs/runbooks/alert-response.md) to triage runti
 
 ### Source checks
 
-The lint job keeps the full ESLint check and runs the [source hooks](.pre-commit-config.yaml) on added and modified files. Prettier checks JavaScript, TypeScript, and CSS. Stylelint lints CSS, Ruff formats and lints Python, RuboCop checks Ruby layout and lint rules, ShellCheck and shfmt check shell scripts, and SQLFluff checks PostgreSQL syntax, style, and layout. OpenTofu formatting and validation run in the infrastructure job.
+The lint job keeps the full ESLint check and runs the [source hooks](.pre-commit-config.yaml) on files added by the change. Prettier checks JavaScript, TypeScript, and CSS. Stylelint lints CSS, Ruff formats and lints Python, RuboCop checks Ruby layout and lint rules, ShellCheck and shfmt check shell scripts, and SQLFluff checks PostgreSQL syntax, style, and layout. OpenTofu formatting and validation run in the infrastructure job.
 
-Run `pre-commit run --files <paths>` for the same source hooks locally. Use `ruff format <paths>` for Python, `shfmt -w -i 2 <paths>` for shell, or `pre-commit run ruby-format --hook-stage manual --files <paths>` for Ruby. Use `pre-commit run sql-format --hook-stage manual --files <paths>` on new SQL only. Applied migrations are immutable.
+Run `pre-commit run --files <paths>` for the same source hooks locally. Use `ruff format <paths>` for Python, `shfmt -w -i 2 <paths>` for shell, or `pre-commit run ruby-format --hook-stage manual --files <paths>` for Ruby. Use `pre-commit run sql-format --hook-stage manual --files <paths>` on new SQL outside control API migrations. Applied migrations are immutable.
 
 ## Test policy
 
@@ -146,4 +146,5 @@ The `portal-integration` job enforces the `/app` JavaScript budget. Keep the oth
 | §4 Run the full suite on main and merge groups | Main pushes skip PR-only checks and queue image builds because the merge queue already qualified the exact tree. | 2026-12-14 |
 | §6 Automatic production backups and quarterly restore tests | There is no production data yet. The [control-plane backup and restore runbook](docs/runbooks/control-plane-backup-restore.md) covers enabling backups, installing the quarterly timer, and recording the first successful host rehearsal. | 2026-12-14 |
 | §1 One formatter and one linter per language in CI | The Keycloak Java extension still lacks formatter and lint checks. | 2026-12-14 |
+| §1 Source-style coverage | Existing files stay outside the source-style gate until the baseline format lands after the `v0.1.0-rc.1` tag. Control API migrations remain outside SQLFluff until hosted coverage proves the PostgreSQL dialect parses them. [Tracking issue #233](https://github.com/WasalX/wasalx-platform/issues/233) | 2026-12-14 |
 | §6 Staging rollback rehearsal for every release candidate | Staging is not in service. Once it is, deploy each RC, roll back to the previous release, verify health, and record the rehearsal in the deployment audit. | 2026-12-14 |
