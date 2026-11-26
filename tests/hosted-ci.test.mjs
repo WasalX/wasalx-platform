@@ -326,7 +326,7 @@ test("DEV installer dry run selects Compose, full-stack configuration and migrat
   }
 });
 
-test("nightly install reports independently with read-only access", async () => {
+test("nightly install is report-only, read-only and runs on schedule, dispatch and RC tags", async () => {
   const path = ".github/workflows/nightly-install.yml";
   const { on, permissions, jobs } = parse(await read(path));
   const job = jobs["nightly-install"];
@@ -336,7 +336,6 @@ test("nightly install reports independently with read-only access", async () => 
     workflow_dispatch: {
       inputs: { commit: { description: "Exact published main commit SHA (optional)", type: "string", required: false } },
     },
-    pull_request: { branches: ["main"], types: ["opened", "synchronize", "reopened"] },
     push: { tags: ["v*-rc.*"] },
   });
   assert.match(job.if, /\(github\.event_name == 'push' && github\.ref_type == 'tag'\)/u);

@@ -9,9 +9,6 @@ on:
         description: Exact published main commit SHA (optional)
         type: string
         required: false
-  pull_request:
-    branches: [main]
-    types: [opened, synchronize, reopened]
   push:
     tags: ['v*-rc.*']
 
