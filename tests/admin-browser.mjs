@@ -163,6 +163,7 @@ async function teamsListRecovery(locale) {
       await expect(button("teamsAdmin.createTeam")).toHaveCount(0);
       await expect(empty).toHaveCount(0);
       await expect(choose).toHaveCount(0);
+      assert.ok(await page.evaluate(() => { const alert = document.querySelector(".settings-feedback.error"); return alert.parentElement.getBoundingClientRect().bottom - alert.getBoundingClientRect().bottom >= 12; }), "the load-failure alert touches the bottom of its card");
       await capture("failed");
 
       await button("common.actions.retry").click();
