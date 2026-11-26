@@ -82,6 +82,7 @@ jobs:
           needed=true
           if git diff --quiet --no-ext-diff --no-renames HEAD^1 HEAD -- \
             app/ lib/ packages/ public/ worker/ db/ build/ tests/e2e/ tests/fixtures/ tests/helpers/ \
+            services/control-api/ infra/docker/postgres/ tests/support/ tests/hosted-platform-operator.mjs \
             scripts/run-application-e2e.mjs scripts/application-e2e-pool.mjs scripts/release/ \
             playwright.application.config.ts next.config.ts vite.config.ts hosting.json tsconfig.json \
             cloudflare-env.d.ts next-env.d.ts ':(glob)**/package.json' pnpm-lock.yaml pnpm-workspace.yaml \
@@ -147,9 +148,8 @@ jobs:
             scripts/release/installer-stages.mjs scripts/release/installer-artifacts.mjs release/installer-images.json; then
             installer_portal=true
           fi
-          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
-          echo "images=$images" >> "$GITHUB_OUTPUT"
-          echo "installer-portal=$installer_portal" >> "$GITHUB_OUTPUT"
+          printf 'matrix=%s\nimages=%s\ninstaller-portal=%s\n' \
+            "$matrix" "$images" "$installer_portal" >> "$GITHUB_OUTPUT"
 
   workflow-lint:
     runs-on: ubuntu-24.04
@@ -162,11 +162,54 @@ jobs:
         env:
           ACTIONLINT_URL: https://github.com/kjanat/actionlint/releases/download/v1.17.1/actionlint_1.17.1_linux_amd64.tar.gz
           ACTIONLINT_SHA256: 6bfe0f49f0e108b9b23732baf7de63bfa4d89174fa40f9cb98feb9676df3318f
+          SHELLCHECK_URL: https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.gz
+          SHELLCHECK_SHA256: b7af85e41cc99489dcc21d66c6d5f3685138f06d34651e6d34b42ec6d54fe6f6
+          PYFLAKES_URL: https://files.pythonhosted.org/packages/c2/2f/81d580a0fb83baeb066698975cb14a618bdbed7720678566f1b046a95fe8/pyflakes-3.4.0-py2.py3-none-any.whl
+          PYFLAKES_SHA256: f742a7dbd0d9cb9ea41e9a24a918996e8170c799fa528688d40dd582c8265f4f
         run: |
           scratch=$(mktemp -d)
+          trap 'rm -rf "$scratch"' EXIT
+          wheel="$scratch/${PYFLAKES_URL##*/}"
           bash scripts/release/fetch-verified-asset.sh "$ACTIONLINT_URL" "$scratch/actionlint.tar.gz" "$ACTIONLINT_SHA256"
+          bash scripts/release/fetch-verified-asset.sh "$SHELLCHECK_URL" "$scratch/shellcheck.tar.gz" "$SHELLCHECK_SHA256"
+          bash scripts/release/fetch-verified-asset.sh "$PYFLAKES_URL" "$wheel" "$PYFLAKES_SHA256"
           tar -xzf "$scratch/actionlint.tar.gz" -C "$scratch" actionlint
-          "$scratch/actionlint" -shellcheck= -pyflakes=
+          tar -xzf "$scratch/shellcheck.tar.gz" -C "$scratch" shellcheck-v0.11.0/shellcheck
+          python3 -m venv "$scratch/pyflakes-env"
+          "$scratch/pyflakes-env/bin/python" -m pip --isolated install --disable-pip-version-check --no-index --no-deps "$wheel"
+
+          shellcheck="$scratch/shellcheck-v0.11.0/shellcheck"
+          pyflakes="$scratch/pyflakes-env/bin/pyflakes"
+          "$scratch/actionlint" -version | grep -E '(^| )v?1\.17\.1$'
+          "$shellcheck" --version | grep -Fx 'version: 0.11.0'
+          "$pyflakes" --version | grep -E '^3\.4\.0 Python '
+          lint=("$scratch/actionlint" "-shellcheck=$shellcheck" "-pyflakes=$pyflakes")
+
+          # Keep the intentionally invalid scripts outside the real workflow inventory.
+          fixture="$scratch/embedded-diagnostics.yml"
+          cat > "$fixture" <<'YAML'
+          on: push
+          jobs:
+            diagnostics:
+              runs-on: ubuntu-24.04
+              steps:
+                - shell: bash
+                  run: echo $1
+                - shell: python
+                  run: print(missing_name)
+          YAML
+          status=0
+          "${lint[@]}" "$fixture" > "$scratch/diagnostics.log" 2>&1 || status=$?
+          cat "$scratch/diagnostics.log"
+          if [[ "$status" != 1 ]] ||
+            ! grep -qE 'SC2086:.*\[shellcheck\]$' "$scratch/diagnostics.log" ||
+            ! grep -qE "undefined name 'missing_name'.*\[pyflakes\]$" "$scratch/diagnostics.log"; then
+            echo '::error::Expected ShellCheck SC2086 and Pyflakes undefined-name diagnostics from actionlint'
+            exit 1
+          fi
+
+          "${lint[@]}"
+          echo 'Workflow lint passed with zero findings.'
 
   storybook:
     needs: changes
@@ -240,6 +283,8 @@ jobs:
     name: ${{ matrix.name }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    env:
+      PRE_COMMIT_VERSION: '4.6.2'
     strategy:
       fail-fast: false
       max-parallel: 5
@@ -253,7 +298,7 @@ jobs:
     steps: &check-steps
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: ${{ github.event_name == 'pull_request' && matrix.mode == 'unit' && '2' || '1' }}
+          fetch-depth: ${{ github.event_name == 'pull_request' && matrix.mode == 'unit' && '2' || matrix.mode == 'lint' && (github.event_name == 'pull_request' && '2' || '0') || '1' }}
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -315,6 +360,36 @@ jobs:
       - name: Lint
         if: matrix.mode == 'lint'
         run: pnpm run lint --cache --cache-strategy content --cache-location .git/hosted-eslint-cache
+      - name: Cache source hook environments
+        if: matrix.mode == 'lint'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ runner.os }}-${{ runner.arch }}-${{ env.PRE_COMMIT_VERSION }}-${{ hashFiles('.pre-commit-config.yaml', '.rubocop.yml') }}
+      - name: Check added source style
+        if: matrix.mode == 'lint'
+        shell: bash
+        env:
+          STYLE_BASE: ${{ github.event_name == 'pull_request' && 'HEAD^1' || github.event.merge_group.base_sha }}
+        run: |
+          # Pre-commit installs environments before applying its file filters.
+          git diff --name-only --diff-filter=A -z "$STYLE_BASE" HEAD |
+            ruby -ryaml -e '
+              omit = Regexp.new(YAML.safe_load_file(".pre-commit-config.yaml").fetch("exclude"))
+              web = /\.(?:[cm]?[jt]sx?|css)\z/
+              other = /\.(?:gypi?|py[itw]?|ipynb|tac|wsgi|rb|rake|gemspec|jbuilder|bash|bats|csh|sh|zsh|sql)\z/i
+              names = /\A(?:\.bash_(?:aliases|profile)|\.bashrc|\.envrc|\.pdbrc|\.profile|\.z(?:login|logout|profile|shrc|shenv)|Brewfile|config\.ru|direnvrc|Fastfile|Gemfile|PKGBUILD|Rakefile|Vagrantfile|wscript)\z/
+              shebang = /\A#![^\n]*\b(?:a?sh|bash|bats|cbsd|t?csh|dash|ksh|zsh|python[23]?(?:\.\d+)*|ruby(?:\.\d+)*)(?:\s|\z)/
+              STDIN.each_line("\0") do |entry|
+                path = entry.delete_suffix("\0")
+                next if omit.match?(path) || !File.file?(path) || File.symlink?(path)
+                name = File.basename(path)
+                if web.match?(name) || other.match?(name) || names.match?(name) || (File.executable?(path) && shebang.match?(File.binread(path, 256)))
+                  print entry
+                end
+              end
+            ' |
+            xargs -0 -r pipx run --spec "pre-commit==$PRE_COMMIT_VERSION" pre-commit run --show-diff-on-failure --files
       - name: Typecheck
         if: matrix.mode == 'typecheck'
         run: pnpm exec tsc --noEmit
@@ -521,7 +596,7 @@ jobs:
 
   application-e2e:
     needs: [changes, portal-browser-build]
-    if: >-
+    if: &application-e2e-needed >-
       ${{ !cancelled() && needs.portal-browser-build.result == 'success' &&
       (github.event_name != 'pull_request' || needs.changes.result != 'success' ||
       needs.changes.outputs.application-e2e != 'false') }}
@@ -554,6 +629,31 @@ jobs:
             output/playwright/application*/*/report/**
             output/playwright/application*/*/results/**
           retention-days: 7
+
+  platform-operator-e2e:
+    needs: [changes, portal-browser-build]
+    if: *application-e2e-needed
+    name: Platform Operator E2E (${{ matrix.locale }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env: *portal-browser-env
+    strategy:
+      fail-fast: false
+      matrix:
+        locale: [en, ar]
+    steps:
+      - *integration-checkout
+      - *integration-node
+      - *integration-pnpm
+      - *integration-build
+      - *download-portal-browser
+      - *extract-portal-browser
+      - name: Run registered cases with a seeded signed-in operator
+        env:
+          E2E_LOCALE: ${{ matrix.locale }}
+          WASALX_E2E_CONTROL_PORT: '14101'
+          WASALX_E2E_PORTAL_PORT: '14102'
+        run: node tests/hosted-platform-operator.mjs "$E2E_LOCALE"
 
   keycloak-identity:
     needs: changes
@@ -749,7 +849,7 @@ jobs:
 
   ci-gate:
     if: always()
-    needs: [changes, workflow-lint, storybook, privacy, dependency-review, checks, full-unit, images, installer-portal, integration, portal-integration, application-e2e, keycloak-identity, integration-coverage, infra-validate, dev-install-dryrun, zammad-compatibility]
+    needs: [changes, workflow-lint, storybook, privacy, dependency-review, checks, full-unit, images, installer-portal, integration, portal-integration, application-e2e, platform-operator-e2e, keycloak-identity, integration-coverage, infra-validate, dev-install-dryrun, zammad-compatibility]
     runs-on: ubuntu-slim
     timeout-minutes: 2
     permissions: {}
@@ -773,6 +873,7 @@ jobs:
           PORTAL_INTEGRATION: ${{ needs.portal-integration.result }}
           APPLICATION_NEEDED: ${{ needs.changes.outputs.application-e2e }}
           APPLICATION_E2E: ${{ needs.application-e2e.result }}
+          PLATFORM_OPERATOR_E2E: ${{ needs.platform-operator-e2e.result }}
           KEYCLOAK_IDENTITY_NEEDED: ${{ needs.changes.outputs.keycloak-identity }}
           KEYCLOAK_IDENTITY: ${{ needs.keycloak-identity.result }}
           INTEGRATION_COVERAGE: ${{ needs.integration-coverage.result }}
@@ -788,8 +889,8 @@ jobs:
             *:*:success|pull_request:false:skipped) ;;
             *) echo 'Storybook did not pass.'; exit 1 ;;
           esac
-          case "$EVENT:$APPLICATION_NEEDED:$APPLICATION_E2E" in
-            *:*:success|pull_request:false:skipped) ;;
+          case "$EVENT:$APPLICATION_NEEDED:$APPLICATION_E2E:$PLATFORM_OPERATOR_E2E" in
+            *:*:success:success|pull_request:false:skipped:skipped) ;;
             *) echo 'Application browser tests did not pass.'; exit 1 ;;
           esac
           case "$EVENT:$KEYCLOAK_IDENTITY_NEEDED:$KEYCLOAK_IDENTITY" in

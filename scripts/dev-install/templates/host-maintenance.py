@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
-"""Generate measured lease inputs or archive a closed support directory."""
+"""Manage DEV step custody, measured lease inputs and closed support archives."""
 
 import argparse
+import hashlib
 import hmac
 import json
 import os
 from pathlib import Path
 import re
+from runpy import run_path
+import secrets
 import stat
 import subprocess
 import sys
@@ -29,6 +32,9 @@ REVIEWED_RESERVATIONS = {"install": 13_400, "rollback": 11_400}
 COMMIT_FALLBACK_S = 25_050
 GB = 10**9
 RUN_ID = re.compile(r"[0-9]{8}T[0-9]{6}Z")
+STEP_RUN_ID = re.compile(r"(?:[0-9a-f]{64}|[0-9]{8}T[0-9]{6}Z)")
+STEP_NAME = re.compile(r"[a-z][a-z0-9-]{0,47}")
+UTC_STAMP = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z")
 
 
 def sizing_top(path):
@@ -226,6 +232,137 @@ def archive_support(source, archive, run_id, receipt_name):
                 os.close(fd)
 
 
+def private_file(path):
+    info = path.lstat()
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_nlink != 1 or info.st_mode & 0o022:
+        raise ValueError("invalid receipt custody")
+    return info
+
+
+def step_receipt(path):
+    if private_file(path).st_size > 4096:
+        raise ValueError("invalid receipt size")
+    raw = path.read_bytes()
+    receipt = json.loads(raw)
+    if not isinstance(receipt, dict):
+        raise ValueError("invalid receipt")
+    return receipt, hashlib.sha256(raw).hexdigest()
+
+
+def expected_handback(evidence, record, record_sha):
+    terminal, terminal_sha = step_receipt(evidence / "terminal.json")
+    stop, stop_sha = step_receipt(evidence / "stop.json")
+    run_id = record["run_id"]
+    if (terminal.get("run_id") != run_id or terminal.get("status") != "terminal"
+            or stop.get("run_id") != run_id or stop.get("status") not in ("stopped", "no-work")):
+        raise ValueError("invalid terminal evidence")
+    return {
+        "run_id": run_id, "record_sha256": record_sha, "released": True,
+        "lock_device": record["lock_device"], "lock_inode": record["lock_inode"],
+        "terminal_sha256": terminal_sha, "stop_sha256": stop_sha,
+    }
+
+
+def verified_handback(evidence, record, record_sha, write=None):
+    if not private_directory(evidence):
+        raise ValueError("invalid evidence directory")
+    expected = expected_handback(evidence, record, record_sha)
+    handback = evidence / "handback.json"
+    completion = evidence / "completion.json"
+    if write:
+        write(handback, expected)
+        _, handback_sha = step_receipt(handback)
+        write(completion, {"run_id": record["run_id"], "handback_sha256": handback_sha})
+    actual, handback_sha = step_receipt(handback)
+    done, _ = step_receipt(completion)
+    return (actual.get("released") is True
+            and type(actual.get("lock_device")) is int and type(actual.get("lock_inode")) is int
+            and all(actual.get(key) == value for key, value in expected.items())
+            and done.get("run_id") == record["run_id"] and done.get("handback_sha256") == handback_sha)
+
+
+def dev_step(args):
+    try:
+        lock = Path(os.environ["DEV_STEP_LOCK"])
+        directory = lock.parent.lstat()
+        if (not lock.is_absolute() or not stat.S_ISDIR(directory.st_mode)
+                or directory.st_uid != os.geteuid() or directory.st_mode & 0o022):
+            raise ValueError("invalid lock directory")
+        lock_stat = lock.stat()
+        try:
+            held = (os.path.samestat(os.fstat(7), lock_stat)
+                    and re.search(r"^lock:.* FLOCK\s+ADVISORY\s+WRITE\s", Path("/proc/self/fdinfo/7").read_text(), re.M))
+        except OSError:
+            held = False
+        if not held:
+            return "HOLD_DEV_STEP_DESCRIPTOR"
+        record_path = lock.with_name(lock.name + ".run")
+        try:
+            record, record_sha = step_receipt(record_path)
+        except FileNotFoundError:
+            record = None
+        else:
+            if not (STEP_RUN_ID.fullmatch(record["run_id"]) and STEP_NAME.fullmatch(record["step"])
+                    and UTC_STAMP.fullmatch(record["started_at"])
+                    and re.fullmatch(r"[0-9a-f]{32}", record["claim"])
+                    and type(record["lock_device"]) is int and record["lock_device"] == lock_stat.st_dev
+                    and type(record["lock_inode"]) is int and record["lock_inode"] == lock_stat.st_ino):
+                raise ValueError("invalid run record")
+        if args.operation == "check":
+            return f'HOLD_DEV_STEP_UNRESOLVED run_id={record["run_id"]}' if record else None
+        if not STEP_RUN_ID.fullmatch(args.run_id):
+            return "HOLD_DEV_STEP_RUN_ID"
+        if args.operation in ("acquire", "terminal") and not STEP_NAME.fullmatch(args.step):
+            return "HOLD_DEV_STEP_ARGUMENTS"
+        if args.operation == "acquire":
+            if record and args.inherited == record["claim"] and record["run_id"] == args.run_id:
+                print("inherited")
+                return None
+            # The matching lease takes its reservation once. The overlay checks its cgroup before VM work.
+            lease = os.environ.get("LEASE_UNIT", "")
+            reserved = (args.entry == "lease" and record and record["run_id"] == args.run_id and args.step in PHASES
+                        and record["step"] == f"register-{args.step}" and lease
+                        and lease == f'{os.environ.get("LEASE_PREFIX")}-{args.step}-{args.run_id}.service')
+            if record and not reserved:
+                return f'HOLD_DEV_STEP_UNRESOLVED run_id={record["run_id"]}'
+            if not UTC_STAMP.fullmatch(args.started_at):
+                return "HOLD_DEV_STEP_CLOCK"
+            disk = run_path(str(Path(__file__).with_name("frozen-disk.py")))
+            claim = secrets.token_hex(16)
+            disk["write_receipt"](record_path, {
+                "run_id": args.run_id, "step": args.step, "started_at": args.started_at,
+                "claim": claim, "lock_device": lock_stat.st_dev, "lock_inode": lock_stat.st_ino,
+            })
+            print(claim)
+            return None
+        if not record or record["run_id"] != args.run_id:
+            return "HOLD_DEV_STEP_HANDBACK"
+        disk = run_path(str(Path(__file__).with_name("frozen-disk.py")))
+        evidence = Path(args.evidence)
+        if args.operation == "terminal":
+            if (record["step"] != args.step or not private_directory(evidence)
+                    or (evidence / "run-id").read_text(encoding="ascii").strip() != args.run_id):
+                return "HOLD_DEV_STEP_HANDBACK"
+            evidence = evidence / f'dev-step-{record["claim"]}'
+            evidence.mkdir(mode=0o700)
+            disk["write_receipt"](evidence / "terminal.json", {"run_id": args.run_id, "status": "terminal"})
+            disk["write_receipt"](evidence / "stop.json", {"run_id": args.run_id, "status": args.stop})
+            print(evidence)
+            return None
+        write = disk["write_receipt"] if args.operation == "local-handback" else None
+        if write and evidence.name != f'dev-step-{record["claim"]}':
+            return "HOLD_DEV_STEP_HANDBACK"
+        if not verified_handback(evidence, record, record_sha, write):
+            return "HOLD_DEV_STEP_HANDBACK"
+        record_path.unlink()
+        disk["sync_dir"](record_path.parent)
+        if args.operation == "handback":
+            print("DEV_STEP_HANDBACK=PASS")
+        return None
+    except (OSError, ValueError, KeyError, TypeError):
+        return "HOLD_DEV_STEP_RECORD" if args.operation in ("acquire", "check") else "HOLD_DEV_STEP_HANDBACK"
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     action = parser.add_subparsers(dest="action", required=True)
@@ -240,6 +377,22 @@ def main():
     archive.add_argument("archive", type=Path)
     archive.add_argument("run_id")
     archive.add_argument("receipt_name")
+    step = action.add_parser("dev-step")
+    operation = step.add_subparsers(dest="operation", required=True)
+    operation.add_parser("check")
+    acquire = operation.add_parser("acquire")
+    acquire.add_argument("run_id")
+    acquire.add_argument("step")
+    acquire.add_argument("inherited")
+    acquire.add_argument("started_at")
+    acquire.add_argument("entry", choices=("direct", "lease"))
+    for name in ("handback", "local-handback", "terminal"):
+        subcommand = operation.add_parser(name)
+        subcommand.add_argument("run_id")
+        subcommand.add_argument("evidence")
+        if name == "terminal":
+            subcommand.add_argument("step")
+            subcommand.add_argument("stop", choices=("stopped", "no-work"))
     args = parser.parse_args()
     if args.action == "lease-budgets":
         budgets = lease_budgets(path.read_text(encoding="utf-8") for path in args.receipts)
@@ -251,9 +404,12 @@ def main():
         if not 0 < seconds < 2**31:
             raise ValueError("invalid lease duration")
         print(seconds)
-    else:
+    elif args.action == "archive-support":
         archive_support(args.source, args.archive, args.run_id, args.receipt_name)
         print(f"SUPPORT_ARCHIVE=PASS run_id={args.run_id}")
+    elif refusal := dev_step(args):
+        print(refusal)
+        raise SystemExit(75)
 
 
 if __name__ == "__main__":

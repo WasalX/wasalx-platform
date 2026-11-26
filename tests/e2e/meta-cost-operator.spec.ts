@@ -63,32 +63,43 @@ async function keyboardClick(page:Page,locator:Locator){await locator.focus();aw
 
 test('operator cost drafts, accepted activation and every bounded reassessment page remain reachable',async({page},info)=>{
  test.skip(!ready,'Requires root-supplied authenticated platform session and reused control-plane server');
- const h=await setup(page);const reassess=h.management.getByRole('group',{name:t('cost.manage.reassess'),exact:true});
- await expect(h.dialog.getByRole('navigation',{name:t('cost.pages'),exact:true})).toHaveCount(1);
- await expect(reassess.getByRole('navigation',{name:t('cost.manage.reassessPages'),exact:true})).toBeVisible();
+ const h=await test.step("Open cost management",()=>setup(page));const reassess=h.management.getByRole('group',{name:t('cost.manage.reassess'),exact:true});
+ await test.step("Check cost reassessment navigation",async()=>{
+  await expect(h.dialog.getByRole('navigation',{name:t('cost.pages'),exact:true})).toHaveCount(1);
+  await expect(reassess.getByRole('navigation',{name:t('cost.manage.reassessPages'),exact:true})).toBeVisible();
+ });
  h.setWrite(async(route,write)=>{
   if(write.path===`${root()}/tariffs`){expect(write.body).toEqual({definition:tariff(),supersedesId:null});h.tariffs.push({id:tariffId,state:'DRAFT',definition:tariff(),definition_sha256:'2'.repeat(64),supersedes_id:null,created_at:from,accepted_policies:[{id:policyA,createdAt:from},{id:policyB,createdAt:to}]});}
   else if(write.path.endsWith('/activate')){expect(write.body).toEqual({expectedDefinitionSha256:'2'.repeat(64),policyVersionId:policyB});h.tariffs[0]!.state='ACTIVE';}
   await route.fulfill({json:{ok:true}});
  });
- await h.management.getByLabel(t('cost.manage.rateFile'),{exact:true}).setInputFiles(file(tariff()));
- await expect(h.management.getByRole('table',{name:t('cost.manage.preview'),exact:true})).toContainText('USD 0.123456789012');
- const tableScroll=h.management.getByRole("region",{name:t("cost.manage.preview"),exact:true});
- await tableScroll.focus();await page.keyboard.press("Shift+Tab");await expect(tableScroll).not.toBeFocused();
- await page.keyboard.press("Tab");await expect(tableScroll).toBeFocused();
- await expect(tableScroll).toHaveCSS("outline-style","solid");await expect(tableScroll).toHaveCSS("outline-width","2px");
- const scroll=await tableScroll.evaluate(element=>({left:element.scrollLeft,max:element.scrollWidth-element.clientWidth,rtl:getComputedStyle(element).direction==="rtl"}));
- if(scroll.max>1){
-  const key=scroll.rtl?(scroll.left>-scroll.max+1?"ArrowLeft":"ArrowRight"):(scroll.left<scroll.max-1?"ArrowRight":"ArrowLeft");
-  await page.keyboard.press(key);
-  await expect.poll(()=>tableScroll.evaluate(element=>element.scrollLeft)).not.toBe(scroll.left);
- }
- await info.attach(`cost-preview-keyboard-${locale}-${info.project.name}`,{body:await page.screenshot(),contentType:"image/png"});
- expect((await new AxeBuilder({page}).include("dialog[open]").analyze()).violations).toEqual([]);
- expect(h.writes).toHaveLength(0);await keyboardClick(page,h.management.getByRole('button',{name:t('cost.manage.saveDraft'),exact:true}));
- const activation=h.management.getByRole('button',{name:t('cost.manage.activate'),exact:true});await expect(activation).toBeDisabled();
- await h.management.getByRole('combobox',{name:t('cost.manage.acceptance'),exact:true}).selectOption(policyB);await keyboardClick(page,activation);await expect(activation).toHaveCount(0);
+ await test.step("Load cost tariff preview",async()=>{
+  await h.management.getByLabel(t('cost.manage.rateFile'),{exact:true}).setInputFiles(file(tariff()));
+  await expect(h.management.getByRole('table',{name:t('cost.manage.preview'),exact:true})).toContainText('USD 0.123456789012');
+ });
+ await test.step("Check cost preview keyboard",async()=>{
+  const tableScroll=h.management.getByRole("region",{name:t("cost.manage.preview"),exact:true});
+  await tableScroll.focus();await page.keyboard.press("Shift+Tab");await expect(tableScroll).not.toBeFocused();
+  await page.keyboard.press("Tab");await expect(tableScroll).toBeFocused();
+  await expect(tableScroll).toHaveCSS("outline-style","solid");await expect(tableScroll).toHaveCSS("outline-width","2px");
+  const scroll=await tableScroll.evaluate(element=>({left:element.scrollLeft,max:element.scrollWidth-element.clientWidth,rtl:getComputedStyle(element).direction==="rtl"}));
+  if(scroll.max>1){
+   const key=scroll.rtl?(scroll.left>-scroll.max+1?"ArrowLeft":"ArrowRight"):(scroll.left<scroll.max-1?"ArrowRight":"ArrowLeft");
+   await page.keyboard.press(key);
+   await expect.poll(()=>tableScroll.evaluate(element=>element.scrollLeft)).not.toBe(scroll.left);
+  }
+  await info.attach(`cost-preview-keyboard-${locale}-${info.project.name}`,{body:await page.screenshot(),contentType:"image/png"});
+ });
+ await test.step("Audit cost preview",async()=>{
+  expect((await new AxeBuilder({page}).include("dialog[open]").analyze()).violations).toEqual([]);
+ });
+ await test.step("Save and activate cost tariff",async()=>{
+  expect(h.writes).toHaveLength(0);await keyboardClick(page,h.management.getByRole('button',{name:t('cost.manage.saveDraft'),exact:true}));
+  const activation=h.management.getByRole('button',{name:t('cost.manage.activate'),exact:true});await expect(activation).toBeDisabled();
+  await h.management.getByRole('combobox',{name:t('cost.manage.acceptance'),exact:true}).selectOption(policyB);await keyboardClick(page,activation);await expect(activation).toHaveCount(0);
+ });
  const checks=()=>reassess.getByRole('checkbox');
+ const last=reassess.getByRole('checkbox').last();
  const selectedButton=()=>reassess.getByRole('button',{name:new RegExp(t('cost.manage.reassessSelected',{count:'\\d+'}).replace('\\d+','.+'))});
  const clearSelector=reassess.getByLabel(t('cost.manage.clearSelector'),{exact:true});
  const checkedRows=reassess.getByRole('checkbox',{checked:true,name:new RegExp(t('cost.manage.message',{count:'.+'}))});
@@ -98,36 +109,60 @@ test('operator cost drafts, accepted activation and every bounded reassessment p
  };
  // First page: 100 effects, plus the explicit withdraw checkbox outside selection.
  const effectChecks=reassess.getByRole('checkbox');
- expect(await checks().count()).toBe(101);
- for(let i=1;i<=100;i++)await effectChecks.nth(i).check();
- await selectedButton().click();await expect.poll(()=>h.writes.length).toBe(3);
- const firstItems=h.writes[2]!.body.items as Array<Record<string,unknown>>;expect(firstItems).toHaveLength(100);expect(firstItems.every(x=>!Object.hasOwn(x,'selectorEvidence'))).toBe(true);
- await waitForReassessment();
- await keyboardClick(page,reassess.getByRole('button',{name:t('cost.next'),exact:true}));
- const last=reassess.getByRole('checkbox').last();await expect(last).toHaveAccessibleName(new RegExp(t('cost.manage.message',{count:formatNumber(101,locale)})));
- await last.focus();await page.keyboard.press('Space');await h.management.getByLabel(t('cost.manage.selectorFile'),{exact:true}).setInputFiles(file(selector));await selectedButton().click();await expect.poll(()=>h.writes.length).toBe(4);
- expect(h.writes[3]!.body.items).toEqual([{deliveryId:h.rows[100]!.deliveryId,expectedHeadId:h.rows[100]!.id,selectorEvidence:selector}]);
- await waitForReassessment();
- await last.check();await clearSelector.check();await selectedButton().click();await expect.poll(()=>h.writes.length).toBe(5);
- expect(h.writes[4]!.body.items).toEqual([{deliveryId:h.rows[100]!.deliveryId,expectedHeadId:h.rows[100]!.id,selectorEvidence:null}]);
- await waitForReassessment();
- await reassess.getByRole('button',{name:t('cost.previous'),exact:true}).click();await effectChecks.nth(1).check();await effectChecks.nth(2).check();
- const unchanged=h.rows[1]!.id;h.rows[0]!.id=uuid(8000);
- const refresh=page.waitForResponse(r=>new URL(r.url()).pathname===root()&&r.request().method()==='GET');await page.evaluate(()=>window.dispatchEvent(new Event('focus')));await refresh;
- await expect(effectChecks.nth(1)).not.toBeChecked();await expect(effectChecks.nth(2)).toBeChecked();
- let rejected=false;h.setWrite(async(route,write)=>{expect((write.body.items as Array<{expectedHeadId:string}>)[0]!.expectedHeadId).toBe(unchanged);rejected=true;h.expected.push({url:route.request().url(),status:409});await route.fulfill({status:409,json:{error:'PRIVATE_HEAD_CONFLICT'}});});
- await selectedButton().click();await expect(h.dialog.getByRole('alert')).toContainText(t('cost.manage.failed'));expect(rejected).toBe(true);await expect(page.getByText('PRIVATE_HEAD_CONFLICT')).toHaveCount(0);
- await expect(clearSelector).toBeEnabled();
- expect(h.writes.filter(x=>x.path.endsWith('/reassess')).every(x=>(x.body.items as unknown[]).length<=100)).toBe(true);
- expect((await new AxeBuilder({page}).include("dialog[open]").analyze()).violations).toEqual([]);
- expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth+1)).toBe(true);
- await info.attach(`cost-operator-${locale}-${info.project.name}`,{body:await page.screenshot(),contentType:'image/png'});expect(h.expected).toEqual([]);expect(h.errors).toEqual([]);
+ await test.step("Select first-page cost effects",async()=>{
+  expect(await checks().count()).toBe(101);
+  const progress={type:'wasalx-operator:checkedCostEffects',description:'0'};
+  info.annotations.push(progress);
+  for(let i=1;i<=100;i++){
+   await effectChecks.nth(i).check();
+   progress.description=String(i);
+  }
+ });
+ await test.step("Submit first-page cost reassessment",async()=>{
+  await selectedButton().click();await expect.poll(()=>h.writes.length).toBe(3);
+  const firstItems=h.writes[2]!.body.items as Array<Record<string,unknown>>;expect(firstItems).toHaveLength(100);expect(firstItems.every(x=>!Object.hasOwn(x,'selectorEvidence'))).toBe(true);
+  await waitForReassessment();
+ });
+ await test.step("Reassess final cost effect with selector",async()=>{
+  await keyboardClick(page,reassess.getByRole('button',{name:t('cost.next'),exact:true}));
+  await expect(last).toHaveAccessibleName(new RegExp(t('cost.manage.message',{count:formatNumber(101,locale)})));
+  await last.focus();await page.keyboard.press('Space');await h.management.getByLabel(t('cost.manage.selectorFile'),{exact:true}).setInputFiles(file(selector));await selectedButton().click();await expect.poll(()=>h.writes.length).toBe(4);
+  expect(h.writes[3]!.body.items).toEqual([{deliveryId:h.rows[100]!.deliveryId,expectedHeadId:h.rows[100]!.id,selectorEvidence:selector}]);
+  await waitForReassessment();
+ });
+ await test.step("Withdraw cost selector evidence",async()=>{
+  await expect(last).not.toBeChecked();
+  await last.check();await clearSelector.check();await selectedButton().click();await expect.poll(()=>h.writes.length).toBe(5);
+  expect(h.writes[4]!.body.items).toEqual([{deliveryId:h.rows[100]!.deliveryId,expectedHeadId:h.rows[100]!.id,selectorEvidence:null}]);
+  await waitForReassessment();
+ });
+ const unchanged=await test.step("Select cost effects before refresh",async()=>{
+  await reassess.getByRole('button',{name:t('cost.previous'),exact:true}).click();await effectChecks.nth(1).check();await effectChecks.nth(2).check();
+  const unchanged=h.rows[1]!.id;h.rows[0]!.id=uuid(8000);
+  return unchanged;
+ });
+ await test.step("Wait for changed cost heads",async()=>{
+  const refresh=page.waitForResponse(r=>new URL(r.url()).pathname===root()&&r.request().method()==='GET');await page.evaluate(()=>window.dispatchEvent(new Event('focus')));await refresh;
+ });
+ await test.step("Reject stale cost reassessment",async()=>{
+  await expect(effectChecks.nth(1)).not.toBeChecked();await expect(effectChecks.nth(2)).toBeChecked();
+  let rejected=false;h.setWrite(async(route,write)=>{expect((write.body.items as Array<{expectedHeadId:string}>)[0]!.expectedHeadId).toBe(unchanged);rejected=true;h.expected.push({url:route.request().url(),status:409});await route.fulfill({status:409,json:{error:'PRIVATE_HEAD_CONFLICT'}});});
+  await selectedButton().click();await expect(h.dialog.getByRole('alert')).toContainText(t('cost.manage.failed'));expect(rejected).toBe(true);await expect(page.getByText('PRIVATE_HEAD_CONFLICT')).toHaveCount(0);
+  await expect(clearSelector).toBeEnabled();
+ });
+ await test.step("Audit final cost reassessment",async()=>{
+  expect(h.writes.filter(x=>x.path.endsWith('/reassess')).every(x=>(x.body.items as unknown[]).length<=100)).toBe(true);
+  expect((await new AxeBuilder({page}).include("dialog[open]").analyze()).violations).toEqual([]);
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth+1)).toBe(true);
+  await info.attach(`cost-operator-${locale}-${info.project.name}`,{body:await page.screenshot(),contentType:'image/png'});expect(h.expected).toEqual([]);expect(h.errors).toEqual([]);
+ });
 });
 
 test('statement file replacements invalidate all four imported actions and stale read completions',async({page},info)=>{
  test.skip(!ready,'Requires root-supplied authenticated platform session and reused control-plane server');test.setTimeout(90_000);
  await page.addInitScript(()=>{const original=File.prototype.text;const controls={release:undefined as undefined|(()=>void),finished:false};Object.assign(window,{costFileRead:controls});File.prototype.text=function(){if(this.name!=='delayed.json')return original.call(this);return new Promise(resolve=>{controls.finished=false;controls.release=()=>{void original.call(this).then(value=>{resolve(value);controls.finished=true;});};});};});
- const h=await setup(page);await h.statement.getByLabel(t('cost.statement.version'),{exact:true}).selectOption(statementId);
+ const h=await setup(page);
+ await test.step('Select statement version',()=>h.statement.getByRole('combobox',{name:t('cost.statement.version'),exact:true}).selectOption(statementId));
  await expect(h.statement.getByRole('button',{name:t('cost.statement.recordReview'),exact:true})).toBeDisabled();
  await h.statement.locator('summary').filter({hasText:t('cost.statement.retention')}).click();await h.statement.locator('summary').filter({hasText:t('cost.statement.recovery')}).click();
  const review={expectedVersion:3,expectedInputSha256:'f'.repeat(64),expectedCurrentHeadId:null,reviewSha256:'3'.repeat(64),subjectCoverage:'VERIFIED_NO_SUBJECT_DATA',subjectRefs:[],priorAdjustments:[],originalSha256:null};

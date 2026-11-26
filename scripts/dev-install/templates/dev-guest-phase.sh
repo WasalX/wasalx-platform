@@ -7,7 +7,7 @@ state="$2"
 source "$state/host.env"
 # shellcheck source=/dev/null
 source "$state/dev-step-lock.sh"
-hold_dev_step_lock
+hold_dev_step_lock "$(cat "$state/run-id")" "guest-$phase"
 P="$STAGING"
 ssh_guest=(ssh -F /dev/null -T -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes
   -o "UserKnownHostsFile=$GUEST_KNOWN_HOSTS" -o ConnectTimeout=12 -i "$GUEST_KEY"
@@ -73,3 +73,4 @@ install)
   ;;
 *) exit 75 ;;
 esac
+finish_dev_step "$state"
