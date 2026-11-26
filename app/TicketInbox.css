@@ -1,8 +1,8 @@
 /* Add to the incumbent Inbox styles; no additional theme or shell. */
 .wx-ticket-create { inline-size: min(40rem, calc(100% - 2rem)); max-block-size: calc(100dvh - 2rem); overflow: auto; padding: var(--wx-space-6); border: 1px solid var(--wx-color-border); border-radius: var(--wx-radius-panel); background: var(--wx-color-surface); color: var(--wx-color-text); font-family: var(--wx-font-sans); }
 .wx-ticket-create form, .wx-ticket-attachments { display: grid; gap: var(--wx-space-3); }
-.wx-ticket-create label, .wx-ticket-attachments label { display: grid; gap: var(--wx-space-2); font-size: var(--wx-font-size-2); }
-.wx-ticket-create :is(input, select, textarea), .wx-ticket-attachments input { inline-size: 100%; min-inline-size: 0; min-block-size: var(--wx-control-height); padding: var(--wx-space-2) var(--wx-space-3); border: 1px solid var(--wx-color-border-strong); border-radius: var(--wx-radius-control); background: var(--wx-color-surface); color: inherit; font: inherit; }
+.wx-ticket-create label { display: grid; gap: var(--wx-space-2); font-size: var(--wx-font-size-2); }
+.wx-ticket-create :is(input, select, textarea) { inline-size: 100%; min-inline-size: 0; min-block-size: var(--wx-control-height); padding: var(--wx-space-2) var(--wx-space-3); border: 1px solid var(--wx-color-border-strong); border-radius: var(--wx-radius-control); background: var(--wx-color-surface); color: inherit; font: inherit; }
 .wx-ticket-create textarea { resize: vertical; font-size: var(--wx-font-size-4); }
 .wx-ticket-create :focus-visible, .wx-ticket-attachments :focus-visible, .wx-ticket-full-article :focus-visible { outline: 2px solid var(--wx-color-accent); outline-offset: 2px; }
 .wx-ticket-create :disabled { opacity: .6; cursor: not-allowed; }
@@ -12,7 +12,7 @@
 .wx-ticket-full-article p { white-space: pre-wrap; overflow-wrap: anywhere; line-height: var(--wx-line-height-relaxed); }
 @media (max-width: 760px) {
   .wx-ticket-create { padding: var(--wx-space-4); }
-  .wx-ticket-create :is(input, select, button), .wx-ticket-attachments :is(input, button), .wx-ticket-full-article button { min-block-size: 2.75rem; }
+  .wx-ticket-create :is(input, select, button), .wx-ticket-attachments button, .wx-ticket-full-article button { min-block-size: 2.75rem; }
 }
 
 .wx-ticket-preview { padding: var(--wx-space-3); border: 1px solid var(--wx-color-border); border-radius: var(--wx-radius-control); background: var(--wx-color-surface-raised); }

@@ -8,8 +8,9 @@ builds, which run without registry login, package writes or OIDC.
 On a push to `main`, `ci` calls `release` in
 `.github/workflows/branch-image.yml` to build, inspect, publish, sign and
 attest the full catalog. Package writes are limited to the publish and alias
-jobs. OIDC is limited to the publish lanes. Admission to the DEV environment
-requires a successful `ci` run on `main` with the `images-manifest` artifact.
+jobs. OIDC is limited to the publish lanes. DEV admission uses a successful
+`ci` push run and its complete `images-manifest` for the exact commit.
+The manifest job summary records whether immutable publication is complete.
 
 The publish jobs on `main` export one GHCR cache tag per heavy
 image, without importing layers. PR and merge-queue builds import those
@@ -17,14 +18,35 @@ layers anonymously and run the same image inspection. The cache package
 must be public for anonymous cache hits. The first publish creates the
 package and seeds the cache. Check the anonymous access before claiming a
 warm-cache timing. Cosign produces the signature and SLSA attestation.
-Exact-SHA image pushes, signing, and attestation allow up to three attempts.
+The [registry retry policy](../../scripts/release/image_registry_retry.py)
+allows at most three attempts for recognized transient HTTP and network
+failures or a registry command deadline. The immutable image push also retries
+the exact Docker error "unknown blob" within that same limit, logging each
+failed push attempt and its output. Build, authorization, signature,
+provenance and digest errors fail on the first attempt. Unclassified failures
+also fail immediately. Release tool and infrastructure downloads use curl's
+standard transient retry set with a time budget. Verification failures stop
+before the downloaded bytes are used.
 
 Each package is `ghcr.io/wasalx/<image>`, tagged with the full public commit SHA.
-Each main commit publishes independently. After its manifest is uploaded, a
-serialized job advances each `main` discovery alias only when the commit
-descends from the revision on the current alias. The job summary records skips
-when the revision or ancestry is unknown or the update would move backwards.
-Exact-SHA tags and manifest receipts remain available.
+Each main commit publishes independently. The [main image aliases workflow](../../.github/workflows/main-image-aliases.yml)
+resolves the triggering successful CI run's manifest by immutable artifact ID.
+The artifact includes `images-manifest-attempt.json`, which records the producing
+run ID, attempt and SHA-256 of the unchanged `images-manifest.json` bytes. The
+alias job validates that binding and checks the receipt against the triggering
+commit's actual tree and historical image catalog before registry login. A
+reassembled manifest may use earlier published image receipts from the same
+run. If a later successful attempt reuses the entire earlier manifest, the job
+reports `HELD_PRIOR_ATTEMPT` and leaves the aliases alone. A missing binding or
+a manifest from a newer attempt fails the alias job before registry access.
+The serialized job advances each `main` discovery alias only when the commit
+descends from the revision on the current alias. The job summary identifies the source commit,
+CI run and attempt. It records advanced and verified aliases, aliases kept at
+the expected digest, and skipped moves when the revision or ancestry is unknown
+or the update would move backwards. A registry failure or digest mismatch fails
+the alias workflow. Earlier moves may already have landed when an update fails.
+The CI result, exact-SHA tags and manifest receipts retain their publication
+outcomes independently of the alias run.
 Resolve the alias once, then use only `@sha256:<manifest digest>`.
 The `images-manifest` artifact requires one receipt for every matrix row, all
 bound to the same commit and tree. When the plan marks both add-on images
@@ -82,6 +104,9 @@ honesty or release approval. Sigstore verification failure means no admission.
 The optional `admit-hosted` stage admits already loaded images. It never pulls,
 loads, builds, replaces or starts a service. Keep the existing local
 `preflight -> build -> replace -> smoke` path for local builds.
+During image preparation, a confirmed missing image can trigger a candidate build
+or a pinned dependency pull. Docker access errors and invalid inspection output
+stop the stage. Correct the inspection failure before retrying.
 
 An exited, non-target container with Docker restart policy `no` can be retained
 in the replacement preimage even when its Compose hash differs. The private

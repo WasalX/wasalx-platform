@@ -78,10 +78,10 @@ jobs:
             then "- `\(.key)` `\(.value.digest)`"
             else error("Invalid image digest row") end
           ' "$directory/images-manifest.json")
-          printf '### Image digests for `%s` (%s)\n\nSource commit `%s`\n\n%s\n' \
+          printf "### Image digests for \`%s\` (%s)\n\nSource commit \`%s\`\n\n%s\n" \
             "$DEPLOY_REF" "$DEPLOY_ENVIRONMENT" "$commit" "$digests" >> "$GITHUB_STEP_SUMMARY"
           if [[ -n "$receipt_code" ]]; then
-            printf '\nReceipt code `%s`\n' "$receipt_code" >> "$GITHUB_STEP_SUMMARY"
+            printf "\nReceipt code \`%s\`\n" "$receipt_code" >> "$GITHUB_STEP_SUMMARY"
             if [[ "$receipt_code" == HOLD_* || "$receipt_code" == CLASS_HALTED ]]; then
               exit 1
             fi

@@ -32,7 +32,7 @@ export function parseTeamRecovery(raw: string | null): Intent | null {
 
 export function SupportTeams({ execute, scope, owner = false }: { execute: <T>(operation: TeamOperation, input: Record<string, unknown>, signal?: AbortSignal) => Promise<T>; scope: string; owner?: boolean }) {
   const { t } = useI18n();
-  const [teams, setTeams] = useState<Team[]>([]);
+  const [teams, setTeams] = useState<Team[] | null>(null);
   const [cursor, setCursor] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [detail, setDetail] = useState<Detail | null>(null);
@@ -69,6 +69,7 @@ export function SupportTeams({ execute, scope, owner = false }: { execute: <T>(o
   const storageKey = `wasalx:team-operation:${scope}`;
   const dirty = selected === "new" ? Boolean(draft.name || draft.note) : Boolean(detail && (draft.name !== detail.name || draft.note !== detail.note || draft.active !== detail.active || Object.keys(grants).length));
   const blocked = busy || Boolean(pending) || recoveryCorrupt || !recoveryReady || denied;
+  const listUnavailable = teams === null && !denied && !reauthenticate && !recoveryCorrupt && pending === null;
 
   const failure = useCallback((cause: unknown) => {
     if (!lifecycle.current.mounted || cause instanceof DOMException && cause.name === "AbortError") return;
@@ -78,7 +79,7 @@ export function SupportTeams({ execute, scope, owner = false }: { execute: <T>(o
     }
     if (status === 401 || status === 403) {
       lifecycle.current.generation++; inFlight.current = false; setDenied(true); setCursor(null);
-      setTeams([]); setDetail(null); setSelected(null); setDraft({ name: "", note: "", active: true }); setGrants({}); setGrantVersions({}); setDraftVersion(null);
+      setTeams(null); setDetail(null); setSelected(null); setDraft({ name: "", note: "", active: true }); setGrants({}); setGrantVersions({}); setDraftVersion(null);
       fence.current.invalidate(); listFence.current.invalidate();
       setBusy(false); setLoading(false);
     }
@@ -90,7 +91,7 @@ export function SupportTeams({ execute, scope, owner = false }: { execute: <T>(o
     const execution = listFence.current.begin();
     const page = await request<{ items: Team[]; next_cursor: string | null }>("TEAM_LIST", { limit: 50, ...(before ? { before } : {}) }, signal).catch(cause => { if (!listFence.current.isCurrent(execution)) throw new DOMException("Stale list", "AbortError"); throw cause; });
     if (!live(generation) || signal?.aborted || !listFence.current.isCurrent(execution)) return;
-    setTeams(current => before ? [...current, ...page.items.filter(row => !current.some(item => item.id === row.id))] : page.items);
+    setTeams(current => before && current ? [...current, ...page.items.filter(row => !current.some(item => item.id === row.id))] : page.items);
     setCursor(page.next_cursor); setDenied(false); setError(null);
   }, [live, request]);
 
@@ -220,19 +221,23 @@ export function SupportTeams({ execute, scope, owner = false }: { execute: <T>(o
   };
 
   return <section className="panel" aria-labelledby="support-teams-heading" data-unsaved={dirty || undefined}>
-    <div className="panel-heading"><div><h2 id="support-teams-heading">{t("teamsAdmin.title")}</h2><p>{t("teamsAdmin.body")}</p></div><button type="button" className="button primary" disabled={blocked} onClick={() => void open("new")}>{t("teamsAdmin.createTeam")}</button></div>
-    {error ? <><p role="alert" className="settings-feedback error">{error}</p><button type="button" className="button secondary" disabled={busy || !recoveryReady || recoveryCorrupt} onClick={() => void reload()}>{t("common.actions.retry")}</button></> : null}
+    <div className="panel-heading"><div><h2 id="support-teams-heading">{t("teamsAdmin.title")}</h2><p>{t("teamsAdmin.body")}</p></div>{teams !== null || denied ? <button type="button" className="button primary" disabled={blocked} onClick={() => void open("new")}>{t("teamsAdmin.createTeam")}</button> : null}</div>
+    {error ? <div className={`settings-feedback error ${styles.feedback}`}>
+      <p role="alert">{listUnavailable ? t("teamsAdmin.listFailed") : error}</p>
+      <button type="button" className={listUnavailable ? "wx-button wx-button-primary" : "button secondary"} disabled={busy || !recoveryReady || recoveryCorrupt} onClick={() => void reload()}>{t("common.actions.retry")}</button>
+    </div> : null}
     {reauthenticate ? <a className="button secondary wx-button" href="/auth/login?step_up=privileged&return_to=%2Fapp%3Fview%3Dteam">{t("tenant.privacy.action.reauthenticate")}</a> : null}
     {notice ? <p role="status" className="settings-feedback success">{notice}</p> : null}
     {pending ? <div className="settings-validation"><p>{t("teamsAdmin.unknown")}</p><button type="button" className="button secondary" disabled={busy} onClick={() => void reconcile(false)}>{t("teamsAdmin.check")}</button><button type="button" className="button secondary" disabled={busy} onClick={() => void reconcile(true)}>{t("teamsAdmin.cancelMissing")}</button></div> : null}
     {owner ? <ServiceAccess execute={execute} scope={scope} teamId={detail?.id ?? null}/> : null}
-    <div className={styles.workspace}>
+    {teams === null && loading ? <div className={styles.workspace}><p role="status">{t("teamsAdmin.loading")}</p></div> : null}
+    {teams !== null ? <div className={styles.workspace}>
       <nav aria-label={t("teamsAdmin.title")}><ul className={styles.list}>{teams.map(team => <li key={team.id}><button type="button" className="button secondary" aria-current={selected === team.id ? "true" : undefined} disabled={blocked} onClick={() => void open(team.id)}><bdi>{team.name}</bdi> · {t(team.active ? "teamsAdmin.active" : "teamsAdmin.archived")}</button></li>)}</ul>{loading ? <p role="status">{t("teamsAdmin.loading")}</p> : !teams.length ? <p>{t("teamsAdmin.empty")}</p> : null}{cursor ? <button type="button" className="button secondary" disabled={blocked} onClick={() => void reload(cursor)}>{t("teamsAdmin.more")}</button> : null}</nav>
       {selected === "new" || detail ? <div><form className="settings-form" onSubmit={save}><fieldset disabled={blocked || detail?.can_manage === false}><legend>{t(detail ? "teamsAdmin.edit" : "teamsAdmin.createTeam")}</legend><label>{t("teamsAdmin.name")}<input required maxLength={160} value={draft.name} onChange={event => setDraft(current => ({ ...current, name: event.target.value }))}/></label><label>{t("teamsAdmin.note")}<input maxLength={250} value={draft.note} onChange={event => setDraft(current => ({ ...current, note: event.target.value }))}/></label>{detail ? <label>{t("teamsAdmin.status")}<select value={draft.active ? "active" : "archived"} onChange={event => setDraft(current => ({ ...current, active: event.target.value === "active" }))}><option value="active">{t("teamsAdmin.active")}</option><option value="archived">{t("teamsAdmin.archived")}</option></select></label> : null}<button className="button primary" disabled={!draft.name.trim()}>{t("teamsAdmin.save")}</button></fieldset></form>
       {detail ? <section aria-labelledby="team-grants-heading"><h3 id="team-grants-heading">{t("teamsAdmin.access")}</h3><p>{t("teamsAdmin.inherited")}</p>{detail.members.map(member => {
         const value = grants[member.id] ?? member.direct_access;
         return <form key={member.id} className={styles.member} onSubmit={event => { event.preventDefault(); void mutate("TEAM_GRANT_SAVE", { team_id: detail.id, member_id: member.id, expected_version: grantVersions[member.id] ?? member.version, access: value }); }}><fieldset disabled={blocked || !detail.can_grant || !member.editable}><legend><bdi>{member.name}</bdi></legend><p><bdi>{member.email}</bdi></p><p>{t("teamsAdmin.effective")}: {member.effective_access.length ? member.effective_access.map(item => t(`teamsAdmin.${item}`)).join(" · ") : t("teamsAdmin.none")}</p><label className="check"><input type="checkbox" checked={value.includes("full")} onChange={event => updateGrant(member, event.target.checked ? ["full"] : [])}/>{t("teamsAdmin.full")}</label>{(["read", "create", "change", "overview"] as const).map(access => <label className="check" key={access}><input type="checkbox" checked={value.includes("full") || value.includes(access)} disabled={value.includes("full")} onChange={event => updateGrant(member, event.target.checked ? [...value, access] : value.filter(item => item !== access))}/>{t(`teamsAdmin.${access}`)}</label>)}<button className="button secondary" disabled={!grants[member.id]}>{t("teamsAdmin.saveAccess")}</button></fieldset></form>;
-      })}{detail.members_next_cursor ? <button type="button" className="button secondary" disabled={blocked} onClick={() => void moreMembers()}>{t("teamsAdmin.moreMembers")}</button> : null}</section> : null}</div> : <p>{t("teamsAdmin.choose")}</p>}
-    </div>
+      })}{detail.members_next_cursor ? <button type="button" className="button secondary" disabled={blocked} onClick={() => void moreMembers()}>{t("teamsAdmin.moreMembers")}</button> : null}</section> : null}</div> : teams.length > 0 && <p>{t("teamsAdmin.choose")}</p>}
+    </div> : null}
   </section>;
 }

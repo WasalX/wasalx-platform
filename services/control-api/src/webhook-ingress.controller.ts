@@ -1,4 +1,4 @@
-import { createHash, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { BadRequestException, Body, Controller, Get, Header, HttpCode, NotFoundException, type OnModuleInit, Param, Post, Query, Req, ServiceUnavailableException, SetMetadata, UnauthorizedException } from "@nestjs/common";
 import { PUBLIC_ROUTE } from "./auth.guard.js";
 import { DatabaseService, type MetaLifecycleEventType, type MetaLifecycleRoute, type MetaRoutingRoute, type WebhookRoute } from "./database.service.js";
@@ -16,9 +16,10 @@ import { WebhookSecretService } from "./webhook-secret.service.js";
 import { recordWebhook } from "@wasalx/observability";
 import { RoutingConnectorsConfig } from "./routing-connectors.config.js";
 import { SecretProvisioningService } from "./secret-provisioning.service.js";
-import { parseWahaTestRecipientAllowlist, wahaTestWebhookAllowed } from "@wasalx/core/waha-test-recipient-scope";
+import { parseWahaTestRecipientAllowlist, wahaTestRecipientAllowed, wahaTestWebhookAllowed } from "@wasalx/core/waha-test-recipient-scope";
 import { metaTestCoexistenceUnit, metaTestLifecycleValue, metaTestRoutingEvidence, metaTestWebhookUnits } from "@wasalx/core/meta-test-recipient-scope";
 import type { MetaTestRecipientLink } from "@wasalx/core/meta-test-recipient-link";
+import { parseMetaMarketingPreferences } from "@wasalx/core/meta-marketing-preferences";
 
 type RawWebhookRequest={rawBody?:Uint8Array;headers:Record<string,string|string[]|undefined>};
 type MetaBody={object?:string;entry?:Array<{id?:string;time?:number;changes?:Array<{field?:string;value?:Record<string,unknown>}>}>};
@@ -237,6 +238,26 @@ export class WebhookIngressController implements OnModuleInit{
             const route = await this.database.resolveMetaWebhookRoute(unit.phoneId);
             if (!route || !matchesMetaWebhookApp(route, boundReference)) { unroutedCount++; continue; }
             coexistencePlans.push({ route, input: { unit, appId, sourceSha256: unit.sourceSha256 } });
+          }
+          continue;
+        }
+        if(change.field==="user_preferences"){
+          const accountId=entry.id, externalKey=metaExternalKey(change.value);
+          if(body.object!=="whatsapp_business_account"||typeof accountId!=="string"||!/^[0-9]{1,32}$/u.test(accountId)
+            ||!externalKey||!/^[0-9]{1,32}$/u.test(externalKey))throw new BadRequestException("Meta preference asset is invalid");
+          let preferences:ReturnType<typeof parseMetaMarketingPreferences>;
+          try{preferences=parseMetaMarketingPreferences(change.value,Date.now(),()=>recordWebhook("meta","rejected","invalid_marketing_preference"))}
+          catch{throw new BadRequestException("Meta marketing preference is invalid")}
+          const route=await this.database.resolveMetaWebhookRoute(externalKey);
+          if(!route||!matchesMetaWebhookApp(route,boundReference)){unroutedCount++;continue}
+          for(const preference of preferences){
+            if(!wahaTestRecipientAllowed(this.testRecipients,preference.phone)){recordWebhook("meta","rejected","test_recipient_scope");continue}
+            const marketingPreference={...preference,accountId};
+            const payloadSha256=createHmac("sha256",secret).update(JSON.stringify([route.tenant_id,route.connection_id,marketingPreference])).digest("hex");
+            const target=preference.optedOut?guardedNegatives:plans;
+            target.push({route,lifecycle:false,input:{providerEventId:`preference:v1:${payloadSha256}`,eventType:"user_preferences",
+              payload:{redacted:true,payload_sha256:payloadSha256},payloadSha256,routeKey:externalKey,providerSessionKey:externalKey,
+              providerEngine:"CLOUD_API",marketingPreference}});
           }
           continue;
         }
