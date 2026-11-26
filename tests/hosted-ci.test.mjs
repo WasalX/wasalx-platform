@@ -840,6 +840,35 @@ test("CI gates integration and infrastructure and runs portal integration files 
   }
 });
 
+test("privacy CI enforces the PR opener rule with redacted output", async () => {
+  const metadata = parse(await read(".github/workflows/privacy.yml"));
+  assert(Object.hasOwn(metadata.on, "workflow_call"));
+  assert.deepEqual(metadata.on.pull_request.types, ["edited"]);
+  const { steps } = metadata.jobs["privacy-scan"];
+  const mask = steps.find(step => step.name === "Mask the pull request opener");
+  const check = steps.find(step => step.name === "Require an allowed pull request opener");
+  assert(mask && check && steps.indexOf(mask) < steps.indexOf(check));
+  assert.equal(mask.if, "github.event_name == 'pull_request'");
+  assert.equal(check.if, "github.event_name == 'pull_request'");
+  assert.equal(check.env.PR_OPENER, "${{ github.event.pull_request.user.login }}");
+  const defaultList = "tree-publisher[bot],dependabot[bot]";
+  assert.equal(check.env.PR_OPENER_ALLOWLIST, "${{ vars.PR_OPENER_ALLOWLIST || '" + defaultList + "' }}");
+  for (const [login, allowlist, status] of [
+    ["tree-publisher[bot]", defaultList, 0],
+    ["dependabot[bot]", defaultList, 0],
+    ["fixture-app[bot]", "another-app[bot], fixture-app[bot]\nexample-app[bot]", 0],
+    ["tree-publisherb", defaultList, 1],
+    ["tree-publisher[bot]", "fixture-app[bot]", 1],
+    ["", defaultList, 1],
+  ]) {
+    const result = runWorkflowScript(check.run, { PR_OPENER: login, PR_OPENER_ALLOWLIST: allowlist });
+    assert.ifError(result.error);
+    assert.equal(result.status, status);
+    assert.equal(result.stdout.trim(), status ? "::error::PR opener allowlist rule failed." : "");
+    assert.equal(result.stderr, "");
+  }
+});
+
 test("Application browser CI shards roles and locales and reuses the portal build", async (t) => {
   const { jobs } = parse(await read(".github/workflows/ci.yml"));
   const application = jobs["application-e2e"];
