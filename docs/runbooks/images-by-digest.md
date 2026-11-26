@@ -13,8 +13,9 @@ publishes, signs and verifies the image digests. DEV admission uses the
 successful publish run and complete `images-manifest` for the exact commit.
 Missing queue evidence or an expired artifact blocks publication.
 
-PR builds can still import existing public GHCR cache layers. Queue images for
-publication build without cache imports. Cosign produces the signature and
+PR builds import public GHCR cache layers exported by the separate [Warm CI
+caches workflow](../../.github/workflows/warm-ci-caches.yml) on main pushes.
+Queue images for publication build without cache imports. Cosign produces the signature and
 SLSA attestation, which includes the queue run, attempt and image archive digest.
 The [registry retry policy](../../scripts/release/image_registry_retry.py)
 allows at most three attempts for recognized transient HTTP and network
@@ -63,6 +64,20 @@ Digest receipts are build evidence, not application acceptance, native queue
 qualification, release approval or deployment proof. Admission must separately
 bind the reviewed workflow revision, required CI/queue evidence and approved
 source tuple. Partial matrix publication cannot authorize an incomplete release.
+
+## Recover a missing queue archive
+
+Check the add-on source availability in the queue and push logs and the queue
+run's attempt number. A source that becomes available after the queue run can
+make the push expect an archive the queue never built. Re-running only failed
+queue jobs can also leave images in the previous attempt.
+
+Once the build inputs are stable, use **Re-run all jobs** on the original
+merge-group CI run for the exact commit. Confirm that `ci-gate` passed and that
+the new attempt uploaded every expected image archive. Then use **Re-run all
+jobs** on the corresponding main CI run so it resolves the new queue attempt.
+If the original exact-commit queue run cannot produce the required evidence,
+qualify a new commit through the protected merge queue.
 
 ## Public visibility and anonymous pulls
 

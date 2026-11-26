@@ -119,12 +119,14 @@ def public_addon_source(raw=None):
     return source
 
 
-def matrix(changed_paths=None, *, pull_request=False):
+def matrix(changed_paths=None, *, pull_request=False, cacheable_only=False):
     rows = catalog()
     if changed_paths is not None:
         rows = changed_images(rows, changed_paths, pull_request=pull_request)
     source = public_addon_source() if rows else None
     addons = addon_images(rows)
+    if cacheable_only:
+        rows = [row for row in rows if row["image"] in CACHED_IMAGES and (row["image"] not in addons or source)]
     return {"include": [{"image": row["image"], "dockerfile": row["dockerfile"],
                           "pending": row["image"] in addons and source is None,
                           "addonSource": source if row["image"] in addons else None} for row in rows]}
@@ -433,11 +435,12 @@ def cache_options(image, mode):
     publishing = (event == "push" and os.environ.get("GITHUB_REF") == "refs/heads/main"
                   and os.environ.get("GITHUB_REPOSITORY") == REPOSITORY)
     require(mode == "read" and event in {"pull_request", "merge_group"} or mode == "write" and publishing,
-            "Cache imports are checks-only and cache exports are main-publish only")
+            "Cache imports are checks-only and cache exports are main-push only")
     if image not in CACHED_IMAGES:
+        require(mode == "read", "Image has no cache export configured")
         return []
     cache_ref = "type=registry,ref=ghcr.io/wasalx/buildcache:" + image
-    return ["--cache-from", cache_ref] if mode == "read" else ["--cache-to", cache_ref + ",mode=max,ignore-error=true"]
+    return ["--cache-from", cache_ref] if mode == "read" else ["--cache-to", cache_ref + ",mode=max"]
 
 
 def archive_digest(path):
@@ -485,9 +488,10 @@ def build(image, output, cache="off", *, archive=None):
                     sha256((context / "build/addon-licenses" / name).read_bytes())
                     for name in ["LICENSE", "COPYING", "THIRD-PARTY-NOTICES"]} if addon else {}
         dockerfile_digest = sha256((context / row["dockerfile"]).read_bytes())
-        # Publication exports a cache but never imports one. No host context or secret/SSH mounts.
+        # Main cache jobs export layers without loading a release image.
+        exporter = "type=cacheonly" if cache == "write" else "type=docker,rewrite-timestamp=true"
         registry_output("docker", "buildx", "build", "--platform", "linux/amd64",
-                        "--output", "type=docker,rewrite-timestamp=true",
+                        "--output", exporter,
                         "--provenance=false", "--sbom=false", *cache_args, "--file", str(context / row["dockerfile"]),
                         "--tag", reference, "--build-arg", "WASALX_CANDIDATE_SHA=" + commit,
                         "--build-arg", "SOURCE_DATE_EPOCH=" + epoch,
@@ -496,6 +500,8 @@ def build(image, output, cache="off", *, archive=None):
                         "--label", "org.opencontainers.image.source=" + SOURCE,
                         "--label", "org.opencontainers.image.revision=" + commit,
                         "--label", "io.wasalx.source.tree=" + tree, str(context), capture_stdout=False)
+        if cache == "write":
+            return
         inspection = inspect_image(reference, row, commit, tree, directory, licenses,
                                    **({"export_path": archive} if archive else {}))
     receipt = {"image": image, "reference": reference, "commit": commit, "tree": tree, "status": "built",
@@ -695,6 +701,7 @@ if __name__ == "__main__":
     diff.add_argument("--pull-request", action="store_true")
     diff.add_argument("--base-sha")
     parser.add_argument("--cache", choices=["off", "read", "write"], default="off")
+    parser.add_argument("--cacheable-only", action="store_true")
     parser.add_argument("--config-digest")
     parser.add_argument("--output", default="images-manifest.json")
     parser.add_argument("--records", default="records")
@@ -708,7 +715,8 @@ if __name__ == "__main__":
     elif args.command == "matrix":
         base = "HEAD^1" if args.pull_request else args.base_sha
         paths = changed_paths(base) if base is not None else None
-        print(json.dumps(matrix(paths, pull_request=args.pull_request), separators=(",", ":")))
+        plan = matrix(paths, pull_request=args.pull_request, cacheable_only=args.cacheable_only)
+        print(json.dumps(plan, separators=(",", ":")))
     elif args.command == "build":
         build(args.image, args.output, args.cache, archive=args.archive)
     elif args.command == "publish":

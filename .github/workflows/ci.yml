@@ -351,16 +351,11 @@ jobs:
       - name: Check add-on session state
         if: matrix.mode == 'unit' && matrix.shard == 1
         run: ruby tests/fixtures/native-session-state-contract.rb
-      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        id: eslint-cache
-        if: matrix.mode == 'lint'
-        with:
-          path: .git/hosted-eslint-cache
-          key: eslint-${{ runner.os }}-${{ hashFiles('eslint.config.*', 'pnpm-lock.yaml') }}-${{ github.sha }}
-          restore-keys: eslint-${{ runner.os }}-${{ hashFiles('eslint.config.*', 'pnpm-lock.yaml') }}-
       - name: Lint
         if: matrix.mode == 'lint'
-        run: pnpm run lint --cache --cache-strategy content --cache-location .git/hosted-eslint-cache
+        uses: ./.github/actions/ci-pnpm
+        with:
+          task: lint
       - name: Cache source hook environments
         if: matrix.mode == 'lint'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

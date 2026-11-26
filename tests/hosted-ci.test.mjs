@@ -1050,6 +1050,10 @@ test("CI gate requires each event's jobs and rejects unplanned skips, failures, 
   const { "ci-gate": gate, checks } = jobs;
   const [{ run, env }] = gate.steps;
   const lint = checks.steps.find(step => step.name === "Lint");
+  const lintAction = parse(await read(".github/actions/ci-pnpm/action.yml"));
+  const lintStep = lintAction.runs.steps.find(step => step.name === "Lint with the ESLint cache");
+  assert.equal(lint.uses, "./.github/actions/ci-pnpm");
+  assert.equal(lint.with.task, "lint");
   assert(gate.needs.includes("checks"));
   assert.equal(env.CHECKS, "${{ needs.checks.result }}");
   assert.equal(checks.if, "github.event_name == 'pull_request' || github.event_name == 'merge_group'");
@@ -1062,7 +1066,7 @@ pnpm() {
   [[ "$1 $2" == "run lint" ]] || return 99
   return 17
 }
-${lint.run}`, {});
+${lintStep.run}`, {});
   assert.ifError(injectedLint.error);
   assert.equal(injectedLint.status, 17, injectedLint.stderr);
 
@@ -1161,7 +1165,7 @@ ${lint.run}`, {});
   assert.match(await readFile(summary, "utf8"), /Event workflow_dispatch ran both full unit shards/u);
 });
 
-test("CI restores pnpm caches and builds cleanly in the merge queue", async t => {
+test("CI seeds caches on main and builds cleanly in the merge queue", async t => {
   const { jobs } = parse(await read(".github/workflows/ci.yml"));
   const actionPath = "./.github/actions/ci-pnpm";
   const action = parse(await read(".github/actions/ci-pnpm/action.yml"));
@@ -1169,9 +1173,29 @@ test("CI restores pnpm caches and builds cleanly in the merge queue", async t =>
   for (const job of [jobs.checks, jobs.integration]) {
     assert.equal(job.steps.find(step => step.id === "pnpm")?.uses, actionPath);
   }
-  const eslintRestore = jobs.checks.steps.find(step => step.id === "eslint-cache");
+  const warmup = parse(await read(".github/workflows/warm-ci-caches.yml"));
+  assert.deepEqual(warmup.on, { push: { branches: ["main"] } });
+  assert.deepEqual(warmup.permissions, { contents: "read" });
+  assert.equal(warmup.jobs.workspace.if, "github.repository == 'WasalX/wasalx-platform'");
+  assert.equal(jobs.publish.needs, undefined);
+  assert.deepEqual(warmup.jobs.workspace.steps.filter(step => step.uses === actionPath).map(step => step.with), [
+    { "seed-dependencies": "true" },
+    { task: "build", "dependency-key": "${{ steps.pnpm.outputs.dependency-key }}" },
+    { task: "save-build", "dependency-key": "${{ steps.pnpm.outputs.dependency-key }}" },
+    { task: "lint" },
+  ]);
+  assert.match(warmup.jobs.plan.steps.at(-1).run, /matrix --base-sha "\$BASE" --cacheable-only/u);
+  assert.equal(warmup.jobs.images.needs, "plan");
+  assert.deepEqual(warmup.jobs.images.permissions, { contents: "read", packages: "write" });
+  assert.equal(warmup.jobs.images.steps.at(-1).run,
+    'python3 scripts/release/images-by-digest.py build --cache write --image "$IMAGE"');
+
+  const eslintRestore = action.runs.steps.find(step => step.id === "eslint-cache");
   assert.match(eslintRestore.uses, /^actions\/cache\/restore@/u);
   assert.equal(eslintRestore.with["fail-on-cache-miss"], undefined);
+  assert.equal(eslintRestore.if, "inputs.task == 'lint'");
+  const eslintSave = action.runs.steps.find(step => step.with?.key === "${{ steps.eslint-cache.outputs.cache-primary-key }}");
+  assert.equal(eslintSave.with.path, eslintRestore.with.path);
   const modules = action.runs.steps.find(step => step.id === "modules");
   const store = action.runs.steps.find(step => step.id === "store");
   assert(action.runs.steps.indexOf(modules) < action.runs.steps.indexOf(store));
@@ -1204,7 +1228,7 @@ test("CI restores pnpm caches and builds cleanly in the merge queue", async t =>
 
   const mainOnly = "github.event_name == 'push' && github.ref == 'refs/heads/main'";
   const saveSteps = action.runs.steps.filter(step => step.uses?.startsWith("actions/cache/save@"));
-  assert.equal(saveSteps.length, 3);
+  assert.equal(saveSteps.length, 4);
   for (const step of saveSteps) {
     assert(step.if.includes(mainOnly));
     assert(step.if.includes("github.repository == 'WasalX/wasalx-platform'"));
@@ -1310,6 +1334,7 @@ test("PR image results are advisory while the merge queue requires the full imag
   assert.equal(gate.steps[0].env.IMAGES, "${{ needs.images.result }}");
   assert.equal(publish.needs, undefined);
   assert.equal(branch.publish.needs, "queue");
+  assert.equal(branch.publish.steps.find(step => step.uses?.startsWith("docker/setup-buildx-action@")).with["cache-binary"], false);
   assert.equal(branch.queue.permissions.actions, "read");
   assert.equal(publish.permissions.actions, "read");
   const exportImage = images.steps.find(step => step.with?.name?.startsWith("image-queue-"));
@@ -1377,23 +1402,30 @@ test("main publication resolves the exact successful queue attempt", async t => 
 gh() {
   case "$*" in
     *"/actions/workflows/ci.yml/runs -f event=merge_group -f head_sha=$GITHUB_SHA "*) printf '%s\n' "$RUNS" ;;
-    "api repos/$GITHUB_REPOSITORY/actions/runs/123/attempts/2/jobs?per_page=100") printf '%s\n' "$JOBS" ;;
+    "api --paginate --slurp repos/$GITHUB_REPOSITORY/actions/runs/123/attempts/2/jobs?per_page=100")
+      printf '%s\n' "$JOB_PAGES" ;;
+    "api repos/$GITHUB_REPOSITORY/actions/runs/123/attempts/2/jobs?per_page=100")
+      jq '.[0]' <<< "$JOB_PAGES" ;;
     *) return 99 ;;
   esac
 }
 `;
-  for (const [candidate, job, expected] of [
-    [row, gate, true],
-    [{ ...row, head_sha: "b".repeat(40) }, gate, false],
-    [{ ...row, event: "pull_request" }, gate, false],
-    [{ ...row, head_branch: "gh-readonly-queue/other/pr-1" }, gate, false],
-    [row, { ...gate, conclusion: "failure" }, false],
-    [row, { ...gate, status: "in_progress" }, false],
+  const otherJobs = Array.from({ length: 100 }, (_, index) => ({ name: `Build image ${index}` }));
+  for (const [candidate, pages, expected] of [
+    [row, [[gate]], true],
+    [row, [otherJobs, [gate]], true],
+    [row, [[gate, ...otherJobs.slice(1)], [gate]], false],
+    [{ ...row, head_sha: "b".repeat(40) }, [[gate]], false],
+    [{ ...row, event: "pull_request" }, [[gate]], false],
+    [{ ...row, head_branch: "gh-readonly-queue/other/pr-1" }, [[gate]], false],
+    [row, [[{ ...gate, conclusion: "failure" }]], false],
+    [row, [[{ ...gate, status: "in_progress" }]], false],
   ]) {
     await writeFile(output, "");
     const result = runWorkflowScript(mock + script, {
       GITHUB_SHA: sha, GITHUB_REPOSITORY: repo, GITHUB_OUTPUT: output,
-      RUNS: JSON.stringify({ total_count: 1, workflow_runs: [candidate] }), JOBS: JSON.stringify({ jobs: [job] }),
+      RUNS: JSON.stringify({ total_count: 1, workflow_runs: [candidate] }),
+      JOB_PAGES: JSON.stringify(pages.map(jobs => ({ total_count: pages.flat().length, jobs }))),
     });
     assert.ifError(result.error);
     assert.equal(result.status === 0, expected, result.stderr);
