@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Exercise the rendered packet in a network-isolated Linux container."""
 
-from contextlib import redirect_stdout
+from contextlib import contextmanager, redirect_stdout
 import hashlib
 import io
 import json
@@ -27,6 +27,16 @@ IMAGE = "node:24.22.1-bookworm@sha256:d862bb5d082c5ae0210ac07e8c0344cb8cf7bef6d7
 SANDBOX_HOSTNAME = "sandbox.example.test"
 SANDBOX_TIMEOUT = 120
 CLEANUP_TIMEOUT = 20
+INSTALL_PHASES = ("preflight", "cutover", "smoke")
+INSTALL_ADMISSION_HOLDS = {
+    "late-start": "HOLD_INSTALL_WINDOW_TOO_SHORT",
+    "late-after-claim": "HOLD_INSTALL_WINDOW_TOO_SHORT",
+    "finished-bundle": "HOLD_DEV_INSTALL_ALREADY_STARTED",
+}
+INSTALL_FAILURE_CHECKPOINTS = {
+    case: f"test_server_install_stops_at_first_failed_phase:{case or 'success'}"
+    for case in (None, "acquire", *INSTALL_PHASES, "handback", *INSTALL_ADMISSION_HOLDS)
+}
 CHILD_CHECKPOINTS = {
     f"DEV_DRYRUN_CHECKPOINT {phase}".encode("ascii"): phase
     for phase in (
@@ -37,6 +47,7 @@ CHILD_CHECKPOINTS = {
         "step-wrapper-reopen",
         "guest-prepare", "guest-render", "guest-receive", "guest-readability", "guest-receive-repeat",
         "guest-probe", "guest-probe-timeout", "guest-lock", "suite-passed", "suite-failed",
+        *INSTALL_FAILURE_CHECKPOINTS.values(),
     )
 }
 NATIVE_READABILITY = """
@@ -58,6 +69,15 @@ def check(condition, message):
 
 def checkpoint(phase):
     print(f"DEV_DRYRUN_CHECKPOINT {phase}", flush=True)
+
+
+@contextmanager
+def checkpoint_on_failure(phase):
+    try:
+        yield
+    except Exception:
+        checkpoint(phase)
+        raise
 
 
 def run(*args, **options):
@@ -428,14 +448,12 @@ bash "$1" acquire "$2" maintenance
         self.assertEqual(offsets, sorted(offsets))
 
     def test_server_install_stops_at_first_failed_phase(self):
-        phases = ("preflight", "cutover", "smoke")
-        admission_holds = {
-            "late-start": "HOLD_INSTALL_WINDOW_TOO_SHORT",
-            "late-after-claim": "HOLD_INSTALL_WINDOW_TOO_SHORT",
-            "finished-bundle": "HOLD_DEV_INSTALL_ALREADY_STARTED",
-        }
-        for failure in (None, "acquire", *phases, "handback", *admission_holds):
-            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
+        for failure, failure_checkpoint in INSTALL_FAILURE_CHECKPOINTS.items():
+            with (
+                self.subTest(failure=failure),
+                checkpoint_on_failure(failure_checkpoint),
+                tempfile.TemporaryDirectory() as directory,
+            ):
                 work = Path(directory)
                 state = work / "packet"
                 state.mkdir(mode=0o700)
@@ -519,24 +537,25 @@ exec bash "$1/run-install.sh" "$(id -un)" "$1" "$2"
                     clock="2000-01-01T00:59:00Z" if failure == "late-start" else "2000-01-01T00:00:00Z",
                     after_claim="2000-01-01T00:59:00Z" if failure == "late-after-claim" else "",
                 )
-                expected_status = 42 if failure in phases else 75 if failure else 0
+                expected_status = 42 if failure in INSTALL_PHASES else 75 if failure else 0
                 self.assertEqual(result.returncode, expected_status, (result.stdout, result.stderr))
                 self.assertEqual(host_step(work, 'exec flock -n "$DEV_STEP_LOCK" true').returncode, 0)
                 trace = state / "actions"
-                if failure in admission_holds:
+                if failure in INSTALL_ADMISSION_HOLDS:
                     self.assertFalse(record_path.exists())
                     self.assertFalse(trace.exists())
-                    self.assertIn(admission_holds[failure], result.stdout)
+                    self.assertIn(INSTALL_ADMISSION_HOLDS[failure], result.stdout)
                     if failure == "late-after-claim":
                         stop, = state.glob("dev-step-*/stop.json")
                         self.assertEqual(json.loads(stop.read_bytes())["status"], "no-work")
                     else:
-                        self.assertFalse(list(state.glob("dev-step-*")))
+                        self.assertFalse(any(path.is_dir() for path in state.glob("dev-step-*")))
                     continue
                 if failure == "acquire":
                     self.assertFalse(trace.exists())
                     self.assertIn("HOLD_DEV_STEP_UNRESOLVED", result.stdout)
                 else:
+                    phases = INSTALL_PHASES
                     count = phases.index(failure) + 1 if failure in phases else len(phases)
                     self.assertEqual(trace.read_text().splitlines(), ["install", *phases[:count]])
                     self.assertEqual((state / "portal-readiness.log").exists(), count == len(phases))
@@ -787,15 +806,22 @@ class SandboxTest(unittest.TestCase):
 
     def test_failed_suite_remains_failed_if_cleanup_times_out(self):
         output = io.StringIO()
+        failure_checkpoint = INSTALL_FAILURE_CHECKPOINTS["late-start"]
+        child_output = (
+            f"DEV_DRYRUN_CHECKPOINT {failure_checkpoint}\n"
+            f"DEV_DRYRUN_CHECKPOINT {failure_checkpoint} raw-output-marker\n"
+            "DEV_DRYRUN_CHECKPOINT suite-failed\n"
+        ).encode("ascii")
         results = [
             mock.Mock(returncode=0), mock.Mock(returncode=0),
-            mock.Mock(returncode=1, stdout=b"DEV_DRYRUN_CHECKPOINT suite-failed\n"),
+            mock.Mock(returncode=1, stdout=child_output),
             subprocess.TimeoutExpired(["docker", "rm"], CLEANUP_TIMEOUT),
         ]
         with redirect_stdout(output), mock.patch.object(subprocess, "run", side_effect=results):
             with self.assertRaisesRegex(RuntimeError, "DispatchTest: start-attach failed"):
                 sandbox(SANDBOX_HOSTNAME, "DispatchTest")
-        self.assertIn("child suite-failed", output.getvalue())
+        self.assertIn(f"child {failure_checkpoint} suite-failed", output.getvalue())
+        self.assertNotIn("raw-output-marker", output.getvalue())
         self.assertIn("cleanup deadline exceeded", output.getvalue())
 
     def test_timed_out_create_checks_for_late_registration(self):
