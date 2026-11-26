@@ -5,6 +5,7 @@ import {useI18n} from './I18nProvider';
 import {useDeadlineCurrent} from './use-deadline-current';
 import {useVisibleRefresh} from './use-visible-refresh';
 import {createLatestRequestFence} from '../lib/operator-ui';
+import {formatDateTime} from '../lib/i18n/format';
 import {readBoundedJson} from '../lib/bounded-json';
 import {localizedUiError,type UiErrorCode} from '../lib/ui-error';
 import {isMetaTransitionExecutionView,metaTransitionIntentKey,metaTransitionIntentSettled,metaTransitionPendingActionMatches,parseMetaTransitionIntent,type MetaTransitionIntent} from '../lib/meta-transition-intent';
@@ -181,10 +182,10 @@ function Preview({connectionId,canConfigure,mutationHeaders,refreshKey}:Props){
         </>:<p className="connection-detail-note">{label('execution.terms.unavailable')}</p>):null}
         <p className="connection-detail-note">{t('tenant.connection.accountPreview.execution.impact',{count:execution.impactConnectionCount})}</p>
         <dl className="connection-detail-note"><dt>{label('execution.providerStatus')}</dt><dd>{execution.providerStatus?label(`execution.provider.${execution.providerStatus}`):label('unknown')}</dd>
-          <dt>{label('execution.observedAt')}</dt><dd>{execution.observedAt?new Intl.DateTimeFormat(locale,{dateStyle:'medium',timeStyle:'short'}).format(new Date(execution.observedAt)):label('unknown')}</dd></dl>
+          <dt>{label('execution.observedAt')}</dt><dd>{execution.observedAt?formatDateTime(execution.observedAt,locale):label('unknown')}</dd></dl>
         {execution.reasons.length?<ul>{execution.reasons.map((reason,index)=><li key={`${reason}:${index}`}>{label(`execution.reason.${executionReasons.has(reason)?reason:'UNKNOWN'}`)}</li>)}</ul>:null}
         {execution.history.length?<><h4>{label('execution.history')}</h4><ul>{execution.history.map((entry,index)=><li key={`${entry.stage}:${entry.attemptedAt}:${index}`}>
-          {label(`execution.action.${entry.stage.toLowerCase()}`)} · {label(`execution.outcome.${entry.outcome}`)} · {new Intl.DateTimeFormat(locale,{dateStyle:'medium',timeStyle:'short'}).format(new Date(entry.attemptedAt))}
+          {label(`execution.action.${entry.stage.toLowerCase()}`)} · {label(`execution.outcome.${entry.outcome}`)} · {formatDateTime(entry.attemptedAt,locale)}
         </li>)}</ul></>:null}
         {hold?<><p role="status" aria-live="polite" className="connection-detail-note">{label('execution.heldRequest')}</p>
           {canConfigure?<><p className="connection-detail-note">{label('execution.resolveHelp')}</p><button type="button" className="button secondary"
