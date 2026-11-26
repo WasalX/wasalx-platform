@@ -1089,7 +1089,9 @@ test("CI gate requires each event's jobs and rejects unplanned skips, failures, 
     ["merge queue", queue, {}, 0],
     ["merge queue with Storybook skipped", queue, { STORYBOOK: "skipped" }, 1],
     ["merge queue with failed images", queue, { IMAGES: "failure" }, 1],
-    ["merge queue with Zammad compatibility skipped", queue, { ZAMMAD_COMPATIBILITY: "skipped" }, 1],
+    ["merge queue with Zammad compatibility skipped without an applicable diff", queue, { ZAMMAD_COMPATIBILITY: "skipped" }, 1],
+    ["merge queue with selected Zammad compatibility skipped", queue, { ZAMMAD_NEEDED: "true", ZAMMAD_COMPATIBILITY: "skipped" }, 1],
+    ["merge queue without affected Zammad paths", queue, { ZAMMAD_NEEDED: "false", ZAMMAD_COMPATIBILITY: "skipped" }, 0],
     ["merge queue missing the installer portal build", queue, { INSTALLER_PORTAL_NEEDED: "false", INSTALLER_PORTAL: "skipped" }, 1],
     ["main push", push, {}, 0],
     ["main push with Storybook skipped", push, { STORYBOOK: "skipped" }, 1],
@@ -1510,7 +1512,8 @@ ${detector.run}`, { GITHUB_OUTPUT: outputFile.replaceAll("\\", "/"), DIFF_PATHS:
 
 test("Zammad compatibility selects changes to outbound dependencies and service build inputs", async t => {
   const { jobs } = parse(await read(".github/workflows/ci.yml"));
-  const { run } = jobs.changes.steps.find(step => step.id === "zammad");
+  const { run, env } = jobs.changes.steps.find(step => step.id === "zammad");
+  assert.equal(env.BASE, "${{ github.event_name == 'pull_request' && 'HEAD^1' || github.event.merge_group.base_sha }}");
   const directory = await mkdtemp(join(tmpdir(), "zammad-compatibility-selection-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const git = (...args) => execFileSync("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", ...args], {
@@ -1518,7 +1521,14 @@ test("Zammad compatibility selects changes to outbound dependencies and service 
   });
   git("init", "--quiet");
   git("commit", "--quiet", "--allow-empty", "-m", "Base");
+  const base = git("rev-parse", "HEAD").trim();
   const output = join(directory, "selection");
+  const selected = async baseRef => {
+    await writeFile(output, "");
+    const result = runWorkflowScript(run, { BASE: baseRef, GITHUB_OUTPUT: output.replaceAll("\\", "/") }, directory);
+    assert.equal(result.status, 0, result.error?.message ?? result.stderr);
+    return (await readFile(output, "utf8")).trim();
+  };
   for (const [path, expected] of [
     ["services/control-api/src/ticket-reply-target.ts", true],
     ["services/connector-worker/src/media-runtime.ts", true],
@@ -1534,11 +1544,12 @@ test("Zammad compatibility selects changes to outbound dependencies and service 
     await writeFile(join(directory, path), "fixture\n");
     git("add", "--", path);
     git("commit", "--quiet", "-m", "Change one input");
-    await writeFile(output, "");
-    const result = runWorkflowScript(run, { GITHUB_OUTPUT: output.replaceAll("\\", "/") }, directory);
-    assert.equal(result.status, 0, result.error?.message ?? result.stderr);
-    assert.equal((await readFile(output, "utf8")).trim(), `needed=${expected}`, path);
+    assert.equal(await selected("HEAD^1"), 'needed=' + expected, path);
   }
+  assert.equal(await selected(base), "needed=true", "the group includes affected changes before its final commit");
+  assert.equal(await selected(git("rev-parse", "HEAD^1").trim()), "needed=false", "a docs-only group skips compatibility");
+  assert.equal(await selected(""), "needed=true", "a missing base cannot skip compatibility");
+  assert.equal(await selected("0".repeat(40)), "needed=true", "an unresolvable base cannot skip compatibility");
 });
 
 test("Zammad compatibility gates CI and reuses the same job on the nightly schedule", async () => {
@@ -1548,7 +1559,7 @@ test("Zammad compatibility gates CI and reuses the same job on the nightly sched
   const compatibility = parse(await read(workflow));
   const job = jobs["zammad-compatibility"];
   assert.equal(job.needs, "changes");
-  assert.equal(job.if, "${{ !cancelled() && (github.event_name != 'pull_request' || needs.changes.outputs.zammad != 'false') }}");
+  assert.equal(job.if, "${{ !cancelled() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch' || needs.changes.result != 'success' || needs.changes.outputs.zammad != 'false') }}");
   assert.equal(job.uses, `./${workflow}`);
   assert(jobs["ci-gate"].needs.includes("zammad-compatibility"));
   assert.equal(jobs["ci-gate"].steps[0].env.ZAMMAD_COMPATIBILITY, "${{ needs.zammad-compatibility.result }}");
