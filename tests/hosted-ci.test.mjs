@@ -255,6 +255,19 @@ test("tracked tests belong to a named CI runner or the test allowlist", async ()
   assert.deepEqual({ missing, stale, invalid }, { missing: [], stale: [], invalid: [] });
 });
 
+test("CI job timeouts are covered by the measured limits", async () => {
+  const { jobs } = parse(await read(".github/workflows/ci.yml"));
+  const timing = JSON.parse(await read(".github/ci-timings.json"));
+  const configured = Object.entries(jobs).filter(([, job]) => Object.hasOwn(job, "timeout-minutes"));
+  // These jobs landed after the timing sample and still need measurements.
+  const unmeasured = ["application-e2e", "installer-portal", "keycloak-identity", "platform-operator-e2e", "portal-browser-build"];
+  assert.deepEqual(configured.map(([id]) => id).sort(), [...Object.keys(timing.jobs), ...unmeasured].sort());
+  for (const [id, { p95_minutes: p95 }] of Object.entries(timing.jobs)) {
+    const timeout = jobs[id]["timeout-minutes"];
+    assert(Number.isInteger(timeout) && timeout > 0 && timeout <= Math.ceil(p95 * 1.25), id);
+  }
+});
+
 test("Storybook selects UI changes and unknown diffs", async (t) => {
   const { jobs } = parse(await read(".github/workflows/ci.yml"));
   const selection = jobs.changes.steps.find(step => step.id === "storybook");
@@ -730,11 +743,15 @@ test("workflow lint requires verified tools, both embedded diagnostics, and clea
     "esac",
     "",
   ].join("\n"), { mode: 0o755 });
+  const archivePath = join(directory, "actionlint-release.tar.gz");
+  const release = "actionlint release fixture";
+  const pinnedTools = { ...job.env, ...step.env };
+  const sha256 = createHash("sha256").update(release).digest("hex");
   const mocks = String.raw`
 bash() {
   [[ "$1" == scripts/release/fetch-verified-asset.sh && "$2" == https://* && "$4" =~ ^[a-f0-9]{64}$ ]] || exit 99
   if [[ "$2" == "$FAIL_DOWNLOAD" ]]; then return 2; fi
-  touch "$3"
+  printf '%s' "$RELEASE_CONTENTS" > "$3"
 }
 tar() {
   [[ "$1" == -xzf && -f "$2" && "$3" == -C ]] || exit 99
@@ -748,9 +765,11 @@ python3() {
   cp tool "$3/bin/pyflakes"
 }
 `;
-  for (const [name, overrides, expected] of [
+  for (const [name, overrides, expected, cachedArchive] of [
     ["clean", {}, 0],
-    ...["ACTIONLINT_URL", "SHELLCHECK_URL", "PYFLAKES_URL"].map(key => [key, { FAIL_DOWNLOAD: step.env[key] }, 2]),
+    ["valid cached actionlint", { FAIL_DOWNLOAD: pinnedTools.ACTIONLINT_URL }, 0, release],
+    ["corrupt cached actionlint", { FAIL_DOWNLOAD: pinnedTools.ACTIONLINT_URL }, 1, "corrupt"],
+    ...["ACTIONLINT_URL", "SHELLCHECK_URL", "PYFLAKES_URL"].map(key => [key, { FAIL_DOWNLOAD: pinnedTools[key] }, 2]),
     ["wrong actionlint", { ACTIONLINT_VERSION: "1.17.0" }, 1],
     ["wrong ShellCheck", { SHELLCHECK_VERSION: "0.10.0" }, 1],
     ["wrong Pyflakes", { PYFLAKES_VERSION: "3.3.0" }, 1],
@@ -760,9 +779,14 @@ python3() {
     ["fixture execution error", { FIXTURE_STATUS: "3" }, 1],
     ["real finding", { REAL_STATUS: "1" }, 1],
   ]) {
+    await rm(archivePath, { force: true });
+    if (cachedArchive !== undefined) await writeFile(archivePath, cachedArchive);
     const result = runWorkflowScript(mocks + step.run, {
-      ...step.env,
+      ...pinnedTools,
+      RUNNER_TEMP: directory.replaceAll("\\", "/"),
       TMPDIR: directory,
+      ACTIONLINT_SHA256: sha256,
+      RELEASE_CONTENTS: release,
       FAIL_DOWNLOAD: "", ACTIONLINT_VERSION: "1.17.1", SHELLCHECK_VERSION: "0.11.0", PYFLAKES_VERSION: "3.4.0",
       MISSING: "", FIXTURE_STATUS: "1", REAL_STATUS: "0",
       ...overrides,
@@ -790,7 +814,6 @@ test("CI gates integration and infrastructure and runs portal integration files 
   assert.match(integration.services.postgres.options, /--tmpfs /u);
   assert(coverage.steps.some(step => runsFile(step.run ?? "", "scripts/postgres-scenario-registry.mjs")));
   assert(integration.steps.some(step => runsFile(step.run ?? "", "scripts/test-postgres-integration.mjs", "--shard")));
-  assert.equal(integration["timeout-minutes"], 25);
   assert.deepEqual(integration.permissions, { contents: "read" });
   assert.match(integration.services.postgres.image, /^postgres:[^@]+@sha256:[a-f0-9]{64}$/u);
   const devPreflightFile = "tests/installer-dev-recreatability.test.mjs";
@@ -1125,7 +1148,9 @@ test("CI gate requires each event's jobs and rejects unplanned skips, failures, 
     ["merge queue", queue, {}, 0],
     ["merge queue with Storybook skipped", queue, { STORYBOOK: "skipped" }, 1],
     ["merge queue with failed images", queue, { IMAGES: "failure" }, 1],
-    ["merge queue with Zammad compatibility skipped", queue, { ZAMMAD_COMPATIBILITY: "skipped" }, 1],
+    ["merge queue with Zammad compatibility skipped without an applicable diff", queue, { ZAMMAD_COMPATIBILITY: "skipped" }, 1],
+    ["merge queue with selected Zammad compatibility skipped", queue, { ZAMMAD_NEEDED: "true", ZAMMAD_COMPATIBILITY: "skipped" }, 1],
+    ["merge queue without affected Zammad paths", queue, { ZAMMAD_NEEDED: "false", ZAMMAD_COMPATIBILITY: "skipped" }, 0],
     ["merge queue missing the installer portal build", queue, { INSTALLER_PORTAL_NEEDED: "false", INSTALLER_PORTAL: "skipped" }, 1],
     ["main push", push, {}, 0],
     ["main push with Storybook skipped", push, { STORYBOOK: "skipped" }, 1],
@@ -1286,6 +1311,13 @@ test("PR image results gate affected changes while the merge queue requires the 
   assert.equal(images.strategy["max-parallel"], 21);
   assert.deepEqual(prImages.strategy, { ...images.strategy, "max-parallel": 8 });
   assert.equal(prImages.steps, images.steps);
+  const imageBuilder = images.steps.find(step => step.uses?.startsWith("docker/setup-buildx-action@"));
+  const publisherBuilder = branch.publish.steps.find(step => step.uses?.startsWith("docker/setup-buildx-action@"));
+  assert.equal(imageBuilder.uses, publisherBuilder.uses);
+  assert.equal(imageBuilder.with.version, publisherBuilder.with.version);
+  assert.equal(imageBuilder.with["cache-binary"], true);
+  assert.equal(publisherBuilder.with["cache-binary"], true);
+  assert.equal(imageBuilder.with.cleanup, false);
   assert.equal(images["continue-on-error"], undefined);
   assert.equal(prImages["continue-on-error"], undefined);
   assert.equal(report.if, "always() && github.event_name == 'pull_request'");
@@ -1474,14 +1506,15 @@ test("optional PR lanes run on diff errors and gate their applicable checks", as
     ].join(" ")],
   ]) {
     const detector = changes.steps.find(step => step.id === id);
-    assert.equal(detector.if, "github.event_name == 'pull_request'");
+    assert.equal(detector.if, id === "zammad" ? undefined : "github.event_name == 'pull_request'");
     for (const [status, needed] of [[0, false], [1, true], [128, true]]) {
       const outputFile = join(directory, `${id}-${status}`);
       const result = runWorkflowScript(`git() {
+  if [[ "$*" == "merge-base --is-ancestor HEAD^1 HEAD" && "$LANE" == zammad ]]; then return 0; fi
   test "$*" = "diff --quiet --no-ext-diff --no-renames HEAD^1 HEAD -- $DIFF_PATHS" || exit 99
   return "$DIFF_STATUS"
 }
-${detector.run}`, { GITHUB_OUTPUT: outputFile.replaceAll("\\", "/"), DIFF_PATHS: diffPaths, DIFF_STATUS: String(status) });
+${detector.run}`, { GITHUB_OUTPUT: outputFile.replaceAll("\\", "/"), DIFF_PATHS: diffPaths, DIFF_STATUS: String(status), BASE: "HEAD^1", LANE: id });
       assert.equal(result.status, 0, result.error?.message ?? result.stderr);
       assert.equal((await readFile(outputFile, "utf8")).trim(), `needed=${needed}`);
     }
@@ -1549,7 +1582,8 @@ ${detector.run}`, { GITHUB_OUTPUT: outputFile.replaceAll("\\", "/"), DIFF_PATHS:
 
 test("Zammad compatibility selects changes to outbound dependencies and service build inputs", async t => {
   const { jobs } = parse(await read(".github/workflows/ci.yml"));
-  const { run } = jobs.changes.steps.find(step => step.id === "zammad");
+  const { run, env } = jobs.changes.steps.find(step => step.id === "zammad");
+  assert.equal(env.BASE, "${{ github.event_name == 'pull_request' && 'HEAD^1' || github.event.merge_group.base_sha }}");
   const directory = await mkdtemp(join(tmpdir(), "zammad-compatibility-selection-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const git = (...args) => execFileSync("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", ...args], {
@@ -1557,7 +1591,14 @@ test("Zammad compatibility selects changes to outbound dependencies and service 
   });
   git("init", "--quiet");
   git("commit", "--quiet", "--allow-empty", "-m", "Base");
+  const base = git("rev-parse", "HEAD").trim();
   const output = join(directory, "selection");
+  const selected = async baseRef => {
+    await writeFile(output, "");
+    const result = runWorkflowScript(run, { BASE: baseRef, GITHUB_OUTPUT: output.replaceAll("\\", "/") }, directory);
+    assert.equal(result.status, 0, result.error?.message ?? result.stderr);
+    return (await readFile(output, "utf8")).trim();
+  };
   for (const [path, expected] of [
     ["services/control-api/src/ticket-reply-target.ts", true],
     ["services/connector-worker/src/media-runtime.ts", true],
@@ -1579,11 +1620,12 @@ test("Zammad compatibility selects changes to outbound dependencies and service 
     await writeFile(join(directory, path), "fixture\n");
     git("add", "--", path);
     git("commit", "--quiet", "-m", "Change one input");
-    await writeFile(output, "");
-    const result = runWorkflowScript(run, { GITHUB_OUTPUT: output.replaceAll("\\", "/") }, directory);
-    assert.equal(result.status, 0, result.error?.message ?? result.stderr);
-    assert.equal((await readFile(output, "utf8")).trim(), `needed=${expected}`, path);
+    assert.equal(await selected("HEAD^1"), 'needed=' + expected, path);
   }
+  assert.equal(await selected(base), "needed=true", "the group includes affected changes before its final commit");
+  assert.equal(await selected(git("rev-parse", "HEAD^1").trim()), "needed=false", "a docs-only group skips compatibility");
+  assert.equal(await selected(""), "needed=true", "a missing base cannot skip compatibility");
+  assert.equal(await selected("0".repeat(40)), "needed=true", "an unresolvable base cannot skip compatibility");
 });
 
 test("Zammad compatibility gates CI and reuses the same job on the nightly schedule", async () => {
@@ -1593,7 +1635,7 @@ test("Zammad compatibility gates CI and reuses the same job on the nightly sched
   const compatibility = parse(await read(workflow));
   const job = jobs["zammad-compatibility"];
   assert.equal(job.needs, "changes");
-  assert.equal(job.if, "${{ !cancelled() && (github.event_name != 'pull_request' || needs.changes.outputs.zammad != 'false') }}");
+  assert.equal(job.if, "${{ !cancelled() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch' || needs.changes.result != 'success' || needs.changes.outputs.zammad != 'false') }}");
   assert.equal(job.uses, `./${workflow}`);
   assert(jobs["ci-gate"].needs.includes("zammad-compatibility"));
   assert.equal(jobs["ci-gate"].steps[0].env.ZAMMAD_COMPATIBILITY, "${{ needs.zammad-compatibility.result }}");
