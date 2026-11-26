@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import test from "node:test";
 
 import {
@@ -165,6 +165,16 @@ test("explicit UTC and selected zones are honored without changing Riyadh defaul
     assert.equal(formatDateTime(instant, locale, { ...timeOptions, timeZone: "Asia/Tokyo" }), tokyo);
   }
   assert.throws(() => formatDateTime(instant, "en", { timeZone: "not-a-time-zone" }), RangeError);
+});
+
+test("app code formats dates and numbers through the shared formatter", async () => {
+  const offenders = [];
+  for (const file of await readdir(new URL("../app/", import.meta.url), { recursive: true })) {
+    if (!/\.tsx?$/u.test(file)) continue;
+    const source = await readFile(new URL(`../app/${file.replaceAll("\\", "/")}`, import.meta.url), "utf8");
+    if (/new Intl\.(?:DateTime|Number)Format\(/u.test(source)) offenders.push(file);
+  }
+  assert.deepEqual(offenders, [], "use formatDateTime or formatNumber from lib/i18n/format so digits and the time zone follow the locale");
 });
 
 test("localized UI errors never expose raw provider messages", () => {
