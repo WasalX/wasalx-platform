@@ -14,7 +14,7 @@ RUN="$(cat "$STATE/run-id")"
 source "$STATE/host.env"
 # shellcheck source=/dev/null
 source "$STATE/dev-step-lock.sh"
-hold_dev_step_lock
+hold_dev_step_lock "$RUN" "$MODE"
 export STATE
 ORIGINAL="$STATE/original-dropin.conf"
 ROLLBACK_KEPT="$DIR/disk-install-$RUN.rolled-back.$RUN.qcow2"
@@ -266,6 +266,7 @@ audit)
     if test "$(disk phase)" = writable; then
         check_drive "$TOP_DRIVE"
         echo 'DAILY_FROZEN_AUDIT=DEFERRED_WRITABLE_TOP'
+        finish_dev_step "$STATE"
         exit 0
     fi
     step daily-base-hash frozen_check audit
@@ -349,6 +350,7 @@ PY
     # Then verify-hosted -> original preimage -> candidate env -> preload ->
     # admit-hosted -> action-time preimage + replace -> held smoke -> fence proofs.
     step overlay-guard-and-install guest_phase install
+    step held-smoke guest_phase smoke
     check_drive "$OVERLAY_DRIVE"
     step terminal-frozen-proof frozen_check verify
     printf 'DEV_OVERLAY_DONE %s %s held_smoke=PASS fence=PASS release=HELD\n' "$(date -u +%FT%TZ)" "$REV" | tee "$STATE/install.done"
@@ -399,3 +401,4 @@ commit)
     printf 'COMMIT_PASS %s overlay_retained=%s\n' "$(date -u +%FT%TZ)" "$COMMIT_KEPT"
     ;;
 esac
+finish_dev_step "$STATE"

@@ -5,6 +5,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEve
 import { AttachmentFilePicker } from "./AttachmentFilePicker";
 import { ModalDialog } from "./ModalDialog";
 import { isAbortError } from "../lib/bot-conversations";
+import { formatDateTime, formatNumber } from "../lib/i18n/format";
 import { useI18n } from "./I18nProvider";
 import { ScrollRegion } from "./tenant-ui";
 import { useVisibleRefresh } from "./use-visible-refresh";
@@ -176,7 +177,7 @@ function GroupInboxSession({ selectedGroup, selectedMessage = null, selectGroup,
   const [teams, setTeams] = useState<{ id: string; name: string }[]>([]);
   const [recording, setRecording] = useState(false);
   const timeline = useRef<HTMLDivElement>(null), composer = useRef<HTMLTextAreaElement>(null), chooser = useRef<HTMLSelectElement>(null);
-  const heading = useRef<HTMLHeadingElement>(null), latest = useRef<HTMLLIElement>(null);
+  const heading = useRef<HTMLHeadingElement>(null), latest = useRef<HTMLLIElement>(null), loadFocus = useRef<Element | null>(null);
   const current = useRef({ group: selectedGroup, scope, filter, ticketFilter, active, canWrite, context: selectedMessage });
   const submittedSends = useRef(new Map<string, SendInput>());
   const mounted = useRef(true), inFlight = useRef(false), authorization = useRef(0);
@@ -382,6 +383,7 @@ function GroupInboxSession({ selectedGroup, selectedMessage = null, selectGroup,
     if (capture) { capture.discard = true; clearTimeout(capture.timer); capture.stream.getTracks().forEach(track => track.stop()); if (capture.instance.state !== "inactive") capture.instance.stop(); }
     const resetRecording = window.setTimeout(() => setRecording(false), 0);
     if (!active) return () => window.clearTimeout(resetRecording);
+    loadFocus.current = document.activeElement;
     const controller = new AbortController();
     const groupId = selectedGroup, boundary = scope, generation = authorization.current, groupGeneration = groupId ? groupEpoch.current.get(groupId) ?? 0 : 0;
     const sequenceFence = messageSequence;
@@ -400,7 +402,12 @@ function GroupInboxSession({ selectedGroup, selectedMessage = null, selectGroup,
   }, [active, selectedGroup, selectedMessage, request, loadMessages, scope, t]);
   useEffect(() => {
     if (!active || loading || !group?.id || contextTarget) return;
-    const frame = requestAnimationFrame(() => heading.current?.focus({ preventScroll: true }));
+    const frame = requestAnimationFrame(() => {
+      // A slow load must not pull focus back from a control the operator moved to meanwhile.
+      const current = document.activeElement;
+      if (current && current !== document.body && current !== loadFocus.current) return;
+      heading.current?.focus({ preventScroll: true });
+    });
     return () => cancelAnimationFrame(frame);
   }, [active, loading, group?.id, contextTarget]);
   useEffect(() => {
@@ -600,7 +607,7 @@ function GroupInboxSession({ selectedGroup, selectedMessage = null, selectGroup,
     void run(() => mutate({ operation: "GROUP_SEND", input }));
   };
   const jumpLatest = () => { setFollowing(true); followingRef.current = true; setIncoming(0); unreadSnapshot.current.clear(); void run(() => loadMessages()); };
-  const formatTime = (value: string) => new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
+  const formatTime = (value: string) => formatDateTime(value, locale);
   const actionable = (message: Message) => message.latest_mutation !== "REVOKED";
   const button = "wx-button wx-button-secondary";
   return <section className="wx-group" dir={direction} aria-label={t("groups.title")}>
@@ -632,7 +639,7 @@ function GroupInboxSession({ selectedGroup, selectedMessage = null, selectGroup,
         {!groups.length ? <p>{t("groups.empty")}</p> : <ul>{groups.map(item => <li key={item.id}><button type="button" className="wx-group-choice"
           aria-current={selectedGroup === item.id ? "true" : undefined} onClick={() => selectGroup(item.id)}>
           <b dir="auto">{item.name}</b><span>{t(`groups.scope.${item.access_scope}`)}</span>
-          {item.unread_count ? <span>{t("groups.unread", { count: new Intl.NumberFormat(locale).format(item.unread_count) })}</span> : null}
+          {item.unread_count ? <span>{t("groups.unread", { count: formatNumber(item.unread_count, locale) })}</span> : null}
         </button></li>)}</ul>}
         {groupCursor ? <button type="button" className={button} disabled={busy} onClick={() => void run(() => loadGroups(groupCursor))}>{t("groups.moreGroups")}</button> : null}
       </aside>

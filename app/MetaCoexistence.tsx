@@ -2,6 +2,7 @@
 
 import { useEffect, useEffectEvent, useRef, useState } from "react";
 import type { MetaCoexistenceContactView, MetaCoexistenceMessageView, MetaCoexistencePage, MetaCoexistenceSummary } from "../lib/meta-coexistence-contract";
+import { formatDateTime, formatNumber } from "../lib/i18n/format";
 import { localizedUiError } from "../lib/ui-error";
 import { createLatestRequestFence } from "../lib/operator-ui";
 import { useI18n } from "./I18nProvider";
@@ -156,8 +157,8 @@ function CoexistenceSession({ connectionId, mutationHeaders }: Props) {
   }
 
   if (!summary && !error) return null; // Ordinary Meta connections have no import context.
-  const stamp = (value: string) => Number.isFinite(Date.parse(value)) ? new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value)) : t("tenant.metaCoexistence.unknown");
-  const number = (value: number) => new Intl.NumberFormat(locale).format(value);
+  const stamp = (value: string) => Number.isFinite(Date.parse(value)) ? formatDateTime(value, locale) : t("tenant.metaCoexistence.unknown");
+  const number = (value: number) => formatNumber(value, locale);
   const captureActive = summary && (summary.consent.history || summary.consent.contacts || summary.consent.echoes);
   return <section className={`connection-detail-section ${styles.section}`} aria-labelledby="meta-coexistence-title" aria-busy={loading || stopping}>
     <div className="connection-detail-section-head"><div><h3 id="meta-coexistence-title">{t("tenant.metaCoexistence.title")}</h3><p>{t("tenant.metaCoexistence.intro")}</p></div></div>

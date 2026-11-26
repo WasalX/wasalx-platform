@@ -1,5 +1,6 @@
 import { installWorkspaceReadFixture } from "./workspace-read.fixture";
 import { auditWorkspaceJourney } from "./audit-workspace.fixture";
+import { consumeExpectedPrivacyResponse, registerPrivacySettingsJourneys } from "./privacy-settings.fixture";
 import { consumeExpectedLegacyDenial, metaLegacyMigrationJourney } from "./meta-legacy-migration.fixture";
 import { consumeExpectedRoutingDenial, installMetaRoutingReadFixture, metaRoutingJourney } from "./meta-routing.fixture";
 import { consumeExpectedCoexistenceDenial, metaCoexistenceJourney } from "./meta-coexistence.fixture";
@@ -16,11 +17,14 @@ import { accountObservationJourney, consumeExpectedObservationFailure, workspace
 import { consumeExpectedDirectSetupDenial, metaDirectConsentJourney } from "./meta-direct-consent.fixture";
 import { consumeExpectedSignupDenial, metaSignupJourney } from "./meta-signup.fixture";
 import { ticketEventWorkflowJourney } from "./ticket-event-workflows.fixture";
+import { registerOperationsScreenshots } from "./operations-screenshots.fixture";
 import type { TeamAccessData } from "../../lib/control-plane-data";
 import { expectAxeClean } from "../helpers/axe";
 import { expect, test, type Page } from "@playwright/test";
 
 const role = process.env.WASALX_E2E_ROLE ?? "tenant_owner";
+registerPrivacySettingsJourneys("en", role);
+if (role === "tenant_owner") registerOperationsScreenshots("en");
 test("Audit uses localized workspace actions and truthful actors with permitted CSV export", { tag: "@tablet" }, async ({ page }, testInfo) => {
   await auditWorkspaceJourney(page, "en", role, testInfo);
 });
@@ -283,7 +287,7 @@ test.beforeEach(async ({ page }) => {
   expectedNetworkErrors.set(page, []);
   page.on("console", (message) => {
     if (message.type() === "error") {
-      if (consumeExpectedNumberReleaseDenial(page, message) || consumeExpectedActivationDenial(page, message) || consumeExpectedDirectSetupDenial(page, message) || consumeExpectedSignupDenial(page, message) || consumeExpectedReconnectDenial(page, message) || consumeExpectedCoexistenceDenial(page, message) || consumeExpectedAddAccessDenial(page, message) || consumeExpectedRoutingDenial(page, message) || consumeExpectedTemplateDenial(page, message) || consumeExpectedLegacyDenial(page, message) || consumeExpectedObservationFailure(page, message)) return;
+      if (consumeExpectedNumberReleaseDenial(page, message) || consumeExpectedPrivacyResponse(page, message) || consumeExpectedActivationDenial(page, message) || consumeExpectedDirectSetupDenial(page, message) || consumeExpectedSignupDenial(page, message) || consumeExpectedReconnectDenial(page, message) || consumeExpectedCoexistenceDenial(page, message) || consumeExpectedAddAccessDenial(page, message) || consumeExpectedRoutingDenial(page, message) || consumeExpectedTemplateDenial(page, message) || consumeExpectedLegacyDenial(page, message) || consumeExpectedObservationFailure(page, message)) return;
       const location = message.location().url;
       if (
         message.text().startsWith("Failed to load resource:") &&
@@ -2320,6 +2324,29 @@ test("duplicate cleanup reconciles the connection list immediately on close", as
   await expect(page.getByRole("button", { name: "Save policy" })).toBeDisabled();
   await open(page, "audit");
   await expect(page.getByRole("button", { name: "Export CSV…" })).toBeVisible();
+});
+
+// #540: the privacy panel must reflow at 390 and 320 px (WCAG 2.2 reflow) in both directions.
+(role === "tenant_owner" ? test : test.skip)("privacy panel fits narrow viewports and reaches every action", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "mobile-390");
+  await open(page, "settings");
+  await page.getByRole("tab", { name: "Privacy & retention" }).click();
+  const panel = page.getByRole("tabpanel");
+  for (const language of ["English", "العربية"]) {
+    if (language !== "English") await page.getByRole("button", { name: language }).click();
+    await expect(panel.getByRole("table")).toHaveCount(2);
+    for (const width of [390, 320]) {
+      await page.setViewportSize({ width, height: 844 });
+      const box = await panel.boundingBox();
+      expect(box, `privacy panel at ${width} px in ${language}`).not.toBeNull();
+      expect(box!.x).toBeGreaterThanOrEqual(0);
+      expect(box!.x + box!.width).toBeLessThanOrEqual(width);
+      for (const action of await panel.getByRole("button").all()) {
+        await action.scrollIntoViewIfNeeded();
+        await expect(action).toBeInViewport();
+      }
+    }
+  }
 });
 
 (role === "tenant_owner" ? test : test.skip)("async page failure exposes a plain-language recovery action", async ({ page }, testInfo) => {

@@ -4,6 +4,8 @@ import {useI18n} from './I18nProvider';
 import { ScrollRegion } from "./tenant-ui";
 import {MetaAccountTransitionPreview} from './MetaAccountTransitionPreview';
 import {createLatestRequestFence} from '../lib/operator-ui';
+import {formatDateTime} from '../lib/i18n/format';
+import type {Locale} from '../lib/i18n/locales';
 import {localizedUiError,type UiErrorCode} from '../lib/ui-error';
 import {metaTariffQueryString,parseMetaPolicySelection,isMetaPolicyAcceptanceResult,type MetaTariffQuery} from '../packages/core/src/meta-billing-policy-contract';
 import {billingIntentKey,parseBillingIntent,type BillingIntent} from '../lib/meta-billing-policy-intent';
@@ -71,7 +73,7 @@ function CustomerPaymentPolicySession({tenantId,actorId,connectionId,canConfigur
    {choice||view?.managedAvailable&&view.managedChoices?.length?<div className="field"><label htmlFor={`managed-choice-${connectionId}`}>{t('tenant.connection.paymentPolicy.managedChoice')}</label>
     <select id={`managed-choice-${connectionId}`} value={choiceId} disabled={loading||reading||locked} onChange={event=>choose(false,event.target.value)}>
      <option value="">{t('tenant.connection.paymentPolicy.chooseManaged')}</option>
-     {(choice&&!view?.managedChoices?.some(item=>item.choiceId===choice.choiceId)?[choice,...(view?.managedChoices??[])]:view?.managedChoices??[]).map(item=><option key={item.choiceId} value={item.choiceId}>{t(item.kind==='MULTI_PARTNER_SOLUTION'?'tenant.connection.paymentPolicy.partnerChoice':'tenant.connection.paymentPolicy.ownChoice')} · {new Intl.DateTimeFormat(locale,{dateStyle:'medium'}).format(new Date(item.expiresAt))}</option>)}
+     {(choice&&!view?.managedChoices?.some(item=>item.choiceId===choice.choiceId)?[choice,...(view?.managedChoices??[])]:view?.managedChoices??[]).map(item=><option key={item.choiceId} value={item.choiceId}>{t(item.kind==='MULTI_PARTNER_SOLUTION'?'tenant.connection.paymentPolicy.partnerChoice':'tenant.connection.paymentPolicy.ownChoice')} · {formatDateTime(item.expiresAt,locale,{dateStyle:'medium'})}</option>)}
     </select></div>:null}
    {selected||choice?<div className="field"><label htmlFor={`tariff-choice-${connectionId}`}>{t('tenant.connection.paymentPolicy.rates')}</label>
     <select id={`tariff-choice-${connectionId}`} value={tariffId} disabled={reading||locked} onChange={event=>{setTariffId(event.target.value);setAcceptedTerms(false);}}>
@@ -104,7 +106,7 @@ function CustomerPaymentPolicySession({tenantId,actorId,connectionId,canConfigur
 }
 async function failure(response:Response){const value=await response.json().catch(()=>null) as {code?:unknown}|null;return Object.assign(new Error('Request unavailable'),{status:response.status,code:typeof value?.code==='string'?value.code:undefined});}
 
-function formatTariffDate(value:string,timezone:string,locale:string){
- try{return new Intl.DateTimeFormat(locale,{year:'numeric',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit',fractionalSecondDigits:3,timeZone:timezone}).format(new Date(value));}
+function formatTariffDate(value:string,timezone:string,locale:Locale){
+ try{return formatDateTime(value,locale,{year:'numeric',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit',fractionalSecondDigits:3,timeZone:timezone});}
  catch{return value;} // The exact ISO instant is still readable for a PG-only timezone alias.
 }

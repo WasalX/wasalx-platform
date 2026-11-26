@@ -8,7 +8,8 @@ test "$(stat -c '%F:%u:%a' -- "$state")" = directory:0:700
 source "$state/host.env"
 # shellcheck source=/dev/null
 source "$state/dev-step-lock.sh"
-hold_dev_step_lock
+run="$(cat "$state/run-id")"
+hold_dev_step_lock "$run" "$mode" lease
 p="$STAGING"
 action="$state/overlay-action.sh"
 (cd "$p" && sha256sum --check --strict --quiet DEV-SHA256SUMS)
@@ -17,6 +18,7 @@ case "$mode" in
 install)
     if bash "$action" install "$state"; then
         if grep -q '^DEV_OVERLAY_DONE .* held_smoke=PASS fence=PASS release=HELD$' "$state/install.done"; then
+            finish_dev_step "$state"
             printf 'DEV_SIGNED_INSTALL=PASS release=HELD %s\n' "$(date -u +%FT%TZ)"
             exit 0
         fi
@@ -25,10 +27,10 @@ install)
         failure=$?
     fi
     printf 'DEV_SIGNED_INSTALL=HOLD exit=%s %s\n' "$failure" "$(date -u +%FT%TZ)"
+    # The parent controller owns recovery and handback for a failed phase.
+    test -n "$DEV_STEP_OWNER" || exit "$failure"
     ;;
 rollback)
-    run="$(cat "$state/run-id")"
-    [[ "$run" =~ ^[0-9]{8}T[0-9]{6}Z$ ]]
     if grep -sq '^DEV_OVERLAY_DONE .* held_smoke=PASS fence=PASS release=HELD$' "$state/install.done"; then
         echo HOLD_SUCCESS_WITHOUT_END
         exit 75
@@ -36,7 +38,9 @@ rollback)
     printf 'DISCARD_ONLY=START %s\n' "$(date -u +%FT%TZ)"
     ;;
 commit)
-    exec bash "$action" commit "$state"
+    bash "$action" commit "$state"
+    finish_dev_step "$state"
+    exit 0
     ;;
 *) exit 75 ;;
 esac
@@ -44,10 +48,9 @@ if [ ! -f "$state/overlay-verification-armed" ]; then
     printf 'ROLLBACK=HOLD_BEFORE_ARMED\n'
     exit 75
 fi
-run="$(cat "$state/run-id")"
-[[ "$run" =~ ^[0-9]{8}T[0-9]{6}Z$ ]]
 if bash "$action" rollback "$state"; then
     printf 'DISCARD_OVERLAY=PASS TOP_RESTORED %s\n' "$(date -u +%FT%TZ)"
+    finish_dev_step "$state"
     if [ "$mode" = rollback ]; then exit 0; fi
 else
     if [ "$?" = 76 ]; then

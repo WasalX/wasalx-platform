@@ -10,6 +10,7 @@ import { operatorCaseProgress } from "./support/operator-case-progress.mjs";
 const expected = new Map([
   ["meta-cost-operator.spec.ts", 5],
   ["meta-transition-operator.spec.ts", 5],
+  ["meta-deletion-operator.spec.ts", 4],
 ]);
 const projects = ["desktop", "mobile-390"];
 
