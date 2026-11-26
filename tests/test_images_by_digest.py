@@ -292,6 +292,7 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
                          ["portal", "control-api", "connector-worker", "foundation-postgres"])
         self.assertEqual(images.matrix(["docs/guide/intro.md", "unmapped/new-file"], pull_request=True),
                          {"include": []})
+        self.assertIn("A PR path that matches no image input selects no image.", (ROOT / "DELIVERY.md").read_text(encoding="utf-8"))
 
     def test_pull_request_matrix_selects_addon_staging_inputs(self):
         addon_images = {"zammad", "workspace-configurator"}
