@@ -1,1 +1,0 @@
-def answer =  42
