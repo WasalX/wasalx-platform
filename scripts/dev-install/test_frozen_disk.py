@@ -82,10 +82,10 @@ class HostPacketTest(unittest.TestCase):
             self.assertIn("flock -n -E 75 7", helper)
             self.assertNotIn(marker, helper)
             for name, state, lock, first_action in (
-                ("register.sh", "STATE", "(hold_dev_step_lock)", 'exec 9>"$STATE/install-registration.lock"'),
-                ("install-or-discard.sh", "state", "hold_dev_step_lock", "sha256sum --check"),
-                ("overlay-action.sh", "STATE", "hold_dev_step_lock", "stamp lease start"),
-                ("dev-guest-phase.sh", "state", "hold_dev_step_lock", "stamp ssh-ready start"),
+                ("register.sh", "STATE", "dev_step_record check || exit 75", 'exec 9>"$STATE/install-registration.lock"'),
+                ("install-or-discard.sh", "state", 'hold_dev_step_lock "$run" "$mode" lease', "sha256sum --check"),
+                ("overlay-action.sh", "STATE", 'hold_dev_step_lock "$RUN" "$MODE"', "stamp lease start"),
+                ("dev-guest-phase.sh", "state", 'hold_dev_step_lock "$(cat "$state/run-id")" "guest-$phase"', "stamp ssh-ready start"),
             ):
                 with self.subTest(step=name):
                     script = (packet / name).read_text()
@@ -133,7 +133,9 @@ class HostPacketTest(unittest.TestCase):
                 renderer.render_host(fields, "20000101T000000Z", "1" * 40, [install, rollback], packet)
             hashes = dict(line.split("  ", 1)[::-1] for line in (packet / "SHA256SUMS").read_text().splitlines())
             self.assertEqual(set(hashes), {file.name for file in packet.iterdir()} - {"SHA256SUMS"})
-            self.assertTrue({"overlay-action.sh", "frozen-disk.py", "register.sh", "host.env"}.issubset(hashes))
+            self.assertTrue(
+                {"overlay-action.sh", "frozen-disk.py", "register.sh", "run-install.sh", "host.env"}.issubset(hashes)
+            )
             self.assertFalse({"packet.json", "receive.py", "dispatch.py"}.intersection(hashes))
             for name, sha256 in hashes.items():
                 self.assertEqual(hashlib.sha256((packet / name).read_bytes()).hexdigest(), sha256)

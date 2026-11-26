@@ -75,6 +75,7 @@ try {
       const axe = await new AxeBuilder({ page }).include("dialog").withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze();
       assert.deepEqual(axe.violations.map(row => ({ id: row.id, nodes: row.nodes.map(node => node.target) })), []);
       assert.equal(await dialog.evaluate(node => node.scrollWidth <= node.clientWidth + 1), true);
+      if (locale === "ar") assert.deepEqual(await page.evaluate(() => [...document.querySelectorAll('[dir="rtl"] *:not(code)')].filter(node => !["normal", "0px"].includes(getComputedStyle(node).letterSpacing)).map(node => node.className)), []);
       await page.screenshot({ path: `${output}/privacy-${kind}-${locale}.png`, fullPage: true });
       stale = false; malformed = true; await submit.click();
       await expect(dialog.getByRole("alert")).toContainText(t("tenant.privacy.recovery.unknown"));

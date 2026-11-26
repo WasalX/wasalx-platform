@@ -45,10 +45,14 @@ release proves the platform end to end in its own environments.
 
 ## Nightly installer evidence
 
-Scheduled runs and manual runs from `main` require a complete, green image
-publication for the workflow's exact `main` commit. A missing or incomplete
-publication fails qualification and reports `BLOCKED` for that commit in the
-job summary. RC tag runs require the publication for the commit the tag resolves to.
+Scheduled runs and manual runs without a commit input take a bounded walk of
+`main` and select the newest commit from the last 24 hours with green push CI
+and a publication manifest with zero pending rows. The job summary records the
+selected SHA, publishing run, and number of newer commits skipped. If the
+search finds no eligible publication, the rehearsal fails and reports `BLOCKED`.
+The installer checks out the selected SHA and uses that commit's images.
+Manual runs with a commit input require the complete publication for that exact
+main SHA. RC tag runs require the publication for the commit the tag resolves to.
 
 PR installer rehearsals use the PR's checked-out merge tree for installer
 scripts and configuration. The rehearsal and PR pull-tooling check use a signed
