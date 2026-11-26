@@ -1819,12 +1819,27 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
     state.templateAgentId = String(firstIdentityProof.agent_id);
     const templateStart = state.requests.length;
     const templateTicketUrl = `${zammadOrigin}/desktop/tickets/${state.templateTicketId}`;
+    await page.addInitScript(ticketId => {
+      if (location.pathname !== `/desktop/tickets/${ticketId}`) return;
+      const probe = { lookups: 0, lastId: null, mountTarget: null };
+      window.__wasalxTemplateTargetProbe = probe;
+      const getElementById = document.getElementById;
+      document.getElementById = function (id) {
+        const element = getElementById.call(this, id);
+        if (typeof id === 'string' && id.endsWith('-wasalxServiceWindowClosed')) {
+          probe.lookups += 1;
+          probe.lastId = id;
+          if (element?.parentElement) probe.mountTarget = element.parentElement;
+        }
+        return element;
+      };
+    }, state.templateTicketId);
     const templateDialog = page.locator('#wasalx-template-dialog');
     const templateEditor = page.locator('#ticketArticleReplyForm');
     const templateButton = templateEditor.locator('[data-test-id="wasalx-send-template"]');
     const templateBubble = page.getByText(templateArticle, { exact: true }).last()
       .locator("xpath=ancestor::div[contains(@class, 'group/article')][1]");
-    const openTemplateComposer = async ({ reply, sidebar, stateLabel, openState }) => {
+    const openTemplateComposer = async ({ reply, sidebar, operationsLabel, stateLabel, openState }) => {
       const [panelResponse] = await Promise.all([
         page.waitForResponse(response => new URL(response.url()).pathname === `/api/v1/wasalx/tickets/${state.templateTicketId}/panel`),
         page.goto(templateTicketUrl, { waitUntil: 'domcontentloaded' }),
@@ -1840,15 +1855,39 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
       await stateField.getByText(openState, { exact: true }).waitFor({ state: 'visible' });
       await templateBubble.hover();
       await templateBubble.getByRole('button', { name: reply, exact: true }).click();
-      await withNativeDiagnostic(t, 'template composer', () => page.evaluate(() => ({
-        editorPresent: Boolean(document.querySelector('#ticketArticleReplyForm [contenteditable="true"]')),
-        windowMessagePresent: Boolean(document.querySelector('#ticketArticleReplyForm [id$="-wasalxServiceWindowClosed"]')),
-      })), async () => {
+      await withNativeDiagnostic(t, 'template composer', async () => ({
+        sidebarMounted: (await page.getByRole('button', { name: operationsLabel, exact: true }).count()) > 0,
+        panelAllowsTemplates: panel.connection.provider === 'META' && panel.ticket.bot_state === 'HUMAN'
+          && Date.parse(panel.service_window_expires_at) < Date.now(),
+        ...(await page.evaluate(() => {
+          const editor = document.querySelector('#ticketArticleReplyForm');
+          const messageSelector = '[id$="-wasalxServiceWindowClosed"]';
+          const message = editor?.querySelector(messageSelector);
+          const probe = window.__wasalxTemplateTargetProbe;
+          const mountTarget = probe?.mountTarget;
+          const buttonSelector = '[data-test-id="wasalx-send-template"]';
+          return {
+            editorPresent: Boolean(editor?.querySelector('[contenteditable="true"]')),
+            publicWhatsAppReply: Boolean(message),
+            windowMessageCount: document.querySelectorAll(messageSelector).length,
+            templatesAllowedAtMount: (probe?.lookups ?? 0) > 0,
+            lookupMatchedRenderedMessage: Boolean(message && probe?.lastId === message.id),
+            mountTargetFound: Boolean(mountTarget),
+            mountTargetConnected: mountTarget?.isConnected ?? false,
+            mountTargetInsideReplyForm: Boolean(mountTarget && editor?.contains(mountTarget)),
+            buttonInsideReplyForm: Boolean(editor?.querySelector(buttonSelector)),
+            buttonCount: document.querySelectorAll(buttonSelector).length,
+          };
+        })),
+      }), async () => {
         await templateEditor.waitFor({ state: 'visible' });
         await templateButton.click();
       }, false);
     };
-    await openTemplateComposer({ reply: 'Reply on WhatsApp', sidebar: 'Ticket', stateLabel: 'State', openState: /^open$/iu });
+    await openTemplateComposer({
+      reply: 'Reply on WhatsApp', sidebar: 'Ticket', operationsLabel: 'WasalX operations',
+      stateLabel: 'State', openState: /^open$/iu,
+    });
     await templateDialog.getByRole('combobox').selectOption(template.id);
     await templateDialog.getByText(template.text, { exact: true }).waitFor();
     assert.equal(await templateDialog.getAttribute('dir'), 'ltr');
@@ -1879,7 +1918,7 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
     try {
       await openTemplateComposer({
         reply: 'الرد عبر واتساب', sidebar: 'تذكرة',
-        stateLabel: 'حالة', openState: 'افتح',
+        operationsLabel: 'عمليات WasalX', stateLabel: 'حالة', openState: 'افتح',
       });
       await templateDialog.getByRole('heading', { name: 'إرسال قالب واتساب', exact: true }).waitFor();
       assert.equal(await templateDialog.evaluate(dialog => getComputedStyle(dialog).direction), 'rtl');
