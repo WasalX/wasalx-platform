@@ -142,4 +142,4 @@ jobs:
         run: |
           complete=$(jq -er --arg commit "$GITHUB_SHA" 'select(.commit == $commit) | .publicationComplete | booleans | tostring' images-manifest.json)
           echo "complete=$complete" >> "$GITHUB_OUTPUT"
-          printf 'Immutable image publication complete for `%s`: %s\n' "$GITHUB_SHA" "$complete" >> "$GITHUB_STEP_SUMMARY"
+          printf "Immutable image publication complete for \`%s\`: %s\n" "$GITHUB_SHA" "$complete" >> "$GITHUB_STEP_SUMMARY"
