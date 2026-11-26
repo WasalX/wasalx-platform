@@ -283,11 +283,14 @@ test("nightly install is report-only, read-only and fails open on PR diff errors
   assert.equal(job["continue-on-error"], undefined);
   assert.deepEqual(on, {
     schedule: [{ cron: "17 2 * * *" }],
-    workflow_dispatch: null,
+    workflow_dispatch: {
+      inputs: { commit: { description: "Exact published main commit SHA (optional)", type: "string", required: false } },
+    },
     pull_request: { branches: ["main"], types: ["opened", "synchronize", "reopened"] },
     push: { tags: ["v*-rc.*"] },
   });
   assert.match(job.if, /\(github\.event_name == 'push' && github\.ref_type == 'tag'\)/u);
+  assert.match(job.if, /github\.event_name == 'workflow_dispatch'/u);
   assert.deepEqual(concurrency, {
     group: "nightly-${{ github.event.pull_request.number || github.run_id }}",
     "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
@@ -323,6 +326,8 @@ test("nightly install is report-only, read-only and fails open on PR diff errors
 test("nightly census confirmation accepts matching counts from the rehearsal", async t => {
   const { jobs } = parse(await read(".github/workflows/nightly-install.yml"));
   const confirmation = jobs["nightly-install"].steps.find(step => step.name === "Confirm census PASS");
+  assert.equal(confirmation.env.COMMIT, "${{ steps.publication.outputs.commit }}");
+  assert.match(confirmation.if, /github\.event_name != 'pull_request' \|\| /u);
   const directory = await mkdtemp(join(tmpdir(), "nightly-census-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const diagnostics = join(directory, "wasalx-nightly", "diagnostics");
@@ -459,33 +464,50 @@ test("nightly MinIO mirrors retain the full installer content digests", async ()
   }
 });
 
-test("nightly requires the exact main publication for qualification and labels PR image fixtures", async t => {
+test("nightly binds qualification to a complete main publication and labels PR image fixtures", async t => {
   const directory = await mkdtemp(join(tmpdir(), "nightly-publication-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const options = { cwd: directory, encoding: "utf8", windowsHide: true };
   const git = (...args) => execFileSync("git", args, options).trim();
-  git("init", "--quiet", "--template=");
+  const now = Date.UTC(2026, 10, 26, 12);
+  const gitAt = (time, ...args) => {
+    const date = new Date(time).toISOString();
+    return execFileSync("git", args, {
+      ...options, env: { ...process.env, GIT_AUTHOR_DATE: date, GIT_COMMITTER_DATE: date },
+    }).trim();
+  };
+  git("init", "--quiet", "--template=", "--initial-branch=candidate");
   git("config", "user.name", "Fixture");
   git("config", "user.email", "fixture@example.invalid");
-  for (let i = 0; i < 6; i += 1) {
-    git("commit", "--quiet", "--allow-empty", "-m", "fixture " + i);
+  const catalog = "scripts/release/product-images.json";
+  await mkdir(join(directory, "scripts", "release"), { recursive: true });
+  await writeFile(join(directory, catalog), '[{"image":"zammad"}]');
+  git("add", "--", catalog);
+  for (const [i, ageSeconds] of [86_401, 86_400, 180, 120, 60].entries()) {
+    gitAt(now - ageSeconds * 1000, "commit", "--quiet", "--allow-empty", "-m", "fixture " + i);
   }
   const tree = git("rev-parse", "HEAD^{tree}");
-  const parent = git("rev-parse", "HEAD^1");
-  const side = git("commit-tree", tree, "-p", parent, "-m", "side branch");
-  const base = git("commit-tree", tree, "-p", parent, "-p", side, "-m", "base merge");
-  const prHead = git("commit-tree", tree, "-p", parent, "-m", "PR head");
-  const prMerge = git("commit-tree", tree, "-p", base, "-p", prHead, "-m", "PR merge");
+  const parent = git("rev-parse", "HEAD");
+  await writeFile(join(directory, catalog), '[{"image":"unpublished"}]');
+  git("add", "--", catalog);
+  gitAt(now, "commit", "--quiet", "-m", "unpublished catalog");
+  const side = gitAt(now, "commit-tree", tree, "-p", parent, "-m", "side branch");
+  const base = gitAt(now, "commit-tree", tree, "-p", parent, "-p", side, "-m", "base merge");
+  const prHead = git("rev-parse", "HEAD");
+  const prMerge = gitAt(now, "commit-tree", tree, "-p", base, "-p", prHead, "-m", "PR merge");
   const commits = git("rev-list", "--first-parent", base).split(/\r?\n/u);
   const tag = "v0.0.0-rc.1";
   git("tag", "-a", tag, base, "-m", "fixture tag");
+  git("update-ref", "refs/heads/main", base);
   git("remote", "add", "origin", ".");
   const { jobs } = parse(await read(".github/workflows/nightly-install.yml"));
   const publication = jobs["nightly-install"].steps.find(step => step.id === "publication");
-  await mkdir(join(directory, "scripts", "release"), { recursive: true });
-  await writeFile(join(directory, "scripts", "release", "product-images.json"), '[{"image":"zammad"}]');
   await writeFile(join(directory, "scripts", "release", "image-manifest.sh"), await read("scripts/release/image-manifest.sh"));
   const ghFixture = String.raw`
+date() {
+  [[ "$*" == "-u +%s" ]] || return 2
+  printf '%s\n' "$NOW"
+}
 install() {
   [[ "$1 $2 $3" == '-d -m 0700' ]] && mkdir -p "$4"
 }
@@ -525,6 +547,9 @@ gh() {
   const fixture = commit => `PR signed-image fixture uses main publication ${commit} (run 101, PR base ${base}).`;
   const fallback = `${fixture(commits[4])} The PR base has no complete green publication.`;
   const blocked = reason => `BLOCKED: Exact main publication for ${base} is unavailable (${reason}).`;
+  const exact = `Exact main publication ${base} is complete (run 101).`;
+  const latest = (commit, skipped) => `Selected main publication ${commit} (run 101), skipped ${skipped} newer commits.`;
+  const noRecent = "BLOCKED: No complete green main publication from the last 24 hours (searched up to 50 first-parent main commits).";
   const cases = [
     { ready: base, selected: base, lookups: [base], summary: fixture(base) },
     { ready: commits[4], incomplete: commits[1], expired: commits[2], noJob: commits[3],
@@ -534,20 +559,27 @@ gh() {
     { ready: commits[1], lookupError: base, lookups: commits.slice(0, 1), status: 17 },
     { ready: commits[1], invalid: true, lookups: commits.slice(0, 2), status: 5, reason: "Invalid nightly publication manifest" },
     ...["schedule", "workflow_dispatch"].flatMap(event => [
-      { event, ready: base, selected: base, lookups: [base], summary: `Exact main publication ${base} is complete (run 101).` },
-      { event, ready: commits[1], lookups: [base], summary: blocked("no green main CI push run") },
-      { event, ready: commits[1], incomplete: base, lookups: [base], summary: blocked("images-manifest is incomplete") },
+      { event, ready: base, selected: base, lookups: [base], summary: latest(base, 0) },
+      { event, ready: commits[1], selected: commits[1], lookups: commits.slice(0, 2), summary: latest(commits[1], 1) },
+      { event, ready: commits[2], incomplete: commits[1], selected: commits[2], lookups: commits.slice(0, 3),
+        summary: latest(commits[2], 2) },
+      { event, ready: commits[5], lookups: commits.slice(0, 5), summary: noRecent },
     ]),
-    { event: "schedule", ready: commits[1], expired: base, lookups: [base], summary: blocked("no available images-manifest artifact") },
-    { event: "schedule", ready: commits[1], noJob: base, lookups: [base], summary: blocked("no successful Image digest manifest job") },
-    { event: "workflow_dispatch", ready: base, invalid: true, lookups: [base], status: 5, reason: "Invalid nightly publication manifest" },
+    ...[
+      { ready: base, selected: base, lookups: [base], summary: exact },
+      { ready: commits[1], lookups: [base], summary: blocked("no green main CI push run") },
+      { ready: commits[1], incomplete: base, lookups: [base], summary: blocked("images-manifest is incomplete") },
+      { ready: commits[1], expired: base, lookups: [base], summary: blocked("no available images-manifest artifact") },
+      { ready: commits[1], noJob: base, lookups: [base], summary: blocked("no successful Image digest manifest job") },
+      { ready: base, invalid: true, lookups: [base], status: 5, reason: "Invalid nightly publication manifest" },
+    ].map(scenario => ({ event: "workflow_dispatch", input: base, ...scenario })),
     { event: "push", ready: base, selected: base, lookups: [base] },
     { event: "push", ready: commits[1], lookups: [base], reason: "No green main CI push run for the commit" },
   ];
   const bash = process.platform === "win32" ? "C:/Program Files/Git/bin/bash.exe" : "bash";
   for (const { ready, selected, incomplete = "", expired = "", noJob = "", lookupError = "", invalid = false,
-    event = "pull_request", lookups, status = selected ? 0 : 1, reason, summary = "", warning } of cases) {
-    const head = event === "pull_request" ? prMerge : base;
+    event = "pull_request", input = "", lookups, status = selected ? 0 : 1, reason, summary = "", warning } of cases) {
+    const head = { pull_request: prMerge, workflow_dispatch: prHead }[event] ?? base;
     const tagPush = event === "push";
     git("checkout", "--quiet", "--detach", head);
     await rm(join(directory, "wasalx-nightly"), { recursive: true, force: true });
@@ -559,12 +591,16 @@ gh() {
         ...process.env, GITHUB_REPOSITORY: "fixture/nightly", BASE: base, SIDE: side, READY: ready, INCOMPLETE: incomplete,
         EXPIRED: expired, NO_JOB: noJob, LOOKUP_ERROR: lookupError, INVALID: String(invalid),
         GITHUB_EVENT_NAME: event, GITHUB_REF_TYPE: tagPush ? "tag" : "branch",
-        GITHUB_REF: tagPush ? `refs/tags/${tag}` : event === "pull_request" ? "refs/pull/1/merge" : "refs/heads/main",
+        GITHUB_REF: tagPush ? `refs/tags/${tag}` : {
+          pull_request: "refs/pull/1/merge", workflow_dispatch: "refs/heads/candidate",
+        }[event] ?? "refs/heads/main",
+        DISPATCH_COMMIT: input, NOW: String(now / 1000),
         GITHUB_SHA: head, GITHUB_OUTPUT: "publication-output", GITHUB_STEP_SUMMARY: "publication-summary", RUNNER_TEMP: ".",
       },
     });
     assert.ifError(result.error);
     assert.equal(result.status, status, `${event}\n${result.stdout}${result.stderr}`);
+    assert.equal(git("rev-parse", "HEAD"), event === "pull_request" ? head : selected ?? head);
     assert.equal((await readFile(join(directory, "publication-output"), "utf8")).trim(), selected ? `commit=${selected}` : "");
     if (reason) assert.ok((result.stdout + result.stderr).includes(reason), result.stderr);
     const annotations = result.stderr.split(/\r?\n/u).filter(line => line.startsWith("::warning::"));
