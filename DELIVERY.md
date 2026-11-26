@@ -85,7 +85,7 @@ The [public privacy workflow](.github/workflows/privacy.yml) scans newly introdu
 - WasalX Delivery prepares the DEV host packets. Host work runs through the Servers lead, including the planned stager and relay outside this repo.
 - The `dev` GitHub environment accepts deployments only from `main`. The DEV relay records a receipt only by dispatching the workflow with dispatch ref `main`, environment `dev`, and a 40-hex SHA for a `main` commit. The relay authenticates exclusively through the project's reviewed GitHub App helper. Dispatches accept only the fixed receipt-code vocabulary defined in [deploy.yml](.github/workflows/deploy.yml).
 - Before changing state, verify the backup is restorable and retain the previous installed state. Require a real-stack rehearsal for the exact candidate before any probe or pre-arm code reaches DEV. Run health checks after replacement and record health and recovery evidence for the target environment.
-- On DEV, install on an overlay over the frozen base.
+- On DEV, install on an overlay over the frozen base. Start the [transient install unit](scripts/dev-install/README.md#start-the-install-on-dev) through Servers.
 - Any DEV configuration change must pass the installer's native preflight on the new configuration before acceptance.
 
 ### Rollback

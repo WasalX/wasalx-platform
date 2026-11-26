@@ -133,7 +133,9 @@ class HostPacketTest(unittest.TestCase):
                 renderer.render_host(fields, "20000101T000000Z", "1" * 40, [install, rollback], packet)
             hashes = dict(line.split("  ", 1)[::-1] for line in (packet / "SHA256SUMS").read_text().splitlines())
             self.assertEqual(set(hashes), {file.name for file in packet.iterdir()} - {"SHA256SUMS"})
-            self.assertTrue({"overlay-action.sh", "frozen-disk.py", "register.sh", "host.env"}.issubset(hashes))
+            self.assertTrue(
+                {"overlay-action.sh", "frozen-disk.py", "register.sh", "run-install.sh", "host.env"}.issubset(hashes)
+            )
             self.assertFalse({"packet.json", "receive.py", "dispatch.py"}.intersection(hashes))
             for name, sha256 in hashes.items():
                 self.assertEqual(hashlib.sha256((packet / name).read_bytes()).hexdigest(), sha256)

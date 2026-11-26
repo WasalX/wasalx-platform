@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Exercise the rendered packet in a network-isolated Linux container."""
 
-from contextlib import redirect_stdout
+from contextlib import contextmanager, redirect_stdout
 import hashlib
 import io
 import json
@@ -27,6 +27,16 @@ IMAGE = "node:24.22.1-bookworm@sha256:d862bb5d082c5ae0210ac07e8c0344cb8cf7bef6d7
 SANDBOX_HOSTNAME = "sandbox.example.test"
 SANDBOX_TIMEOUT = 120
 CLEANUP_TIMEOUT = 20
+INSTALL_PHASES = ("preflight", "cutover", "smoke")
+INSTALL_ADMISSION_HOLDS = {
+    "late-start": "HOLD_INSTALL_WINDOW_TOO_SHORT",
+    "late-after-claim": "HOLD_INSTALL_WINDOW_TOO_SHORT",
+    "finished-bundle": "HOLD_DEV_INSTALL_ALREADY_STARTED",
+}
+INSTALL_FAILURE_CHECKPOINTS = {
+    case: f"test_server_install_stops_at_first_failed_phase:{case or 'success'}"
+    for case in (None, "acquire", *INSTALL_PHASES, "handback", *INSTALL_ADMISSION_HOLDS)
+}
 CHILD_CHECKPOINTS = {
     f"DEV_DRYRUN_CHECKPOINT {phase}".encode("ascii"): phase
     for phase in (
@@ -37,6 +47,7 @@ CHILD_CHECKPOINTS = {
         "step-wrapper-reopen",
         "guest-prepare", "guest-render", "guest-receive", "guest-readability", "guest-receive-repeat",
         "guest-probe", "guest-probe-timeout", "guest-lock", "suite-passed", "suite-failed",
+        *INSTALL_FAILURE_CHECKPOINTS.values(),
     )
 }
 NATIVE_READABILITY = """
@@ -58,6 +69,15 @@ def check(condition, message):
 
 def checkpoint(phase):
     print(f"DEV_DRYRUN_CHECKPOINT {phase}", flush=True)
+
+
+@contextmanager
+def checkpoint_on_failure(phase):
+    try:
+        yield
+    except Exception:
+        checkpoint(phase)
+        raise
 
 
 def run(*args, **options):
@@ -262,10 +282,21 @@ def assert_mutations(test, stage, mutations):
             print(f"Mutation rejected: {label}", flush=True)
 
 
-def host_step(work, shell, *args, clock="2000-01-01T00:00:00Z"):
+def host_step(work, shell, *args, clock="2000-01-01T00:00:00Z", after_claim=""):
     return subprocess.run(
         ["bash", "-c", r"""
 date() {
+    case "$*" in
+        '-u +%s')
+            local instant="$DEV_STEP_FIXTURE_UTC"
+            if [[ -n "$DEV_STEP_FIXTURE_AFTER_CLAIM" && -f "$DEV_STEP_LOCK.run" ]]; then
+                instant="$DEV_STEP_FIXTURE_AFTER_CLAIM"
+            fi
+            /bin/date -u -d "$instant" +%s
+            return ;;
+        '-u -d 2000-01-01T00:00:00Z +%s') printf '946684800\n'; return ;;
+        '-u -d 2000-01-01T01:00:00Z +%s') printf '946688400\n'; return ;;
+    esac
     case "$2" in
         +%FT%TZ) printf '%s\n' "$DEV_STEP_FIXTURE_UTC" ;;
         '+%s%N %FT%TZ') printf '946684800000000000 %s\n' "$DEV_STEP_FIXTURE_UTC" ;;
@@ -279,7 +310,8 @@ df() {
 }
 export -f date stat df
 """ + shell, "host-step-fixture", *args],
-        env={**os.environ, "DEV_STEP_LOCK": str(work / "active"), "DEV_STEP_FIXTURE_UTC": clock},
+        env={**os.environ, "DEV_STEP_LOCK": str(work / "active"), "DEV_STEP_FIXTURE_UTC": clock,
+             "DEV_STEP_FIXTURE_AFTER_CLAIM": after_claim},
         capture_output=True, text=True, timeout=10,
     )
 
@@ -401,6 +433,151 @@ bash "$1" acquire "$2" maintenance
 """, helper, run_id)
             assert_step_result(self, "step-wrapper-reopen", (reopened.returncode, reopened.stdout),
                                (75, f"HOLD_DEV_STEP_UNRESOLVED run_id={run_id}\n"))
+
+    def test_overlay_runs_preflight_cutover_and_smoke_in_order(self):
+        overlay = (HERE / "templates" / "overlay-action.sh").read_text(encoding="utf-8")
+        install = overlay.split("\ninstall)\n", 1)[1].split("\nrollback)\n", 1)[0]
+        stages = (
+            "step running-top-guard-and-preflight guest_phase preflight",
+            'step top-shutdown poweroff_clean "$TOP_DRIVE"',
+            "step overlay-guard-and-install guest_phase install",
+            "step held-smoke guest_phase smoke",
+            "DEV_OVERLAY_DONE",
+        )
+        offsets = [install.index(stage) for stage in stages]
+        self.assertEqual(offsets, sorted(offsets))
+
+    def test_server_install_stops_at_first_failed_phase(self):
+        for failure, failure_checkpoint in INSTALL_FAILURE_CHECKPOINTS.items():
+            with (
+                self.subTest(failure=failure),
+                checkpoint_on_failure(failure_checkpoint),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                work = Path(directory)
+                state = work / "packet"
+                state.mkdir(mode=0o700)
+                staging = work / "staging"
+                staging.mkdir()
+                marker = work / "active"
+                marker.touch()
+                run_id = "20000101T000000Z"
+                for name in ("run-install.sh", "dev-step-lock.sh", "host-maintenance.py",
+                             "frozen-disk.py", "install-or-discard.sh", "dev-guest-phase.sh"):
+                    shutil.copyfile(HERE / "templates" / name, state / name)
+                (state / "run-id").write_text(run_id + "\n", encoding="ascii")
+                (state / "host.env").write_text(
+                    f'export DEV_STEP_LOCK="{marker}" STAGING="{staging}" LEASE_PREFIX=fixture\n'
+                    "export INSTALL_NOT_BEFORE=2000-01-01T00:00:00Z INSTALL_CUTOFF=2000-01-01T01:00:00Z\n"
+                    "export COMMIT_FALLBACK_SECONDS=0 INSTALL_DISCARD_BUDGET_SOURCE=reviewed-reservations\n"
+                    "export INSTALL_SECONDS=60 DISCARD_SECONDS=60\n"
+                    "export GUEST_KNOWN_HOSTS=/fixture/known-hosts GUEST_KEY=/fixture/key\n"
+                    "export GUEST_USER=fixture GUEST_ADDRESS=127.0.0.1 GUEST_PORT=22\n",
+                    encoding="ascii",
+                )
+                (staging / "old-held-readback.py").touch()
+                (state / "probe-up.py").write_text(
+                    "import os\n"
+                    "if os.environ['FIXTURE_FAILURE'] == 'smoke':\n"
+                    "    raise SystemExit(42)\n"
+                    "print('PORTAL_HTTPS_READY=PASS')\n",
+                    encoding="ascii",
+                )
+                action = state / "overlay-action.sh"
+                action.write_text(r"""
+set -euo pipefail
+state="$2"
+printf '%s\n' "$1" >> "$state/actions"
+test "$1" = install
+source "$state/dev-step-lock.sh"
+hold_dev_step_lock "$(cat "$state/run-id")" install
+test -z "$DEV_STEP_OWNER"
+if flock -n "$DEV_STEP_LOCK" true; then exit 91; fi
+test ! -e "$state/overlay-verification-armed"
+# A cutover failure after arming would otherwise invoke automatic discard.
+touch -- "$state/overlay-verification-armed"
+for phase in preflight cutover; do
+    printf '%s\n' "$phase" >> "$state/actions"
+    if [[ "$phase" = "$FIXTURE_FAILURE" ]]; then exit 42; fi
+done
+printf 'smoke\n' >> "$state/actions"
+bash "$state/dev-guest-phase.sh" smoke "$state"
+printf 'DEV_OVERLAY_DONE fixture held_smoke=PASS fence=PASS release=HELD\n' > "$state/install.done"
+if [[ "$FIXTURE_FAILURE" = handback ]]; then chmod 0755 "$state"; fi
+""", encoding="ascii")
+                shutil.copyfile(action, staging / action.name)
+                (staging / "DEV-SHA256SUMS").write_text(
+                    f"{digest(action.read_bytes())}  {action.name}\n", encoding="ascii",
+                )
+                (state / "SHA256SUMS").write_text("".join(
+                    f"{digest(path.read_bytes())}  {path.name}\n" for path in sorted(state.iterdir())
+                ), encoding="ascii")
+
+                record_path = work / "active.run"
+                if failure == "acquire":
+                    prior = host_step(work, r"""
+exec 7<"$DEV_STEP_LOCK"
+flock -n -E 75 7 || exit $?
+bash "$1" acquire "$2" fixture
+""", state / "dev-step-lock.sh", run_id)
+                    self.assertEqual(prior.returncode, 0, (prior.stdout, prior.stderr))
+                invocation = r"""
+export FIXTURE_FAILURE="$3"
+ssh() { [[ "${*: -1}" == *EXPECT_NEVER_STARTED=1* ]]; }
+export -f ssh
+exec bash "$1/run-install.sh" "$(id -un)" "$1" "$2"
+"""
+                if failure == "finished-bundle":
+                    (state / "overlay-verification-armed").touch()
+                    (state / "install.done").write_text(
+                        "DEV_OVERLAY_DONE fixture held_smoke=PASS fence=PASS release=HELD\n", encoding="ascii",
+                    )
+                result = host_step(
+                    work, invocation, state, marker, failure or "",
+                    clock="2000-01-01T00:59:00Z" if failure == "late-start" else "2000-01-01T00:00:00Z",
+                    after_claim="2000-01-01T00:59:00Z" if failure == "late-after-claim" else "",
+                )
+                expected_status = 42 if failure in INSTALL_PHASES else 75 if failure else 0
+                self.assertEqual(result.returncode, expected_status, (result.stdout, result.stderr))
+                self.assertEqual(host_step(work, 'exec flock -n "$DEV_STEP_LOCK" true').returncode, 0)
+                trace = state / "actions"
+                if failure in INSTALL_ADMISSION_HOLDS:
+                    self.assertFalse(record_path.exists())
+                    self.assertFalse(trace.exists())
+                    self.assertIn(INSTALL_ADMISSION_HOLDS[failure], result.stdout)
+                    if failure == "late-after-claim":
+                        stop, = state.glob("dev-step-*/stop.json")
+                        self.assertEqual(json.loads(stop.read_bytes())["status"], "no-work")
+                    else:
+                        self.assertFalse(any(path.is_dir() for path in state.glob("dev-step-*")))
+                    continue
+                if failure == "acquire":
+                    self.assertFalse(trace.exists())
+                    self.assertIn("HOLD_DEV_STEP_UNRESOLVED", result.stdout)
+                else:
+                    phases = INSTALL_PHASES
+                    count = phases.index(failure) + 1 if failure in phases else len(phases)
+                    self.assertEqual(trace.read_text().splitlines(), ["install", *phases[:count]])
+                    self.assertEqual((state / "portal-readiness.log").exists(), count == len(phases))
+                    self.assertFalse((state / "transfer.log").exists())
+                if failure:
+                    self.assertFalse(list(state.glob("dev-step-*/completion.json")))
+                    record = json.loads(record_path.read_bytes())
+                    self.assertEqual(record["run_id"], run_id)
+                    self.assertEqual(record["step"], "fixture" if failure == "acquire" else "controller-install")
+                else:
+                    self.assertIn("DEV_SIGNED_INSTALL=PASS", result.stdout)
+                    self.assertFalse(record_path.exists())
+                    evidence, = state.glob("dev-step-*/completion.json")
+                    self.assertEqual(json.loads(evidence.read_bytes())["run_id"], run_id)
+
+    def test_server_install_requires_three_inputs(self):
+        runner = HERE / "templates" / "run-install.sh"
+        for args in ((), ("", "/bundle", "/lock"), ("fixture", "", "/lock"), ("fixture", "/bundle", "")):
+            with self.subTest(args=args):
+                result = subprocess.run(["bash", runner, *args], capture_output=True, text=True, timeout=10)
+                self.assertEqual(result.returncode, 75)
+                self.assertIn("HOLD_DEV_INSTALL_INPUTS", result.stderr)
 
     def test_golden_and_fixed_identity(self):
         checkpoint("golden-render")
@@ -629,15 +806,22 @@ class SandboxTest(unittest.TestCase):
 
     def test_failed_suite_remains_failed_if_cleanup_times_out(self):
         output = io.StringIO()
+        failure_checkpoint = INSTALL_FAILURE_CHECKPOINTS["late-start"]
+        child_output = (
+            f"DEV_DRYRUN_CHECKPOINT {failure_checkpoint}\n"
+            f"DEV_DRYRUN_CHECKPOINT {failure_checkpoint} raw-output-marker\n"
+            "DEV_DRYRUN_CHECKPOINT suite-failed\n"
+        ).encode("ascii")
         results = [
             mock.Mock(returncode=0), mock.Mock(returncode=0),
-            mock.Mock(returncode=1, stdout=b"DEV_DRYRUN_CHECKPOINT suite-failed\n"),
+            mock.Mock(returncode=1, stdout=child_output),
             subprocess.TimeoutExpired(["docker", "rm"], CLEANUP_TIMEOUT),
         ]
         with redirect_stdout(output), mock.patch.object(subprocess, "run", side_effect=results):
             with self.assertRaisesRegex(RuntimeError, "DispatchTest: start-attach failed"):
                 sandbox(SANDBOX_HOSTNAME, "DispatchTest")
-        self.assertIn("child suite-failed", output.getvalue())
+        self.assertIn(f"child {failure_checkpoint} suite-failed", output.getvalue())
+        self.assertNotIn("raw-output-marker", output.getvalue())
         self.assertIn("cleanup deadline exceeded", output.getvalue())
 
     def test_timed_out_create_checks_for_late_registration(self):
