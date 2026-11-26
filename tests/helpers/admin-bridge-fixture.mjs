@@ -38,7 +38,7 @@ export function adminFixture() {
     if (control.failRead === operation) { control.failRead = null; throw error(503, "TEMPORARY_UNAVAILABLE"); }
     if (control.reauth === operation) { control.reauth = null; throw error(403, "REAUTHENTICATION_REQUIRED"); }
     if (control.reject === operation) { control.reject = null; throw error(409, "CONFLICT"); }
-    if (operation === "TEAM_LIST") { reads.push(operation); return { items: clone(input.before ? teams.slice(2) : teams.slice(0, input.limit === 1 ? 1 : 2)), next_cursor: input.before || input.limit === 1 ? null : "3" }; }
+    if (operation === "TEAM_LIST") { reads.push(operation); return { items: clone(input.before ? teams.slice(2) : teams.slice(0, input.limit === 1 ? 1 : 2)), next_cursor: input.before || input.limit === 1 || teams.length <= 2 ? null : "3" }; }
     if (operation === "TEAM_SHOW") { reads.push(operation); const team = teams.find(row => row.id === input.team_id); if (!team) throw error(404); return teamDetail(team, input.members_after); }
     if (operation === "MAILBOX_LIST") { reads.push(operation); return { items: clone(input.before ? mailboxes.slice(2) : mailboxes.slice(0, 2)), next_cursor: input.before ? null : "12", can_create: control.canCreate, mail_ready: control.setupReady }; }
     if (operation === "MAILBOX_SHOW") { reads.push(operation); const row = mailboxes.find(item => item.id === input.mailbox_id); if (!row) throw error(404); return clone(row); }

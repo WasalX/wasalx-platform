@@ -169,7 +169,7 @@ test("excluded Meta deliveries stop before begin-send, secrets, native writes an
   t.after(()=>{if(previous===undefined)delete process.env.WASALX_TEST_RECIPIENT_ALLOWLIST;else process.env.WASALX_TEST_RECIPIENT_ALLOWLIST=previous});
   process.env.WASALX_TEST_RECIPIENT_ALLOWLIST=JSON.stringify([phone]);
   const effects=[],failures=[];
-  const processor=new DeliveryProcessor({beginSend:async()=>effects.push("begin"),fail:async(_j,_l,retryable,error)=>failures.push({retryable,error})},{resolve:async()=>{effects.push("secret");throw new Error("Unexpected secret read")}},{metaGraphVersion:"v24.0"},8,{prepare:async()=>{effects.push("media");throw new Error("Unexpected media preparation")}});
+  const processor=new DeliveryProcessor({whatsAppMarketingOptedOut:async()=>false,beginSend:async()=>effects.push("begin"),fail:async(_j,_l,retryable,error)=>failures.push({retryable,error})},{resolve:async()=>{effects.push("secret");throw new Error("Unexpected secret read")}},{metaGraphVersion:"v24.0"},8,{prepare:async()=>{effects.push("media");throw new Error("Unexpected media preparation")}});
   const job={id:"synthetic",provider:"meta",tenantId:"synthetic",connectionId:"synthetic",recipientType:"GROUP",groupId:phone,ticketId:"42",text:"Synthetic",contentType:"text/plain",attempts:1,idempotencyKey:"synthetic"};
   assert.equal(await processor.deliver(job,"synthetic-lease"),false);assert.equal(await processor.deliver({...job,media:{mimeType:"image/png"}},"synthetic-lease"),false);
   assert.deepEqual(effects,[]);assert.equal(failures.length,2);assert(failures.every(item=>!item.retryable&&item.error.includes("outside the configured test scope")));
