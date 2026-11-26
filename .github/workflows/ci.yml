@@ -62,6 +62,7 @@ jobs:
           if git diff --quiet --no-ext-diff --no-renames HEAD^1 HEAD -- \
             scripts/dev-install/ scripts/release/installer-stages.mjs scripts/release/installer-stack.mjs \
             scripts/release/compose-stage-lock.mjs scripts/release/compose-stage-config.json \
+            ':(glob)compose*.yaml' infra/docker/full/ services/control-api/migrations/ \
             scripts/release/image_registry_retry.py .github/workflows/ci.yml; then
             needed=false
           fi

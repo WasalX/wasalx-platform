@@ -297,9 +297,38 @@ test("Storybook selects UI changes and unknown diffs", async (t) => {
   }
 });
 
-test("nightly install is report-only, read-only and fails open on PR diff errors", async () => {
+test("DEV installer dry run selects Compose, full-stack configuration and migration changes", async t => {
+  const { jobs } = parse(await read(".github/workflows/ci.yml"));
+  const { run } = jobs.changes.steps.find(step => step.id === "dev-install");
+  const directory = await mkdtemp(join(tmpdir(), "dev-install-selection-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const git = (...args) => execFileSync("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", ...args], {
+    cwd: directory, encoding: "utf8", windowsHide: true,
+  });
+  git("init", "--quiet", "--template=");
+  git("commit", "--quiet", "--allow-empty", "-m", "Base");
+  const output = join(directory, "selection");
+  for (const [path, expected] of [
+    ["compose.yaml", "true"],
+    ["compose.fixture.yaml", "true"],
+    ["infra/docker/full/keycloak/import/realm.json", "true"],
+    ["services/control-api/migrations/0001_fixture.sql", "true"],
+    ["docs/release.md", "false"],
+  ]) {
+    await mkdir(join(directory, posix.dirname(path)), { recursive: true });
+    await writeFile(join(directory, path), "fixture\n");
+    git("add", "--", path);
+    git("commit", "--quiet", "-m", "Change one input");
+    await writeFile(output, "");
+    const result = runWorkflowScript(run, { GITHUB_OUTPUT: "selection" }, directory);
+    assert.equal(result.status, 0, result.error?.message ?? result.stderr);
+    assert.equal((await readFile(output, "utf8")).trim(), "needed=" + expected, path);
+  }
+});
+
+test("nightly install reports independently with read-only access", async () => {
   const path = ".github/workflows/nightly-install.yml";
-  const { on, permissions, concurrency, jobs } = parse(await read(path));
+  const { on, permissions, jobs } = parse(await read(path));
   const job = jobs["nightly-install"];
   assert.equal(job["continue-on-error"], undefined);
   assert.deepEqual(on, {
@@ -312,10 +341,6 @@ test("nightly install is report-only, read-only and fails open on PR diff errors
   });
   assert.match(job.if, /\(github\.event_name == 'push' && github\.ref_type == 'tag'\)/u);
   assert.match(job.if, /github\.event_name == 'workflow_dispatch'/u);
-  assert.deepEqual(concurrency, {
-    group: "nightly-${{ github.event.pull_request.number || github.run_id }}",
-    "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
-  });
   assert.deepEqual(permissions, { contents: "read" });
   assert.deepEqual(job.permissions, { contents: "read", actions: "read" });
   assert.equal(job["runs-on"], "ubuntu-24.04");
@@ -326,13 +351,6 @@ test("nightly install is report-only, read-only and fails open on PR diff errors
   assert(remoteActions.every(step => /@[0-9a-f]{40}$/u.test(step.uses)));
   assert.equal(actions.find(step => step.uses.startsWith("actions/checkout@")).with["persist-credentials"], false);
   assert(!JSON.stringify(job).includes("secrets."));
-  const changeSelection = job.steps.find(step => step.id === "changes");
-  assert.equal(changeSelection.if, "github.event_name == 'pull_request'");
-  const changes = changeSelection.run;
-  assert.match(changes, /needed=true\nif git diff --quiet[^]*; then\n {2}needed=false\nfi/u);
-  for (const input of ["scripts/release/installer-*", "scripts/dev-install/**", "compose*.yaml", path, "release/installer-images.json",
-    "scripts/release/compose-stage-lock.mjs", "scripts/release/compose-stage-config.json", "scripts/release/simulation-rails-json.mjs",
-    "scripts/installer-evidence.mjs", "infra/docker/full/**"]) assert(changes.includes(input));
   assert(job.steps.some(step => step.if?.startsWith("always()")));
   assert(!parse(await read(".github/workflows/ci.yml")).jobs["ci-gate"].needs.includes("nightly-install"));
   const rehearsal = await read("scripts/release/installer-nightly.sh");
@@ -348,7 +366,6 @@ test("nightly census confirmation accepts matching counts from the rehearsal", a
   const { jobs } = parse(await read(".github/workflows/nightly-install.yml"));
   const confirmation = jobs["nightly-install"].steps.find(step => step.name === "Confirm census PASS");
   assert.equal(confirmation.env.COMMIT, "${{ steps.publication.outputs.commit }}");
-  assert.match(confirmation.if, /github\.event_name != 'pull_request' \|\| /u);
   const directory = await mkdtemp(join(tmpdir(), "nightly-census-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const diagnostics = join(directory, "wasalx-nightly", "diagnostics");
@@ -416,61 +433,6 @@ phase fresh-smoke 3m node scripts/release/installer-stages.mjs smoke
   assert.equal((await readFile(join(directory, "installer.log"), "utf8")).trim(), diagnostic);
 });
 
-test("PR installer skips only when the publication migration tree differs", async t => {
-  const { jobs } = parse(await read(".github/workflows/nightly-install.yml"));
-  const steps = jobs["nightly-install"].steps;
-  const changes = steps.find(step => step.id === "changes");
-  const check = steps.find(step => step.id === "migration-check");
-  const rehearsal = steps.find(step => step.name === "Rehearse full installation and controlled recreation");
-  assert.equal(check.if, "github.event_name == 'pull_request' && steps.changes.outputs.needed != 'false'");
-  assert.equal(check.env.PUBLICATION_COMMIT, "${{ steps.publication.outputs.commit }}");
-  assert.equal(rehearsal.if, "steps.changes.outputs.needed != 'false' && steps.migration-check.outputs.skip != 'true'");
-  assert.equal(rehearsal["continue-on-error"], undefined);
-
-  const directory = await mkdtemp(join(tmpdir(), "nightly-migrations-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
-  const git = (...args) => execFileSync("git", args, { cwd: directory, encoding: "utf8", windowsHide: true }).trim();
-  git("init", "--quiet", "--template=");
-  git("config", "user.name", "Fixture");
-  git("config", "user.email", "fixture@example.invalid");
-  const migrations = "services/control-api/migrations";
-  const updated = `${migrations}/0001_updated.sql`;
-  const removed = `${migrations}/0002_removed.sql`;
-  const added = `${migrations}/0003_added.sql`;
-  await mkdir(join(directory, migrations), { recursive: true });
-  await writeFile(join(directory, updated), "SELECT 1;\n");
-  await writeFile(join(directory, removed), "SELECT 2;\n");
-  git("add", "--", migrations);
-  git("commit", "--quiet", "-m", "Published migrations");
-  const publication = git("rev-parse", "HEAD");
-  await writeFile(join(directory, updated), "SELECT 3;\n");
-  await writeFile(join(directory, added), "SELECT 4;\n");
-  git("rm", "--quiet", "--", removed);
-  git("add", "--", migrations);
-  git("commit", "--quiet", "-m", "Change migrations");
-  assert.equal(runWorkflowScript(changes.run, { GITHUB_OUTPUT: "selection" }, directory).status, 0);
-  assert.equal((await readFile(join(directory, "selection"), "utf8")).trim(), "needed=true");
-
-  const matching = git("rev-parse", "HEAD");
-  git("commit", "--quiet", "--allow-empty", "-m", "Unrelated candidate commit");
-  for (const [commit, status, skip] of [[publication, 0, true], [matching, 0, false], ["missing-commit", 128, false]]) {
-    const summaryFile = join(directory, "summary");
-    const outputFile = join(directory, "output");
-    await writeFile(summaryFile, "");
-    await writeFile(outputFile, "");
-    const result = runWorkflowScript(check.run, {
-      PUBLICATION_COMMIT: commit, GITHUB_OUTPUT: "output", GITHUB_STEP_SUMMARY: "summary",
-    }, directory);
-    assert.equal(result.status, status, result.error?.message ?? result.stderr);
-    assert.equal((await readFile(outputFile, "utf8")).trim(), skip ? "skip=true" : "");
-    const summary = await readFile(summaryFile, "utf8");
-    assert.equal(result.stdout, summary);
-    assert.equal(summary, skip
-      ? `Installer rehearsal skipped: PR changes migrations; main publication cannot represent them\n\n\`\`\`\n${[updated, removed, added].join("\n")}\n\`\`\`\n`
-      : "");
-  }
-});
-
 test("nightly MinIO mirrors retain the full installer content digests", async () => {
   const loadServices = async file => parse(await read(file), { logLevel: "silent" }).services;
   const [full, nightly] = await Promise.all([
@@ -485,7 +447,7 @@ test("nightly MinIO mirrors retain the full installer content digests", async ()
   }
 });
 
-test("nightly binds qualification to a complete main publication and labels PR image fixtures", async t => {
+test("nightly binds qualification to a complete main publication", async t => {
   const directory = await mkdtemp(join(tmpdir(), "nightly-publication-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const options = { cwd: directory, encoding: "utf8", windowsHide: true };
@@ -514,8 +476,7 @@ test("nightly binds qualification to a complete main publication and labels PR i
   gitAt(now, "commit", "--quiet", "-m", "unpublished catalog");
   const side = gitAt(now, "commit-tree", tree, "-p", parent, "-m", "side branch");
   const base = gitAt(now, "commit-tree", tree, "-p", parent, "-p", side, "-m", "base merge");
-  const prHead = git("rev-parse", "HEAD");
-  const prMerge = gitAt(now, "commit-tree", tree, "-p", base, "-p", prHead, "-m", "PR merge");
+  const dispatchHead = git("rev-parse", "HEAD");
   const commits = git("rev-list", "--first-parent", base).split(/\r?\n/u);
   const tag = "v0.0.0-rc.1";
   git("tag", "-a", tag, base, "-m", "fixture tag");
@@ -565,25 +526,18 @@ gh() {
   esac
 }
 `;
-  const fixture = commit => `PR signed-image fixture uses main publication ${commit} (run 101, PR base ${base}).`;
-  const fallback = `${fixture(commits[4])} The PR base has no complete green publication.`;
   const blocked = reason => `BLOCKED: Exact main publication for ${base} is unavailable (${reason}).`;
   const exact = `Exact main publication ${base} is complete (run 101).`;
   const latest = (commit, skipped) => `Selected main publication ${commit} (run 101), skipped ${skipped} newer commits.`;
   const noRecent = "BLOCKED: No complete green main publication from the last 24 hours (searched up to 50 first-parent main commits).";
   const cases = [
-    { ready: base, selected: base, lookups: [base], summary: fixture(base) },
-    { ready: commits[4], incomplete: commits[1], expired: commits[2], noJob: commits[3],
-      selected: commits[4], lookups: commits.slice(0, 5), summary: fallback, warning: fallback },
-    { ready: commits[5], lookups: commits.slice(0, 5), reason: "No complete green main publication" },
-    { ready: side, lookups: commits.slice(0, 5), reason: "No complete green main publication" },
-    { ready: commits[1], lookupError: base, lookups: commits.slice(0, 1), status: 17 },
-    { ready: commits[1], invalid: true, lookups: commits.slice(0, 2), status: 5, reason: "Invalid nightly publication manifest" },
     ...["schedule", "workflow_dispatch"].flatMap(event => [
       { event, ready: base, selected: base, lookups: [base], summary: latest(base, 0) },
       { event, ready: commits[1], selected: commits[1], lookups: commits.slice(0, 2), summary: latest(commits[1], 1) },
-      { event, ready: commits[2], incomplete: commits[1], selected: commits[2], lookups: commits.slice(0, 3),
-        summary: latest(commits[2], 2) },
+      { event, ready: commits[4], incomplete: commits[1], expired: commits[2], noJob: commits[3],
+        selected: commits[4], lookups: commits.slice(0, 5), summary: latest(commits[4], 4) },
+      { event, ready: side, lookups: commits.slice(0, 5), summary: noRecent },
+      { event, ready: commits[1], lookupError: base, lookups: [base], status: 17 },
       { event, ready: commits[5], lookups: commits.slice(0, 5), summary: noRecent },
     ]),
     ...[
@@ -599,8 +553,8 @@ gh() {
   ];
   const bash = process.platform === "win32" ? "C:/Program Files/Git/bin/bash.exe" : "bash";
   for (const { ready, selected, incomplete = "", expired = "", noJob = "", lookupError = "", invalid = false,
-    event = "pull_request", input = "", lookups, status = selected ? 0 : 1, reason, summary = "", warning } of cases) {
-    const head = { pull_request: prMerge, workflow_dispatch: prHead }[event] ?? base;
+    event, input = "", lookups, status = selected ? 0 : 1, reason, summary = "" } of cases) {
+    const head = event === "workflow_dispatch" ? dispatchHead : base;
     const tagPush = event === "push";
     git("checkout", "--quiet", "--detach", head);
     await rm(join(directory, "wasalx-nightly"), { recursive: true, force: true });
@@ -612,20 +566,17 @@ gh() {
         ...process.env, GITHUB_REPOSITORY: "fixture/nightly", BASE: base, SIDE: side, READY: ready, INCOMPLETE: incomplete,
         EXPIRED: expired, NO_JOB: noJob, LOOKUP_ERROR: lookupError, INVALID: String(invalid),
         GITHUB_EVENT_NAME: event, GITHUB_REF_TYPE: tagPush ? "tag" : "branch",
-        GITHUB_REF: tagPush ? `refs/tags/${tag}` : {
-          pull_request: "refs/pull/1/merge", workflow_dispatch: "refs/heads/candidate",
-        }[event] ?? "refs/heads/main",
+        GITHUB_REF: tagPush ? `refs/tags/${tag}`
+          : event === "workflow_dispatch" ? "refs/heads/candidate" : "refs/heads/main",
         DISPATCH_COMMIT: input, NOW: String(now / 1000),
-        GITHUB_SHA: head, GITHUB_OUTPUT: "publication-output", GITHUB_STEP_SUMMARY: "publication-summary", RUNNER_TEMP: ".",
+        GITHUB_OUTPUT: "publication-output", GITHUB_STEP_SUMMARY: "publication-summary", RUNNER_TEMP: ".",
       },
     });
     assert.ifError(result.error);
     assert.equal(result.status, status, `${event}\n${result.stdout}${result.stderr}`);
-    assert.equal(git("rev-parse", "HEAD"), event === "pull_request" ? head : selected ?? head);
+    assert.equal(git("rev-parse", "HEAD"), selected ?? head);
     assert.equal((await readFile(join(directory, "publication-output"), "utf8")).trim(), selected ? `commit=${selected}` : "");
     if (reason) assert.ok((result.stdout + result.stderr).includes(reason), result.stderr);
-    const annotations = result.stderr.split(/\r?\n/u).filter(line => line.startsWith("::warning::"));
-    assert.deepEqual(annotations, warning ? [`::warning::${warning}`] : []);
     assert.equal((await readFile(join(directory, "publication-summary"), "utf8")).trim(), summary);
     if (summary.startsWith("BLOCKED")) assert.ok(result.stderr.includes(`::error::${summary}`), result.stderr);
     if (selected) {
