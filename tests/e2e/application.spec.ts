@@ -2324,6 +2324,29 @@ test("duplicate cleanup reconciles the connection list immediately on close", as
   await expect(page.getByRole("button", { name: "Export CSV…" })).toBeVisible();
 });
 
+// #540: the privacy panel must reflow at 390 and 320 px (WCAG 2.2 reflow) in both directions.
+(role === "tenant_owner" ? test : test.skip)("privacy panel fits narrow viewports and reaches every action", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "mobile-390");
+  await open(page, "settings");
+  await page.getByRole("tab", { name: "Privacy & retention" }).click();
+  const panel = page.getByRole("tabpanel");
+  for (const language of ["English", "العربية"]) {
+    if (language !== "English") await page.getByRole("button", { name: language }).click();
+    await expect(panel.getByRole("table")).toHaveCount(2);
+    for (const width of [390, 320]) {
+      await page.setViewportSize({ width, height: 844 });
+      const box = await panel.boundingBox();
+      expect(box, `privacy panel at ${width} px in ${language}`).not.toBeNull();
+      expect(box!.x).toBeGreaterThanOrEqual(0);
+      expect(box!.x + box!.width).toBeLessThanOrEqual(width);
+      for (const action of await panel.getByRole("button").all()) {
+        await action.scrollIntoViewIfNeeded();
+        await expect(action).toBeInViewport();
+      }
+    }
+  }
+});
+
 (role === "tenant_owner" ? test : test.skip)("async page failure exposes a plain-language recovery action", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop");
   let failOnce = true;
