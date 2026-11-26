@@ -65,3 +65,11 @@ A synchronous `131050` records the Stop in the delivery failure transaction. An
 expired lease rolls back that observation, and a later rejection can record it.
 Preferences apply across all WhatsApp Business Accounts in a tenant. A newer
 Resume on one number clears the same contact's Stop on another.
+
+## Optional portal mutation bodies
+
+The Notion authorization start, delivery retry, and privacy request retry
+endpoints accept an omitted body or a JSON object. Their optional fields are
+`integrationId` (string), `confirmOutcomeUnknown` (boolean), and `confirmation`
+(string), respectively. Malformed JSON, a non-object body, or a field with
+the wrong type returns HTTP 400 before the operation is dispatched.
