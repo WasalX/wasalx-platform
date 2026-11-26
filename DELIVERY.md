@@ -14,7 +14,7 @@ Use the [observability runbook](docs/runbooks/alert-response.md) to triage runti
 - For all other changes, the thread that made the change opens its own PR and merges it once required CI is green. No second review or lead sign-off is required. Never bypass required CI or branch protection.
 - For a critical PR, the author enables auto-merge only after the reviewer's passing verdict comment names the current head SHA. Before any later push, disable auto-merge, check queue membership, and remove the PR if queued. A push after the verdict needs a new verdict only when it adds a new critical change. Tests check the fix for a finding, not another review.
 - Update `main` only through the protected queue, which qualifies the exact combined tree. Never force-push or rewrite history.
-- Run agent pushes, PR operations, merges, reruns, and issue and board writes only through the project's reviewed GitHub App helper. Never print its installation token. Use the owner login only for approved settings changes and authorized tag creation.
+- Run agent pushes, PR operations, merges, reruns, and issue and board writes only through the project's reviewed GitHub App helper. Never print its installation token. For settings steps the App cannot perform, see §8 (“Agents try first”) in the delivery-orchestration skill (private).
 
 ## Checks
 
