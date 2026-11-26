@@ -1151,6 +1151,7 @@ export const arabicTenantMessages = {
   "tenant.privacy.download.previewVerified": "تم التحقق من الرابط النموذجي",
   "tenant.privacy.download.title": "التنزيل الموقع لمدة خمس دقائق جاهز",
   "tenant.privacy.error.createHold": "تعذر إنشاء الحجز القانوني.",
+  "tenant.privacy.error.holdBlocksDeletion": "يمنع حجز قانوني نشط هذا الحذف. ارفع الحجز من «الحجوزات القانونية»، ثم اطلب الحذف مجددًا.",
   "tenant.privacy.error.invalidDownload": "لم تستوفِ استجابة التنزيل الموقع عقد الأمان المحدد بخمس دقائق.",
   "tenant.privacy.error.load": "تعذر تحميل عناصر التحكم في الخصوصية.",
   "tenant.privacy.error.loadDetail": "تعذر تحميل تفاصيل الطلب.",

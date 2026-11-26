@@ -1148,6 +1148,7 @@ export const englishTenantMessages = {
   "tenant.privacy.download.previewVerified": "Sample link verified",
   "tenant.privacy.download.title": "Five-minute signed download ready",
   "tenant.privacy.error.createHold": "The legal hold could not be created.",
+  "tenant.privacy.error.holdBlocksDeletion": "An active legal hold blocks this deletion. Release the hold in Legal holds, then request the deletion again.",
   "tenant.privacy.error.invalidDownload": "The signed-download response did not meet the five-minute security contract.",
   "tenant.privacy.error.load": "Privacy controls could not be loaded.",
   "tenant.privacy.error.loadDetail": "Request detail could not be loaded.",
