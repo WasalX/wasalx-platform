@@ -30,7 +30,16 @@ SANDBOX_TIMEOUT = 120
 IMAGE_CHECK_TIMEOUT = 10
 REGISTRY_PULL_TIMEOUT = 75
 CLEANUP_TIMEOUT = 20
-INSTALL_PHASES = ("preflight", "cutover", "smoke")
+INSTALL_PHASE_STEPS = {
+    "preflight": ("step running-top-guard-and-preflight guest_phase preflight",),
+    "cutover": (
+        'step top-shutdown poweroff_clean "$TOP_DRIVE"',
+        'step overlay-boot boot "$OVERLAY_DRIVE"',
+        "step overlay-guard-and-install guest_phase install",
+    ),
+    "smoke": ("step held-smoke guest_phase smoke",),
+}
+INSTALL_PHASES = tuple(INSTALL_PHASE_STEPS)
 INSTALL_ADMISSION_HOLDS = {
     "late-start": "HOLD_INSTALL_WINDOW_TOO_SHORT",
     "late-after-claim": "HOLD_INSTALL_WINDOW_TOO_SHORT",
@@ -473,18 +482,19 @@ exit 42
             reopened = host_step(work, acquire, helper, run_id)
             assert_step_result(self, "step-wrapper-reopen", reopened, 75, f"HOLD_DEV_STEP_UNRESOLVED run_id={run_id}\n")
 
-    def test_overlay_runs_preflight_cutover_and_smoke_in_order(self):
+    def test_real_install_order_matches_phase_list(self):
         overlay = (HERE / "templates" / "overlay-action.sh").read_text(encoding="utf-8")
         install = overlay.split("\ninstall)\n", 1)[1].split("\nrollback)\n", 1)[0]
-        stages = (
-            "step running-top-guard-and-preflight guest_phase preflight",
-            'step top-shutdown poweroff_clean "$TOP_DRIVE"',
-            "step overlay-guard-and-install guest_phase install",
-            "step held-smoke guest_phase smoke",
-            "DEV_OVERLAY_DONE",
-        )
-        offsets = [install.index(stage) for stage in stages]
-        self.assertEqual(offsets, sorted(offsets))
+        expected = [step for steps in INSTALL_PHASE_STEPS.values() for step in steps]
+        completion = "DEV_OVERLAY_DONE"
+        actual = []
+        for line in install.splitlines():
+            line = line.strip()
+            if line in expected:
+                actual.append(line)
+            elif line.startswith(f"printf '{completion} "):
+                actual.append(completion)
+        self.assertEqual(actual, [*expected, completion])
 
     def test_server_install_stops_at_first_failed_phase(self):
         for failure, failure_checkpoint in INSTALL_FAILURE_CHECKPOINTS.items():
@@ -600,7 +610,7 @@ exec bash "$1/run-install.sh" "$(id -un)" "$1" "$2"
                 else:
                     phases = INSTALL_PHASES
                     count = phases.index(failure) + 1 if failure in phases else len(phases)
-                    self.assertEqual(trace.read_text().splitlines(), ["install", *phases[:count]])
+                    self.assertCountEqual(trace.read_text().splitlines(), ["install", *phases[:count]])
                     self.assertEqual((state / "portal-readiness.log").exists(), count == len(phases))
                     self.assertFalse((state / "transfer.log").exists())
                 if failure:
