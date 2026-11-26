@@ -33,6 +33,15 @@ async function captureReview(page, dialog, locale, state, disabled = false, them
         const rect = action.getBoundingClientRect();
         if (rect.top < r.top || rect.bottom > r.bottom) errors.push("dialog action clipped vertically");
       }
+      const inset = element => { const rect = element.getBoundingClientRect(); return [rect.left - r.left, r.right - rect.right]; };
+      // A scrolling dialog gives its inline-end edge to the scrollbar, so the edge checks apply only when it fits.
+      if (box.scrollHeight <= box.clientHeight + 1) {
+        for (const bar of box.querySelectorAll(":scope > .modal-head, :scope > .modal-actions")) if (inset(bar).some(value => value > 2)) errors.push("dialog divider stops short of the dialog edge");
+        const title = inset(box.querySelector(".modal-head h2"))[getComputedStyle(box).direction === "rtl" ? 1 : 0];
+        for (const element of box.querySelectorAll(":scope > p, :scope > .settings-validation")) if (inset(element).some(value => Math.abs(value - title) > 1)) errors.push("dialog body inset differs from its header");
+      }
+      const recovery = [...box.querySelectorAll(".settings-validation > button")].map(button => button.getBoundingClientRect());
+      for (let i = 1; i < recovery.length; i++) { const a = recovery[i - 1], b = recovery[i]; if (Math.max(b.left - a.right, a.left - b.right, b.top - a.bottom) < 7.5) errors.push("recovery actions need the control gap"); }
       const focused=document.activeElement,s=getComputedStyle(focused);
       if(!disabled && (!focused.matches(":focus-visible")||s.outlineStyle!=="solid"||parseFloat(s.outlineWidth)<2))errors.push("checkbox focus-visible");
       if(disabled && [...box.querySelectorAll('input[type="checkbox"]')].some(input=>!input.disabled))errors.push("busy checkboxes must stay disabled");
