@@ -31,6 +31,8 @@ function row(n:number){return{id:uuid(1000+n),deliveryId:uuid(2000+n),accountId:
 const description=()=>({schemaVersion:1,basisKind:'CUSTOMER_TARIFF_DERIVATION',accountId:account,policyVersionId:policyA,commercialTermsVersionId:terms,periodFrom:from,periodTo:to,timezone:'UTC',currency:'USD',minorUnits:2,tariffVersionId:tariffId,upstreamStatementVersionIds:[uuid(8)]});
 function statementDetail(){return{id:statementId,version:3,state:'SOURCE_READY',purpose:'CUSTOMER_CHARGE',evidenceMode:'SIMULATED',currency:'USD',periodFrom:from,periodTo:to,sourceState:'NONE',description:description(),inputSha256:'f'.repeat(64),originalSha256:null,originalByteSize:null,originalMime:null,writeAttemptId:uuid(9),writeDisposition:'UNKNOWN',scanSha256:null,currentHeadId:null,priorAdjustments:[],verificationSha256:null,previewSha256:null,preview:null,publication:null,privacyReviews:[]};}
 async function setup(page:Page){
+ // The first filechooser listener enables interception asynchronously; subscribe before navigation so a keyboard-opened chooser is never missed.
+ page.on('filechooser',()=>undefined);
  const errors:string[]=[],expected:Array<{url:string;status:number}>=[];page.on('pageerror',error=>errors.push(error.message));
  page.on('console',message=>{if(message.type()!=='error')return;const i=expected.findIndex(x=>x.url===message.location().url&&message.text().includes(String(x.status)));if(i>=0)expected.splice(i,1);else errors.push(message.text());});
  const rows=Array.from({length:101},(_,i)=>row(i)),tariffs:Tariff[]=[],writes:Write[]=[];
