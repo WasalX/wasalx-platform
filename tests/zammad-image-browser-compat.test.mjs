@@ -474,7 +474,7 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
         if (!direct) assert.equal(payload.attachments[0].content_type, "application/pdf");
         value = { id: "14000000-0000-4000-8000-000000000099", state: "QUEUED" };
       }
-      else if (request.method === "GET" && [state.ticketId, state.directReplyTicketId].some(id => id != null
+      else if (request.method === "GET" && [state.ticketId, state.directReplyTicketId, state.templateTicketId].some(id => id != null
         && url.pathname === `/internal/v1/zammad/tickets/${id}/context`)) value = {
         ticket_id: Number(url.pathname.split("/").at(-2)), connection_id: connectionId, provider: "WAHA", connection_state: "WORKING",
         binding_state: "ACTIVE", correlation_state: "OPEN", group_name: "Riyadh Operations", delivery_state: "SENT",
@@ -483,7 +483,7 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
         delivery_retry_requires_confirmation: false, last_heartbeat_at: "2026-08-20T10:04:00.000Z",
         last_provider_event_at: "2026-08-20T10:03:00.000Z", delivery_updated_at: "2026-08-20T10:03:00.000Z",
         ...(url.pathname === `/internal/v1/zammad/tickets/${state.templateTicketId}/context` ? {
-          provider: "META", service_window_expires_at: "2020-01-01T00:00:00.000Z",
+          provider: "META", bot_state: "HUMAN", service_window_expires_at: "2020-01-01T00:00:00.000Z",
           // An unrelated older send updates the general panel while the
           // selected template is still queued.
           delivery_id: state.templateToken ? earlierDeliveryId : null,
@@ -1655,26 +1655,33 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
 
     // Mirror only native ownership fields; this is not a real WasalX bot/provider-engine cycle.
     const directMarker = 'WX-NATIVE-DIRECT-RESET'; const directBody = `تم استلام طلبكم. ${directMarker}`;
-    const directSeed = await dockerAsync(directory, project, 'exec', '-T', 'zammad-railsserver', 'bundle', 'exec', 'rails', 'runner', `
-      require 'json'; original = Ticket.find(${Number(state.ticketId)})
-      t = Ticket.create!(title: 'Direct mounted-form HUMAN', group_id: original.group_id,
-        customer_id: original.customer_id, state_id: Ticket::State.find_by!(name: 'open').id,
-        created_by_id: original.customer_id, updated_by_id: original.customer_id,
-        wasalx_connection_id: '${connectionId}', wasalx_group_id: '12125550104@c.us',
-        wasalx_group_name: 'Direct fixture customer', wasalx_provider: 'WAHA',
-        wasalx_correlation_status: 'OPEN', wasalx_bot_conversation: 'true', wasalx_bot_state: 'HUMAN')
-      direct_article = Ticket::Article.create!(ticket: t, sender: Ticket::Article::Sender.find_by!(name: 'Customer'),
-        type: Ticket::Article::Type.find_by!(name: 'wasalx group message'), internal: false,
-        content_type: 'text/plain', body: 'Direct fixture request', preferences: { 'wasalx_origin' => 'provider' },
-        created_by_id: original.customer_id, updated_by_id: original.customer_id)
-      # A persisted provider article can legitimately have no native Message-ID.
-      # Clear it after callbacks, then prove the actual GraphQL/browser fallback.
-      direct_article.update_columns(message_id: nil, message_id_md5: nil)
-      raise 'Empty native Message-ID fixture was not persisted' unless direct_article.reload.message_id.nil?
-      puts JSON.generate(id: t.id, article_id: direct_article.id, message_id: direct_article.message_id)
-    `);
-    const directFixture = JSON.parse(directSeed.split('\n').find(line => line.startsWith('{')));
-    assert.equal(directFixture.message_id, null);
+    const seedDirectTicket = async ({ title, participant, provider, article }) => {
+      const seeded = await dockerAsync(directory, project, 'exec', '-T', 'zammad-railsserver', 'bundle', 'exec', 'rails', 'runner', `
+        require 'json'; original = Ticket.find(${Number(state.ticketId)})
+        t = Ticket.create!(title: ${JSON.stringify(title)}, group_id: original.group_id,
+          customer_id: original.customer_id, state_id: Ticket::State.find_by!(name: 'open').id,
+          created_by_id: original.customer_id, updated_by_id: original.customer_id,
+          wasalx_connection_id: '${connectionId}', wasalx_group_id: ${JSON.stringify(participant)},
+          wasalx_group_name: 'Direct fixture customer', wasalx_provider: ${JSON.stringify(provider)},
+          wasalx_correlation_status: 'OPEN', wasalx_bot_conversation: 'true', wasalx_bot_state: 'HUMAN')
+        direct_article = Ticket::Article.create!(ticket: t, sender: Ticket::Article::Sender.find_by!(name: 'Customer'),
+          type: Ticket::Article::Type.find_by!(name: 'wasalx group message'), internal: false,
+          content_type: 'text/plain', body: ${JSON.stringify(article)}, preferences: { 'wasalx_origin' => 'provider' },
+          created_by_id: original.customer_id, updated_by_id: original.customer_id)
+        # A persisted provider article can legitimately have no native Message-ID.
+        # Clear it after callbacks, then prove the actual GraphQL/browser fallback.
+        direct_article.update_columns(message_id: nil, message_id_md5: nil)
+        raise 'Empty native Message-ID fixture was not persisted' unless direct_article.reload.message_id.nil?
+        puts JSON.generate(id: t.id, article_id: direct_article.id, message_id: direct_article.message_id)
+      `);
+      const fixture = JSON.parse(seeded.split('\n').find(line => line.startsWith('{')));
+      assert.equal(fixture.message_id, null);
+      return fixture;
+    };
+    const directFixture = await seedDirectTicket({
+      title: 'Direct mounted-form HUMAN', participant: '12125550104@c.us', provider: 'WAHA',
+      article: 'Direct fixture request',
+    });
     state.directReplyTicketId = directFixture.id;
     state.directBotState = 'HUMAN';
     await page.goto(`${zammadOrigin}/desktop/tickets/${state.directReplyTicketId}`, { waitUntil: 'domcontentloaded' });
@@ -1801,20 +1808,23 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
       assert.deepEqual((await replySnapshot(state.directReplyTicketId, directBody)).rows, directClosed.rows);
     } finally { page.off('request', recordDirectMutation); }
 
-    // Exercise the installed composer and signed Rails endpoint against the simulated control API.
-    await dockerAsync(directory, project, 'exec', '-T', 'zammad-railsserver', 'bundle', 'exec', 'rails', 'runner', `
-      Ticket.find(${directFixture.id}).update_columns(wasalx_provider: 'META', wasalx_group_id: '12125550104',
-        state_id: Ticket::State.find_by!(name: 'open').id)
-    `);
-    state.templateTicketId = directFixture.id;
+    // Use a fresh META ticket so the preceding closed ticket and its form state stay intact.
+    const templateTitle = 'Direct template ticket';
+    const templateArticle = 'Direct template request';
+    const templateFixture = await seedDirectTicket({
+      title: templateTitle, participant: '12125550104', provider: 'META', article: templateArticle,
+    });
+    assert.notEqual(templateFixture.id, directFixture.id);
+    state.templateTicketId = templateFixture.id;
     state.templateAgentId = String(firstIdentityProof.agent_id);
     const templateStart = state.requests.length;
     const templateTicketUrl = `${zammadOrigin}/desktop/tickets/${state.templateTicketId}`;
     const templateDialog = page.locator('#wasalx-template-dialog');
     const templateEditor = page.locator('#ticketArticleReplyForm');
     const templateButton = templateEditor.locator('[data-test-id="wasalx-send-template"]');
-    const nativeNoteAction = page.locator('[data-test-id="ticket-detail-content-container"] button:has(use[href="#icon-note"])');
-    const openTemplateComposer = async (replyLabel) => {
+    const templateBubble = page.getByText(templateArticle, { exact: true }).last()
+      .locator("xpath=ancestor::div[contains(@class, 'group/article')][1]");
+    const openTemplateComposer = async ({ reply, sidebar, stateLabel, openState }) => {
       const [panelResponse] = await Promise.all([
         page.waitForResponse(response => new URL(response.url()).pathname === `/api/v1/wasalx/tickets/${state.templateTicketId}/panel`),
         page.goto(templateTicketUrl, { waitUntil: 'domcontentloaded' }),
@@ -1824,10 +1834,12 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
       assert.equal(panel.connection.provider, 'META');
       assert.equal(panel.ticket.bot_state, 'HUMAN');
       assert.equal(Date.parse(panel.service_window_expires_at), Date.parse('2020-01-01T00:00:00.000Z'));
-      // Zammad shows the native reply toolbar only after the ticket form has settled.
-      await nativeNoteAction.waitFor({ state: 'visible' });
-      await directBubble.hover();
-      await directBubble.getByRole('button', { name: replyLabel, exact: true }).click();
+      await page.getByRole('heading', { name: templateTitle, exact: true }).first().waitFor({ state: 'visible' });
+      const stateField = page.getByRole('combobox', { name: stateLabel, exact: true });
+      if (!(await stateField.isVisible())) await page.getByRole('button', { name: sidebar, exact: true }).click();
+      await stateField.getByText(openState, { exact: true }).waitFor({ state: 'visible' });
+      await templateBubble.hover();
+      await templateBubble.getByRole('button', { name: reply, exact: true }).click();
       await withNativeDiagnostic(t, 'template composer', () => page.evaluate(() => ({
         editorPresent: Boolean(document.querySelector('#ticketArticleReplyForm [contenteditable="true"]')),
         windowMessagePresent: Boolean(document.querySelector('#ticketArticleReplyForm [id$="-wasalxServiceWindowClosed"]')),
@@ -1836,7 +1848,7 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
         await templateButton.click();
       }, false);
     };
-    await openTemplateComposer('Reply on WhatsApp');
+    await openTemplateComposer({ reply: 'Reply on WhatsApp', sidebar: 'Ticket', stateLabel: 'State', openState: /^open$/iu });
     await templateDialog.getByRole('combobox').selectOption(template.id);
     await templateDialog.getByText(template.text, { exact: true }).waitFor();
     assert.equal(await templateDialog.getAttribute('dir'), 'ltr');
@@ -1865,7 +1877,10 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
 
     await setNativeLocale(agentEmail, 'ar');
     try {
-      await openTemplateComposer('الرد عبر واتساب');
+      await openTemplateComposer({
+        reply: 'الرد عبر واتساب', sidebar: 'تذكرة',
+        stateLabel: 'حالة', openState: 'افتح',
+      });
       await templateDialog.getByRole('heading', { name: 'إرسال قالب واتساب', exact: true }).waitFor();
       assert.equal(await templateDialog.evaluate(dialog => getComputedStyle(dialog).direction), 'rtl');
       await templateDialog.getByRole('button', { name: 'إرسال قالب آخر', exact: true }).click();
