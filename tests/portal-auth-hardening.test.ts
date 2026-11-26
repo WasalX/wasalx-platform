@@ -146,6 +146,7 @@ test("authenticated portal mutations distinguish malformed JSON from an omitted 
           { label: "empty object", raw: "{}", expected: [contract.call()], status: contract.status },
           { label: "omitted body", raw: undefined, expected: [contract.call()], status: contract.status },
           { label: "malformed JSON", raw: JSON.stringify({ [contract.field]: contract.valid }).slice(0, -1), expected: [], status: 400 },
+          { label: "whitespace-only body", raw: " ", expected: [], status: 400 },
           { label: "JSON array", raw: "[]", expected: [], status: 400 },
           { label: "JSON null", raw: "null", expected: [], status: 400 },
           { label: "invalid field type", raw: JSON.stringify({ [contract.field]: contract.invalid }), expected: [], status: 400 },
