@@ -113,7 +113,7 @@ test("PHONE and BSUID recheck the joint pin and classify lookup failures before 
       const pin=await resolveMetaTestRecipientLink(client(row),input);let current={...pin},fetches=0,completed=0,failed,admitted=false;
       const mutate=()=>{current={...current,[field]:field==="bsuidAliasRevision"?"2":field==="bsuidAliasId"?uuid(99):"d".repeat(64)}};
       globalThis.fetch=async(_url,init)=>{fetches++;const wire=JSON.parse(init.body);assert.equal(kind==="PHONE"?wire.to:wire.recipient,kind==="PHONE"?phone:bsuid);assert.equal(Object.hasOwn(wire,kind==="PHONE"?"recipient":"to"),false);return Response.json({messages:[{id:"wamid.phone-current"}]})};
-      const repository={metaTestRecipientAdmission:async()=>({state:"READY",link:pin}),metaTestRecipientLink:async()=>{if(phase==="read-error"||(phase==="admission-read-error"&&admitted))throw Error("private database diagnostic");return current},
+      const repository={whatsAppMarketingOptedOut:async()=>false,metaTestRecipientAdmission:async()=>({state:"READY",link:pin}),metaTestRecipientLink:async()=>{if(phase==="read-error"||(phase==="admission-read-error"&&admitted))throw Error("private database diagnostic");return current},
         beginSend:async()=>true,assertMetaDeliveryContextCurrent:async()=>{},metaInheritedTemplateContext:async()=>null,
         admitMetaMessageRequest:async()=>{admitted=true;if(phase==="admission")mutate()},complete:async()=>{completed++},
         outcomeUnknown:async()=>assert.fail("No ambiguous request"),fail:async(_job,_lease,retryable,detail,_at,_manual,code)=>{failed={retryable,detail,code}}};
@@ -138,7 +138,7 @@ test("a policy-selected PHONE waits for the same completed producer before effec
   const old=process.env.WASALX_TEST_RECIPIENT_ALLOWLIST;process.env.WASALX_TEST_RECIPIENT_ALLOWLIST=JSON.stringify([phone]);
   t.after(()=>{if(old===undefined)delete process.env.WASALX_TEST_RECIPIENT_ALLOWLIST;else process.env.WASALX_TEST_RECIPIENT_ALLOWLIST=old});
   const effects=[],deferred=[];
-  const processor=new DeliveryProcessor({metaTestRecipientAdmission:async()=>({state:"PENDING"}),
+  const processor=new DeliveryProcessor({whatsAppMarketingOptedOut:async()=>false,metaTestRecipientAdmission:async()=>({state:"PENDING"}),
     deferMetaTestRecipient:async job=>deferred.push(job.id),beginSend:async()=>effects.push("send"),fail:async()=>effects.push("fail")},
     {resolve:async()=>{effects.push("secret");throw Error("Unexpected read")}}, {metaGraphVersion:"v24.0"});
   const job={id:input.deliveryId,tenantId:input.tenantId,connectionId:input.connectionId,provider:"meta",recipientType:"DIRECT",
@@ -156,7 +156,7 @@ test("a fully verified but still-processing source defers before all effects and
   process.env.WASALX_TEST_RECIPIENT_ALLOWLIST=JSON.stringify([phone]);
   t.after(()=>{if(old===undefined)delete process.env.WASALX_TEST_RECIPIENT_ALLOWLIST;else process.env.WASALX_TEST_RECIPIENT_ALLOWLIST=old});
   const effects=[],deferred=[];
-  const processor=new DeliveryProcessor({metaTestRecipientAdmission:async()=>({state:"PENDING"}),
+  const processor=new DeliveryProcessor({whatsAppMarketingOptedOut:async()=>false,metaTestRecipientAdmission:async()=>({state:"PENDING"}),
     deferMetaTestRecipient:async(job,lease)=>deferred.push([job.id,lease]),
     beginSend:async()=>effects.push("begin"),fail:async()=>effects.push("fail")},
     {resolve:async()=>{effects.push("secret");throw new Error("Unexpected secret read")}},

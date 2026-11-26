@@ -41,3 +41,19 @@ typing indicator while the reply is still sending. Meta combines the signals
 when both apply. WAHA uses separate requests and targets the specific inbound ID.
 Each inbound message is claimed once, and signal failures leave the reply
 delivery result intact.
+
+## WhatsApp marketing preferences
+
+Subscribe the Meta app to the [`user_preferences` webhook](https://developers.facebook.com/documentation/business-messaging/whatsapp/webhooks/reference/user_preferences).
+WasalX records signed Stop and Resume events and Meta delivery error `131050`.
+After a Stop, template delivery requires a verified non-marketing category.
+Without a recorded Stop, marketing templates continue under the usual delivery rules.
+Service replies continue through the normal delivery rules. The audit log records
+preference changes and refused sends by ID.
+
+Group jobs have no direct recipient, so WasalX refuses group marketing templates.
+The refusal message currently reports that the contact stopped marketing messages.
+A synchronous `131050` records the Stop in the delivery failure transaction. An
+expired lease rolls back that observation, and a later rejection can record it.
+Preferences apply across all WhatsApp Business Accounts in a tenant. A newer
+Resume on one number clears the same contact's Stop on another.

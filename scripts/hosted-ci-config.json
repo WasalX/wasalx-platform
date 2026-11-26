@@ -44,18 +44,6 @@
       "runner": "docker:smoke",
       "reason": "not run in CI: requires a full Docker Compose stack and local image builds."
     },
-    "tests/e2e/keycloak-signin.spec.ts": {
-      "runner": "playwright.identity.config.ts",
-      "reason": "not run in CI: requires Chromium and a deployed portal and Keycloak realm."
-    },
-    "tests/e2e/meta-cost-operator.spec.ts": {
-      "runner": "test:e2e",
-      "reason": "not run in CI: requires Chromium and a configured platform operator environment."
-    },
-    "tests/e2e/meta-transition-operator.spec.ts": {
-      "runner": "test:e2e",
-      "reason": "not run in CI: requires the application Playwright role and locale harness with a built portal and isolated fixtures."
-    },
     "tests/visual/design-system.spec.ts": {
       "runner": "test:visual",
       "reason": "not run in CI: requires a separate Storybook build, Chromium, and visual or synthetic browser fixtures."

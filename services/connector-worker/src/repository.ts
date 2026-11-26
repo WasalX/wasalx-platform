@@ -1,3 +1,4 @@
+import { recordWhatsAppMarketingRejection, whatsappMarketingOptedOut } from "./whatsapp-marketing-preferences.js";
 import {reconsiderMetaIdentityTransitions} from "./meta-direct-identity.js";
 import { metaTestRecipientAdmission, resolveMetaTestRecipientLink } from "../../../packages/core/src/meta-test-recipient-link.js";
 import { parseWahaTestRecipientAllowlist } from "../../../packages/core/src/waha-test-recipient-scope.js";
@@ -568,7 +569,10 @@ export class OutboxRepository{
       return row.value;
     });
   }
-  async admitMetaMessageRequest(job:DeliveryJob,leaseId:string,requestSha256:string,runtime?:MetaRuntimeEvidenceCandidate,requestPhoneNumberId=job.sessionId,templateProof:MetaTemplateSendProof|null=null) {
+  async whatsAppMarketingOptedOut(job:DeliveryJob){
+    return this.tenant(job.tenantId,client=>whatsappMarketingOptedOut(client,job.tenantId,job.connectionId,job.metaDirectRecipientSnapshot));
+  }
+  async admitMetaMessageRequest(job:DeliveryJob,leaseId:string,requestSha256:string,runtime?:MetaRuntimeEvidenceCandidate,requestPhoneNumberId=job.sessionId,templateProof:MetaTemplateSendProof|null=null,nonMarketing=false) {
     if(job.provider!=='meta')return;
     await this.tenant(job.tenantId,async client=>{
       if((await client.query<{acquired:boolean}>("SELECT pg_try_advisory_xact_lock_shared(hashtextextended('privacy:'||$1::text,0)) AS acquired",[job.tenantId])).rows[0]?.acquired!==true)
@@ -592,6 +596,12 @@ export class OutboxRepository{
           AND delivery.content_redacted_at IS NULL AND NOT app.delivery_has_active_privacy_target(delivery.id)
           AND attempt.state='SENDING' AND attempt.finished_at IS NULL AND attempt.meta_billing_admission IS NULL FOR UPDATE OF delivery,attempt`,[job.tenantId,job.id,leaseId])).rows[0];
       if(!row||!/^[a-f0-9]{64}$/u.test(requestSha256))throw new ProviderError('Message request admission is unavailable.',false,'META_MESSAGE_NOT_ATTEMPTED',undefined,true);
+      if(job.template){
+        await client.query("SELECT pg_advisory_xact_lock_shared(hashtextextended('whatsapp-marketing:'||$1::uuid::text,0))",[job.tenantId]);
+        if(await whatsappMarketingOptedOut(client,job.tenantId,job.connectionId,job.metaDirectRecipientSnapshot)&&!nonMarketing)
+          throw new ProviderError("The contact has stopped WhatsApp marketing messages. Only verified non-marketing templates can be sent.",
+            false,"WHATSAPP_MARKETING_OPTED_OUT",undefined,true);
+      }
       const snapshot=row.meta_billing_snapshot===null ? null : parseMetaBillingSnapshot(row.meta_billing_snapshot);
       if(metaLifecyclePayloadSha256(snapshot)!==metaLifecyclePayloadSha256(job.metaBillingSnapshot??null))
         throw new ProviderError('Queued payment attribution changed.',false,'META_MESSAGE_NOT_ATTEMPTED',undefined,true);
@@ -656,11 +666,26 @@ export class OutboxRepository{
         AND (zammad_article_id IS NULL OR zammad_article_id=$1)`,[articleId,job.tenantId,job.id,leaseId,job.ticketEventExecutionId??null]);if(updated.rowCount!==1)throw new Error("Bot article link could not be persisted")})}
   async fail(job:DeliveryJob,leaseId:string,retryable:boolean,safeError:string,availableAt?:string,manualRetryAllowed=false,errorCode?:string,quarantineMediaCode?:string){return this.tenant(job.tenantId,async(client)=>{
     let currentMetaAuthenticationFailure=false;
+    if(!retryable&&job.provider==="meta"&&job.template&&errorCode==="META_MARKETING_OPTED_OUT"){
+      const delivery=(await client.query<{meta_direct_recipient:unknown;observed_at:Date}>(`SELECT delivery.meta_direct_recipient,
+        COALESCE((attempt.meta_billing_admission->>'admittedAt')::timestamptz,attempt.started_at) AS observed_at
+        FROM delivery_outbox delivery JOIN delivery_attempts attempt ON attempt.tenant_id=delivery.tenant_id
+          AND attempt.delivery_id=delivery.id AND attempt.attempt_number=delivery.attempts
+        WHERE delivery.tenant_id=$1 AND delivery.id=$2 AND delivery.connection_id=$3 AND delivery.lease_id=$4
+          AND delivery.state='SENDING' AND delivery.content_redacted_at IS NULL FOR UPDATE OF delivery`,
+        [job.tenantId,job.id,job.connectionId,leaseId])).rows[0];
+      if(!delivery)throw new Error("Delivery lease was lost before recording marketing rejection");
+      await recordWhatsAppMarketingRejection(client,job.tenantId,job.connectionId,delivery.meta_direct_recipient,delivery.observed_at,job.id);
+    }
     if(!retryable&&errorCode==="META_AUTHENTICATION_FAILED"&&job.provider==="meta"){
       // Connection then session before delivery, matching the send/rotation lock order.
       await client.query("SELECT id FROM connections WHERE tenant_id=$1 AND id=$2 FOR UPDATE",[job.tenantId,job.connectionId]);
       currentMetaAuthenticationFailure=await this.metaDeliveryContextCurrent(client,job,false);
     }
+    if(errorCode==="WHATSAPP_MARKETING_OPTED_OUT")await client.query(`INSERT INTO audit_events
+      (tenant_id,actor_type,actor_id,action,target_type,target_id,new_value,request_id)
+      VALUES ($1,'SYSTEM',$2,'whatsapp.marketing_delivery_refused','delivery',$3,'{"reason":"WHATSAPP_MARKETING_OPTED_OUT"}'::jsonb,$3)`,
+      [job.tenantId,job.connectionId,job.id]);
     const state=retryable?"FAILED_RETRYABLE":"FAILED_TERMINAL";const updated=await client.query("UPDATE delivery_outbox SET state=$1,available_at=COALESCE($2,available_at),safe_error=$3,manual_retry_allowed=CASE WHEN $1='FAILED_TERMINAL' THEN $7 ELSE false END,lease_id=NULL,lease_expires_at=NULL,updated_at=now() WHERE tenant_id=$4 AND id=$5 AND lease_id=$6 AND lease_expires_at>=now() AND state IN ('CLAIMED','SENDING') AND content_redacted_at IS NULL",[state,availableAt??null,safeError.slice(0,500),job.tenantId,job.id,leaseId,manualRetryAllowed]);if(updated.rowCount!==1)throw new Error("Delivery lease was lost");if(!retryable&&quarantineMediaCode&&job.media){await client.query("UPDATE delivery_media SET state='FAILED',safe_error=$1,updated_at=now() WHERE tenant_id=$2 AND id=$3 AND delivery_id=$4",[safeError.slice(0,500),job.tenantId,job.media.id,job.id]);await client.query(`INSERT INTO quarantine_records
     (tenant_id,source_kind,reason_code,state,connection_id,delivery_id,safe_summary,safe_metadata)
     VALUES ($1,'OUTBOUND','OUTBOUND_MEDIA_REJECTED','OPEN',$2,$3,'Outbound media requires operator review',$4::jsonb)
