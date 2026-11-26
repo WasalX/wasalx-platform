@@ -263,6 +263,7 @@ export const arabicCaseMessages = {
   "teamsAdmin.storage": "تخزين الاسترداد غير متاح. فعّل تخزين الجلسة قبل الحفظ.",
   "teamsAdmin.discard": "هل تريد تجاهل تغييرات الفريق غير المحفوظة؟",
   "teamsAdmin.loading": "جارٍ تحميل الفرق…",
+  "teamsAdmin.listFailed": "تعذر تحميل فرق الدعم. أعد المحاولة لعرض فرقك.",
   "teamsAdmin.empty": "لا توجد فرق دعم بعد. أنشئ فريقًا لتنظيم العمل على التذاكر.",
   "teamsAdmin.more": "تحميل مزيد من الفرق",
   "teamsAdmin.choose": "اختر فريقًا لمراجعة إعداداته وصلاحياته.",
@@ -421,4 +422,5 @@ export const arabicCaseMessages = {
   "serviceAccess.fullTeamAccess": "السماح لأتمتة وصل إكس بوصول كامل إلى الفريق",
   "serviceAccess.confirm": "راجعت هذا التغيير وأوافق عليه بصفتي مالك مساحة العمل.",
   "serviceAccess.apply": "تطبيق التغيير بعد مراجعته",
+  "serviceAccess.applyingGrant": "جارٍ تطبيق تغيير وصول الأتمتة…",
 } as const satisfies DictionaryFor<typeof englishCaseMessages>;

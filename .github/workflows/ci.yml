@@ -35,7 +35,9 @@ jobs:
       dev-install: ${{ steps.dev-install.outputs.needed }}
       integration: ${{ steps.integration.outputs.needed }}
       storybook: ${{ steps.storybook.outputs.needed }}
+      application-e2e: ${{ steps.application-e2e.outputs.needed }}
       zammad: ${{ steps.zammad.outputs.needed }}
+      keycloak-identity: ${{ steps.keycloak-identity.outputs.needed }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -49,7 +51,7 @@ jobs:
           if git diff --quiet --no-ext-diff --no-renames HEAD^1 HEAD -- \
             infra/helm/ infra/terraform/ ':(glob)scripts/validate-*' scripts/release/fetch-verified-asset.sh \
             compose.full.yaml tests/fixtures/production-backup-alerts.yaml tests/secret-adapter-readiness.test.rb \
-            .github/workflows/ci.yml; then
+            docs/runbooks/alert-response.md infra/docker/full/prometheus/alerts.yaml .github/workflows/ci.yml; then
             needed=false
           fi
           echo "needed=$needed" >> "$GITHUB_OUTPUT"
@@ -74,12 +76,39 @@ jobs:
             needed=false
           fi
           echo "needed=$needed" >> "$GITHUB_OUTPUT"
+      - id: application-e2e
+        if: github.event_name == 'pull_request'
+        run: |
+          needed=true
+          if git diff --quiet --no-ext-diff --no-renames HEAD^1 HEAD -- \
+            app/ lib/ packages/ public/ worker/ db/ build/ tests/e2e/ tests/fixtures/ tests/helpers/ \
+            scripts/run-application-e2e.mjs scripts/application-e2e-pool.mjs scripts/release/ \
+            playwright.application.config.ts next.config.ts vite.config.ts hosting.json tsconfig.json \
+            cloudflare-env.d.ts next-env.d.ts ':(glob)**/package.json' pnpm-lock.yaml pnpm-workspace.yaml \
+            patches/ .npmrc .github/actions/ci-pnpm/ .github/workflows/ci.yml; then
+            needed=false
+          fi
+          echo "needed=$needed" >> "$GITHUB_OUTPUT"
+      - id: keycloak-identity
+        if: github.event_name == 'pull_request'
+        run: |
+          needed=true
+          if git diff --quiet --no-ext-diff --no-renames HEAD^1 HEAD -- \
+            Dockerfile.foundation-keycloak infra/docker/full/keycloak/ scripts/release/patch-keycloak-jackson.py \
+            app/fonts/ public/ tests/e2e/keycloak-signin.spec.ts tests/hosted-keycloak-identity.mjs \
+            tests/support/hosted-keycloak-cleanup.mjs \
+            playwright.identity.config.ts package.json pnpm-lock.yaml pnpm-workspace.yaml patches/ .npmrc \
+            .dockerignore .github/actions/ci-pnpm/ .github/workflows/ci.yml; then
+            needed=false
+          fi
+          echo "needed=$needed" >> "$GITHUB_OUTPUT"
       - id: storybook
         if: github.event_name == 'pull_request'
         run: |
           needed=true
           if git diff --quiet --no-ext-diff --no-renames HEAD^1 HEAD -- \
-            app/ lib/ packages/ public/ .storybook/ tests/visual/ \
+            app/ lib/ packages/ public/ .storybook/ tests/visual/ tests/fixtures/ tests/helpers/ \
+            ':(glob)tests/*-browser.mjs' tests/storybook-static-contract.test.mjs \
             scripts/serve-storybook-static.mjs scripts/storybook-visual-regression.mjs \
             playwright.storybook.config.ts package.json pnpm-lock.yaml pnpm-workspace.yaml \
             patches/ .npmrc tsconfig.json .github/actions/ci-pnpm/ .github/workflows/ci.yml; then
@@ -200,23 +229,28 @@ jobs:
       - uses: ./.github/actions/ci-pnpm
       - name: Build Storybook
         run: pnpm run build:storybook
+      - name: Check the built story index
+        run: node --test tests/storybook-static-contract.test.mjs
       - name: Install Playwright Chromium
         env:
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '0'
         run: pnpm exec playwright install --no-shell chromium
       - name: Audit and capture every story
-        id: audit
         run: >-
           node scripts/storybook-visual-regression.mjs --require-browser tests/visual/storybook-ci.spec.ts
-          --fully-parallel --workers=2
+          tests/visual/inbox-synthetic.spec.ts --fully-parallel --workers=2
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: always() && steps.audit.outcome != 'skipped'
-        with:
+        if: failure() || cancelled()
+        with: &storybook-audit-artifact
           name: storybook-audit
           path: |
             test-results/storybook
             output/playwright/design-system
+            output/playwright/inbox/synthetic
           retention-days: 7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: success()
+        with: *storybook-audit-artifact
 
   privacy:
     if: github.event_name != 'workflow_dispatch'
@@ -382,7 +416,7 @@ jobs:
 
   integration:
     needs: changes
-    if: &integration-needed >-
+    if: >-
       ${{ !cancelled() && (github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
       (github.event_name == 'pull_request' && (needs.changes.result != 'success' || needs.changes.outputs.integration != 'false'))) }}
@@ -449,9 +483,42 @@ jobs:
           task: save-build
           dependency-key: ${{ steps.pnpm.outputs.dependency-key }}
 
-  portal-integration:
+  portal-browser-build:
     needs: changes
-    if: *integration-needed
+    if: >-
+      ${{ !cancelled() && (github.event_name != 'pull_request' ||
+      needs.changes.result != 'success' || needs.changes.outputs.integration != 'false' ||
+      needs.changes.outputs.application-e2e != 'false') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env: &portal-browser-env
+      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.wrangler/ci-chromium
+    steps:
+      - *integration-checkout
+      - *integration-node
+      - *integration-pnpm
+      - name: Build the portal
+        run: pnpm run build
+      - name: Install Playwright Chromium
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '0'
+        run: pnpm exec playwright install --no-shell chromium
+      - name: Package portal and Chromium
+        run: tar -czf portal-browser.tar.gz dist packages/observability/dist .wrangler/ci-chromium
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: portal-browser
+          path: portal-browser.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+
+  portal-integration:
+    needs: [changes, portal-browser-build]
+    if: >-
+      ${{ !cancelled() && needs.portal-browser-build.result == 'success' &&
+      (github.event_name != 'pull_request' || needs.changes.result != 'success' ||
+      needs.changes.outputs.integration != 'false') }}
+    env: *portal-browser-env
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
@@ -466,14 +533,17 @@ jobs:
           node --experimental-strip-types --import ./tests/helpers/operator-input-fixtures.mjs --test --test-concurrency=1
           tests/installer-preimage.test.mjs
       - *integration-build
-      - name: Build the portal
-        run: pnpm run build
+      - &download-portal-browser
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: portal-browser
+      - &extract-portal-browser
+        name: Restore portal and Chromium
+        run: tar -xzf portal-browser.tar.gz
       - name: Prepare browser fixtures
         env:
-          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '0'
           POSTGRES_IMAGE: *integration-postgres-image
         run: |
-          pnpm exec playwright install --no-shell chromium
           # Keep both shared fixture images available for the serialized browser tests.
           docker pull "$POSTGRES_IMAGE"
           for attempt in 1 2 3; do
@@ -490,6 +560,66 @@ jobs:
         run: >-
           node --test --test-concurrency=1 tests/multitenant-e2e.test.mjs tests/platform-invitation-e2e.test.mjs
           tests/portal-security-headers.test.mjs tests/rendered-html.test.mjs
+
+  application-e2e:
+    needs: [changes, portal-browser-build]
+    if: >-
+      ${{ !cancelled() && needs.portal-browser-build.result == 'success' &&
+      (github.event_name != 'pull_request' || needs.changes.result != 'success' ||
+      needs.changes.outputs.application-e2e != 'false') }}
+    name: Application E2E (${{ matrix.locale }}, ${{ matrix.roles }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env: *portal-browser-env
+    strategy:
+      fail-fast: false
+      matrix:
+        locale: [en, ar]
+        roles: [tenant_owner, 'tenant_admin,supervisor', 'agent,auditor']
+    steps:
+      - *integration-checkout
+      - *integration-node
+      - *integration-pnpm
+      - *download-portal-browser
+      - *extract-portal-browser
+      - name: Test application fixtures
+        env:
+          WASALX_E2E_SKIP_BUILD: '1'
+          WASALX_E2E_LOCALES: ${{ matrix.locale }}
+          WASALX_E2E_ROLES: ${{ matrix.roles }}
+        run: node scripts/run-application-e2e.mjs
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: failure() || cancelled()
+        with:
+          name: application-e2e-${{ matrix.locale }}-${{ matrix.roles }}
+          path: |
+            output/playwright/application*/*/report/**
+            output/playwright/application*/*/results/**
+          retention-days: 7
+
+  keycloak-identity:
+    needs: changes
+    if: >-
+      ${{ !cancelled() && (github.event_name != 'pull_request' ||
+      needs.changes.result != 'success' || needs.changes.outputs.keycloak-identity != 'false') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - *integration-checkout
+      - *integration-node
+      - *integration-pnpm
+      - name: Install Playwright Chromium
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '0'
+        run: pnpm exec playwright install --no-shell chromium
+      - name: Build the pinned Keycloak image and run the isolated identity cases
+        env:
+          KEYCLOAK_IMAGE: wasalx/ci-keycloak:${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          docker build --file Dockerfile.foundation-keycloak --tag "$KEYCLOAK_IMAGE" \
+            --build-arg "WASALX_CANDIDATE_SHA=$GITHUB_SHA" \
+            --build-arg "WASALX_CANDIDATE_TREE=$(git rev-parse 'HEAD^{tree}')" .
+          node tests/hosted-keycloak-identity.mjs "$KEYCLOAK_IMAGE"
 
   integration-coverage:
     needs: integration
@@ -661,7 +791,7 @@ jobs:
 
   ci-gate:
     if: always()
-    needs: [changes, workflow-lint, storybook, privacy, dependency-review, checks, full-unit, images, installer-portal, integration, portal-integration, integration-coverage, infra-validate, dev-install-dryrun, zammad-compatibility]
+    needs: [changes, workflow-lint, storybook, privacy, dependency-review, checks, full-unit, images, installer-portal, integration, portal-integration, application-e2e, keycloak-identity, integration-coverage, infra-validate, dev-install-dryrun, zammad-compatibility]
     runs-on: ubuntu-slim
     timeout-minutes: 2
     permissions: {}
@@ -683,6 +813,10 @@ jobs:
           INTEGRATION_NEEDED: ${{ needs.changes.outputs.integration }}
           INTEGRATION: ${{ needs.integration.result }}
           PORTAL_INTEGRATION: ${{ needs.portal-integration.result }}
+          APPLICATION_NEEDED: ${{ needs.changes.outputs.application-e2e }}
+          APPLICATION_E2E: ${{ needs.application-e2e.result }}
+          KEYCLOAK_IDENTITY_NEEDED: ${{ needs.changes.outputs.keycloak-identity }}
+          KEYCLOAK_IDENTITY: ${{ needs.keycloak-identity.result }}
           INTEGRATION_COVERAGE: ${{ needs.integration-coverage.result }}
           INFRA_NEEDED: ${{ needs.changes.outputs.infra }}
           INFRA: ${{ needs.infra-validate.result }}
@@ -695,6 +829,14 @@ jobs:
           case "$EVENT:$STORYBOOK_NEEDED:$STORYBOOK" in
             *:*:success|pull_request:false:skipped) ;;
             *) echo 'Storybook did not pass.'; exit 1 ;;
+          esac
+          case "$EVENT:$APPLICATION_NEEDED:$APPLICATION_E2E" in
+            *:*:success|pull_request:false:skipped) ;;
+            *) echo 'Application browser tests did not pass.'; exit 1 ;;
+          esac
+          case "$EVENT:$KEYCLOAK_IDENTITY_NEEDED:$KEYCLOAK_IDENTITY" in
+            *:*:success|pull_request:false:skipped) ;;
+            *) echo 'Keycloak identity browser tests did not pass.'; exit 1 ;;
           esac
           case "$EVENT:$PRIVACY" in
             pull_request:success|merge_group:success|push:success|workflow_dispatch:skipped) ;;

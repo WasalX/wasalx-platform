@@ -518,6 +518,7 @@ export const arabicTenantMessages = {
   "cost.manage.acceptanceVersion": "القبول {count}",
   "cost.manage.activate": "تفعيل الإصدار المراجَع",
   "cost.manage.reassess": "إعادة تقييم الرسائل",
+  "cost.manage.reassessPages": "صفحات إعادة التقييم",
   "cost.manage.reassessHelp": "اختر حتى ١٠٠ تقييم حالي. دون ملف أدلة جديد، تُحتفظ حقائق التسعير المراجَعة الحالية. لا تُعاد إرسال الرسائل.",
   "cost.manage.selectorFile": "أدلة تسعير بديلة (ملف JSON اختياري)",
   "cost.manage.message": "الرسالة {count}",

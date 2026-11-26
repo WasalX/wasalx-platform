@@ -13,6 +13,8 @@ import { unitAddonSources, validateUnitAddonInputs } from "../scripts/fetch-zamm
 import { unitAllowlist, unitFiles } from "../scripts/test-unit.mjs";
 import { reportTimingsWithQuarantine, validateQuarantine } from "../scripts/hosted-ci-timing-reporter.mjs";
 import { parsePostgresShardArgs, postgresScenarioGroups, verifyPostgresReports } from "../scripts/postgres-scenario-registry.mjs";
+import { discoverBrowserCases } from "../scripts/release/browser-shards.mjs";
+import { cleanupKeycloakIdentity } from "./support/hosted-keycloak-cleanup.mjs";
 
 const repository = fileURLToPath(new URL("../", import.meta.url));
 const read = file => readFile(join(repository, file), "utf8");
@@ -78,6 +80,26 @@ test("runner ownership recognizes a bare sudo interpreter", () => {
 function referencesFile(source, file) {
   return source.includes(`"${file}"`) || source.includes(`'${file}'`);
 }
+
+function hostedApplicationOwns(file, fixtureSpecs) {
+  if (file.endsWith("-operator.spec.ts")) return false;
+  return (file === "tests/e2e/arabic.spec.ts" || fixtureSpecs.get("en").has(file))
+    && (file === "tests/e2e/application.spec.ts" || fixtureSpecs.get("ar").has(file));
+}
+
+test("application ownership rejects a shared spec moved out of hosted fixture mode", () => {
+  const shared = "tests/e2e/meta-cost-statements.spec.ts";
+  const english = "tests/e2e/application.spec.ts";
+  const arabic = "tests/e2e/arabic.spec.ts";
+  const fixtureSpecs = new Map([["en", new Set([english, shared])], ["ar", new Set([arabic, shared])]]);
+  assert(hostedApplicationOwns(english, fixtureSpecs));
+  assert(hostedApplicationOwns(arabic, fixtureSpecs));
+  assert(hostedApplicationOwns(shared, fixtureSpecs));
+  fixtureSpecs.get("ar").delete(shared);
+  assert(!hostedApplicationOwns(shared, fixtureSpecs), "a shared spec must be selected in Arabic too");
+  fixtureSpecs.get("en").delete(shared);
+  assert(!hostedApplicationOwns(shared, fixtureSpecs), "a platform-only spec has no hosted fixture owner");
+});
 
 const tofuFile = file => /^infra\/terraform\/tests\/[^/]+\.tftest\.(?:hcl|json)$/u.test(file);
 const postgresFile = file => /^tests\/.*(?:-postgres(?:-check)?|-real-schema-check)\.mjs$/u.test(file);
@@ -147,6 +169,13 @@ test("tracked tests belong to a named CI runner or the test allowlist", async ()
     await Promise.all(["scripts/validate-infra.sh", "infra/docker/Dockerfile.zammad", "tests/zammad-image-browser-compat.test.mjs",
       "playwright.application.config.ts", "playwright.identity.config.ts", "playwright.storybook.config.ts",
       "tests/visual/inbox-synthetic.spec.ts", "scripts/storybook-visual-regression.mjs", "scripts/run-application-e2e.mjs"].map(read));
+  const identityRunner = await read("tests/hosted-keycloak-identity.mjs");
+  const fixtureSpecs = new Map(jobs["application-e2e"].strategy.matrix.locale.map(locale => {
+    const cases = discoverBrowserCases({ argv: ["pnpm", "test:e2e"], env: {
+      WASALX_E2E_LOCALES: locale, WASALX_E2E_ROLES: "tenant_owner", WASALX_E2E_PLATFORM_URL: "",
+    } });
+    return [locale, new Set(cases.filter(row => row.expectedStatus !== "skipped").map(row => posix.join("tests/e2e", row.file)))];
+  }));
   const runsTofu = /^\s+"\$\{TOFU\[@\]\}" -chdir=infra\/terraform test -no-color$/mu.test(validation)
     && /^run_terraform_tests$/mu.test(validation);
 
@@ -176,19 +205,26 @@ test("tracked tests belong to a named CI runner or the test allowlist", async ()
         return runsFile(command, "tests/zammad-image-browser-compat.test.mjs")
           && (referencesFile(zammadBrowser, file)
             || (posix.dirname(file) === "tests" && referencesFile(zammadBrowser, posix.basename(file))));
+      case "application-e2e":
+        return runsFile(command, "scripts/run-application-e2e.mjs")
+          && referencesFile(applicationRunner, "playwright.application.config.ts")
+          && referencesFile(application, "./tests/e2e") && hostedApplicationOwns(file, fixtureSpecs);
       case "test:e2e":
         return runsFile(command, "scripts/run-application-e2e.mjs")
           && referencesFile(applicationRunner, "playwright.application.config.ts")
           && referencesFile(application, "./tests/e2e")
           && posix.dirname(file) === "tests/e2e" && referencesFile(application, posix.basename(file));
-      case "playwright.identity.config.ts":
-        return referencesFile(identity, "./tests/e2e")
+      case "keycloak-identity":
+        return runsFile(command, "tests/hosted-keycloak-identity.mjs")
+          && referencesFile(identityRunner, "playwright.identity.config.ts") && referencesFile(identity, "./tests/e2e")
           && posix.dirname(file) === "tests/e2e" && referencesFile(identity, posix.basename(file));
       case "storybook":
         return referencesFile(storybookRunner, "playwright.storybook.config.ts")
           && referencesFile(storybook, "./tests/visual")
           && commands(command).some(line =>
-            runsFile(line, "scripts/storybook-visual-regression.mjs", "--require-browser") && words(line).includes(file));
+            runsFile(line, "scripts/storybook-visual-regression.mjs", "--require-browser")
+            && (words(line).includes(file) || (words(line).includes("tests/visual/inbox-synthetic.spec.ts")
+              && referencesFile(visualHarness, file))));
       case "test:visual":
         return runsFile(command, "scripts/storybook-visual-regression.mjs")
           && referencesFile(storybookRunner, "playwright.storybook.config.ts")
@@ -219,6 +255,7 @@ test("Storybook selects UI changes and unknown diffs", async (t) => {
   assert.match(jobs.storybook.if, /github\.event_name == 'push'/u);
   assert.match(jobs.storybook.if, /github\.event_name == 'pull_request' && needs\.changes\.outputs\.storybook != 'false'/u);
   assert.match(jobs.storybook.if, /github\.event_name == 'merge_group'/u);
+  assert.match(jobs.storybook.if, /github\.event_name == 'workflow_dispatch'/u);
   assert(jobs["ci-gate"].needs.includes("storybook"));
   const [gateStep] = jobs["ci-gate"].steps;
   assert.equal(gateStep.env.STORYBOOK_NEEDED, "${{ needs.changes.outputs.storybook }}");
@@ -422,7 +459,7 @@ test("nightly MinIO mirrors retain the full installer content digests", async ()
   }
 });
 
-test("nightly selects the newest complete publication within five first-parent commits and requires an exact publication on tags", async t => {
+test("nightly requires the exact main publication for qualification and labels PR image fixtures", async t => {
   const directory = await mkdtemp(join(tmpdir(), "nightly-publication-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const options = { cwd: directory, encoding: "utf8", windowsHide: true };
@@ -437,10 +474,11 @@ test("nightly selects the newest complete publication within five first-parent c
   const parent = git("rev-parse", "HEAD^1");
   const side = git("commit-tree", tree, "-p", parent, "-m", "side branch");
   const base = git("commit-tree", tree, "-p", parent, "-p", side, "-m", "base merge");
+  const prHead = git("commit-tree", tree, "-p", parent, "-m", "PR head");
+  const prMerge = git("commit-tree", tree, "-p", base, "-p", prHead, "-m", "PR merge");
   const commits = git("rev-list", "--first-parent", base).split(/\r?\n/u);
   const tag = "v0.0.0-rc.1";
   git("tag", "-a", tag, base, "-m", "fixture tag");
-  git("checkout", "--quiet", "--detach", base);
   git("remote", "add", "origin", ".");
   const { jobs } = parse(await read(".github/workflows/nightly-install.yml"));
   const publication = jobs["nightly-install"].steps.find(step => step.id === "publication");
@@ -472,8 +510,11 @@ gh() {
     'run download')
       local commit=$READY images='{"zammad":{}}' pending='{}' complete=true
       [[ "$3" != 102 ]] || { commit=$INCOMPLETE; images='{}'; pending='{"zammad":{}}'; complete=false; }
-      [[ "$INVALID" != true ]] || commit=$BASE
+      [[ "$INVALID" != true ]] || commit=$SIDE
+      local downloaded_run=$3
       while [[ "$1" != --dir ]]; do shift; done
+      [[ ! -e "$2/images-manifest.json" && ! -e "$2/images-manifest-attempt.json" ]] || return 18
+      printf '%s\n' "$downloaded_run" > "$2/images-manifest-attempt.json"
       printf '{"schemaVersion":1,"repository":"%s","platform":"linux/amd64","commit":"%s","tree":"%s","images":%s,"pending":%s,"publicationComplete":%s}\n' \
         "$GITHUB_REPOSITORY" "$commit" "$(git rev-parse "$commit^{tree}")" "$images" "$pending" "$complete" > "$2/images-manifest.json"
       ;;
@@ -481,45 +522,59 @@ gh() {
   esac
 }
 `;
+  const fixture = commit => `PR signed-image fixture uses main publication ${commit} (run 101, PR base ${base}).`;
+  const fallback = `${fixture(commits[4])} The PR base has no complete green publication.`;
+  const blocked = reason => `BLOCKED: Exact main publication for ${base} is unavailable (${reason}).`;
   const cases = [
-    { ready: base, selected: base, lookups: commits.slice(0, 1), reason: "requested base has a complete publication" },
+    { ready: base, selected: base, lookups: [base], summary: fixture(base) },
     { ready: commits[4], incomplete: commits[1], expired: commits[2], noJob: commits[3],
-      selected: commits[4], lookups: commits.slice(0, 5) },
+      selected: commits[4], lookups: commits.slice(0, 5), summary: fallback, warning: fallback },
     { ready: commits[5], lookups: commits.slice(0, 5), reason: "No complete green main publication" },
     { ready: side, lookups: commits.slice(0, 5), reason: "No complete green main publication" },
     { ready: commits[1], lookupError: base, lookups: commits.slice(0, 1), status: 17 },
     { ready: commits[1], invalid: true, lookups: commits.slice(0, 2), status: 5, reason: "Invalid nightly publication manifest" },
-    { ready: base, exact: true, selected: base, lookups: commits.slice(0, 1) },
-    { ready: commits[1], exact: true, lookups: commits.slice(0, 1), reason: "No green main CI push run for the commit" },
+    ...["schedule", "workflow_dispatch"].flatMap(event => [
+      { event, ready: base, selected: base, lookups: [base], summary: `Exact main publication ${base} is complete (run 101).` },
+      { event, ready: commits[1], lookups: [base], summary: blocked("no green main CI push run") },
+      { event, ready: commits[1], incomplete: base, lookups: [base], summary: blocked("images-manifest is incomplete") },
+    ]),
+    { event: "schedule", ready: commits[1], expired: base, lookups: [base], summary: blocked("no available images-manifest artifact") },
+    { event: "schedule", ready: commits[1], noJob: base, lookups: [base], summary: blocked("no successful Image digest manifest job") },
+    { event: "workflow_dispatch", ready: base, invalid: true, lookups: [base], status: 5, reason: "Invalid nightly publication manifest" },
+    { event: "push", ready: base, selected: base, lookups: [base] },
+    { event: "push", ready: commits[1], lookups: [base], reason: "No green main CI push run for the commit" },
   ];
   const bash = process.platform === "win32" ? "C:/Program Files/Git/bin/bash.exe" : "bash";
   for (const { ready, selected, incomplete = "", expired = "", noJob = "", lookupError = "", invalid = false,
-    exact = false, lookups, status = selected ? 0 : 1, reason } of cases) {
+    event = "pull_request", lookups, status = selected ? 0 : 1, reason, summary = "", warning } of cases) {
+    const head = event === "pull_request" ? prMerge : base;
+    const tagPush = event === "push";
+    git("checkout", "--quiet", "--detach", head);
+    await rm(join(directory, "wasalx-nightly"), { recursive: true, force: true });
     await writeFile(join(directory, "lookups"), "");
     await writeFile(join(directory, "publication-output"), "");
     await writeFile(join(directory, "publication-summary"), "");
     const result = spawnSync(bash, ["--noprofile", "--norc", "-euo", "pipefail", "-c", ghFixture + publication.run], {
       ...options, timeout: 10_000, env: {
-        ...process.env, GITHUB_REPOSITORY: "fixture/nightly", BASE: base, READY: ready, INCOMPLETE: incomplete,
+        ...process.env, GITHUB_REPOSITORY: "fixture/nightly", BASE: base, SIDE: side, READY: ready, INCOMPLETE: incomplete,
         EXPIRED: expired, NO_JOB: noJob, LOOKUP_ERROR: lookupError, INVALID: String(invalid),
-        GITHUB_EVENT_NAME: exact ? "push" : "schedule", GITHUB_REF_TYPE: exact ? "tag" : "branch",
-        GITHUB_REF: exact ? `refs/tags/${tag}` : "refs/heads/main",
-        GITHUB_SHA: base, GITHUB_OUTPUT: "publication-output", GITHUB_STEP_SUMMARY: "publication-summary", RUNNER_TEMP: ".",
+        GITHUB_EVENT_NAME: event, GITHUB_REF_TYPE: tagPush ? "tag" : "branch",
+        GITHUB_REF: tagPush ? `refs/tags/${tag}` : event === "pull_request" ? "refs/pull/1/merge" : "refs/heads/main",
+        GITHUB_SHA: head, GITHUB_OUTPUT: "publication-output", GITHUB_STEP_SUMMARY: "publication-summary", RUNNER_TEMP: ".",
       },
     });
     assert.ifError(result.error);
-    assert.equal(result.status, status, result.stdout + result.stderr);
+    assert.equal(result.status, status, `${event}\n${result.stdout}${result.stderr}`);
     assert.equal((await readFile(join(directory, "publication-output"), "utf8")).trim(), selected ? `commit=${selected}` : "");
     if (reason) assert.ok((result.stdout + result.stderr).includes(reason), result.stderr);
-    const warning = selected && selected !== base
-      ? `Nightly images come from ${selected} (run 101) because requested base ${base} has no complete green publication.`
-      : "";
     const annotations = result.stderr.split(/\r?\n/u).filter(line => line.startsWith("::warning::"));
     assert.deepEqual(annotations, warning ? [`::warning::${warning}`] : []);
-    assert.equal((await readFile(join(directory, "publication-summary"), "utf8")).trim(), warning);
+    assert.equal((await readFile(join(directory, "publication-summary"), "utf8")).trim(), summary);
+    if (summary.startsWith("BLOCKED")) assert.ok(result.stderr.includes(`::error::${summary}`), result.stderr);
     if (selected) {
       const manifest = join(directory, "wasalx-nightly", "images-manifest.json");
       assert.equal(JSON.parse(await readFile(manifest, "utf8")).commit, selected);
+      assert.equal((await readFile(join(directory, "wasalx-nightly", "images-manifest-attempt.json"), "utf8")).trim(), "101");
     }
     assert.deepEqual((await readFile(join(directory, "lookups"), "utf8")).trim().split(/\r?\n/u), lookups);
   }
@@ -683,8 +738,9 @@ test("CI gates integration and infrastructure and runs portal integration files 
   assert.deepEqual(on.push.branches, ["main"]);
   assert.equal(integration.needs, "changes");
   assert.equal(integration.if, "${{ !cancelled() && (github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && (needs.changes.result != 'success' || needs.changes.outputs.integration != 'false'))) }}");
-  assert.equal(portal.needs, "changes");
-  assert.equal(portal.if, integration.if);
+  assert.deepEqual(portal.needs, ["changes", "portal-browser-build"]);
+  assert.match(portal.if, /needs\.portal-browser-build\.result == 'success'/u);
+  assert.match(portal.if, /needs\.changes\.outputs\.integration != 'false'/u);
   assert.equal(coverage.needs, "integration");
   assert.deepEqual(integration.strategy, { "fail-fast": false, matrix: { shard: [1, 2, 3, 4] } });
   assert.match(integration.services.postgres.options, /--tmpfs /u);
@@ -727,6 +783,8 @@ test("CI gates integration and infrastructure and runs portal integration files 
   assert.equal(gateStep.env.INTEGRATION_NEEDED, "${{ needs.changes.outputs.integration }}");
   assert.equal(gateStep.env.INTEGRATION, "${{ needs.integration.result }}");
   assert.equal(gateStep.env.PORTAL_INTEGRATION, "${{ needs.portal-integration.result }}");
+  assert.equal(gateStep.env.APPLICATION_NEEDED, "${{ needs.changes.outputs.application-e2e }}");
+  assert.equal(gateStep.env.APPLICATION_E2E, "${{ needs.application-e2e.result }}");
   assert.equal(gateStep.env.INTEGRATION_COVERAGE, "${{ needs.integration-coverage.result }}");
   assert.equal(gateStep.env.DEV_INSTALL_NEEDED, "${{ needs.changes.outputs.dev-install }}");
   assert.equal(gateStep.env.DEV_INSTALL, "${{ needs.dev-install-dryrun.result }}");
@@ -735,6 +793,118 @@ test("CI gates integration and infrastructure and runs portal integration files 
   assert.equal(gateStep.env.INSTALLER_PORTAL, "${{ needs.installer-portal.result }}");
   for (const job of [jobs.changes, jobs.checks]) {
     assert.equal(job.if, "github.event_name == 'pull_request' || github.event_name == 'merge_group'");
+  }
+});
+
+test("Application browser CI shards roles and locales and reuses the portal build", async (t) => {
+  const { jobs } = parse(await read(".github/workflows/ci.yml"));
+  const application = jobs["application-e2e"];
+  const portal = jobs["portal-integration"];
+  const build = jobs["portal-browser-build"];
+  const selection = jobs.changes.steps.find(step => step.id === "application-e2e");
+  assert(jobs["ci-gate"].needs.includes("application-e2e"));
+  assert.equal(selection.if, "github.event_name == 'pull_request'");
+  assert.equal(jobs.changes.outputs["application-e2e"], "${{ steps.application-e2e.outputs.needed }}");
+  assert.match(application.if, /needs\.changes\.outputs\.application-e2e != 'false'/u);
+  assert.deepEqual(application.needs, ["changes", "portal-browser-build"]);
+  assert.deepEqual(application.strategy.matrix.locale, ["en", "ar"]);
+  assert.deepEqual(application.strategy.matrix.roles.flatMap(roles => roles.split(",")),
+    ["tenant_owner", "tenant_admin", "supervisor", "agent", "auditor"]);
+  assert(build.steps.some(step => step.run === "pnpm run build"));
+  const run = application.steps.find(step => runsFile(step.run ?? "", "scripts/run-application-e2e.mjs"));
+  assert.deepEqual(run.env, {
+    WASALX_E2E_SKIP_BUILD: "1",
+    WASALX_E2E_LOCALES: "${{ matrix.locale }}",
+    WASALX_E2E_ROLES: "${{ matrix.roles }}",
+  });
+  const artifact = build.steps.find(step => step.uses?.startsWith("actions/upload-artifact@")).with.name;
+  for (const job of [portal, application]) {
+    assert.deepEqual(job.env, build.env);
+    assert.equal(job.steps.find(step => step.uses?.startsWith("actions/download-artifact@")).with.name, artifact);
+  }
+
+  const directory = await mkdtemp(join(tmpdir(), "application-selection-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const output = join(directory, "output");
+  for (const [status, expected] of [[0, "false"], [1, "true"], [128, "true"]]) {
+    await writeFile(output, "");
+    const result = runWorkflowScript(
+      `git() { case " $* " in *" app/ "*|*" tests/e2e/ "*) return "$DIFF_STATUS";; *) return 99;; esac; }\n${selection.run}`,
+      { DIFF_STATUS: String(status), GITHUB_OUTPUT: output },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal((await readFile(output, "utf8")).trim(), `needed=${expected}`);
+  }
+});
+
+test("Hosted Keycloak identity job builds the project image and requires the isolated cases", async () => {
+  const { jobs } = parse(await read(".github/workflows/ci.yml"));
+  const job = jobs["keycloak-identity"];
+  assert.equal(job.needs, "changes");
+  assert.match(job.if, /needs\.changes\.outputs\.keycloak-identity != 'false'/u);
+  assert.equal(jobs.changes.outputs["keycloak-identity"], "${{ steps.keycloak-identity.outputs.needed }}");
+  const run = job.steps.find(step => runsFile(step.run ?? "", "tests/hosted-keycloak-identity.mjs"));
+  assert.match(run.run, /docker build --file Dockerfile\.foundation-keycloak/u);
+  assert(!job.steps.some(step => step.uses?.startsWith("actions/upload-artifact@")));
+  const gate = jobs["ci-gate"];
+  assert(gate.needs.includes("keycloak-identity"));
+  assert.equal(gate.steps[0].env.KEYCLOAK_IDENTITY, "${{ needs.keycloak-identity.result }}");
+  assert.equal(gate.steps[0].env.KEYCLOAK_IDENTITY_NEEDED, "${{ needs.changes.outputs.keycloak-identity }}");
+});
+
+test("Hosted Keycloak cleanup verifies the prebuilt tag and attempts other resources after a failure", async () => {
+  const image = "wasalx/ci-keycloak:1-1";
+  const container = "wasalx-ci-keycloak-1-1";
+  let tagged = true;
+  let imageChecks = 0;
+  const docker = async (...args) => {
+    if (args[0] === "ps") {
+      assert.deepEqual(args, ["ps", "-aq", "--filter", "name=^/" + container + "$"]);
+      return "owned-container";
+    }
+    if (args[0] === "rm") {
+      assert.deepEqual(args, ["rm", "-f", container]);
+      throw new Error("Container removal failed");
+    }
+    if (args[1] === "ls") {
+      assert.deepEqual(args, ["image", "ls", "-q", image]);
+      imageChecks++;
+      return tagged ? "owned-image" : "";
+    }
+    assert.deepEqual(args, ["image", "rm", image]);
+    tagged = false;
+  };
+  const failures = await cleanupKeycloakIdentity({
+    docker, image, container, callback: { listening: false }, scratch: "owned-fixtures",
+    removeScratch: async () => { throw new Error("Fixture removal failed"); },
+  });
+  assert.deepEqual(failures, ["container", "fixtures"]);
+  assert.equal(tagged, false);
+  assert.equal(imageChecks, 2);
+  assert.deepEqual(await cleanupKeycloakIdentity({
+    docker: async () => "", image, container, callback: { listening: false },
+  }), []);
+});
+
+test("Hosted browser jobs retain Playwright diagnostics on failure or cancellation", async () => {
+  const { jobs } = parse(await read(".github/workflows/ci.yml"));
+  const diagnostics = {
+    "application-e2e": {
+      name: "application-e2e-${{ matrix.locale }}-${{ matrix.roles }}",
+      paths: ["output/playwright/application*/*/report/**", "output/playwright/application*/*/results/**"],
+    },
+    storybook: {
+      name: "storybook-audit",
+      paths: ["test-results/storybook", "output/playwright/design-system", "output/playwright/inbox/synthetic"],
+    },
+  };
+  for (const [job, { name, paths }] of Object.entries(diagnostics)) {
+    const upload = jobs[job].steps.find(step =>
+      step.uses?.startsWith("actions/upload-artifact@") && step.if === "failure() || cancelled()");
+    assert(upload, job);
+    assert.equal(upload.with.name, name, job);
+    assert.deepEqual(upload.with.path.trim().split("\n"), paths, job);
+    assert.equal(upload.with["retention-days"], 7, job);
   }
 });
 
@@ -751,6 +921,7 @@ test("CI gate requires each event's jobs and rejects unplanned skips, failures, 
     DEV_INSTALL_NEEDED: "true", DEV_INSTALL: "success", STORYBOOK_NEEDED: "true", STORYBOOK: "success",
     ZAMMAD_NEEDED: "true", ZAMMAD_COMPATIBILITY: "success",
     INSTALLER_PORTAL_NEEDED: "true", INSTALLER_PORTAL: "success",
+    APPLICATION_NEEDED: "true", APPLICATION_E2E: "success", KEYCLOAK_IDENTITY: "success",
   };
   const unselected = {
     ...pr, INTEGRATION_NEEDED: "false", INTEGRATION: "skipped", PORTAL_INTEGRATION: "skipped",
@@ -758,10 +929,11 @@ test("CI gate requires each event's jobs and rejects unplanned skips, failures, 
     DEV_INSTALL_NEEDED: "false", DEV_INSTALL: "skipped", STORYBOOK_NEEDED: "false", STORYBOOK: "skipped",
     ZAMMAD_NEEDED: "false", ZAMMAD_COMPATIBILITY: "skipped",
     INSTALLER_PORTAL_NEEDED: "false", INSTALLER_PORTAL: "skipped",
+    APPLICATION_NEEDED: "false", APPLICATION_E2E: "skipped", KEYCLOAK_IDENTITY_NEEDED: "false", KEYCLOAK_IDENTITY: "skipped",
   };
   const queue = {
     ...pr, EVENT: "merge_group", REVIEW: "skipped", IMAGES: "success",
-    INTEGRATION_NEEDED: "", INFRA_NEEDED: "", DEV_INSTALL_NEEDED: "", DEV_INSTALL: "skipped", STORYBOOK_NEEDED: "",
+    INTEGRATION_NEEDED: "", INFRA_NEEDED: "", DEV_INSTALL_NEEDED: "", DEV_INSTALL: "skipped", STORYBOOK_NEEDED: "", APPLICATION_NEEDED: "",
     ZAMMAD_NEEDED: "",
   };
   const push = { ...queue, EVENT: "push", CHANGES: "skipped", CHECKS: "skipped", FULL_UNIT: "success", IMAGES: "skipped",
@@ -771,7 +943,15 @@ test("CI gate requires each event's jobs and rejects unplanned skips, failures, 
   for (const [lane, result, override, expected] of [
     ["PR with selected jobs", pr, {}, 0],
     ["PR with unselected jobs", unselected, {}, 0],
+    ["PR with a failed Keycloak identity job", pr, { KEYCLOAK_IDENTITY: "failure" }, 1],
+    ["PR with Keycloak identity skipped without selection evidence", unselected, { KEYCLOAK_IDENTITY_NEEDED: "" }, 1],
+    ["merge queue with Keycloak identity skipped", queue, { KEYCLOAK_IDENTITY: "skipped" }, 1],
+    ["PR with a failed application shard", pr, { APPLICATION_E2E: "failure" }, 1],
+    ["PR with a cancelled application shard", pr, { APPLICATION_E2E: "cancelled" }, 1],
+    ["PR with application skipped without selection evidence", unselected, { APPLICATION_NEEDED: "" }, 1],
+    ["merge queue with application skipped", queue, { APPLICATION_E2E: "skipped" }, 1],
     ["PR with a failed Storybook audit", pr, { STORYBOOK: "failure" }, 1],
+    ["PR with selected Storybook skipped", pr, { STORYBOOK: "skipped" }, 1],
     ["PR with a cancelled Storybook audit", unselected, { STORYBOOK: "cancelled" }, 1],
     ["PR with Storybook skipped without selection evidence", unselected, { STORYBOOK_NEEDED: "" }, 1],
     ["PR without a recorded skip reason", unselected, { INTEGRATION_NEEDED: "" }, 1],
@@ -795,6 +975,7 @@ test("CI gate requires each event's jobs and rejects unplanned skips, failures, 
     ["merge queue with Zammad compatibility skipped", queue, { ZAMMAD_COMPATIBILITY: "skipped" }, 1],
     ["merge queue missing the installer portal build", queue, { INSTALLER_PORTAL_NEEDED: "false", INSTALLER_PORTAL: "skipped" }, 1],
     ["main push", push, {}, 0],
+    ["main push with Storybook skipped", push, { STORYBOOK: "skipped" }, 1],
     ["main push with skipped units", push, { FULL_UNIT: "skipped" }, 1],
     ["main push with failed units", push, { FULL_UNIT: "failure" }, 1],
     ["main push with cancelled units", push, { FULL_UNIT: "cancelled" }, 1],
@@ -803,6 +984,7 @@ test("CI gate requires each event's jobs and rejects unplanned skips, failures, 
     ["main push with skipped infrastructure", push, { INFRA: "skipped" }, 1],
     ["main push with cancelled selection", push, { CHANGES: "cancelled" }, 1],
     ["manual dispatch", dispatch, {}, 0],
+    ["manual dispatch with Storybook skipped", dispatch, { STORYBOOK: "skipped" }, 1],
     ["manual dispatch with skipped units", dispatch, { FULL_UNIT: "skipped" }, 1],
     ["manual dispatch with cancelled infrastructure", dispatch, { INFRA: "cancelled" }, 1],
   ]) {
@@ -964,8 +1146,7 @@ test("PR image results are advisory while the merge queue requires the full imag
   assert.equal(branch.publish.strategy["max-parallel"], 21);
   assert.equal(branch.manifest.needs, "publish");
   assert.equal(branch.manifest.concurrency, undefined);
-  assert.equal(branch.aliases.needs, "manifest");
-  assert.deepEqual(branch.aliases.concurrency, { group: "release-main", queue: "max" });
+  assert.equal(branch.aliases, undefined);
 
   const directory = await mkdtemp(join(tmpdir(), "wasalx-ci-image-results-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
@@ -977,7 +1158,7 @@ test("PR image results are advisory while the merge queue requires the full imag
     if (imageResult === "failure") assert.match(advisory.stdout, /::warning::Advisory PR image builds: failure/u);
 
     const result = runWorkflowScript(gate.steps[0].run, {
-      EVENT: "merge_group", CHANGES: "success", PRIVACY: "success", WORKFLOW_LINT: "success", STORYBOOK: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: "skipped",
+      EVENT: "merge_group", CHANGES: "success", PRIVACY: "success", WORKFLOW_LINT: "success", STORYBOOK: "success", APPLICATION_E2E: "success", KEYCLOAK_IDENTITY: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: "skipped",
       IMAGES: imageResult, INTEGRATION: "success", PORTAL_INTEGRATION: "success",
       INTEGRATION_COVERAGE: "success", DEV_INSTALL: "skipped", INFRA: "success",
       ZAMMAD_COMPATIBILITY: "success",
@@ -987,7 +1168,7 @@ test("PR image results are advisory while the merge queue requires the full imag
   }
   const summary = join(directory, "gate").replaceAll("\\", "/");
   const result = runWorkflowScript(gate.steps[0].run, {
-    EVENT: "pull_request", CHANGES: "success", PRIVACY: "success", WORKFLOW_LINT: "success", STORYBOOK: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: "success",
+    EVENT: "pull_request", CHANGES: "success", PRIVACY: "success", WORKFLOW_LINT: "success", STORYBOOK: "success", APPLICATION_E2E: "success", KEYCLOAK_IDENTITY: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: "success",
     IMAGES: "skipped", INTEGRATION_NEEDED: "false", INTEGRATION: "skipped",
     PORTAL_INTEGRATION: "skipped", INTEGRATION_COVERAGE: "skipped", DEV_INSTALL_NEEDED: "false", DEV_INSTALL: "skipped",
     INSTALLER_PORTAL_NEEDED: "false", INSTALLER_PORTAL: "skipped",
@@ -996,6 +1177,90 @@ test("PR image results are advisory while the merge queue requires the full imag
   });
   assert.equal(result.status, 0, result.stderr);
   assert((await readFile(summary, "utf8")).includes(report.name));
+});
+
+test("main alias updates report independently and use the exact successful CI attempt's manifest", async t => {
+  const workflow = parse(await read(".github/workflows/main-image-aliases.yml"));
+  const { aliases } = workflow.jobs;
+  assert.deepEqual(workflow.on, { workflow_run: { workflows: ["ci"], types: ["completed"], branches: ["main"] } });
+  assert.match(aliases.if, /github\.repository == 'WasalX\/wasalx-platform'/u);
+  assert.match(aliases.if, /head_repository\.full_name == github\.repository/u);
+  assert.match(aliases.if, /path == '\.github\/workflows\/ci\.yml'/u);
+  assert.match(aliases.if, /event == 'push'/u);
+  assert.match(aliases.if, /head_branch == 'main'/u);
+  assert.match(aliases.if, /conclusion == 'success'/u);
+  assert.deepEqual(aliases.concurrency, { group: "release-main", queue: "max" });
+  assert.equal(aliases["continue-on-error"], undefined);
+  assert.deepEqual(aliases.steps.find(step => step.uses?.startsWith("actions/checkout@")).with,
+    { ref: "${{ github.sha }}", "fetch-depth": 0, "persist-credentials": false });
+  const resolve = aliases.steps.find(step => step.id === "artifact");
+  const download = aliases.steps.find(step => step.uses?.startsWith("actions/download-artifact@"));
+  assert.deepEqual(download.with,
+    { "artifact-ids": "${{ steps.artifact.outputs.id }}", path: "${{ runner.temp }}/publication",
+      "github-token": "${{ github.token }}", "run-id": "${{ github.event.workflow_run.id }}" });
+  const validate = aliases.steps.find(step => step.id === "publication");
+  assert.equal(validate.run,
+    'python3 scripts/release/advance-main-image-aliases.py --validate-only "$RUNNER_TEMP/publication/images-manifest.json"');
+  assert(aliases.steps.indexOf(resolve) < aliases.steps.indexOf(download));
+  assert(aliases.steps.indexOf(download) < aliases.steps.indexOf(validate));
+  assert.deepEqual(aliases.steps.slice(aliases.steps.indexOf(validate) + 1).map(step => step.if),
+    Array(3).fill("steps.publication.outputs.ready == 'true'"));
+  assert.equal(aliases.steps.at(-1).run,
+    'python3 scripts/release/advance-main-image-aliases.py "$RUNNER_TEMP/publication/images-manifest.json"');
+  assert.equal(aliases.steps.at(-1)["continue-on-error"], undefined);
+
+  const { manifest } = parse(await read(".github/workflows/branch-image.yml")).jobs;
+  const report = manifest.steps.find(step => step.id === "complete").run;
+  const bind = manifest.steps.find(step => step.name === "Bind manifest bytes to this publishing attempt");
+  const upload = manifest.steps.find(step => step.uses?.startsWith("actions/upload-artifact@"));
+  assert.equal(upload.with.name, "images-manifest");
+  assert.deepEqual(upload.with.path.trim().split("\n"), ["images-manifest.json", "images-manifest-attempt.json"]);
+  assert(manifest.steps.indexOf(bind) < manifest.steps.indexOf(upload));
+  const directory = await mkdtemp(join(tmpdir(), "wasalx-publication-outcome-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const commit = "a".repeat(40);
+  for (const publicationComplete of [true, false]) {
+    const summary = join(directory, String(publicationComplete));
+    const output = summary + ".output";
+    const manifestPath = join(directory, "images-manifest.json");
+    const raw = JSON.stringify({ commit, publicationComplete }, null, 2) + "\n";
+    await writeFile(manifestPath, raw);
+    const binding = runWorkflowScript(bind.run, { GITHUB_RUN_ID: "123", GITHUB_RUN_ATTEMPT: "2" }, directory);
+    assert.equal(binding.status, 0, binding.stderr);
+    assert.equal(await readFile(manifestPath, "utf8"), raw);
+    assert.deepEqual(JSON.parse(await readFile(join(directory, "images-manifest-attempt.json"), "utf8")), {
+      runId: "123", runAttempt: "2", manifestSha256: "sha256:" + createHash("sha256").update(raw).digest("hex"),
+    });
+    const result = runWorkflowScript(report, {
+      GITHUB_SHA: commit, GITHUB_OUTPUT: output, GITHUB_STEP_SUMMARY: summary,
+    }, directory);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal((await readFile(output, "utf8")).trim(), `complete=${publicationComplete}`);
+    assert.equal((await readFile(summary, "utf8")).trim(),
+      `Immutable image publication complete for \`${commit}\`: ${publicationComplete}`);
+  }
+  const wrongSource = runWorkflowScript(report, {
+    GITHUB_SHA: "b".repeat(40), GITHUB_OUTPUT: join(directory, "wrong.output"),
+    GITHUB_STEP_SUMMARY: join(directory, "wrong.summary"),
+  }, directory);
+  assert.notEqual(wrongSource.status, 0);
+
+  const output = join(directory, "artifact.output");
+  const available = { id: 412, name: "images-manifest", expired: false };
+  for (const artifacts of [[], [available], [available, { ...available, id: 413 }], [{ ...available, expired: true }]]) {
+    await writeFile(output, "");
+    const result = runWorkflowScript(`gh() {
+      [[ "$*" == 'api repos/WasalX/wasalx-platform/actions/runs/123/artifacts?name=images-manifest' ]] || return 1
+      printf '%s' "$ARTIFACTS"
+    }\n${resolve.run}`, {
+      SOURCE_RUN: "123", GITHUB_REPOSITORY: "WasalX/wasalx-platform", GITHUB_OUTPUT: output,
+      GITHUB_STEP_SUMMARY: join(directory, "artifact.summary"),
+      ARTIFACTS: JSON.stringify({ total_count: artifacts.length, artifacts }),
+    }, directory);
+    const accepted = artifacts.length === 1 && !artifacts[0].expired;
+    assert.equal(result.status, accepted ? 0 : 1, result.stderr);
+    assert.equal(await readFile(output, "utf8"), accepted ? "id=412\n" : "");
+  }
 });
 
 test("optional PR lanes run on diff errors and gate their applicable checks", async t => {
@@ -1020,7 +1285,7 @@ test("optional PR lanes run on diff errors and gate their applicable checks", as
   const paths = [
     "infra/helm/", "infra/terraform/", ":(glob)scripts/validate-*", "scripts/release/fetch-verified-asset.sh",
     "compose.full.yaml", "tests/fixtures/production-backup-alerts.yaml", "tests/secret-adapter-readiness.test.rb",
-    ".github/workflows/ci.yml",
+    "docs/runbooks/alert-response.md", "infra/docker/full/prometheus/alerts.yaml", ".github/workflows/ci.yml",
   ].join(" ");
   const directory = await mkdtemp(join(tmpdir(), "wasalx-infra-validate-changes-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
@@ -1071,7 +1336,7 @@ ${detector.run}`, { GITHUB_OUTPUT: outputFile.replaceAll("\\", "/"), DIFF_PATHS:
   ]) {
     const pr = event === "pull_request";
     const result = runWorkflowScript(gateStep.run, {
-      EVENT: event, CHANGES: "success", PRIVACY: "success", WORKFLOW_LINT: "success", STORYBOOK: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: pr ? "success" : "skipped",
+      EVENT: event, CHANGES: "success", PRIVACY: "success", WORKFLOW_LINT: "success", STORYBOOK: "success", APPLICATION_E2E: "success", KEYCLOAK_IDENTITY: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: pr ? "success" : "skipped",
       IMAGES: pr ? "skipped" : "success", INTEGRATION_NEEDED: "false",
       INTEGRATION: pr ? "skipped" : "success", PORTAL_INTEGRATION: pr ? "skipped" : "success",
       INTEGRATION_COVERAGE: pr ? "skipped" : "success",
@@ -1087,7 +1352,7 @@ ${detector.run}`, { GITHUB_OUTPUT: outputFile.replaceAll("\\", "/"), DIFF_PATHS:
     ["true", "failure", 1], ["true", "cancelled", 1],
   ]) {
     const result = runWorkflowScript(gateStep.run, {
-      EVENT: "pull_request", CHANGES: "success", PRIVACY: "success", WORKFLOW_LINT: "success", STORYBOOK: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: "success",
+      EVENT: "pull_request", CHANGES: "success", PRIVACY: "success", WORKFLOW_LINT: "success", STORYBOOK: "success", APPLICATION_E2E: "success", KEYCLOAK_IDENTITY: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: "success",
       IMAGES: "skipped", INTEGRATION_NEEDED: "false",
       INTEGRATION: "skipped", PORTAL_INTEGRATION: "skipped", INTEGRATION_COVERAGE: "skipped",
       DEV_INSTALL_NEEDED: needed, DEV_INSTALL: jobResult, INFRA_NEEDED: "false", INFRA: "skipped",
@@ -1108,7 +1373,7 @@ ${detector.run}`, { GITHUB_OUTPUT: outputFile.replaceAll("\\", "/"), DIFF_PATHS:
   ]) {
     const pr = event === "pull_request";
     const result = runWorkflowScript(gateStep.run, {
-      EVENT: event, CHANGES: "success", PRIVACY: "success", WORKFLOW_LINT: "success", STORYBOOK: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: pr ? "success" : "skipped",
+      EVENT: event, CHANGES: "success", PRIVACY: "success", WORKFLOW_LINT: "success", STORYBOOK: "success", APPLICATION_E2E: "success", KEYCLOAK_IDENTITY: "success", CHECKS: "success", FULL_UNIT: "skipped", REVIEW: pr ? "success" : "skipped",
       IMAGES: pr ? "skipped" : "success", DEV_INSTALL_NEEDED: "false", DEV_INSTALL: "skipped",
       INSTALLER_PORTAL_NEEDED: pr ? "false" : "true", INSTALLER_PORTAL: pr ? "skipped" : "success",
       INFRA_NEEDED: "true", INFRA: "success", INTEGRATION_NEEDED: needed, GITHUB_STEP_SUMMARY: summary,
@@ -1170,6 +1435,14 @@ test("Zammad compatibility gates CI and reuses the same job on the nightly sched
   assert(Object.hasOwn(compatibility.on, "workflow_call"));
   assert.deepEqual(compatibility.permissions, { contents: "read" });
   assert.equal(compatibility.jobs.compatibility["runs-on"], "ubuntu-24.04");
+  const manifest = JSON.parse(await read("infra/docker/full/zammad/typecheck-upstream.json"));
+  const dockerfile = (await read("infra/docker/Dockerfile.zammad")).replaceAll("\r\n", "\n");
+  assert.match(manifest.revision, /^[a-f0-9]{40}$/u);
+  assert(dockerfile.includes("FROM scratch AS typecheck-source\nADD https://github.com/zammad/zammad.git#"
+    + manifest.revision + ":app/frontend /app/frontend/"));
+  const typecheck = dockerfile.split(/^RUN /mu).find(run => run.includes("pnpm lint:ts"));
+  assert(dockerfile.includes("COPY --chown=1000:1000 --from=typecheck-source / /tmp/typecheck-upstream/"));
+  assert.match(typecheck, /prepare-zammad-typecheck\.mjs restore \/opt\/zammad \/tmp\/typecheck-upstream\.json \/tmp\/typecheck-upstream [\s\S]+rm -rf \/tmp\/typecheck-upstream[\s\S]+pnpm lint:ts[\s\S]+prepare-zammad-typecheck\.mjs remove/u);
 });
 
 test("PostgreSQL coverage requires an exact report from every shard", async t => {

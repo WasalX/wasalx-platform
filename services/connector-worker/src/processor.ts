@@ -1,6 +1,6 @@
 import {currentMetaRuntimeCandidate} from "./meta-request-provenance.js";
 import {currentMetaTransportBinding} from "./meta-transport-binding.js";
-import {verifyMetaInheritedTemplateSend} from "./meta-template-send.js";
+import {isVerifiedNonMarketingTemplate,verifyMetaInheritedTemplateSend} from "./meta-template-send.js";
 import {parseMetaBillingSnapshot} from "../../../packages/core/src/meta-account-policy.js";
 import {assertMetaLifecycleAccess} from "../../../packages/core/src/meta-account-relation.js";
 import {assertMetaCredentialProof} from "../../../packages/core/src/meta-account-relation.js";
@@ -130,7 +130,9 @@ export class DeliveryProcessor{
         // A failed/missing local descriptor is UNKNOWN, never a caller-selected mode.
         let runtime;
         try{runtime=await currentMetaRuntimeCandidate({...await currentMetaTransportBinding(this.providerConfig.metaGraphVersion),graphVersion:this.providerConfig.metaGraphVersion});}catch{/* UNKNOWN */}
-        await this.repository.admitMetaMessageRequest(job,leaseId,hash,runtime,phoneNumberId,templateProof);assertProof();
+        const nonMarketing=Boolean(job.template&&await this.repository.whatsAppMarketingOptedOut(job)
+          &&await isVerifiedNonMarketingTemplate(job,adapter));
+        await this.repository.admitMetaMessageRequest(job,leaseId,hash,runtime,phoneNumberId,templateProof,nonMarketing);assertProof();
         await checkTestRecipient?.();
       }
       catch(error){if(error instanceof ProviderError)throw error;throw new ProviderError("Message request admission is unavailable.",true,"META_MESSAGE_ADMISSION_UNAVAILABLE",undefined,true);}
