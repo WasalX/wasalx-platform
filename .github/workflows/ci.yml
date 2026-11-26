@@ -621,6 +621,20 @@ jobs:
           WASALX_E2E_LOCALES: ${{ matrix.locale }}
           WASALX_E2E_ROLES: ${{ matrix.roles }}
         run: node scripts/run-application-e2e.mjs
+      - name: Verify every synthetic journey screenshot
+        id: journey-captures
+        if: success() && matrix.roles == 'tenant_owner'
+        env:
+          CAPTURE_LOCALE: ${{ matrix.locale }}
+        run: node tests/e2e/journey-captures.mjs "$CAPTURE_LOCALE"
+      - name: Upload synthetic journey screenshots
+        if: success() && matrix.roles == 'tenant_owner'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: application-journey-captures-${{ matrix.locale }}
+          path: ${{ steps.journey-captures.outputs.paths }}
+          if-no-files-found: error
+          retention-days: 7
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure() || cancelled()
         with:
