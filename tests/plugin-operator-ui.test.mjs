@@ -24,7 +24,7 @@ test("plugin editor is a focus-restoring modal with a guarded dirty close", () =
 
 test("plugin mutation failures preserve typed privileged recovery inside the open draft", () => {
   assert.match(source, /operatorResponseFailure, type CodedOperatorError/u);
-  assert.match(source, /setMutationError\(problem instanceof Error && "code" in problem/u);
+  assert.match(source, /setMutationError\(operatorFailure\(problem, t\("bot\.errors\.change"\), locale\)\)/u);
   assert.match(source, /mutationError\.code === "REAUTHENTICATION_REQUIRED"/u);
   assert.match(source, /href="\/auth\/login\?step_up=privileged&return_to=%2Fapp%3Fview%3Dplugins"/u);
   assert.match(source, /target="_blank"[\s\S]*rel="noopener noreferrer"/u);

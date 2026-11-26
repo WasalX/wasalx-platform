@@ -20,7 +20,9 @@ package and seeds the cache. Check the anonymous access before claiming a
 warm-cache timing. Cosign produces the signature and SLSA attestation.
 The [registry retry policy](../../scripts/release/image_registry_retry.py)
 allows at most three attempts for recognized transient HTTP and network
-failures or a registry command deadline. Build, authorization, signature,
+failures or a registry command deadline. The immutable image push also retries
+the exact Docker error "unknown blob" within that same limit, logging each
+failed push attempt and its output. Build, authorization, signature,
 provenance and digest errors fail on the first attempt. Unclassified failures
 also fail immediately. Release tool and infrastructure downloads use curl's
 standard transient retry set with a time budget. Verification failures stop
