@@ -202,6 +202,7 @@ async function teamsJourney(locale) {
     await button("teamsAdmin.save").click(); await expect(button("teamsAdmin.check")).toBeVisible();
     await assertPrivateStorage(test, storageKey, ["kind", "operation_id"]);
     assert.equal(fixture.writes.filter(row => row.operation === "TEAM_CREATE").length, 1);
+    await expect(button("teamsAdmin.check")).toBeEnabled();
     await page.reload({ waitUntil: "networkidle" }); await button("teamsAdmin.check").click();
     await expect(name).toHaveValue("Synthetic delivery team"); await expect(note).toHaveValue("Synthetic private team description");
     assert.equal(fixture.writes.filter(row => row.operation === "TEAM_CREATE").length, 1);
@@ -221,6 +222,7 @@ async function teamsJourney(locale) {
     await button("teamsAdmin.cancelMissing").click(); await expect(button("teamsAdmin.check")).toHaveCount(0);
     await expect(note).toHaveValue("Preserve private unsaved team description during grant save");
     await button("teamsAdmin.save").click(); await expect(page.getByRole("status")).toContainText(t("teamsAdmin.saved"));
+    await expect(button("teamsAdmin.createTeam")).toBeEnabled();
     await page.reload({ waitUntil: "networkidle" }); await button("teamsAdmin.more").click();
     await page.getByRole("button", { name: /Synthetic delivery team/u }).click();
     await expect(note).toHaveValue("Preserve private unsaved team description during grant save");
@@ -290,6 +292,7 @@ async function mailboxJourney(surface, locale) {
     await assertPrivateStorage(test, storageKey, ["kind", "operation_id"]);
     for (const password of await page.locator('input[type="password"]').all()) await expect(password).toHaveValue("");
     assert.equal(fixture.writes.filter(row => row.operation === "MAILBOX_CREATE").length, 1);
+    await expect(button("mailboxes.check")).toBeEnabled();
     await page.reload({ waitUntil: "networkidle" }); await button("mailboxes.check").click();
     await expect(label("mailboxes.address")).toHaveValue("qualification.delivery.mailbox.with.a.long.supported.name@example.invalid");
     await expect(button("mailboxes.activate")).toBeDisabled();
@@ -303,6 +306,10 @@ async function mailboxJourney(surface, locale) {
     await expect(label("mailboxes.address")).toBeEnabled();
     await label("mailboxes.name").fill("Synthetic updated delivery mailbox with a long supported display name");
     await button("mailboxes.saveDraft").click(); await expect(button("mailboxes.activate")).toBeDisabled();
+    await expect(page.getByRole("status").filter({ hasText: t("mailboxes.saved") })).toBeVisible();
+    // Pause also shows Saved. Save draft is enabled again after the new operation settles.
+    await expect(button("mailboxes.saveDraft")).toBeEnabled();
+    assert.equal(await page.evaluate(key => sessionStorage.getItem(key), storageKey), null, "Mailbox operation must settle before reload");
     await page.reload({ waitUntil: "networkidle" }); await button("mailboxes.more").click(); await mailboxButton("qualification.delivery.mailbox.with.a.long.supported.name@example.invalid").click();
     await expect(label("mailboxes.name")).toHaveValue("Synthetic updated delivery mailbox with a long supported display name");
     // Verification's unknown result is distinct from a lost operation response.
@@ -320,6 +327,7 @@ async function mailboxJourney(surface, locale) {
     fixture.control.loseCommit = "MAILBOX_SIGNATURE_SAVE";
     await button("mailboxes.saveSignature").click(); await expect(button("mailboxes.check")).toBeVisible();
     await assertPrivateStorage(test, storageKey, ["kind", "operation_id", "team_id"]);
+    await expect(button("mailboxes.check")).toBeEnabled();
     await page.reload({ waitUntil: "networkidle" }); await button("mailboxes.check").click();
     await expect(signature).toHaveValue("Synthetic plain team signature"); await expect(label("mailboxes.address")).toHaveCount(0);
     await button("mailboxes.more").click(); await mailboxButton("qualification.delivery.mailbox.with.a.long.supported.name@example.invalid").click(); await button("mailboxes.signature").click();
@@ -332,6 +340,7 @@ async function mailboxJourney(surface, locale) {
     await button("mailboxes.cancelMissing").click(); await expect(button("mailboxes.check")).toHaveCount(0);
     await expect(label("mailboxes.name")).toHaveValue("Private mailbox draft survives check outage");
     await button("mailboxes.saveDraft").click(); await expect(page.getByRole("status").filter({ hasText: t("mailboxes.saved") })).toBeVisible();
+    await expect(button("mailboxes.saveDraft")).toBeEnabled();
     await captureAndAudit(test, "paused");
     fixture.control.reauth = "MAILBOX_LIST"; await focusCheck(test, "MAILBOX_LIST");
     await assertReauthBox(page.getByRole("link", { name: t("tenant.privacy.action.reauthenticate"), exact: true }));
