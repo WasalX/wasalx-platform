@@ -15,22 +15,27 @@ const INSTRUMENTATION_VERSION = "0.1.0";
 
 const sensitiveKey = /(?:^|_)(?:body|text|payload|secret|token|authorization|cookie|password|qr|pass_?key|phone|reference|url|group_name|messages?|title|filename|api_key|access_key|credentials?|private_key|signature|t?otp|passphrase|hmac|sessions?|jwt|key|sig)(?:_|$)/iu;
 // Provider message, chat, and recipient identifiers can contain phone numbers.
-const personalFieldKey = /(?:^|_)(?:e_?mails?|recipients?|subjects?|contacts?|senders?|user_?names?|push_?names?|chat_ids?|wamids?|wa_?ids?|participants?|authors?|nicknames?|mobiles?|msisdns?|tels?|jids?|(?:first|last|full|display|recipient|customer|agent|profile|nick)_names?)(?:_|$)|^(?:names?|customer)$/iu;
+const personalFieldKey = /(?:^|_)(?:e_?mails?|recipients?|subjects?|contacts?|senders?|user_?names?|push_?names?|chat_ids?|wamids?|wa_?ids?|participants?|authors?|nicknames?|mobiles?|msisdns?|tels?|telephones?|cellphones?|from_numbers?|whatsapp_numbers?|jids?|(?:first|last|full|display|recipient|customer|agent|profile|nick)_names?)(?:_|$)|^(?:names?|customer|number|whatsapp)$/iu;
+const mobileMetadataKey = /^(?:is_mobile|mobile_platform)$/iu;
 const addressKey = /(?:^|\.)(?:to|from|cc|bcc|reply[ _-]?to|mail[ _-]?from|address)$/iu;
 const internalIdKey = /^(?:contact|sender|subject|e_?mail)_ids?$/iu;
 const messageCounterKey = /^messages?_(?:count|sent)$/iu;
 const providerMessageIdLike = /\b(?:wamid\.[A-Za-z0-9+/_=-]+|(?:true|false)_[\d-]+@(?:c\.us|g\.us|lid|s\.whatsapp\.net)_[A-Za-z0-9_-]+(?:@(?:c\.us|lid|s\.whatsapp\.net))?|[\d-]+@lid\b(?!-|\.[\p{L}\p{N}-]))/gu;
 const emailLike = /[\p{L}\p{N}.!#$%&'*+/=?^`{|}~-]{1,64}@[\p{L}\p{N}-]{1,63}(?:\.[\p{L}\p{N}-]{1,63})+/gu;
-const phoneZero = String.raw`[0\u0660\u06f0]`;
-const phoneNonZero = String.raw`[1-9\u0661-\u0669\u06f1-\u06f9]`;
+const phoneZero = String.raw`[0\u0660\u06f0\uff10]`;
+const phoneNonZero = String.raw`[1-9\u0661-\u0669\u06f1-\u06f9\uff11-\uff19]`;
 const barePhonePattern = String.raw`${phoneNonZero}\p{Nd}{9,14}|${phoneZero}\p{Nd}{8,13}|${phoneZero}{2}${phoneNonZero}\p{Nd}{7,13}`;
 const barePhoneLike = new RegExp(`^(?:${barePhonePattern})$`, "u");
-const dateAfterHyphen = String.raw`(?<=-)(?:\p{Nd}{4}-\p{Nd}{2}-\p{Nd}{2}|\p{Nd}{2}-\p{Nd}{2}-\p{Nd}{4})(?![\p{Nd}-])`;
-// Allow a hyphen after a text label while protecting date fragments and UUID tails.
+const dateLike = String.raw`(?:\p{Nd}{4}-\p{Nd}{2}-\p{Nd}{2}|\p{Nd}{2}-\p{Nd}{2}-\p{Nd}{4}|\p{Nd}{2}\.\p{Nd}{2}\.\p{Nd}{4})(?![.-]?\p{Nd})`;
+const phoneStart = String.raw`(?<![\p{L}\p{N}_.]|\p{Nd}-|[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-)(?!${dateLike})`;
 // Only formatted numbers may follow a label hyphen, so label-hyphen-digits IDs (req-<digits>) survive.
-const phoneStart = String.raw`(?<![\p{L}\p{N}_.]|\p{Nd}-|[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-)(?!${dateAfterHyphen})`;
+const internationalPrefix = String.raw`(?:\+|${phoneZero}{2}(?=\p{Nd}{0,14}[\s().-]+\p{Nd})[\s.-]*(?=${phoneNonZero}))`;
+const internationalPhonePattern = String.raw`${internationalPrefix}(?:\p{Nd}[\s().-]*){7,14}\p{Nd}`;
+const phoneSeparator = String.raw`[\s.-]+`;
+const countryCodePattern = String.raw`${phoneNonZero}\p{Nd}{0,2}${phoneSeparator}`;
+const groupedPhonePattern = String.raw`(?:(?:\(?\p{Nd}{2,4}\)?${phoneSeparator}){2,3}\p{Nd}{4}|\p{Nd}{3,5}${phoneSeparator}\p{Nd}{6,7})`;
 const phoneLike = new RegExp(
-  String.raw`${phoneStart}(?:\+(?:\p{Nd}[\s().-]*){7,14}\p{Nd}|(?:\(?\p{Nd}{2,4}\)?[\s.-]+){2,3}\p{Nd}{4}|(?<!-)(?:${barePhonePattern}))(?![\p{L}\p{N}_-]|\.\p{Nd})`,
+  String.raw`${phoneStart}(?:${internationalPhonePattern}|(?:${countryCodePattern})?${groupedPhonePattern}|(?<!-)(?:${barePhonePattern}))(?![\p{L}\p{N}_-]|\.\p{Nd})`,
   "gu",
 );
 const trailingToken = /(?<!\S)\S+$/u;
@@ -145,7 +150,8 @@ function redactValue(value: unknown, key: string, ancestors?: WeakSet<object>, u
     messageCounterKey.test(normalizedKey);
   if (!messageCounter && (
     sensitiveKey.test(separatedKey) || sensitiveKey.test(normalizedKey) ||
-    personalFieldKey.test(separatedKey) || personalFieldKey.test(normalizedKey) ||
+    (!mobileMetadataKey.test(normalizedKey) &&
+      (personalFieldKey.test(separatedKey) || personalFieldKey.test(normalizedKey))) ||
     addressKey.test(key)
   )) {
     return "[REDACTED]";
