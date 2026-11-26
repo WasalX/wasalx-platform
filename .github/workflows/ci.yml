@@ -72,7 +72,7 @@ jobs:
           needed=true
           if git diff --quiet --no-ext-diff --no-renames HEAD^1 HEAD -- \
             .github/workflows/ci.yml scripts/test-postgres-integration.mjs scripts/postgres-scenario-registry.mjs \
-            services/control-api/ infra/docker/postgres/ infra/docker/full/postgres/ \
+            services/control-api/ services/connector-worker/ packages/ infra/docker/postgres/ infra/docker/full/postgres/ \
             ':(glob)tests/*postgres*.mjs' tests/meta-routing-fixture.mjs tests/group-designation-evidence.mjs \
             tests/fixtures/ tests/helpers/ tests/support/ \
             app/auth/ app/platform/auth/ app/api/health/ app/WasalXApp.tsx lib/request-auth.ts \
@@ -131,7 +131,7 @@ jobs:
             compose.full.yaml .dockerignore infra/docker/Dockerfile.zammad infra/docker/full/zammad/ \
             zammad-addon.json zammad-package/ build/zammad/ release/installer-images.json \
             ':(glob)scripts/*zammad*' ':(glob)scripts/contracts/*mailbox*' scripts/release/operator-input.mjs \
-            app/AttachmentFilePicker.tsx app/Inbox.tsx app/GroupInbox.tsx app/api/inbox/attachment/ lib/i18n/ \
+            app/AttachmentFilePicker.tsx app/Inbox.tsx app/TicketInbox.tsx app/GroupInbox.tsx app/api/inbox/attachment/ lib/i18n/ \
             tests/zammad-image-browser-compat.test.mjs tests/fixtures/ tests/helpers/ tests/support/ ':(glob)tests/**/*.rb' \
             services/control-api/ services/connector-worker/ packages/ lib/domain.ts lib/literal-matcher.ts \
             scripts/build-services.mjs tsconfig.json ':(glob)services/*/tsconfig*.json' .gitattributes \
