@@ -4,6 +4,7 @@ import { operatorFailureMessage, operatorLocalFailure } from "../lib/operator-ui
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
 import { ModalDialog } from "./ModalDialog";
 import { isAbortError } from "../lib/bot-conversations";
+import { formatDateTime, formatNumber } from "../lib/i18n/format";
 import { useI18n } from "./I18nProvider";
 import { ScrollRegion } from "./tenant-ui";
 import { useVisibleRefresh } from "./use-visible-refresh";
@@ -599,7 +600,7 @@ function GroupInboxSession({ selectedGroup, selectedMessage = null, selectGroup,
     void run(() => mutate({ operation: "GROUP_SEND", input }));
   };
   const jumpLatest = () => { setFollowing(true); followingRef.current = true; setIncoming(0); unreadSnapshot.current.clear(); void run(() => loadMessages()); };
-  const formatTime = (value: string) => new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
+  const formatTime = (value: string) => formatDateTime(value, locale);
   const actionable = (message: Message) => message.latest_mutation !== "REVOKED";
   const button = "wx-button wx-button-secondary";
   return <section className="wx-group" dir={direction} aria-label={t("groups.title")}>
@@ -631,7 +632,7 @@ function GroupInboxSession({ selectedGroup, selectedMessage = null, selectGroup,
         {!groups.length ? <p>{t("groups.empty")}</p> : <ul>{groups.map(item => <li key={item.id}><button type="button" className="wx-group-choice"
           aria-current={selectedGroup === item.id ? "true" : undefined} onClick={() => selectGroup(item.id)}>
           <b dir="auto">{item.name}</b><span>{t(`groups.scope.${item.access_scope}`)}</span>
-          {item.unread_count ? <span>{t("groups.unread", { count: new Intl.NumberFormat(locale).format(item.unread_count) })}</span> : null}
+          {item.unread_count ? <span>{t("groups.unread", { count: formatNumber(item.unread_count, locale) })}</span> : null}
         </button></li>)}</ul>}
         {groupCursor ? <button type="button" className={button} disabled={busy} onClick={() => void run(() => loadGroups(groupCursor))}>{t("groups.moreGroups")}</button> : null}
       </aside>

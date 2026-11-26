@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import { chromium, expect } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
+import { formatNumber } from "../lib/i18n/format.ts";
 
 async function assertMobileAssignment(page, locale) {
   const result = await page.locator("#inbox-team").evaluate(team => {
@@ -300,7 +301,7 @@ try {
     const fullArticle = page.locator(".wx-ticket-full-article").last();
     const previewBody = Array.from(longBody).slice(0, 50_000).join("");
     await expect(fullArticle.locator('p[dir="auto"]')).toHaveText(previewBody);
-    const format = new Intl.NumberFormat(locale);
+    const format = { format: value => formatNumber(value, locale) };
     await expect(fullArticle.locator("p").nth(1)).toHaveText(locale === "ar"
       ? `يُعرض ${format.format(50_000)} من أصل ${format.format(50_002)} حرفًا.`
       : `Showing ${format.format(50_000)} of ${format.format(50_002)} characters.`);
