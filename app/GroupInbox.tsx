@@ -176,7 +176,7 @@ function GroupInboxSession({ selectedGroup, selectedMessage = null, selectGroup,
   const [teams, setTeams] = useState<{ id: string; name: string }[]>([]);
   const [recording, setRecording] = useState(false);
   const timeline = useRef<HTMLDivElement>(null), composer = useRef<HTMLTextAreaElement>(null), chooser = useRef<HTMLSelectElement>(null);
-  const heading = useRef<HTMLHeadingElement>(null), latest = useRef<HTMLLIElement>(null);
+  const heading = useRef<HTMLHeadingElement>(null), latest = useRef<HTMLLIElement>(null), loadFocus = useRef<Element | null>(null);
   const current = useRef({ group: selectedGroup, scope, filter, ticketFilter, active, canWrite, context: selectedMessage });
   const submittedSends = useRef(new Map<string, SendInput>());
   const mounted = useRef(true), inFlight = useRef(false), authorization = useRef(0);
@@ -382,6 +382,7 @@ function GroupInboxSession({ selectedGroup, selectedMessage = null, selectGroup,
     if (capture) { capture.discard = true; clearTimeout(capture.timer); capture.stream.getTracks().forEach(track => track.stop()); if (capture.instance.state !== "inactive") capture.instance.stop(); }
     const resetRecording = window.setTimeout(() => setRecording(false), 0);
     if (!active) return () => window.clearTimeout(resetRecording);
+    loadFocus.current = document.activeElement;
     const controller = new AbortController();
     const groupId = selectedGroup, boundary = scope, generation = authorization.current, groupGeneration = groupId ? groupEpoch.current.get(groupId) ?? 0 : 0;
     const sequenceFence = messageSequence;
@@ -400,7 +401,12 @@ function GroupInboxSession({ selectedGroup, selectedMessage = null, selectGroup,
   }, [active, selectedGroup, selectedMessage, request, loadMessages, scope, t]);
   useEffect(() => {
     if (!active || loading || !group?.id || contextTarget) return;
-    const frame = requestAnimationFrame(() => heading.current?.focus({ preventScroll: true }));
+    const frame = requestAnimationFrame(() => {
+      // A slow load must not pull focus back from a control the operator moved to meanwhile.
+      const current = document.activeElement;
+      if (current && current !== document.body && current !== loadFocus.current) return;
+      heading.current?.focus({ preventScroll: true });
+    });
     return () => cancelAnimationFrame(frame);
   }, [active, loading, group?.id, contextTarget]);
   useEffect(() => {
