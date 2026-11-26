@@ -158,10 +158,41 @@ export function registerPrivacySettingsJourneys(locale: Locale, role: string) {
       }
     });
 
+    if (canRead) {
+      test("fits the privacy lists and reaches every action at 320 px", async ({
+        page,
+      }) => {
+        await page.setViewportSize({ width: 320, height: 720 });
+        await page.goto("/app?view=settings");
+        await expect(
+          page.locator('[data-application-ready="true"]'),
+        ).toBeVisible();
+        await page
+          .getByRole("tab", {
+            name: t("tenant.settings.sections.privacy"),
+            exact: true,
+          })
+          .click();
+        const panel = page.getByRole("tabpanel", {
+          name: t("tenant.settings.sections.privacy"),
+        });
+        await expect(panel.getByRole("table")).toHaveCount(2);
+        const box = await panel.boundingBox();
+        expect(box?.x).toBeGreaterThanOrEqual(0);
+        expect((box?.x ?? 0) + (box?.width ?? Infinity)).toBeLessThanOrEqual(
+          320,
+        );
+        for (const action of await panel.getByRole("button").all()) {
+          await action.scrollIntoViewIfNeeded();
+          await expect(action).toBeInViewport();
+        }
+      });
+    }
+
     if (canExport) {
       test(
         "inspects and recovers exports from the requests table",
-        { tag: "@desktop-only" },
+        { tag: "@privacy-overflow" },
         async ({ page }) => {
           await page.goto("/app?view=settings");
           await expect(
@@ -289,7 +320,7 @@ export function registerPrivacySettingsJourneys(locale: Locale, role: string) {
     if (owner) {
       test(
         "rejects wrong deletion confirmation and blocks deletion under an active legal hold",
-        { tag: "@desktop-only" },
+        { tag: "@privacy-overflow" },
         async ({ page }, info) => {
           const reference = `PRIVACY-HOLD-${info.project.name}`;
           const reason = "Preserve synthetic case evidence";
