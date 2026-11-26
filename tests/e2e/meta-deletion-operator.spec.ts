@@ -149,13 +149,11 @@ for (const scenario of [
     await panel
       .getByRole("combobox", { name: copy["platform.deletion.disposition"] })
       .selectOption("HELD");
-    await panel
-      .locator('input[type="file"]')
-      .setInputFiles({
-        name: "scope-proof.txt",
-        mimeType: "text/plain",
-        buffer: evidence,
-      });
+    await panel.locator('input[type="file"]').setInputFiles({
+      name: "scope-proof.txt",
+      mimeType: "text/plain",
+      buffer: evidence,
+    });
     expect(attempts).toEqual([]);
 
     const review = page.waitForResponse(
