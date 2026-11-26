@@ -551,7 +551,11 @@ try {
 
     // Both themes/locale layouts, mobile chooser focus and keyboard controls.
     for (const theme of ["light", "dark"]) {
-      if (theme === "dark") { await page.goto(`${story}&globals=theme:dark`, { waitUntil: "networkidle" }); await choose("Operations B"); }
+      if (theme === "dark") {
+        await page.goto(`${story}&globals=theme:dark`, { waitUntil: "networkidle" });
+        await choose("Operations B");
+        await expect(group().getByRole("heading", { name: "Operations B" })).toBeFocused();
+      }
       await page.evaluate(() => document.fonts.ready);
       for (const [name, width, height] of [["desktop", 1440, 1000], ["mobile", 390, 844], ["zoom-equivalent", 720, 500]]) {
         await page.setViewportSize({ width, height });
