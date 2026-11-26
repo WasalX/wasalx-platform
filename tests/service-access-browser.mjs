@@ -40,6 +40,8 @@ async function captureReview(page, dialog, locale, state, disabled = false, them
         const title = inset(box.querySelector(".modal-head h2"))[getComputedStyle(box).direction === "rtl" ? 1 : 0];
         for (const element of box.querySelectorAll(":scope > p, :scope > .settings-validation")) if (inset(element).some(value => Math.abs(value - title) > 1)) errors.push("dialog body inset differs from its header");
       }
+      const head = box.querySelector(":scope > .modal-head");
+      if (head.nextElementSibling.getBoundingClientRect().top - head.getBoundingClientRect().bottom < 12) errors.push("dialog body touches its header divider");
       const recovery = [...box.querySelectorAll(".settings-validation > button")].map(button => button.getBoundingClientRect());
       for (let i = 1; i < recovery.length; i++) { const a = recovery[i - 1], b = recovery[i]; if (Math.max(b.left - a.right, a.left - b.right, b.top - a.bottom) < 7.5) errors.push("recovery actions need the control gap"); }
       const focused=document.activeElement,s=getComputedStyle(focused);

@@ -306,7 +306,8 @@ th,td,td small,.status,.timeline :where(p,small),.audit-note small,.support-layo
 .save-bar > .settings-actions > button { max-inline-size: 100%; white-space: normal; overflow-wrap: anywhere; }
 .save-bar > .settings-summary { display: grid; gap: var(--wx-space-2); min-inline-size: 0; overflow-wrap: anywhere; }
 .settings-summary > p { margin: 0; }
-.service-access-review > p { margin-inline: var(--wx-space-4); overflow-wrap: anywhere; }
+.service-access-review > p { margin-block-start: var(--wx-space-2); margin-inline: var(--wx-space-4); overflow-wrap: anywhere; }
+.service-access-review > .modal-head + p { margin-block-start: var(--wx-space-4); }
 @media (max-width: 480px) { .mailbox-list > li { grid-template-columns: minmax(0, 1fr); } }
 .connection-detail-disconnect input:focus-visible { outline-color: var(--danger); }
 @media (forced-colors: none) { .search input:focus-visible { outline-color: transparent; } }
