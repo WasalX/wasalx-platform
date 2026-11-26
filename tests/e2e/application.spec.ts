@@ -1,6 +1,6 @@
 import { installWorkspaceReadFixture } from "./workspace-read.fixture";
 import { auditWorkspaceJourney } from "./audit-workspace.fixture";
-import { registerPrivacySettingsJourneys } from "./privacy-settings.fixture";
+import { consumeExpectedPrivacyResponse, registerPrivacySettingsJourneys } from "./privacy-settings.fixture";
 import { consumeExpectedLegacyDenial, metaLegacyMigrationJourney } from "./meta-legacy-migration.fixture";
 import { consumeExpectedRoutingDenial, installMetaRoutingReadFixture, metaRoutingJourney } from "./meta-routing.fixture";
 import { consumeExpectedCoexistenceDenial, metaCoexistenceJourney } from "./meta-coexistence.fixture";
@@ -285,7 +285,7 @@ test.beforeEach(async ({ page }) => {
   expectedNetworkErrors.set(page, []);
   page.on("console", (message) => {
     if (message.type() === "error") {
-      if (consumeExpectedNumberReleaseDenial(page, message) || consumeExpectedActivationDenial(page, message) || consumeExpectedDirectSetupDenial(page, message) || consumeExpectedSignupDenial(page, message) || consumeExpectedReconnectDenial(page, message) || consumeExpectedCoexistenceDenial(page, message) || consumeExpectedAddAccessDenial(page, message) || consumeExpectedRoutingDenial(page, message) || consumeExpectedTemplateDenial(page, message) || consumeExpectedLegacyDenial(page, message) || consumeExpectedObservationFailure(page, message)) return;
+      if (consumeExpectedNumberReleaseDenial(page, message) || consumeExpectedPrivacyResponse(page, message) || consumeExpectedActivationDenial(page, message) || consumeExpectedDirectSetupDenial(page, message) || consumeExpectedSignupDenial(page, message) || consumeExpectedReconnectDenial(page, message) || consumeExpectedCoexistenceDenial(page, message) || consumeExpectedAddAccessDenial(page, message) || consumeExpectedRoutingDenial(page, message) || consumeExpectedTemplateDenial(page, message) || consumeExpectedLegacyDenial(page, message) || consumeExpectedObservationFailure(page, message)) return;
       const location = message.location().url;
       if (
         message.text().startsWith("Failed to load resource:") &&

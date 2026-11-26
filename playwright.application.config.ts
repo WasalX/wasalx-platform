@@ -90,7 +90,7 @@ export default defineConfig({
     },
     {
       name: "mobile-390",
-      grepInvert: tabletOnly,
+      grepInvert: /(?:^|\s)@(?:tablet|desktop)-only(?:\s|$)/u,
       use: {
         browserName: "chromium",
         deviceScaleFactor: 1,
