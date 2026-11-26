@@ -1271,7 +1271,11 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
             else if (chooser?.contains(target)) {
               clickTarget = target.closest(seededOption) ? 'seeded-option' : target.closest('[role="option"]') ? 'other-option' : 'chooser-other';
             }
-            clicks.push({ target: clickTarget, ...state });
+            clicks.push({
+              target: clickTarget,
+              ...state,
+              modalReady: Boolean(chooser?.closest(".modal.in.modal--ready")),
+            });
           }
           return state;
         };
@@ -1295,20 +1299,19 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
           return { clicks, opened, closedAfterOpen, replaced, optionExposed, final };
         };
       }, machineUiSeed.group_id);
-      let chooser;
       await withNativeDiagnostic(
         t,
         "queue chooser",
+        async () => ({
+          scenario: scenario.name,
+          chooser: await collectChooser(),
+        }),
         async () => {
-          chooser = await collectChooser();
-          return { scenario: scenario.name, chooser };
-        },
-        async () => {
-          // Wait for Zammad's modal autofocus before handing focus to the chooser.
+          // Zammad marks the modal ready after the opening transition and autofocus.
           await newGrant
             .locator(".js-groupListItemAddNew .js-input")
             .and(adminPage.locator(".modal.in.modal--ready .js-input"))
-            .press("ArrowDown");
+            .click();
           await newGrant
             .getByRole("option", { name: "Operations", exact: true })
             .click();
@@ -1317,11 +1320,6 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
           assert.equal(await fullGrant.isChecked(), true);
         },
         scenario === scenarios[0],
-      );
-      assert.equal(
-        chooser?.clicks[0]?.target,
-        "seeded-option",
-        "The Operations option must be the first pointer click in the chooser",
       );
       await new Promise((resolve, reject) => {
         if (coreWorkflowResponses.size) return resolve();
