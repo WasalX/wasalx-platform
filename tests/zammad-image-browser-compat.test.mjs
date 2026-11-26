@@ -1271,7 +1271,11 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
             else if (chooser?.contains(target)) {
               clickTarget = target.closest(seededOption) ? 'seeded-option' : target.closest('[role="option"]') ? 'other-option' : 'chooser-other';
             }
-            clicks.push({ target: clickTarget, ...state });
+            clicks.push({
+              target: clickTarget,
+              ...state,
+              modalReady: Boolean(chooser?.closest(".modal.in.modal--ready")),
+            });
           }
           return state;
         };
@@ -1295,13 +1299,28 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
           return { clicks, opened, closedAfterOpen, replaced, optionExposed, final };
         };
       }, machineUiSeed.group_id);
-      await withNativeDiagnostic(t, 'queue chooser', async () => ({ scenario: scenario.name, chooser: await collectChooser() }), async () => {
-        await newGrant.locator('.js-groupListItemAddNew .js-input').click();
-        await newGrant.getByRole('option', { name: 'Operations', exact: true }).click();
-        await newGrant.locator('input[value="full"]').locator('..').click();
-        await newGrant.locator('.js-add').click();
-        assert.equal(await fullGrant.isChecked(), true);
-      }, scenario === scenarios[0]);
+      await withNativeDiagnostic(
+        t,
+        "queue chooser",
+        async () => ({
+          scenario: scenario.name,
+          chooser: await collectChooser(),
+        }),
+        async () => {
+          // Zammad marks the modal ready after the opening transition and autofocus.
+          await newGrant
+            .locator(".js-groupListItemAddNew .js-input")
+            .and(adminPage.locator(".modal.in.modal--ready .js-input"))
+            .click();
+          await newGrant
+            .getByRole("option", { name: "Operations", exact: true })
+            .click();
+          await newGrant.locator('input[value="full"]').locator("..").click();
+          await newGrant.locator(".js-add").click();
+          assert.equal(await fullGrant.isChecked(), true);
+        },
+        scenario === scenarios[0],
+      );
       await new Promise((resolve, reject) => {
         if (coreWorkflowResponses.size) return resolve();
         const timeout = setTimeout(() => reject(new Error('No matching Users Full-grant CoreWorkflow websocket response')), 30_000);
