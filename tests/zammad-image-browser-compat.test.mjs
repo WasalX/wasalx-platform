@@ -1295,13 +1295,34 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
           return { clicks, opened, closedAfterOpen, replaced, optionExposed, final };
         };
       }, machineUiSeed.group_id);
-      await withNativeDiagnostic(t, 'queue chooser', async () => ({ scenario: scenario.name, chooser: await collectChooser() }), async () => {
-        await newGrant.locator('.js-groupListItemAddNew .js-input').click();
-        await newGrant.getByRole('option', { name: 'Operations', exact: true }).click();
-        await newGrant.locator('input[value="full"]').locator('..').click();
-        await newGrant.locator('.js-add').click();
-        assert.equal(await fullGrant.isChecked(), true);
-      }, scenario === scenarios[0]);
+      let chooser;
+      await withNativeDiagnostic(
+        t,
+        "queue chooser",
+        async () => {
+          chooser = await collectChooser();
+          return { scenario: scenario.name, chooser };
+        },
+        async () => {
+          // Wait for Zammad's modal autofocus before handing focus to the chooser.
+          await newGrant
+            .locator(".js-groupListItemAddNew .js-input")
+            .and(adminPage.locator(".modal.in.modal--ready .js-input"))
+            .press("ArrowDown");
+          await newGrant
+            .getByRole("option", { name: "Operations", exact: true })
+            .click();
+          await newGrant.locator('input[value="full"]').locator("..").click();
+          await newGrant.locator(".js-add").click();
+          assert.equal(await fullGrant.isChecked(), true);
+        },
+        scenario === scenarios[0],
+      );
+      assert.equal(
+        chooser?.clicks[0]?.target,
+        "seeded-option",
+        "The Operations option must be the first pointer click in the chooser",
+      );
       await new Promise((resolve, reject) => {
         if (coreWorkflowResponses.size) return resolve();
         const timeout = setTimeout(() => reject(new Error('No matching Users Full-grant CoreWorkflow websocket response')), 30_000);
