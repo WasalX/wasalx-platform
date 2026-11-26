@@ -258,7 +258,131 @@ def assert_mutations(test, stage, mutations):
             print(f"Mutation rejected: {label}", flush=True)
 
 
+def host_step(work, shell, *args):
+    return subprocess.run(
+        ["bash", "-c", r"""
+date() {
+    case "$2" in
+        +%FT%TZ) printf '%s\n' '2000-01-01T00:00:00Z' ;;
+        '+%s%N %FT%TZ') printf '%s\n' '946684800000000000 2000-01-01T00:00:00Z' ;;
+        *) return 1 ;;
+    esac
+}
+stat() { printf '%s\n' 'directory:0:700'; }
+df() {
+    printf '%s\n' VM_PREFLIGHT_REACHED >&2
+    printf '%s\n' Avail 0
+}
+export -f date stat df
+""" + shell, "host-step-fixture", *args],
+        env={**os.environ, "DEV_STEP_LOCK": str(work / "active")},
+        capture_output=True, text=True, timeout=10,
+    )
+
+
 class DispatchTest(unittest.TestCase):
+    def test_overlay_holds_after_controller_exit_until_verified_handback(self):
+        with tempfile.TemporaryDirectory() as directory:
+            work = Path(directory)
+            templates = HERE / "templates"
+            run_id = digest(json.dumps(["a" * 64, "b" * 64], separators=(",", ":")).encode())
+            helper = work / "dev-step-lock.sh"
+            for name in (helper.name, "host-maintenance.py", "frozen-disk.py"):
+                shutil.copyfile(templates / name, work / name)
+            (work / "active").touch()
+            (work / "run-id").write_text("20000101T000000Z\n", encoding="ascii")
+            (work / "host.env").write_text("export DIR=. ROOT_FLOOR_BYTES=1\n", encoding="ascii")
+            controller = host_step(work, r"""
+exec 7<"$DEV_STEP_LOCK"
+flock -n -E 75 7 || exit $?
+bash "$1" acquire "$2" install || exit $?
+kill -KILL "$BASHPID"
+""", helper, run_id)
+            self.assertEqual(controller.returncode, -signal.SIGKILL, controller.stdout + controller.stderr)
+            overlay = 'exec bash "$1" rollback "$2"'
+            record_path = work / "active.run"
+            record_bytes = record_path.read_bytes()
+            record = json.loads(record_bytes)
+            self.assertEqual((record["run_id"], record["step"], record["started_at"]),
+                             (run_id, "install", "2000-01-01T00:00:00Z"))
+            os.utime(record_path, ns=(1, 1))
+            held = host_step(work, overlay, templates / "overlay-action.sh", work)
+            self.assertEqual((held.returncode, held.stdout, held.stderr),
+                             (75, f"HOLD_DEV_STEP_UNRESOLVED run_id={run_id}\n", ""))
+
+            evidence = work / "evidence"
+            evidence.mkdir(mode=0o700)
+            clear = 'exec bash "$1" handback "$2" "$3"'
+
+            def handback_refused():
+                result = host_step(work, clear, helper, run_id, evidence)
+                self.assertEqual((result.returncode, result.stdout), (75, "HOLD_DEV_STEP_HANDBACK\n"))
+                self.assertEqual(record_path.read_bytes(), record_bytes)
+
+            terminal = json.dumps({"run_id": run_id, "status": "terminal"}).encode()
+            stop = json.dumps({"run_id": run_id, "status": "stopped"}).encode()
+            (evidence / "terminal.json").write_bytes(terminal)
+            handback_refused()
+            handback = json.dumps({
+                "run_id": run_id, "released": True,
+                "lock_device": record["lock_device"], "lock_inode": record["lock_inode"],
+                "record_sha256": digest(record_bytes), "terminal_sha256": digest(terminal), "stop_sha256": digest(stop),
+            }).encode()
+            (evidence / "handback.json").write_bytes(handback)
+            completion = evidence / "completion.json"
+            completion.write_text(json.dumps({"run_id": run_id, "handback_sha256": digest(handback)}), encoding="ascii")
+            handback_refused()
+            (evidence / "stop.json").write_bytes(stop)
+            completion.write_text(json.dumps({"run_id": run_id, "handback_sha256": "0" * 64}), encoding="ascii")
+            handback_refused()
+            completion.write_text(json.dumps({"run_id": run_id, "handback_sha256": digest(handback)}), encoding="ascii")
+
+            same_lock_held = host_step(work, r"""
+exec 7<"$DEV_STEP_LOCK"
+flock -n -E 75 7 || exit $?
+bash "$1" handback "$2" "$3"
+""", helper, run_id, evidence)
+            self.assertEqual((same_lock_held.returncode, same_lock_held.stdout), (75, "HOLD_DEV_STEP_BUSY\n"))
+            marker = work / "active"
+            original = marker.with_suffix(".original")
+            marker.rename(original)
+            marker.touch()
+            handback_refused()
+            original.replace(marker)
+            cleared = host_step(work, clear, helper, run_id, evidence)
+            self.assertEqual((cleared.returncode, cleared.stdout), (0, "DEV_STEP_HANDBACK=PASS\n"), cleared.stderr)
+            self.assertFalse(record_path.exists())
+            admitted = host_step(work, overlay, templates / "overlay-action.sh", work)
+            self.assertEqual((admitted.returncode, admitted.stderr), (1, "VM_PREFLIGHT_REACHED\n"))
+
+    def test_maintenance_wrapper_keeps_lock_after_acquire_returns(self):
+        with tempfile.TemporaryDirectory() as directory:
+            work = Path(directory)
+            (work / "active").touch()
+            (work / "other").touch()
+            helper = HERE / "templates" / "dev-step-lock.sh"
+            run_id = "20000101T000000Z"
+            for setup in ("", 'exec 7<"$DEV_STEP_LOCK"; ', 'exec 7<"$3"; flock -n -E 75 7; '):
+                result = host_step(work, setup + 'exec bash "$1" acquire "$2" maintenance',
+                                   helper, run_id, work / "other")
+                self.assertEqual((result.returncode, result.stdout), (75, "HOLD_DEV_STEP_DESCRIPTOR\n"))
+            self.assertFalse((work / "active.run").exists())
+            wrapper = host_step(work, r"""
+exec 7<"$DEV_STEP_LOCK"
+flock -n -E 75 7 || exit $?
+bash "$1" acquire "$2" maintenance || exit $?
+if flock -n "$DEV_STEP_LOCK" true; then exit 1; fi
+if bash -c 'flock -n "$DEV_STEP_LOCK" true'; then exit 1; fi
+exit 42
+""", helper, run_id)
+            self.assertEqual((wrapper.returncode, wrapper.stdout), (42, ""), wrapper.stderr)
+            reopened = host_step(work, r"""
+exec 7<"$DEV_STEP_LOCK"
+flock -n -E 75 7 || exit $?
+bash "$1" acquire "$2" maintenance
+""", helper, run_id)
+            self.assertEqual((reopened.returncode, reopened.stdout), (75, f"HOLD_DEV_STEP_UNRESOLVED run_id={run_id}\n"))
+
     def test_golden_and_fixed_identity(self):
         checkpoint("golden-render")
         with tempfile.TemporaryDirectory() as work:

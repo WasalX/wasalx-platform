@@ -82,10 +82,10 @@ class HostPacketTest(unittest.TestCase):
             self.assertIn("flock -n -E 75 7", helper)
             self.assertNotIn(marker, helper)
             for name, state, lock, first_action in (
-                ("register.sh", "STATE", "(hold_dev_step_lock)", 'exec 9>"$STATE/install-registration.lock"'),
-                ("install-or-discard.sh", "state", "hold_dev_step_lock", "sha256sum --check"),
-                ("overlay-action.sh", "STATE", "hold_dev_step_lock", "stamp lease start"),
-                ("dev-guest-phase.sh", "state", "hold_dev_step_lock", "stamp ssh-ready start"),
+                ("register.sh", "STATE", "dev_step_record check || exit 75", 'exec 9>"$STATE/install-registration.lock"'),
+                ("install-or-discard.sh", "state", 'hold_dev_step_lock "$run" "$mode" lease', "sha256sum --check"),
+                ("overlay-action.sh", "STATE", 'hold_dev_step_lock "$RUN" "$MODE"', "stamp lease start"),
+                ("dev-guest-phase.sh", "state", 'hold_dev_step_lock "$(cat "$state/run-id")" "guest-$phase"', "stamp ssh-ready start"),
             ):
                 with self.subTest(step=name):
                     script = (packet / name).read_text()

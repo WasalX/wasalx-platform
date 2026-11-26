@@ -147,16 +147,19 @@ The controller run ID is the lowercase SHA-256 of the compact UTF-8 JSON
 array `[carrier_sha256, cutover_authority_json_sha256]`. Platform leases use
 their existing `YYYYMMDDTHHMMSSZ` run ID.
 
-Use the sealed host helper with the same exported host identity. Open
-descriptor 7 in the caller and keep it open for the entire action:
+Use the sealed host helper with the same exported host identity. Open and
+lock descriptor 7 in the caller. Keep it open for the entire action:
 
 ```sh
 exec 7<"$DEV_STEP_LOCK" || exit 75
+flock -n -E 75 7 || { echo HOLD_DEV_STEP_BUSY; exit 75; }
 bash "$DEV_STEP_HELPER" acquire "$RUN_ID" "$STEP" || exit $?
 ```
 
-Exit 0 admits the action. Exit 75 reports a named hold. The action then
-runs in the caller and keeps its own exit status.
+Exit 0 admits the action. Exit 75 reports a named hold. If descriptor 7
+is missing, unlocked or points to another file, the helper reports
+`HOLD_DEV_STEP_DESCRIPTOR`. The action runs in the caller and keeps its own
+exit status.
 
 After the action releases descriptor 7, use
 `bash "$DEV_STEP_HELPER" handback "$RUN_ID" "$EVIDENCE_DIR"` to clear the

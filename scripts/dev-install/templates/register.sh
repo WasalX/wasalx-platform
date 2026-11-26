@@ -9,8 +9,9 @@ case "$MODE" in install|rollback|commit) ;; *) echo HOLD_LEASE_MODE; exit 75 ;; 
 source "$STATE/host.env"
 # shellcheck source=/dev/null
 source "$STATE/dev-step-lock.sh"
-# Refuse an already busy host before writing registration records.
-(hold_dev_step_lock)
+# Keep admission locked until the transient unit can take its reservation.
+dev_step_flock
+dev_step_record check || exit 75
 ATTEMPT="$(cat "$STATE/run-id")"
 [[ "$ATTEMPT" =~ ^[0-9]{8}T[0-9]{6}Z$ ]] || { echo HOLD_LEASE_RUN_ID; exit 75; }
 LEASE_UNIT="${LEASE_PREFIX}-$MODE-$ATTEMPT.service"
@@ -58,6 +59,7 @@ test "$((limit-now))" -ge "$runtime" || { echo HOLD_LEASE_WINDOW_TOO_SHORT; exit
 budget_source="$INSTALL_DISCARD_BUDGET_SOURCE"
 if [ "$MODE" = commit ]; then budget_source="$LEASE_BUDGET_SOURCE"; fi
 printf 'LEASE_BUDGET_SOURCE=%s mode=%s runtime_seconds=%s\n' "$budget_source" "$MODE" "$runtime"
+hold_dev_step_lock "$ATTEMPT" "register-$MODE"
 cat > "$FINISH" <<'SH'
 #!/usr/bin/env bash
 set -eu
@@ -81,10 +83,12 @@ mv -T -- "$tmp" "$MARKER"
 now="$(date -u +%s)"
 if [ "$((limit-now))" -le "$runtime" ]; then
     /bin/bash "$FINISH" "$END" "$LEASE_UNIT"
+    finish_dev_step "$STATE" no-work
     echo HOLD_LEASE_WINDOW_TOO_SHORT
     exit 75
 fi
 # The unit entry takes the DEV step lock before running any action.
+exec 7<&-
 if ! systemd-run --unit="$LEASE_UNIT" --setenv="LEASE_UNIT=$LEASE_UNIT" --setenv="TMPDIR=$STATE" \
     -p CPUQuota=800% -p MemoryMax=8G -p MemorySwapMax=0 -p CPUWeight=10 -p IOWeight=10 \
     -p Nice=19 -p IOSchedulingClass=idle -p UMask=0077 -p RuntimeMaxSec="$runtime" \
