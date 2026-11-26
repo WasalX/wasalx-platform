@@ -183,7 +183,7 @@ if (role === "tenant_owner") {
   }
 
   for (const [view, operation, title, expected] of [
-    ["team", "TEAM_LIST", arabicMessages["teamsAdmin.title"], arabicMessages["teamsAdmin.failed"]],
+    ["team", "TEAM_LIST", arabicMessages["teamsAdmin.title"], arabicMessages["teamsAdmin.listFailed"]],
     ["settings", "MAILBOX_LIST", arabicMessages["mailboxes.title"], arabicMessages["mailboxes.failed"]],
   ] as const) {
     test(`Arabic ${operation} failure uses catalogue text`, async ({ page }, testInfo) => {
