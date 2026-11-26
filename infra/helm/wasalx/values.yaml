@@ -207,7 +207,7 @@ provisioner:
   workspaceBaseDomain: "support.example.com"
   oidcIssuer: "https://identity.example.com/realms/wasalx"
   packageVersion: "0.5.86"
-  packageSha256: "59e7bf797de8a4b1ed7c68065b3bcba024a58c33f2283c2723385ed7b8abbd7f"
+  packageSha256: "ea8432e1b7e25a40f269bbbe6e581b5808bf5116dc1415a45b3b080754ad15d9"
 
   reconcileTimeoutMs: "45000"
   driverTimeoutMs: "60000"

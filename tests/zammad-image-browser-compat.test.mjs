@@ -1813,10 +1813,21 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
     const templateDialog = page.locator('#wasalx-template-dialog');
     const templateButton = page.locator('[data-test-id="wasalx-send-template"]');
     const openTemplateComposer = async (replyLabel) => {
-      await page.goto(templateTicketUrl, { waitUntil: 'domcontentloaded' });
+      const [panelResponse] = await Promise.all([
+        page.waitForResponse(response => new URL(response.url()).pathname === `/api/v1/wasalx/tickets/${state.templateTicketId}/panel`),
+        page.goto(templateTicketUrl, { waitUntil: 'domcontentloaded' }),
+      ]);
+      assert.equal(panelResponse.status(), 200, 'the native panel must load the direct template ticket');
+      const panel = await panelResponse.json();
+      assert.equal(panel.connection.provider, 'META');
+      assert.equal(panel.ticket.bot_state, 'HUMAN');
+      assert.equal(Date.parse(panel.service_window_expires_at), Date.parse('2020-01-01T00:00:00.000Z'));
       await directBubble.hover();
       await directBubble.getByRole('button', { name: replyLabel, exact: true }).click();
-      await templateButton.click();
+      await withNativeDiagnostic(t, 'template composer', () => page.evaluate(() => ({
+        editorPresent: Boolean(document.querySelector('#ticketArticleReplyForm [contenteditable="true"]')),
+        windowMessagePresent: Boolean(document.querySelector('#ticketArticleReplyForm [id$="-wasalxServiceWindowClosed"]')),
+      })), () => templateButton.click(), false);
     };
     await openTemplateComposer('Reply on WhatsApp');
     await templateDialog.getByRole('combobox').selectOption(template.id);
