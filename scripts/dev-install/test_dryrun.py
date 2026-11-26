@@ -258,13 +258,13 @@ def assert_mutations(test, stage, mutations):
             print(f"Mutation rejected: {label}", flush=True)
 
 
-def host_step(work, shell, *args):
+def host_step(work, shell, *args, clock="2000-01-01T00:00:00Z"):
     return subprocess.run(
         ["bash", "-c", r"""
 date() {
     case "$2" in
-        +%FT%TZ) printf '%s\n' '2000-01-01T00:00:00Z' ;;
-        '+%s%N %FT%TZ') printf '%s\n' '946684800000000000 2000-01-01T00:00:00Z' ;;
+        +%FT%TZ) printf '%s\n' "$DEV_STEP_FIXTURE_UTC" ;;
+        '+%s%N %FT%TZ') printf '946684800000000000 %s\n' "$DEV_STEP_FIXTURE_UTC" ;;
         *) return 1 ;;
     esac
 }
@@ -275,7 +275,7 @@ df() {
 }
 export -f date stat df
 """ + shell, "host-step-fixture", *args],
-        env={**os.environ, "DEV_STEP_LOCK": str(work / "active")},
+        env={**os.environ, "DEV_STEP_LOCK": str(work / "active"), "DEV_STEP_FIXTURE_UTC": clock},
         capture_output=True, text=True, timeout=10,
     )
 
@@ -305,10 +305,12 @@ kill -KILL "$BASHPID"
             record = json.loads(record_bytes)
             self.assertEqual((record["run_id"], record["step"], record["started_at"]),
                              (run_id, "install", "2000-01-01T00:00:00Z"))
-            os.utime(record_path, ns=(1, 1))
             held = host_step(work, overlay, templates / "overlay-action.sh", work)
             self.assertEqual((held.returncode, held.stdout, held.stderr),
                              (75, f"HOLD_DEV_STEP_UNRESOLVED run_id={run_id}\n", ""))
+            os.utime(record_path, ns=(1, 1))
+            aged = host_step(work, overlay, templates / "overlay-action.sh", work, clock="2001-01-01T00:00:00Z")
+            self.assertEqual((aged.returncode, aged.stdout, aged.stderr), (75, held.stdout, ""))
 
             evidence = work / "evidence"
             evidence.mkdir(mode=0o700)
