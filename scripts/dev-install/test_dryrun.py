@@ -48,6 +48,8 @@ CHILD_CHECKPOINTS = {
         "step-missing-stop", "step-completion-digest", "step-held-lock", "step-replaced-lock",
         "step-handback", "step-overlay-admitted", "step-wrapper-descriptor", "step-wrapper-lock",
         "step-wrapper-reopen",
+        "step-direct-handback", "step-evidence-symlink", "step-evidence-mode", "step-wrapper-run-id",
+        "step-recreated-lock-directory", "step-legacy-record",
         "guest-prepare", "guest-render", "guest-receive", "guest-readability", "guest-receive-repeat",
         "guest-probe", "guest-probe-timeout", "guest-lock", "suite-passed", "suite-failed",
         *INSTALL_FAILURE_CHECKPOINTS.values(),
@@ -286,13 +288,16 @@ def assert_mutations(test, stage, mutations):
 
 
 def host_step(work, shell, *args, clock="2000-01-01T00:00:00Z", after_claim=""):
+    env = {**os.environ, "DEV_STEP_LOCK": str(work / "locks" / "active"), "DISK_STATE": str(work / "custody"),
+           "DEV_STEP_FIXTURE_UTC": clock, "DEV_STEP_FIXTURE_AFTER_CLAIM": after_claim}
+    env.pop("DEV_STEP_RECORD", None)
     return subprocess.run(
         ["bash", "-c", r"""
 date() {
     case "$*" in
         '-u +%s')
             local instant="$DEV_STEP_FIXTURE_UTC"
-            if [[ -n "$DEV_STEP_FIXTURE_AFTER_CLAIM" && -f "$DEV_STEP_LOCK.run" ]]; then
+            if [[ -n "$DEV_STEP_FIXTURE_AFTER_CLAIM" && -f "$DISK_STATE/dev-step.run" ]]; then
                 instant="$DEV_STEP_FIXTURE_AFTER_CLAIM"
             fi
             /bin/date -u -d "$instant" +%s
@@ -313,16 +318,17 @@ df() {
 }
 export -f date stat df
 """ + shell, "host-step-fixture", *args],
-        env={**os.environ, "DEV_STEP_LOCK": str(work / "active"), "DEV_STEP_FIXTURE_UTC": clock,
-             "DEV_STEP_FIXTURE_AFTER_CLAIM": after_claim},
+        env=env,
         capture_output=True, text=True, timeout=10,
     )
 
 
-def assert_step_result(test, case, actual, expected):
+def assert_step_result(test, case, result, returncode, stdout="", stderr=""):
+    actual = (result.returncode, result.stdout, result.stderr)
+    expected = (returncode, stdout, stderr)
     if actual != expected:
         checkpoint(case)
-    test.assertEqual(actual, expected)
+    test.assertEqual(actual, expected, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}")
 
 
 class DispatchTest(unittest.TestCase):
@@ -334,7 +340,11 @@ class DispatchTest(unittest.TestCase):
             helper = work / "dev-step-lock.sh"
             for name in (helper.name, "host-maintenance.py", "frozen-disk.py"):
                 shutil.copyfile(templates / name, work / name)
-            (work / "active").touch()
+            lock_directory = work / "locks"
+            lock_directory.mkdir()
+            (lock_directory / "active").touch()
+            custody = work / "custody"
+            custody.mkdir(mode=0o700)
             (work / "run-id").write_text("20000101T000000Z\n", encoding="ascii")
             (work / "host.env").write_text("export DIR=. ROOT_FLOOR_BYTES=1\n", encoding="ascii")
             controller = host_step(work, r"""
@@ -343,27 +353,26 @@ flock -n -E 75 7 || exit $?
 bash "$1" acquire "$2" install || exit $?
 kill -KILL "$BASHPID"
 """, helper, run_id)
-            assert_step_result(self, "step-controller-exit", controller.returncode, -signal.SIGKILL)
+            assert_step_result(self, "step-controller-exit", controller, -signal.SIGKILL)
             overlay = 'exec bash "$1" rollback "$2"'
-            record_path = work / "active.run"
+            record_path = custody / "dev-step.run"
             record_bytes = record_path.read_bytes()
             record = json.loads(record_bytes)
             self.assertEqual((record["run_id"], record["step"], record["started_at"]),
                              (run_id, "install", "2000-01-01T00:00:00Z"))
             held = host_step(work, overlay, templates / "overlay-action.sh", work)
-            assert_step_result(self, "step-overlay-hold", (held.returncode, held.stdout, held.stderr),
-                               (75, f"HOLD_DEV_STEP_UNRESOLVED run_id={run_id}\n", ""))
+            assert_step_result(self, "step-overlay-hold", held, 75, f"HOLD_DEV_STEP_UNRESOLVED run_id={run_id}\n")
             os.utime(record_path, ns=(1, 1))
             aged = host_step(work, overlay, templates / "overlay-action.sh", work, clock="2001-01-01T00:00:00Z")
-            assert_step_result(self, "step-aged-hold", (aged.returncode, aged.stdout, aged.stderr), (75, held.stdout, ""))
+            assert_step_result(self, "step-aged-hold", aged, 75, held.stdout)
 
-            evidence = work / "evidence"
+            evidence = work / f"dev-step-{record['claim']}"
             evidence.mkdir(mode=0o700)
             clear = 'exec bash "$1" handback "$2" "$3"'
 
-            def handback_refused(case):
-                result = host_step(work, clear, helper, run_id, evidence)
-                assert_step_result(self, case, (result.returncode, result.stdout), (75, "HOLD_DEV_STEP_HANDBACK\n"))
+            def handback_refused(case, evidence_dir=evidence):
+                result = host_step(work, clear, helper, run_id, evidence_dir)
+                assert_step_result(self, case, result, 75, "HOLD_DEV_STEP_HANDBACK\n")
                 self.assertEqual(record_path.read_bytes(), record_bytes)
 
             terminal = json.dumps({"run_id": run_id, "status": "terminal"}).encode()
@@ -391,35 +400,67 @@ bash "$1" handback "$2" "$3"
 # Keep the independent owner alive through the child call.
 exit $?
 """, helper, run_id, evidence)
-            assert_step_result(self, "step-held-lock", (same_lock_held.returncode, same_lock_held.stdout),
-                               (75, "HOLD_DEV_STEP_BUSY\n"))
-            marker = work / "active"
-            original = marker.with_suffix(".original")
-            marker.rename(original)
-            marker.touch()
+            assert_step_result(self, "step-held-lock", same_lock_held, 75, "HOLD_DEV_STEP_BUSY\n")
+            for operation in ("handback", "local-handback"):
+                with self.subTest(operation=operation):
+                    direct = host_step(work, r"""
+exec 7<"$DEV_STEP_LOCK"
+flock -n -E 75 7 || exit $?
+exec /usr/bin/python3 -I -B "$1" dev-step "$2" "$3" "$4"
+""", work / "host-maintenance.py", operation, run_id, evidence)
+                    assert_step_result(self, "step-direct-handback", direct, 75, "HOLD_DEV_STEP_BUSY\n")
+                    self.assertEqual(record_path.read_bytes(), record_bytes)
+
+            linked_evidence = work / "linked-evidence"
+            linked_evidence.symlink_to(evidence, target_is_directory=True)
+            handback_refused("step-evidence-symlink", linked_evidence)
+            evidence.chmod(0o755)
+            handback_refused("step-evidence-mode")
+            evidence.chmod(0o700)
+            original = work / "original-locks"
+            lock_directory.rename(original)
+            lock_directory.mkdir()
+            (lock_directory / "active").touch()
+            recreated = host_step(work, overlay, templates / "overlay-action.sh", work)
+            assert_step_result(self, "step-recreated-lock-directory", recreated, 75, held.stdout)
+            self.assertEqual(record_path.read_bytes(), record_bytes)
             handback_refused("step-replaced-lock")
-            original.replace(marker)
+            (lock_directory / "active").unlink()
+            lock_directory.rmdir()
+            original.rename(lock_directory)
             cleared = host_step(work, clear, helper, run_id, evidence)
-            assert_step_result(self, "step-handback", (cleared.returncode, cleared.stdout),
-                               (0, "DEV_STEP_HANDBACK=PASS\n"))
+            assert_step_result(self, "step-handback", cleared, 0, "DEV_STEP_HANDBACK=PASS\n")
             self.assertFalse(record_path.exists())
             admitted = host_step(work, overlay, templates / "overlay-action.sh", work)
-            assert_step_result(self, "step-overlay-admitted", (admitted.returncode, admitted.stderr),
-                               (1, "VM_PREFLIGHT_REACHED\n"))
+            assert_step_result(self, "step-overlay-admitted", admitted, 1, stderr="VM_PREFLIGHT_REACHED\n")
 
     def test_maintenance_wrapper_keeps_lock_after_acquire_returns(self):
         with tempfile.TemporaryDirectory() as directory:
             work = Path(directory)
-            (work / "active").touch()
+            (work / "locks").mkdir()
+            (work / "locks" / "active").touch()
+            (work / "custody").mkdir(mode=0o700)
             (work / "other").touch()
             helper = HERE / "templates" / "dev-step-lock.sh"
             run_id = "20000101T000000Z"
             for setup in ("", 'exec 7<"$DEV_STEP_LOCK"; ', 'exec 7<"$3"; flock -n -E 75 7; '):
                 result = host_step(work, setup + 'exec bash "$1" acquire "$2" maintenance',
                                    helper, run_id, work / "other")
-                assert_step_result(self, "step-wrapper-descriptor", (result.returncode, result.stdout),
-                                   (75, "HOLD_DEV_STEP_DESCRIPTOR\n"))
-            self.assertFalse((work / "active.run").exists())
+                assert_step_result(self, "step-wrapper-descriptor", result, 75, "HOLD_DEV_STEP_DESCRIPTOR\n")
+            acquire = r"""
+exec 7<"$DEV_STEP_LOCK"
+flock -n -E 75 7 || exit $?
+exec bash "$1" acquire "$2" maintenance
+"""
+            invalid_run = host_step(work, acquire, helper, "invalid-run")
+            assert_step_result(self, "step-wrapper-run-id", invalid_run, 75, "HOLD_DEV_STEP_RUN_ID\n")
+            legacy = work / "locks" / "active.run"
+            legacy.touch()
+            old_hold = host_step(work, acquire, helper, run_id)
+            assert_step_result(self, "step-legacy-record", old_hold, 75, "HOLD_DEV_STEP_RECORD\n")
+            self.assertTrue(legacy.is_file())
+            legacy.unlink()
+            self.assertFalse((work / "custody" / "dev-step.run").exists())
             wrapper = host_step(work, r"""
 exec 7<"$DEV_STEP_LOCK"
 flock -n -E 75 7 || exit $?
@@ -428,14 +469,9 @@ if flock -n "$DEV_STEP_LOCK" true; then exit 1; fi
 if bash -c 'flock -n "$DEV_STEP_LOCK" true'; then exit 1; fi
 exit 42
 """, helper, run_id)
-            assert_step_result(self, "step-wrapper-lock", (wrapper.returncode, wrapper.stdout), (42, ""))
-            reopened = host_step(work, r"""
-exec 7<"$DEV_STEP_LOCK"
-flock -n -E 75 7 || exit $?
-bash "$1" acquire "$2" maintenance
-""", helper, run_id)
-            assert_step_result(self, "step-wrapper-reopen", (reopened.returncode, reopened.stdout),
-                               (75, f"HOLD_DEV_STEP_UNRESOLVED run_id={run_id}\n"))
+            assert_step_result(self, "step-wrapper-lock", wrapper, 42)
+            reopened = host_step(work, acquire, helper, run_id)
+            assert_step_result(self, "step-wrapper-reopen", reopened, 75, f"HOLD_DEV_STEP_UNRESOLVED run_id={run_id}\n")
 
     def test_overlay_runs_preflight_cutover_and_smoke_in_order(self):
         overlay = (HERE / "templates" / "overlay-action.sh").read_text(encoding="utf-8")
@@ -462,8 +498,12 @@ bash "$1" acquire "$2" maintenance
                 state.mkdir(mode=0o700)
                 staging = work / "staging"
                 staging.mkdir()
-                marker = work / "active"
+                lock_directory = work / "locks"
+                lock_directory.mkdir()
+                marker = lock_directory / "active"
                 marker.touch()
+                custody = work / "custody"
+                custody.mkdir(mode=0o700)
                 run_id = "20000101T000000Z"
                 for name in ("run-install.sh", "dev-step-lock.sh", "host-maintenance.py",
                              "frozen-disk.py", "install-or-discard.sh", "dev-guest-phase.sh"):
@@ -516,7 +556,7 @@ if [[ "$FIXTURE_FAILURE" = handback ]]; then chmod 0755 "$state"; fi
                     f"{digest(path.read_bytes())}  {path.name}\n" for path in sorted(state.iterdir())
                 ), encoding="ascii")
 
-                record_path = work / "active.run"
+                record_path = custody / "dev-step.run"
                 if failure == "acquire":
                     prior = host_step(work, r"""
 exec 7<"$DEV_STEP_LOCK"
