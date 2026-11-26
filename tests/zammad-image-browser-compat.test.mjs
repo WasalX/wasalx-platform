@@ -1811,7 +1811,9 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
     const templateStart = state.requests.length;
     const templateTicketUrl = `${zammadOrigin}/desktop/tickets/${state.templateTicketId}`;
     const templateDialog = page.locator('#wasalx-template-dialog');
-    const templateButton = page.locator('[data-test-id="wasalx-send-template"]');
+    const templateEditor = page.locator('#ticketArticleReplyForm');
+    const templateButton = templateEditor.locator('[data-test-id="wasalx-send-template"]');
+    const nativeNoteAction = page.locator('[data-test-id="ticket-detail-content-container"] button:has(use[href="#icon-note"])');
     const openTemplateComposer = async (replyLabel) => {
       const [panelResponse] = await Promise.all([
         page.waitForResponse(response => new URL(response.url()).pathname === `/api/v1/wasalx/tickets/${state.templateTicketId}/panel`),
@@ -1822,12 +1824,17 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
       assert.equal(panel.connection.provider, 'META');
       assert.equal(panel.ticket.bot_state, 'HUMAN');
       assert.equal(Date.parse(panel.service_window_expires_at), Date.parse('2020-01-01T00:00:00.000Z'));
+      // Zammad shows the native reply toolbar only after the ticket form has settled.
+      await nativeNoteAction.waitFor({ state: 'visible' });
       await directBubble.hover();
       await directBubble.getByRole('button', { name: replyLabel, exact: true }).click();
       await withNativeDiagnostic(t, 'template composer', () => page.evaluate(() => ({
         editorPresent: Boolean(document.querySelector('#ticketArticleReplyForm [contenteditable="true"]')),
         windowMessagePresent: Boolean(document.querySelector('#ticketArticleReplyForm [id$="-wasalxServiceWindowClosed"]')),
-      })), () => templateButton.click(), false);
+      })), async () => {
+        await templateEditor.waitFor({ state: 'visible' });
+        await templateButton.click();
+      }, false);
     };
     await openTemplateComposer('Reply on WhatsApp');
     await templateDialog.getByRole('combobox').selectOption(template.id);
