@@ -266,6 +266,10 @@ def host_step(work, shell, *args, clock="2000-01-01T00:00:00Z"):
     return subprocess.run(
         ["bash", "-c", r"""
 date() {
+    case "$*" in
+        '-u +%s'|'-u -d 2000-01-01T00:00:00Z +%s') printf '946684800\n'; return ;;
+        '-u -d 2000-01-01T01:00:00Z +%s') printf '946688400\n'; return ;;
+    esac
     case "$2" in
         +%FT%TZ) printf '%s\n' "$DEV_STEP_FIXTURE_UTC" ;;
         '+%s%N %FT%TZ') printf '946684800000000000 %s\n' "$DEV_STEP_FIXTURE_UTC" ;;
@@ -401,6 +405,127 @@ bash "$1" acquire "$2" maintenance
 """, helper, run_id)
             assert_step_result(self, "step-wrapper-reopen", (reopened.returncode, reopened.stdout),
                                (75, f"HOLD_DEV_STEP_UNRESOLVED run_id={run_id}\n"))
+
+    def test_overlay_runs_preflight_cutover_and_smoke_in_order(self):
+        overlay = (HERE / "templates" / "overlay-action.sh").read_text(encoding="utf-8")
+        install = overlay.split("\ninstall)\n", 1)[1].split("\nrollback)\n", 1)[0]
+        stages = (
+            "step running-top-guard-and-preflight guest_phase preflight",
+            'step top-shutdown poweroff_clean "$TOP_DRIVE"',
+            "step overlay-guard-and-install guest_phase install",
+            "step held-smoke guest_phase smoke",
+            "DEV_OVERLAY_DONE",
+        )
+        offsets = [install.index(stage) for stage in stages]
+        self.assertEqual(offsets, sorted(offsets))
+
+    def test_server_install_stops_at_first_failed_phase(self):
+        phases = ("preflight", "cutover", "smoke")
+        for failure in (None, "acquire", *phases, "handback"):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
+                work = Path(directory)
+                state = work / "packet"
+                state.mkdir(mode=0o700)
+                staging = work / "staging"
+                staging.mkdir()
+                marker = work / "active"
+                marker.touch()
+                run_id = "20000101T000000Z"
+                for name in ("run-install.sh", "dev-step-lock.sh", "host-maintenance.py",
+                             "frozen-disk.py", "install-or-discard.sh", "dev-guest-phase.sh"):
+                    shutil.copyfile(HERE / "templates" / name, state / name)
+                (state / "run-id").write_text(run_id + "\n", encoding="ascii")
+                (state / "host.env").write_text(
+                    f'export DEV_STEP_LOCK="{marker}" STAGING="{staging}" LEASE_PREFIX=fixture\n'
+                    "export INSTALL_NOT_BEFORE=2000-01-01T00:00:00Z INSTALL_CUTOFF=2000-01-01T01:00:00Z\n"
+                    "export COMMIT_FALLBACK_SECONDS=0 INSTALL_DISCARD_BUDGET_SOURCE=reviewed-reservations\n"
+                    "export INSTALL_SECONDS=60 DISCARD_SECONDS=60\n"
+                    "export GUEST_KNOWN_HOSTS=/fixture/known-hosts GUEST_KEY=/fixture/key\n"
+                    "export GUEST_USER=fixture GUEST_ADDRESS=127.0.0.1 GUEST_PORT=22\n",
+                    encoding="ascii",
+                )
+                (staging / "old-held-readback.py").touch()
+                (state / "probe-up.py").write_text(
+                    "import os\n"
+                    "if os.environ['FIXTURE_FAILURE'] == 'smoke':\n"
+                    "    raise SystemExit(42)\n"
+                    "print('PORTAL_HTTPS_READY=PASS')\n",
+                    encoding="ascii",
+                )
+                action = state / "overlay-action.sh"
+                action.write_text(r"""
+set -euo pipefail
+state="$2"
+printf '%s\n' "$1" >> "$state/actions"
+test "$1" = install
+source "$state/dev-step-lock.sh"
+hold_dev_step_lock "$(cat "$state/run-id")" install
+test -z "$DEV_STEP_OWNER"
+if flock -n "$DEV_STEP_LOCK" true; then exit 91; fi
+# A cutover failure after arming would otherwise invoke automatic discard.
+touch -- "$state/overlay-verification-armed"
+for phase in preflight cutover; do
+    printf '%s\n' "$phase" >> "$state/actions"
+    if [[ "$phase" = "$FIXTURE_FAILURE" ]]; then exit 42; fi
+done
+printf 'smoke\n' >> "$state/actions"
+bash "$state/dev-guest-phase.sh" smoke "$state"
+printf 'DEV_OVERLAY_DONE fixture held_smoke=PASS fence=PASS release=HELD\n' > "$state/install.done"
+if [[ "$FIXTURE_FAILURE" = handback ]]; then chmod 0755 "$state"; fi
+""", encoding="ascii")
+                shutil.copyfile(action, staging / action.name)
+                (staging / "DEV-SHA256SUMS").write_text(
+                    f"{digest(action.read_bytes())}  {action.name}\n", encoding="ascii",
+                )
+                (state / "SHA256SUMS").write_text("".join(
+                    f"{digest(path.read_bytes())}  {path.name}\n" for path in sorted(state.iterdir())
+                ), encoding="ascii")
+
+                record_path = work / "active.run"
+                if failure == "acquire":
+                    prior = host_step(work, r"""
+exec 7<"$DEV_STEP_LOCK"
+flock -n -E 75 7 || exit $?
+bash "$1" acquire "$2" fixture
+""", state / "dev-step-lock.sh", run_id)
+                    self.assertEqual(prior.returncode, 0, (prior.stdout, prior.stderr))
+                invocation = r"""
+export FIXTURE_FAILURE="$3"
+ssh() { [[ "${*: -1}" == *EXPECT_NEVER_STARTED=1* ]]; }
+export -f ssh
+exec bash "$1/run-install.sh" "$(id -un)" "$1" "$2"
+"""
+                result = host_step(work, invocation, state, marker, failure or "")
+                expected_status = 42 if failure in phases else 75 if failure else 0
+                self.assertEqual(result.returncode, expected_status, (result.stdout, result.stderr))
+                trace = state / "actions"
+                if failure == "acquire":
+                    self.assertFalse(trace.exists())
+                    self.assertIn("HOLD_DEV_STEP_UNRESOLVED", result.stdout)
+                else:
+                    count = phases.index(failure) + 1 if failure in phases else len(phases)
+                    self.assertEqual(trace.read_text().splitlines(), ["install", *phases[:count]])
+                    self.assertEqual((state / "portal-readiness.log").exists(), count == len(phases))
+                    self.assertFalse((state / "transfer.log").exists())
+                if failure:
+                    self.assertFalse(list(state.glob("dev-step-*/completion.json")))
+                    record = json.loads(record_path.read_bytes())
+                    self.assertEqual(record["run_id"], run_id)
+                    self.assertEqual(record["step"], "fixture" if failure == "acquire" else "controller-install")
+                else:
+                    self.assertIn("DEV_SIGNED_INSTALL=PASS", result.stdout)
+                    self.assertFalse(record_path.exists())
+                    evidence, = state.glob("dev-step-*/completion.json")
+                    self.assertEqual(json.loads(evidence.read_bytes())["run_id"], run_id)
+                self.assertEqual(host_step(work, 'exec flock -n "$DEV_STEP_LOCK" true').returncode, 0)
+
+    def test_server_install_requires_three_inputs(self):
+        runner = HERE / "templates" / "run-install.sh"
+        for args in ((), ("", "/bundle", "/lock"), ("fixture", "", "/lock"), ("fixture", "/bundle", "")):
+            with self.subTest(args=args):
+                result = subprocess.run(["bash", runner, *args], capture_output=True, text=True, timeout=10)
+                self.assertEqual(result.returncode, 75)
+                self.assertIn("HOLD_DEV_INSTALL_INPUTS", result.stderr)
 
     def test_golden_and_fixed_identity(self):
         checkpoint("golden-render")
