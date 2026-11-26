@@ -372,6 +372,7 @@ export const englishPlatformMessages = {
   "platform.metaTransition.payment.CARD": "Card",
   "platform.metaTransition.payment.LINE": "Credit line",
   "platform.metaTransition.arrangement": "Approved managed-payment arrangement",
+  "platform.metaTransition.arrangementExpiry": "Expires",
   "platform.metaTransition.originalArrangement": "Original approved arrangement",
   "platform.metaTransition.receiver": "Approved target receiving business reference",
   "platform.metaTransition.termsVersion": "Target terms version",
