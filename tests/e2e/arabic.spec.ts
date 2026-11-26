@@ -1,5 +1,6 @@
 import { installWorkspaceReadFixture } from "./workspace-read.fixture";
 import { auditWorkspaceJourney } from "./audit-workspace.fixture";
+import { registerPrivacySettingsJourneys } from "./privacy-settings.fixture";
 import { consumeExpectedLegacyDenial, metaLegacyMigrationJourney } from "./meta-legacy-migration.fixture";
 import { consumeExpectedRoutingDenial, installMetaRoutingReadFixture, metaRoutingJourney } from "./meta-routing.fixture";
 import { consumeExpectedCoexistenceDenial, metaCoexistenceJourney } from "./meta-coexistence.fixture";
@@ -21,6 +22,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { arabicMessages } from "../../lib/i18n/messages/ar/index.ts";
 
 const role = process.env.WASALX_E2E_ROLE ?? "tenant_owner";
+registerPrivacySettingsJourneys("ar", role);
 test("Audit uses localized workspace actions and truthful actors with permitted CSV export", { tag: "@tablet" }, async ({ page }, testInfo) => {
   await auditWorkspaceJourney(page, "ar", role, testInfo);
 });
