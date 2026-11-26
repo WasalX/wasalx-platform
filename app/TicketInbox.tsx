@@ -2,6 +2,7 @@
 
 /* Additive ticket controls; all authorization and durable mutation handling stay in Inbox. */
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { AttachmentFilePicker } from "./AttachmentFilePicker";
 import { InlineConfirmation, ModalDialog } from "./ModalDialog";
 import { formatNumber } from "../lib/i18n/format";
 import { useI18n } from "./I18nProvider";
@@ -37,13 +38,11 @@ export function TicketAttachmentPicker({ id, files, limits, disabled, upload, re
     finally { working.current = false; if (mounted.current) setPending(false); }
   };
   return <div className="wx-ticket-attachments">
-    {limits && (limits.accepted === null || limits.accepted.length) ? <label htmlFor={id}>{t("ticketExtras.attach")}<input id={id} type="file" multiple disabled={disabled || pending}
-      accept={limits.accepted?.map(rule => rule.mime_type).join(",")} onChange={event => {
-        const selected = Array.from(event.target.files ?? []); event.target.value = "";
-        if (!selected.length) return;
+    {limits && (limits.accepted === null || limits.accepted.length) ? <AttachmentFilePicker id={id} disabled={disabled || pending} empty={!files.length && !pending}
+      accept={limits.accepted?.map(rule => rule.mime_type).join(",")} onSelect={selected => {
         if (!filesFitTicketPolicy(files, selected, limits)) { setError(t("ticketExtras.filesRejected")); return; }
         void run(() => upload(selected));
-      }} /></label> : <p>{t("ticketExtras.attachmentsUnavailable")}</p>}
+      }} /> : <p>{t("ticketExtras.attachmentsUnavailable")}</p>}
     {files.length ? <ul>{files.map(file => <li key={file.id}><bdi>{file.name}</bdi><span>{formatNumber(file.bytes, locale)} {t("ticketExtras.bytes")}</span>
       <button type="button" className="wx-button wx-button-secondary" disabled={disabled || pending} onClick={() => void run(() => remove(file))}>{t("ticketExtras.removeFile", { filename: file.name })}</button></li>)}</ul> : null}
     {pending ? <p role="status">{t("ticketExtras.staging")}</p> : null}{error ? <p role="alert">{error}</p> : null}
