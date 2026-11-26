@@ -152,6 +152,7 @@ jobs:
             "$matrix" "$images" "$installer_portal" >> "$GITHUB_OUTPUT"
 
   workflow-lint:
+    if: github.event_name != 'push'
     runs-on: ubuntu-24.04
     timeout-minutes: 3
     steps:
@@ -214,7 +215,7 @@ jobs:
   storybook:
     needs: changes
     if: >-
-      ${{ !cancelled() && (github.event_name == 'merge_group' || github.event_name == 'push' ||
+      ${{ !cancelled() && (github.event_name == 'merge_group' ||
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'pull_request' && needs.changes.outputs.storybook != 'false')) }}
     runs-on: ubuntu-24.04
@@ -254,7 +255,7 @@ jobs:
         with: *storybook-audit-artifact
 
   privacy:
-    if: github.event_name != 'workflow_dispatch'
+    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
     uses: ./.github/workflows/privacy.yml
 
   dependency-review:
@@ -371,7 +372,7 @@ jobs:
         run: node scripts/hosted-ci.mjs unit "$SHARD" 2
 
   full-unit:
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch'
     name: Full ${{ matrix.name }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -381,43 +382,10 @@ jobs:
         include: [*unit-one, *unit-two]
     steps: *check-steps
 
-  lint-on-push:
-    name: Lint on push
-    if: github.event_name == 'push'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: '24.13.1'
-          package-manager-cache: false
-      - name: Set up pnpm dependencies
-        id: pnpm
-        uses: ./.github/actions/ci-pnpm
-        with:
-          seed-dependencies: 'true'
-      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        id: eslint-cache
-        with:
-          path: .git/hosted-eslint-cache
-          key: eslint-${{ runner.os }}-${{ hashFiles('eslint.config.*', 'pnpm-lock.yaml') }}-${{ github.sha }}
-          restore-keys: eslint-${{ runner.os }}-${{ hashFiles('eslint.config.*', 'pnpm-lock.yaml') }}-
-      - name: Lint
-        run: pnpm run lint --cache --cache-strategy content --cache-location .git/hosted-eslint-cache
-      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        if: steps.eslint-cache.outputs.cache-hit != 'true'
-        with:
-          path: .git/hosted-eslint-cache
-          key: ${{ steps.eslint-cache.outputs.cache-primary-key }}
-
   integration:
     needs: changes
     if: >-
       ${{ !cancelled() && (github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
       (github.event_name == 'pull_request' && (needs.changes.result != 'success' || needs.changes.outputs.integration != 'false'))) }}
     name: PostgreSQL ${{ matrix.shard }}/4
     runs-on: ubuntu-24.04
@@ -474,18 +442,11 @@ jobs:
           path: postgres-shard-${{ matrix.shard }}.json
           if-no-files-found: error
           retention-days: 7
-      # Save after shard 1 passes without waiting for shards 2-4 because the cache holds only build outputs.
-      - name: Save service build cache
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && matrix.shard == 1
-        uses: ./.github/actions/ci-pnpm
-        with:
-          task: save-build
-          dependency-key: ${{ steps.pnpm.outputs.dependency-key }}
 
   portal-browser-build:
     needs: changes
     if: >-
-      ${{ !cancelled() && (github.event_name != 'pull_request' ||
+      ${{ !cancelled() && github.event_name != 'push' && (github.event_name != 'pull_request' ||
       needs.changes.result != 'success' || needs.changes.outputs.integration != 'false' ||
       needs.changes.outputs.application-e2e != 'false') }}
     runs-on: ubuntu-24.04
@@ -624,7 +585,7 @@ jobs:
   keycloak-identity:
     needs: changes
     if: >-
-      ${{ !cancelled() && (github.event_name != 'pull_request' ||
+      ${{ !cancelled() && github.event_name != 'push' && (github.event_name != 'pull_request' ||
       needs.changes.result != 'success' || needs.changes.outputs.keycloak-identity != 'false') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -665,7 +626,6 @@ jobs:
     needs: changes
     if: >-
       ${{ !cancelled() && (github.event_name == 'merge_group' ||
-      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
       (github.event_name == 'pull_request' && (needs.changes.result != 'success' || needs.changes.outputs.infra != 'false'))) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -719,7 +679,13 @@ jobs:
           IMAGE: ${{ matrix.image }}
           PUBLIC_ADDON_SOURCE: ${{ toJSON(matrix.addonSource) }}
           PUBLIC_CONTACT_EMAIL: ${{ matrix.image == 'portal' && vars.PUBLIC_CONTACT_EMAIL || '' }}
-        run: python3 scripts/release/images-by-digest.py build --cache read --image "$IMAGE" --output "records/$IMAGE.json"
+        run: |
+          args=(--cache read)
+          if [[ "$GITHUB_EVENT_NAME" == merge_group ]]; then
+            mkdir -p records
+            args=(--archive "records/$IMAGE.tar")
+          fi
+          python3 scripts/release/images-by-digest.py build "${args[@]}" --image "$IMAGE" --output "records/$IMAGE.json"
       - name: Record pending add-on source
         if: matrix.pending
         env:
@@ -732,6 +698,17 @@ jobs:
           name: image-build-${{ matrix.image }}
           path: records/${{ matrix.image }}.json
           if-no-files-found: error
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: github.event_name == 'merge_group' && !matrix.pending
+        with:
+          name: image-queue-${{ github.run_attempt }}-${{ matrix.image }}
+          path: |
+            records/${{ matrix.image }}.json
+            records/${{ matrix.image }}.tar
+          overwrite: true
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
 
   pr-images:
     # Keep the PR matrix outside the required gate's dependency graph.
@@ -797,12 +774,12 @@ jobs:
           NODE
 
   publish:
-    needs: lint-on-push
     if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'WasalX/wasalx-platform' }}
     concurrency:
       group: release-${{ github.sha }}
       cancel-in-progress: false
     permissions:
+      actions: read
       contents: read
       packages: write
       id-token: write
@@ -810,12 +787,12 @@ jobs:
 
   zammad-compatibility:
     needs: changes
-    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.changes.outputs.zammad != 'false') }}
+    if: ${{ !cancelled() && github.event_name != 'push' && (github.event_name != 'pull_request' || needs.changes.outputs.zammad != 'false') }}
     uses: ./.github/workflows/zammad-compatibility.yml
 
   ci-gate:
-    if: always()
-    needs: [changes, workflow-lint, storybook, privacy, dependency-review, checks, full-unit, lint-on-push, images, installer-portal, integration, portal-integration, application-e2e, platform-operator-e2e, keycloak-identity, integration-coverage, infra-validate, dev-install-dryrun, zammad-compatibility]
+    if: always() && github.event_name != 'push'
+    needs: [changes, workflow-lint, storybook, privacy, dependency-review, checks, full-unit, images, installer-portal, integration, portal-integration, application-e2e, platform-operator-e2e, keycloak-identity, integration-coverage, infra-validate, dev-install-dryrun, zammad-compatibility]
     runs-on: ubuntu-slim
     timeout-minutes: 2
     permissions: {}
@@ -830,7 +807,6 @@ jobs:
           PRIVACY: ${{ needs.privacy.result }}
           CHECKS: ${{ needs.checks.result }}
           FULL_UNIT: ${{ needs.full-unit.result }}
-          LINT_ON_PUSH: ${{ needs.lint-on-push.result }}
           REVIEW: ${{ needs.dependency-review.result }}
           IMAGES: ${{ needs.images.result }}
           INSTALLER_PORTAL_NEEDED: ${{ needs.changes.outputs.installer-portal }}
@@ -852,10 +828,6 @@ jobs:
           ZAMMAD_COMPATIBILITY: ${{ needs.zammad-compatibility.result }}
         run: |
           test "$WORKFLOW_LINT" = success || exit 1
-          case "$EVENT:$LINT_ON_PUSH" in
-            push:success|pull_request:skipped|merge_group:skipped|workflow_dispatch:skipped) ;;
-            *) echo "::error::Lint on push result for $EVENT: ${LINT_ON_PUSH:-missing}"; exit 1 ;;
-          esac
           case "$EVENT:$STORYBOOK_NEEDED:$STORYBOOK" in
             *:*:success|pull_request:false:skipped) ;;
             *) echo 'Storybook did not pass.'; exit 1 ;;
@@ -869,7 +841,7 @@ jobs:
             *) echo 'Keycloak identity browser tests did not pass.'; exit 1 ;;
           esac
           case "$EVENT:$PRIVACY" in
-            pull_request:success|merge_group:success|push:success|workflow_dispatch:skipped) ;;
+            pull_request:success|merge_group:success|workflow_dispatch:skipped) ;;
             *) echo 'Privacy scan did not pass.'; exit 1 ;;
           esac
           case "$EVENT:$ZAMMAD_NEEDED:$ZAMMAD_COMPATIBILITY" in
@@ -878,11 +850,11 @@ jobs:
               echo 'Zammad compatibility skipped because its inputs did not change.' >> "$GITHUB_STEP_SUMMARY" ;;
             *) echo "::error::Zammad compatibility result: $ZAMMAD_COMPATIBILITY"; exit 1 ;;
           esac
-          if [[ "$EVENT" == push || "$EVENT" == workflow_dispatch ]]; then
+          if [[ "$EVENT" == workflow_dispatch ]]; then
             test "$CHANGES:$CHECKS:$REVIEW:$IMAGES:$DEV_INSTALL:$INSTALLER_PORTAL" = skipped:skipped:skipped:skipped:skipped:skipped || exit 1
             test "$FULL_UNIT" = success || exit 1
             test "$INTEGRATION:$PORTAL_INTEGRATION:$INTEGRATION_COVERAGE" = success:success:success || exit 1
-            case "$EVENT:$INFRA" in push:success|workflow_dispatch:skipped) ;; *) exit 1 ;; esac
+            test "$INFRA" = skipped || exit 1
             echo "Event $EVENT ran both full unit shards. Infrastructure validation: $INFRA (skipped on manual dispatch)." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi

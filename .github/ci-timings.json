@@ -17,9 +17,6 @@
     "checks": {
       "p95_minutes": 2.2833
     },
-    "lint-on-push": {
-      "p95_minutes": 0.6833
-    },
     "integration": {
       "p95_minutes": 2.8333
     },

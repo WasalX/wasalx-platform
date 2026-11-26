@@ -152,7 +152,7 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
         self.assertIn("\nARG PUBLIC_CONTACT_EMAIL=\nRUN pnpm build\n", build_stage)
         binding = "          PUBLIC_CONTACT_EMAIL: ${{ matrix.image == 'portal' && vars.PUBLIC_CONTACT_EMAIL || '' }}"
         for name, step_name in [("ci.yml", "Build and inspect without publication"),
-                                ("branch-image.yml", "Build without cache imports, export layers and inspect")]:
+                                ("branch-image.yml", "Publish, sign, attest and inspect the published digest")]:
             with self.subTest(workflow=name):
                 workflow = (ROOT / ".github/workflows" / name).read_text()
                 step = workflow.split(f"      - name: {step_name}\n", 1)[1].split("\n      - ", 1)[0]
@@ -659,6 +659,36 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
                 with self.assertRaisesRegex(ValueError, "requires a main push"):
                     images.publish("unused")
 
+    def test_publication_requires_the_inspected_archive_from_the_queue_attempt(self):
+        commit, tree = "a" * 40, "b" * 40
+        env = {"GITHUB_EVENT_NAME": "push", "GITHUB_REF": "refs/heads/main",
+               "QUEUE_RUN_ID": "123", "QUEUE_RUN_ATTEMPT": "2"}
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, env, clear=True), \
+                patch.object(images, "coordinates", return_value=(commit, tree)), \
+                patch.object(images, "registry_output") as registry, \
+                patch.object(images, "loaded_config") as verify, \
+                patch.object(images.subprocess, "run") as docker:
+            archive = Path(directory) / "image.tar"
+            archive.write_bytes(b"inspected queue image")
+            path = Path(directory) / "receipt.json"
+            queue = {"runId": "123", "attempt": "2", "archiveDigest": images.archive_digest(archive)}
+            receipt = {"image": "control-api", "commit": commit, "tree": tree, "status": "built",
+                       "reference": "ghcr.io/wasalx/control-api:" + commit,
+                       "inspection": {"configDigest": "sha256:" + "c" * 64}}
+            for bad_queue in ({**queue, "attempt": "1"}, {**queue, "archiveDigest": "sha256:" + "0" * 64}):
+                images.write(path, {**receipt, "queue": bad_queue})
+                with self.assertRaisesRegex(ValueError, "archive or attempt differs"):
+                    images.publish(path, archive=archive)
+            verify.assert_not_called()
+            docker.assert_not_called()
+            registry.assert_not_called()
+            images.write(path, {**receipt, "queue": queue})
+            verify.side_effect = ValueError("Loaded config differs")
+            with self.assertRaisesRegex(ValueError, "Loaded config differs"):
+                images.publish(path, archive=archive)
+            docker.assert_not_called()
+            registry.assert_not_called()
+
     def test_main_alias_advances_to_a_descendant_and_skips_a_late_older_publish_or_unknown_revision(self):
         raw = b'{"schemaVersion":2}'
         digest = images.sha256(raw)
@@ -1003,7 +1033,11 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
         self.assertIn(guard, bodies["publish"])
         self.assertIn(guard, bodies["manifest"])
         self.assertNotRegex(bodies["publish"], r"(?m)^    environment:")
-        self.assertIn("BUILD_CACHE: ${{ github.ref_name == 'main' && 'write' || 'off' }}", bodies["publish"])
+        self.assertIn(guard, bodies["queue"])
+        self.assertNotIn("images-by-digest.py build", bodies["publish"])
+        self.assertIn('publish --archive "records/$IMAGE.tar"', bodies["publish"])
+        self.assertIn('QUEUE_RUN_ID: ${{ needs.queue.outputs.run }}', bodies["publish"])
+        self.assertIn('QUEUE_RUN_ATTEMPT: ${{ needs.queue.outputs.attempt }}', bodies["publish"])
         self.assertNotIn("actions/attest-build-provenance@", text)
         self.assertNotIn("url:", text)
         allowed = {"actions/checkout", "actions/setup-node", "actions/upload-artifact", "actions/download-artifact",
