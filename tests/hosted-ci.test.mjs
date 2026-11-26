@@ -1592,7 +1592,7 @@ test("Zammad compatibility gates CI and reuses the same job on the nightly sched
   const compatibility = parse(await read(workflow));
   const job = jobs["zammad-compatibility"];
   assert.equal(job.needs, "changes");
-  assert.equal(job.if, "${{ !cancelled() && (github.event_name != 'pull_request' || needs.changes.outputs.zammad != 'false') }}");
+  assert.equal(job.if, "${{ !cancelled() && github.event_name != 'push' && (github.event_name != 'pull_request' || needs.changes.outputs.zammad != 'false') }}");
   assert.equal(job.uses, `./${workflow}`);
   assert(jobs["ci-gate"].needs.includes("zammad-compatibility"));
   assert.equal(jobs["ci-gate"].steps[0].env.ZAMMAD_COMPATIBILITY, "${{ needs.zammad-compatibility.result }}");
