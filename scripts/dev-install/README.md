@@ -145,7 +145,7 @@ Pass exactly three required arguments to `run-install.sh`.
 
 | Argument | Value |
 | --- | --- |
-| `DEV_UNIT_USER` | The configured unit user. The script checks that it is running as this user. |
+| `DEV_UNIT_USER` | The configured unit user. Set it to root. |
 | `DEV_INSTALL_BUNDLE` | The absolute path to the verified host packet directory on DEV. |
 | `DEV_STEP_LOCK` | The canonical absolute lock marker path from the host identity. It must match the packet. |
 
@@ -155,6 +155,7 @@ Use the existing install lease unit name and limits. Servers derives
 unit on DEV with the configured identity and install lease properties:
 
 ```sh
+# Root is required to access the sealed packet, freeze the base disk and switch the system VM to its overlay.
 systemd-run --unit="${LEASE_PREFIX}-install-$RUN_ID.service" --uid="$DEV_UNIT_USER" --wait \
   -p RuntimeMaxSec="$INSTALL_RUNTIME" -p TimeoutStopSec=30 -p KillMode=control-group \
   -p CPUQuota=800% -p MemoryMax=8G -p MemorySwapMax=0 -p CPUWeight=10 -p IOWeight=10 \
