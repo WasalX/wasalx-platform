@@ -560,6 +560,39 @@ jobs:
             output/playwright/workspace-invitation/invitation-incomplete-desktop-dark-preview-${{ matrix.locale }}.png
             output/playwright/workspace-invitation/invitation-incomplete-mobile-390-light-${{ matrix.locale }}.png
             output/playwright/workspace-invitation/invitation-incomplete-mobile-390-dark-preview-${{ matrix.locale }}.png
+          if-no-files-found: error
+          retention-days: 7
+      - name: Upload synthetic workflow, routing, and delivery screenshots
+        if: success() && matrix.roles == 'tenant_owner'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: workflow-routing-delivery-${{ matrix.locale }}
+          path: |
+            output/playwright/workflow-routing-delivery/workflow-automation-list-desktop-light-${{ matrix.locale }}.png
+            output/playwright/workflow-routing-delivery/workflow-automation-list-desktop-dark-${{ matrix.locale }}.png
+            output/playwright/workflow-routing-delivery/workflow-automation-list-mobile-390-light-${{ matrix.locale }}.png
+            output/playwright/workflow-routing-delivery/workflow-automation-list-mobile-390-dark-${{ matrix.locale }}.png
+            output/playwright/workflow-routing-delivery/workflow-automation-edit-desktop-light-${{ matrix.locale }}.png
+            output/playwright/workflow-routing-delivery/workflow-automation-edit-desktop-dark-${{ matrix.locale }}.png
+            output/playwright/workflow-routing-delivery/workflow-automation-edit-mobile-390-light-${{ matrix.locale }}.png
+            output/playwright/workflow-routing-delivery/workflow-automation-edit-mobile-390-dark-${{ matrix.locale }}.png
+            output/playwright/workflow-routing-delivery/client-routing-list-desktop-light-${{ matrix.locale }}.png
+            output/playwright/workflow-routing-delivery/client-routing-list-desktop-dark-${{ matrix.locale }}.png
+            output/playwright/workflow-routing-delivery/client-routing-list-mobile-390-light-${{ matrix.locale }}.png
+            output/playwright/workflow-routing-delivery/client-routing-list-mobile-390-dark-${{ matrix.locale }}.png
+            output/playwright/workflow-routing-delivery/client-routing-edit-desktop-light-${{ matrix.locale }}.png
+            output/playwright/workflow-routing-delivery/client-routing-edit-desktop-dark-${{ matrix.locale }}.png
+            output/playwright/workflow-routing-delivery/client-routing-edit-mobile-390-light-${{ matrix.locale }}.png
+            output/playwright/workflow-routing-delivery/client-routing-edit-mobile-390-dark-${{ matrix.locale }}.png
+            output/playwright/workflow-routing-delivery/message-delivery-list-desktop-light-${{ matrix.locale }}.png
+            output/playwright/workflow-routing-delivery/message-delivery-list-desktop-dark-${{ matrix.locale }}.png
+            output/playwright/workflow-routing-delivery/message-delivery-list-mobile-390-light-${{ matrix.locale }}.png
+            output/playwright/workflow-routing-delivery/message-delivery-list-mobile-390-dark-${{ matrix.locale }}.png
+            output/playwright/workflow-routing-delivery/message-delivery-detail-desktop-light-${{ matrix.locale }}.png
+            output/playwright/workflow-routing-delivery/message-delivery-detail-desktop-dark-${{ matrix.locale }}.png
+            output/playwright/workflow-routing-delivery/message-delivery-detail-mobile-390-light-${{ matrix.locale }}.png
+            output/playwright/workflow-routing-delivery/message-delivery-detail-mobile-390-dark-${{ matrix.locale }}.png
+          if-no-files-found: error
           retention-days: 7
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure() || cancelled()

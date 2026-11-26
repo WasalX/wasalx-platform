@@ -861,21 +861,37 @@ test("Hosted browser jobs retain Playwright diagnostics on failure or cancellati
   }
 });
 
-test("Successful owner fixture shards retain only the named workspace and invitation PNGs", async () => {
+test("Successful owner fixture shards retain only the named journey PNGs", async () => {
   const { jobs } = parse(await read(".github/workflows/ci.yml"));
   const uploads = jobs["application-e2e"].steps.filter(step =>
     step.uses?.startsWith("actions/upload-artifact@") && step.if !== "failure() || cancelled()");
-  assert.equal(uploads.length, 1);
-  const [upload] = uploads;
-  assert.equal(upload.if, "success() && matrix.roles == 'tenant_owner'");
-  assert.equal(upload.with.name, "workspace-invitation-${{ matrix.locale }}");
-  const expected = ["desktop", "mobile-390"].flatMap(viewport => [
-    `workspace-access-ready-${viewport}-light`,
-    `workspace-access-ready-${viewport}-dark`,
-    `invitation-incomplete-${viewport}-light`,
-    `invitation-incomplete-${viewport}-dark-preview`,
-  ]).map(name => "output/playwright/workspace-invitation/" + name + "-${{ matrix.locale }}.png");
-  assert.deepEqual(upload.with.path.trim().split("\n").sort(), expected.sort());
+  const archives = {
+    "workspace-invitation": {
+      "workspace-access-ready": ["light", "dark"],
+      "invitation-incomplete": ["light", "dark-preview"],
+    },
+    "workflow-routing-delivery": {
+      "workflow-automation-list": ["light", "dark"],
+      "workflow-automation-edit": ["light", "dark"],
+      "client-routing-list": ["light", "dark"],
+      "client-routing-edit": ["light", "dark"],
+      "message-delivery-list": ["light", "dark"],
+      "message-delivery-detail": ["light", "dark"],
+    },
+  };
+  assert.equal(uploads.length, Object.keys(archives).length);
+  for (const [archive, screens] of Object.entries(archives)) {
+    const name = archive + "-${{ matrix.locale }}";
+    const upload = uploads.find(step => step.with.name === name);
+    assert(upload, `Missing ${name} upload`);
+    assert.equal(upload.if, "success() && matrix.roles == 'tenant_owner'");
+    assert.equal(upload.with["if-no-files-found"], "error");
+    assert.equal(upload.with["retention-days"], 7);
+    const expected = Object.entries(screens).flatMap(([screen, themes]) =>
+      ["desktop", "mobile-390"].flatMap(viewport => themes.map(theme =>
+        `output/playwright/${archive}/${screen}-${viewport}-${theme}-${{ matrix.locale }}.png`)));
+    assert.deepEqual(upload.with.path.trim().split("\n").sort(), expected.sort(), name);
+  }
 });
 
 test("CI gate requires each event's jobs and rejects unplanned skips, failures, and cancellations", async t => {
