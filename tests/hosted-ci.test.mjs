@@ -1437,14 +1437,15 @@ test("optional PR lanes run on diff errors and gate their applicable checks", as
     ].join(" ")],
   ]) {
     const detector = changes.steps.find(step => step.id === id);
-    assert.equal(detector.if, "github.event_name == 'pull_request'");
+    assert.equal(detector.if, id === "zammad" ? undefined : "github.event_name == 'pull_request'");
     for (const [status, needed] of [[0, false], [1, true], [128, true]]) {
       const outputFile = join(directory, `${id}-${status}`);
       const result = runWorkflowScript(`git() {
+  if [[ "$*" == "merge-base --is-ancestor HEAD^1 HEAD" && "$LANE" == zammad ]]; then return 0; fi
   test "$*" = "diff --quiet --no-ext-diff --no-renames HEAD^1 HEAD -- $DIFF_PATHS" || exit 99
   return "$DIFF_STATUS"
 }
-${detector.run}`, { GITHUB_OUTPUT: outputFile.replaceAll("\\", "/"), DIFF_PATHS: diffPaths, DIFF_STATUS: String(status) });
+${detector.run}`, { GITHUB_OUTPUT: outputFile.replaceAll("\\", "/"), DIFF_PATHS: diffPaths, DIFF_STATUS: String(status), BASE: "HEAD^1", LANE: id });
       assert.equal(result.status, 0, result.error?.message ?? result.stderr);
       assert.equal((await readFile(outputFile, "utf8")).trim(), `needed=${needed}`);
     }
