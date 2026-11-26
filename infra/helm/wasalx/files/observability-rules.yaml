@@ -69,21 +69,21 @@
           labels: { severity: critical, owner: platform }
           annotations:
             summary: No WAHA registry worker health signal is reaching the metrics backend.
-            runbook_url: "__RUNBOOK_BASE_URL__#worker-or-session-loss"
+            runbook_url: "__RUNBOOK_BASE_URL__#waha-worker-telemetry-missing"
         - alert: WasalXWahaWorkerUnhealthy
           expr: min by (worker, engine) (wasalx_waha_worker_health) < 1
           for: 1m
           labels: { severity: critical, owner: connector }
           annotations:
             summary: A WAHA worker is unhealthy or its health probe cannot complete.
-            runbook_url: "__RUNBOOK_BASE_URL__#worker-or-session-loss"
+            runbook_url: "__RUNBOOK_BASE_URL__#waha-worker-unhealthy"
         - alert: WasalXWahaWorkerCapacityHigh
           expr: max by (worker, engine) (wasalx_waha_worker_sessions) / clamp_min(max by (worker, engine) (wasalx_waha_worker_capacity), 1) >= 0.9
           for: 5m
           labels: { severity: warning, owner: platform }
           annotations:
             summary: A WAHA worker has consumed at least 90% of its configured session capacity.
-            runbook_url: "__RUNBOOK_BASE_URL__#worker-or-session-loss"
+            runbook_url: "__RUNBOOK_BASE_URL__#waha-worker-capacity-high"
         - alert: WasalXConnectionActionRequired
           expr: sum(wasalx_connection_state{state="action_required"}) > 0
           for: 1m

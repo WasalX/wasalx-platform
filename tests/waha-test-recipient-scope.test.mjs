@@ -234,7 +234,7 @@ test("excluded deliveries fail before begin-send, secret reads, native writes or
   t.after(()=>{if(previous===undefined)delete process.env.WASALX_TEST_RECIPIENT_ALLOWLIST;else process.env.WASALX_TEST_RECIPIENT_ALLOWLIST=previous});
   process.env.WASALX_TEST_RECIPIENT_ALLOWLIST=raw;
   const effects=[],failures=[];
-  const repository={beginSend:async()=>effects.push("begin"),fail:async(_job,_lease,retryable,error)=>failures.push({retryable,error})};
+  const repository={whatsAppMarketingOptedOut:async()=>false,beginSend:async()=>effects.push("begin"),fail:async(_job,_lease,retryable,error)=>failures.push({retryable,error})};
   const processor=new DeliveryProcessor(repository,{resolve:async()=>{effects.push("secret");throw new Error("Unexpected secret read")}},{metaGraphVersion:"v24.0"},8,{prepare:async()=>{effects.push("media");throw new Error("Unexpected media preparation")}});
   const job={id:"synthetic",provider:"waha",tenantId:"synthetic",connectionId:"synthetic",groupId:otherGroup,ticketId:"42",text:"synthetic",contentType:"text/plain",attempts:1,idempotencyKey:"synthetic"};
   assert.equal(await processor.deliver(job,"synthetic-lease"),false);

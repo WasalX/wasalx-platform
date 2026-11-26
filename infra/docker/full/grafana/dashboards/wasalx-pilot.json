@@ -5,7 +5,7 @@
   "graphTooltip": 1,
   "id": null,
   "links": [
-    { "title": "Alert runbook", "type": "link", "url": "https://github.com/WasalX/wasalx-platform/tree/main/docs/runbooks", "targetBlank": true }
+    { "title": "Alert runbook", "type": "link", "url": "https://github.com/WasalX/wasalx-platform/blob/main/docs/runbooks/alert-response.md", "targetBlank": true }
   ],
   "panels": [
     {
