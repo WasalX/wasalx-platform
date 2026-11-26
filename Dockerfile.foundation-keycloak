@@ -32,7 +32,8 @@ RUN echo '1f1935812026b0a5acbdb3717c9685b257f811b133a9bec455f0b2f0110321dc  /tmp
     && python /tmp/patch-keycloak-jackson.py /tmp/keycloak-admin-cli-26.7.3.jar /tmp/jackson-databind-2.21.7.jar /tmp/jackson-core-2.21.7.jar
 
 FROM ${WOLFI_BASE} AS mail-fence
-RUN apk add --no-cache 'openjdk-21=21.0.12.1-r2'
+COPY infra/docker/full/keycloak/apk-add-with-retry.sh /tmp/apk-add-with-retry.sh
+RUN /bin/sh /tmp/apk-add-with-retry.sh 'openjdk-21=21.0.12.1-r2'
 ENV PATH=/usr/lib/jvm/java-21-openjdk/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 COPY infra/docker/full/keycloak/mail-fence/ /build/src/
 COPY --from=keycloak /opt/keycloak/lib/lib/main/ /keycloak-jars/
@@ -43,10 +44,12 @@ RUN mkdir -p /build/classes /build/test \
     && jar --create --file /build/wasalx-mail-fence.jar -C /build/classes . -C /build/src META-INF
 
 FROM ${WOLFI_BASE}
-RUN apk add --no-cache 'libcrypto3=3.6.5-r1' 'libssl3=3.6.5-r1' \
+COPY infra/docker/full/keycloak/apk-add-with-retry.sh /tmp/apk-add-with-retry.sh
+RUN /bin/sh /tmp/apk-add-with-retry.sh 'libcrypto3=3.6.5-r1' 'libssl3=3.6.5-r1' \
       'bash=5.3-r13' \
       'openjdk-21-jre=21.0.12.1-r2' \
-      'zlib=1.3.1-r51'
+      'zlib=1.3.1-r51' \
+    && rm /tmp/apk-add-with-retry.sh
 COPY --from=keycloak --chown=1000:1000 /opt/keycloak /opt/keycloak
 COPY --from=mail-fence --chown=1000:1000 /build/wasalx-mail-fence.jar /opt/keycloak/providers/wasalx-mail-fence.jar
 COPY --from=jackson-patch --chown=1000:1000 /tmp/keycloak-admin-cli-26.7.3.jar /opt/keycloak/bin/client/keycloak-admin-cli-26.7.3.jar

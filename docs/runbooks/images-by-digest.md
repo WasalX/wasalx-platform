@@ -277,6 +277,10 @@ to GHCR to export cache layers and publish images.
 Default BuildKit provenance is disabled; the inspected public predicate is
 attested explicitly instead.
 
+The cold Keycloak build retries a pinned Wolfi APK install once after a
+two-second delay when APK reports a temporary fetch error. Both attempts use
+the same package constraints and signature verification.
+
 The same inspector runs before login/push and after pulling the published digest.
 It checks exact labels and environment against public Dockerfile declarations
 and the digest-pinned final base, inspects full history and Docker-save config,

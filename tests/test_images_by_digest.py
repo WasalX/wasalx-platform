@@ -271,6 +271,44 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
         catalog = [row["image"] for row in images.matrix()["include"]]
         self.assertEqual(re.findall(r"(?m)^          - ([a-z-]+)$", publish), catalog)
 
+    def test_keycloak_retries_only_temporary_apk_fetch_errors(self):
+        helper = ROOT / "infra/docker/full/keycloak/apk-add-with-retry.sh"
+        fixture = r"""
+apk() {
+    printf 'apk %s\n' "$*" >> "$calls"
+    case "$scenario" in
+        temporary)
+            if [ "$(wc -l < "$calls")" -gt 1 ]; then return 0; fi
+            ;;
+        signature)
+            printf '%s\n' 'ERROR: example: UNTRUSTED signature' >&2
+            return 7
+            ;;
+    esac
+    printf '%s\n' 'ERROR: example: temporary error (try again later)' >&2
+    return 8
+}
+sleep() { printf 'sleep %s\n' "$1" >> "$backoff"; }
+. "$helper" 'example=1.2.3'
+"""
+        apk_call = "apk add --no-cache example=1.2.3"
+        bash = "C:/Program Files/Git/bin/bash.exe" if os.name == "nt" else "bash"
+        for scenario, status, attempts in [("temporary", 0, 2), ("exhausted", 8, 2), ("signature", 7, 1)]:
+            with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as directory:
+                calls = Path(directory) / "calls"
+                backoff = Path(directory) / "backoff"
+                result = subprocess.run(
+                    [bash, "-c", fixture], capture_output=True, text=True, timeout=10,
+                    env={**os.environ, "helper": str(helper), "scenario": scenario,
+                         "calls": str(calls), "backoff": str(backoff)},
+                )
+                self.assertEqual(result.returncode, status, result.stderr)
+                self.assertEqual(calls.read_text().splitlines(), [apk_call] * attempts)
+                if attempts == 2:
+                    self.assertEqual(backoff.read_text(), "sleep 2\n")
+                else:
+                    self.assertFalse(backoff.exists())
+
     def test_pull_request_matrix_selects_union_of_literal_context_inputs(self):
         rows = images.matrix()["include"]
         narrow = {
@@ -279,6 +317,7 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
             "services/invitation-mailer/src/removed.ts": "invitation-mailer",
             "scripts/release/patch-keycloak-jackson.py": "foundation-keycloak",
             "infra/docker/full/keycloak/mail-fence/AllowedEmailSenderFactory.java": "foundation-keycloak",
+            "infra/docker/full/keycloak/apk-add-with-retry.sh": "foundation-keycloak",
             "tools/dev-secret-sidecar.mjs": "secret-sidecar",
             "infra/docker/Dockerfile.zammad": "zammad",
             "infra/docker/full/zammad/entrypoint.rb": "zammad",
