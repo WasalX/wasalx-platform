@@ -350,6 +350,7 @@ PY
     # Then verify-hosted -> original preimage -> candidate env -> preload ->
     # admit-hosted -> action-time preimage + replace -> held smoke -> fence proofs.
     step overlay-guard-and-install guest_phase install
+    step held-smoke guest_phase smoke
     check_drive "$OVERLAY_DRIVE"
     step terminal-frozen-proof frozen_check verify
     printf 'DEV_OVERLAY_DONE %s %s held_smoke=PASS fence=PASS release=HELD\n' "$(date -u +%FT%TZ)" "$REV" | tee "$STATE/install.done"

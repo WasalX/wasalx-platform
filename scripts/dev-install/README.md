@@ -25,8 +25,8 @@ before invoking its scripts with `python3 -I -B`.
 - `receive.py` checks out the exact commit and tree from the transferred `signed-<tag>-dev-incoming-source.bundle` in the guest's home.
 - `probe.py` takes the native read-only preimage capture using the installed environment.
 
-The signed runbook owns approval, transport, and engine actions. These scripts provide the
-checkout and preflight steps for that runbook.
+The signed runbook owns approval and staging. The DEV host runs the install phases in a
+transient system service. See [Start the install on DEV](#start-the-install-on-dev).
 
 The read-only running-stack scan is `node scripts/dev-install/probe.mjs --project-name "$PROJECT" --env-file "$FULL_ENV"`.
 Run it as root from the candidate checkout, with the deployed Compose inputs in a separate tree.
@@ -100,11 +100,11 @@ python3 -I -B scripts/dev-install/render.py --host-identity "$HOST_IDENTITY" \
   --run-id "$RUN_ID" --commit "$COMMIT" --output "$HOST_PACKET"
 ```
 
-The host identity fields are in `fixtures/host-identity.example.json`. The signed
-launcher verifies the seal and stages the rendered host files with the approved
-guest payload and `DEV-SHA256SUMS`. Keep the host packet private and separate
-from the guest packet. Use a root-owned mode-0700 `DISK_STATE` directory that
-persists across runs, outside the support directories.
+The host identity fields are in `fixtures/host-identity.example.json`. Stage the
+rendered host files with the approved guest payload and `DEV-SHA256SUMS`. Keep
+the host packet private and separate from the guest packet. Use a root-owned
+mode-0700 `DISK_STATE` directory that persists across runs, outside the support
+directories.
 
 - The post-create, pre-boot gate requires the immutable flag, exact identity for TOP
   and every backing layer, `qemu-img check` and the pinned backing chain.
@@ -129,6 +129,48 @@ persists across runs, outside the support directories.
 
 The real-QEMU nightly uses a scratch ext4 filesystem and a boot-sector guard stub.
 Use the signed host qualification to measure the live phase budgets.
+
+## Start the install on DEV
+
+Transfer the sealed install bundle to the approved private staging location and
+request the unit start through the Servers maintenance entry point. The
+workstation performs only those two operations. Servers verifies the approved
+seal before starting any packet script and stages the host packet in a
+root-owned mode-0700 directory with the guest payload at the packet's `STAGING`
+path.
+
+Pass exactly three required arguments to `run-install.sh`.
+
+| Argument | Value |
+| --- | --- |
+| `DEV_UNIT_USER` | The configured unit user. The script checks that it is running as this user. |
+| `DEV_INSTALL_BUNDLE` | The absolute path to the verified host packet directory on DEV. |
+| `DEV_STEP_LOCK` | The canonical absolute lock marker path from the host identity. It must match the packet. |
+
+Use the existing install lease unit name and limits. Servers derives
+`LEASE_PREFIX`, `RUN_ID` and `INSTALL_RUNTIME` from the verified packet using its
+`host.env`, `run-id` and `host-maintenance.py lease-runtime install`. Start the
+unit on DEV with the configured identity and install lease properties:
+
+```sh
+systemd-run --unit="${LEASE_PREFIX}-install-$RUN_ID.service" --uid="$DEV_UNIT_USER" --wait \
+  -p RuntimeMaxSec="$INSTALL_RUNTIME" -p TimeoutStopSec=30 -p KillMode=control-group \
+  -p CPUQuota=800% -p MemoryMax=8G -p MemorySwapMax=0 -p CPUWeight=10 -p IOWeight=10 \
+  -p Nice=19 -p IOSchedulingClass=idle -p UMask=0077 \
+  /bin/bash "$DEV_INSTALL_BUNDLE/run-install.sh" "$DEV_UNIT_USER" "$DEV_INSTALL_BUNDLE" "$DEV_STEP_LOCK"
+```
+
+The service keeps running if the workstation disconnects. It holds descriptor
+7 across the existing guest preflight, overlay cutover and smoke. It then
+closes descriptor 7 and uses the lock helper to record and verify handback. A
+phase failure stops the service and preserves the run record. A smoke failure
+leaves the overlay for the authorized recovery path and runs no build or
+deployment again. Before recovery or another attempt, retain the unit journal
+and the private run evidence. For timing and archival, retain the service's
+message output as the raw install receipt after a successful unit exit and
+verified handback. If a phase fails after the overlay is armed, have Servers
+resolve the run record through the [DEV step handback](#dev-step-lock) before
+registering the authorized rollback with `register.sh rollback "$STATE"`.
 
 ## DEV step lock
 
