@@ -262,12 +262,19 @@ def assert_mutations(test, stage, mutations):
             print(f"Mutation rejected: {label}", flush=True)
 
 
-def host_step(work, shell, *args, clock="2000-01-01T00:00:00Z"):
+def host_step(work, shell, *args, clock="2000-01-01T00:00:00Z", after_claim=""):
     return subprocess.run(
         ["bash", "-c", r"""
 date() {
     case "$*" in
-        '-u +%s'|'-u -d 2000-01-01T00:00:00Z +%s') printf '946684800\n'; return ;;
+        '-u +%s')
+            local instant="$DEV_STEP_FIXTURE_UTC"
+            if [[ -n "$DEV_STEP_FIXTURE_AFTER_CLAIM" && -f "$DEV_STEP_LOCK.run" ]]; then
+                instant="$DEV_STEP_FIXTURE_AFTER_CLAIM"
+            fi
+            /bin/date -u -d "$instant" +%s
+            return ;;
+        '-u -d 2000-01-01T00:00:00Z +%s') printf '946684800\n'; return ;;
         '-u -d 2000-01-01T01:00:00Z +%s') printf '946688400\n'; return ;;
     esac
     case "$2" in
@@ -283,7 +290,8 @@ df() {
 }
 export -f date stat df
 """ + shell, "host-step-fixture", *args],
-        env={**os.environ, "DEV_STEP_LOCK": str(work / "active"), "DEV_STEP_FIXTURE_UTC": clock},
+        env={**os.environ, "DEV_STEP_LOCK": str(work / "active"), "DEV_STEP_FIXTURE_UTC": clock,
+             "DEV_STEP_FIXTURE_AFTER_CLAIM": after_claim},
         capture_output=True, text=True, timeout=10,
     )
 
@@ -421,7 +429,12 @@ bash "$1" acquire "$2" maintenance
 
     def test_server_install_stops_at_first_failed_phase(self):
         phases = ("preflight", "cutover", "smoke")
-        for failure in (None, "acquire", *phases, "handback"):
+        admission_holds = {
+            "late-start": "HOLD_INSTALL_WINDOW_TOO_SHORT",
+            "late-after-claim": "HOLD_INSTALL_WINDOW_TOO_SHORT",
+            "finished-bundle": "HOLD_DEV_INSTALL_ALREADY_STARTED",
+        }
+        for failure in (None, "acquire", *phases, "handback", *admission_holds):
             with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
                 work = Path(directory)
                 state = work / "packet"
@@ -462,6 +475,7 @@ source "$state/dev-step-lock.sh"
 hold_dev_step_lock "$(cat "$state/run-id")" install
 test -z "$DEV_STEP_OWNER"
 if flock -n "$DEV_STEP_LOCK" true; then exit 91; fi
+test ! -e "$state/overlay-verification-armed"
 # A cutover failure after arming would otherwise invoke automatic discard.
 touch -- "$state/overlay-verification-armed"
 for phase in preflight cutover; do
@@ -495,10 +509,30 @@ ssh() { [[ "${*: -1}" == *EXPECT_NEVER_STARTED=1* ]]; }
 export -f ssh
 exec bash "$1/run-install.sh" "$(id -un)" "$1" "$2"
 """
-                result = host_step(work, invocation, state, marker, failure or "")
+                if failure == "finished-bundle":
+                    (state / "overlay-verification-armed").touch()
+                    (state / "install.done").write_text(
+                        "DEV_OVERLAY_DONE fixture held_smoke=PASS fence=PASS release=HELD\n", encoding="ascii",
+                    )
+                result = host_step(
+                    work, invocation, state, marker, failure or "",
+                    clock="2000-01-01T00:59:00Z" if failure == "late-start" else "2000-01-01T00:00:00Z",
+                    after_claim="2000-01-01T00:59:00Z" if failure == "late-after-claim" else "",
+                )
                 expected_status = 42 if failure in phases else 75 if failure else 0
                 self.assertEqual(result.returncode, expected_status, (result.stdout, result.stderr))
+                self.assertEqual(host_step(work, 'exec flock -n "$DEV_STEP_LOCK" true').returncode, 0)
                 trace = state / "actions"
+                if failure in admission_holds:
+                    self.assertFalse(record_path.exists())
+                    self.assertFalse(trace.exists())
+                    self.assertIn(admission_holds[failure], result.stdout)
+                    if failure == "late-after-claim":
+                        stop, = state.glob("dev-step-*/stop.json")
+                        self.assertEqual(json.loads(stop.read_bytes())["status"], "no-work")
+                    else:
+                        self.assertFalse(list(state.glob("dev-step-*")))
+                    continue
                 if failure == "acquire":
                     self.assertFalse(trace.exists())
                     self.assertIn("HOLD_DEV_STEP_UNRESOLVED", result.stdout)
@@ -517,7 +551,6 @@ exec bash "$1/run-install.sh" "$(id -un)" "$1" "$2"
                     self.assertFalse(record_path.exists())
                     evidence, = state.glob("dev-step-*/completion.json")
                     self.assertEqual(json.loads(evidence.read_bytes())["run_id"], run_id)
-                self.assertEqual(host_step(work, 'exec flock -n "$DEV_STEP_LOCK" true').returncode, 0)
 
     def test_server_install_requires_three_inputs(self):
         runner = HERE / "templates" / "run-install.sh"

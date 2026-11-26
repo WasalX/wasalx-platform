@@ -22,15 +22,31 @@ run="$(cat "$state/run-id")"
 export LEASE_UNIT="${LEASE_PREFIX}-install-$run.service"
 
 unset DEV_STEP_CLAIM
-hold_dev_step_lock "$run" controller-install
+# Serialize admission with the other DEV steps without reserving a run yet.
+dev_step_flock
+dev_step_record check || exit 75
+for marker in overlay-verification-armed install.done; do
+    if [[ -e "$state/$marker" || -L "$state/$marker" ]]; then
+        echo HOLD_DEV_INSTALL_ALREADY_STARTED
+        exit 75
+    fi
+done
 
-# Keep the existing install lease window before the overlay preflight starts.
 runtime="$(/usr/bin/python3 -I -B "$state/host-maintenance.py" lease-runtime install)"
 now="$(date -u +%s)"
 earliest="$(date -u -d "$INSTALL_NOT_BEFORE" +%s)"
 cutoff="$(date -u -d "$INSTALL_CUTOFF" +%s)"
 test "$now" -ge "$earliest" && test "$now" -lt "$cutoff" || { echo HOLD_TIME_WINDOW; exit 75; }
 test "$((cutoff-now))" -ge "$runtime" || { echo HOLD_INSTALL_WINDOW_TOO_SHORT; exit 75; }
+
+hold_dev_step_lock "$run" controller-install
+# If recording custody consumed the remaining margin, release it as no-work.
+now="$(date -u +%s)"
+if [ "$((cutoff-now))" -lt "$runtime" ]; then
+    finish_dev_step "$state" no-work
+    echo HOLD_INSTALL_WINDOW_TOO_SHORT
+    exit 75
+fi
 
 # The overlay keeps guest preflight, cutover and smoke together under this lock.
 # Exit on any failure so the run record is available for recovery and handback.

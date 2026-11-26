@@ -168,7 +168,9 @@ leaves the overlay for the authorized recovery path and runs no build or
 deployment again. Before recovery or another attempt, retain the unit journal
 and the private run evidence. For timing and archival, retain the service's
 message output as the raw install receipt after a successful unit exit and
-verified handback.
+verified handback. If a phase fails after the overlay is armed, have Servers
+resolve the run record through the [DEV step handback](#dev-step-lock) before
+registering the authorized rollback with `register.sh rollback "$STATE"`.
 
 ## DEV step lock
 
