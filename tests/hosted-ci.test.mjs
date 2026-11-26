@@ -1679,6 +1679,17 @@ test("PR unit selection catches a hidden transitive regression and falls back on
   assert(jobs["ci-gate"].needs.includes("full-unit"));
 });
 
+test("source style checks only files added by a pull request or merge group", async () => {
+  const { jobs } = parse(await read(".github/workflows/ci.yml"));
+  const step = jobs.checks.steps.find(step => step.name === "Check added source style");
+  assert.equal(step.if, "matrix.mode == 'lint'");
+  assert.equal(step.env.STYLE_BASE, "${{ github.event_name == 'pull_request' && 'HEAD^1' || github.event.merge_group.base_sha }}");
+  assert.match(step.run, /git diff --name-only --diff-filter=A -z "\$STYLE_BASE" HEAD/u);
+  assert.match(step.run, /xargs -0 -r .*pre-commit run .*--files/u);
+  assert(!jobs["lint-on-push"].steps.some(step => step.name === "Check added source style"));
+  assert.equal(jobs["lint-on-push"].steps[0].with["fetch-depth"], undefined);
+});
+
 test("shards cover each file once regardless of inventory order or duplicates", () => {
   const files = ["d", "a", "b", "c", "a"];
   const shards = [1, 2, 3].map(shard => shardFiles(files, shard, 3));
