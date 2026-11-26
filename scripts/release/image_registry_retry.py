@@ -1,4 +1,4 @@
-"""Retry registry CLI calls only on recognized transport failures."""
+"""Retry recognized registry failures within one command budget."""
 
 import re
 import subprocess
@@ -29,23 +29,30 @@ def last_diagnostic(stderr):
     return (stderr or b"").decode("utf-8", errors="replace").strip().rsplit("\n", 1)[-1]
 
 
-def registry_output(*command, timeout=None, delays=(10, 20), capture_stdout=True):
+def registry_output(*command, timeout=None, delays=(10, 20), capture_stdout=True,
+                    retry_unknown_blob=False):
     for attempt in range(len(delays) + 1):
         try:
             result = subprocess.run(command, check=True, stdout=subprocess.PIPE if capture_stdout else None,
                                     stderr=subprocess.PIPE, timeout=timeout)
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
             diagnostic = (error.stderr or b"").decode("utf-8", errors="replace")
+            if retry_unknown_blob:
+                print(f"Image push attempt {attempt + 1}/{len(delays) + 1} failed.", file=sys.stderr)
+                if error.stdout:
+                    sys.stderr.write(error.stdout.decode("utf-8", errors="replace"))
             if diagnostic:
                 sys.stderr.write(diagnostic)
             reason = last_diagnostic(error.stderr)
+            unknown_blob = retry_unknown_blob and diagnostic.strip() == "unknown blob"
             if attempt == len(delays) or TERMINAL.search(diagnostic):
                 raise
             if not isinstance(error, subprocess.TimeoutExpired) and (
-                    error.returncode <= 0 or not TRANSIENT.search(reason)):
+                    error.returncode <= 0 or not (unknown_blob or TRANSIENT.search(reason))):
                 raise
-            print(f"Transient registry transport failure in {command[0]}; "
-                  f"retrying in {delays[attempt]} seconds.", file=sys.stderr)
+            failure = "Image push returned unknown blob" if unknown_blob else (
+                f"Transient registry transport failure in {command[0]}")
+            print(f"{failure}; retrying in {delays[attempt]} seconds.", file=sys.stderr)
             time.sleep(delays[attempt])
         else:
             if result.stderr:
