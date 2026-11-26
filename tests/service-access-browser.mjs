@@ -199,6 +199,29 @@ try {
       assert.equal(await reauthLink.evaluate(link=>["inline-flex","flex"].includes(getComputedStyle(link).display)&&link.getBoundingClientRect().height>=34&&link.matches(":focus-visible")),true);
       await dialog.getByRole("button", { name: t("serviceAccess.check"), exact: true }).click(); await expect(dialog).toBeVisible(); await dialog.getByRole("button", { name: t("serviceAccess.cancelMissing"), exact: true }).click(); await expect(dialog).toHaveCount(0);
       assert.equal(writes.filter(row => row.operation === "IDENTITY_GRANT").length, 1);
+      await button("serviceAccess.more").click();
+      await button("serviceAccess.reviewGrant").click();
+      await dialog.getByRole("checkbox", { name: t("serviceAccess.fullTeamAccess"), exact: true }).check();
+      lose = true;
+      await approve();
+      const unknownMessage = t("serviceAccess.unknown");
+      const dialogMessage = dialog.getByText(unknownMessage, { exact: true });
+      await expect(dialog.getByRole("button", { name: t("serviceAccess.check"), exact: true })).toBeEnabled();
+      await expect(dialog.getByRole("button", { name: t("serviceAccess.cancelMissing"), exact: true })).toBeEnabled();
+      await expect(dialogMessage).toHaveCount(1);
+      await expect(dialog.getByRole("status").and(dialogMessage)).toBeVisible();
+      await captureReview(page, dialog, locale, "grant-unknown-after-submit", true);
+
+      await dialog.getByRole("button", { name: t("tenant.team.actions.cancel"), exact: true }).click();
+      await expect(dialog).toHaveCount(0);
+      const panelMessage = page.getByText(unknownMessage, { exact: true });
+      await expect(panelMessage).toHaveCount(1);
+      await expect(page.getByRole("status").and(panelMessage)).toBeVisible();
+      await expect(button("serviceAccess.cancelMissing")).toBeEnabled();
+      await button("serviceAccess.check").click();
+      await expect(panelMessage).toHaveCount(0);
+      assert.equal(writes.filter(row => row.operation === "IDENTITY_GRANT").length, 2);
+
       // Fresh initialization has no synthetic finish/retirement operation.
       state.mode = "FRESH"; state.phase = "BOUND"; state.portal_ready = false; state.can_complete = false; await reload(); await expect(page.getByText(t("serviceAccess.fresh"), { exact: true })).toBeVisible(); await expect(button("serviceAccess.complete")).toHaveCount(0); await expect(button("serviceAccess.initialize")).toHaveCount(0);
       state.portal_ready = true; await reload();
