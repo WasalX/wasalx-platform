@@ -77,6 +77,14 @@
   color: var(--wx-color-danger);
 }
 
+.wx-attachment-picker {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--wx-space-2);
+  color: var(--wx-color-text-muted);
+}
+
 .wx-spinner {
   width: var(--wx-space-3);
   height: var(--wx-space-3);
