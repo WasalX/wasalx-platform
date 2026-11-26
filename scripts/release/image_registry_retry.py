@@ -29,14 +29,17 @@ def last_diagnostic(stderr):
     return (stderr or b"").decode("utf-8", errors="replace").strip().rsplit("\n", 1)[-1]
 
 
-def registry_output(*command, timeout=None, delays=(10, 20), capture_stdout=True):
+def registry_output(*command, timeout=None, delays=(10, 20), capture_stdout=True, report_failure=None):
+    """Use the failure callback in place of printing CLI diagnostics."""
     for attempt in range(len(delays) + 1):
         try:
             result = subprocess.run(command, check=True, stdout=subprocess.PIPE if capture_stdout else None,
                                     stderr=subprocess.PIPE, timeout=timeout)
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
             diagnostic = (error.stderr or b"").decode("utf-8", errors="replace")
-            if diagnostic:
+            if report_failure is not None:
+                report_failure(attempt + 1, error)
+            elif diagnostic:
                 sys.stderr.write(diagnostic)
             reason = last_diagnostic(error.stderr)
             if attempt == len(delays) or TERMINAL.search(diagnostic):
@@ -44,10 +47,11 @@ def registry_output(*command, timeout=None, delays=(10, 20), capture_stdout=True
             if not isinstance(error, subprocess.TimeoutExpired) and (
                     error.returncode <= 0 or not TRANSIENT.search(reason)):
                 raise
-            print(f"Transient registry transport failure in {command[0]}; "
-                  f"retrying in {delays[attempt]} seconds.", file=sys.stderr)
+            if report_failure is None:
+                print(f"Transient registry transport failure in {command[0]}; "
+                      f"retrying in {delays[attempt]} seconds.", file=sys.stderr)
             time.sleep(delays[attempt])
         else:
-            if result.stderr:
+            if result.stderr and report_failure is None:
                 sys.stderr.write(result.stderr.decode("utf-8", errors="replace"))
             return result.stdout
