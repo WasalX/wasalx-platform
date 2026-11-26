@@ -9,7 +9,7 @@ export function registerOperationsScreenshots(locale: "en" | "ar") {
       area: "workflow-automation",
       view: "automation",
       state: "edit",
-      listReady: (page: Page) => page.locator("#bot-panel-flows .bot-version-list").getByRole("button", { name: /Customer care/u }),
+      listReady: (page: Page) => page.locator("#bot-panel-flows .bot-version-list").getByRole("button", { name: /Customer care/u, pressed: true }),
       open: (page: Page) => page.getByRole("button", { name: messages["bot.flows.new"], exact: true }),
       detailReady: (page: Page) => page.getByLabel(messages["bot.canvas.minimap"], { exact: true }),
     },
