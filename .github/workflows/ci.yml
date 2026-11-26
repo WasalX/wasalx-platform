@@ -43,12 +43,20 @@ jobs:
         with:
           fetch-depth: ${{ github.event_name == 'merge_group' && '0' || '2' }}
           persist-credentials: false
+      - id: selector-base
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && 'HEAD^1' || github.event.merge_group.base_sha }}
+        run: |
+          if [[ -n "$BASE" ]] && git merge-base --is-ancestor "$BASE" HEAD; then
+            printf 'sha=%s\n' "$BASE" >> "$GITHUB_OUTPUT"
+          fi
       - id: infra
-        if: github.event_name == 'pull_request'
+        env:
+          BASE: ${{ steps.selector-base.outputs.sha }}
         run: |
           # Use the same test-merge base as the image matrix. Only a clean diff can skip tests.
           needed=true
-          if git diff --quiet --no-ext-diff --no-renames HEAD^1 HEAD -- \
+          if [[ -n "$BASE" ]] && git diff --quiet --no-ext-diff --no-renames "$BASE" HEAD -- \
             infra/helm/ infra/terraform/ ':(glob)scripts/validate-*' scripts/release/fetch-verified-asset.sh \
             compose.full.yaml tests/fixtures/production-backup-alerts.yaml tests/secret-adapter-readiness.test.rb \
             docs/runbooks/alert-response.md infra/docker/full/prometheus/alerts.yaml .github/workflows/ci.yml; then
@@ -104,10 +112,11 @@ jobs:
           fi
           echo "needed=$needed" >> "$GITHUB_OUTPUT"
       - id: storybook
-        if: github.event_name == 'pull_request'
+        env:
+          BASE: ${{ steps.selector-base.outputs.sha }}
         run: |
           needed=true
-          if git diff --quiet --no-ext-diff --no-renames HEAD^1 HEAD -- \
+          if [[ -n "$BASE" ]] && git diff --quiet --no-ext-diff --no-renames "$BASE" HEAD -- \
             app/ lib/ packages/ public/ .storybook/ tests/visual/ tests/fixtures/ tests/helpers/ \
             ':(glob)tests/*-browser.mjs' tests/storybook-static-contract.test.mjs \
             scripts/serve-storybook-static.mjs scripts/storybook-visual-regression.mjs \
@@ -136,6 +145,7 @@ jobs:
       - id: matrix
         env:
           EVENT: ${{ github.event_name }}
+          BASE: ${{ steps.selector-base.outputs.sha }}
         run: |
           args=()
           if [ "$EVENT" = pull_request ]; then
@@ -143,8 +153,12 @@ jobs:
           fi
           matrix=$(python3 scripts/release/images-by-digest.py matrix "${args[@]}")
           images=$(jq '.include | length > 0' <<< "$matrix")
-          installer_portal=$(jq 'any(.include[]; .image == "portal")' <<< "$matrix")
-          if [[ "$EVENT" == pull_request ]] && ! git diff --quiet --no-ext-diff --no-renames HEAD^1 HEAD -- \
+          affected="$matrix"
+          if [[ "$EVENT" == merge_group && -n "$BASE" ]]; then
+            affected=$(python3 scripts/release/images-by-digest.py matrix --base-sha "$BASE")
+          fi
+          installer_portal=$(jq 'any(.include[]; .image == "portal")' <<< "$affected")
+          if [[ -z "$BASE" ]] || ! git diff --quiet --no-ext-diff --no-renames "$BASE" HEAD -- \
             scripts/release/installer-stages.mjs scripts/release/installer-artifacts.mjs release/installer-images.json; then
             installer_portal=true
           fi
@@ -214,9 +228,8 @@ jobs:
   storybook:
     needs: changes
     if: >-
-      ${{ !cancelled() && (github.event_name == 'merge_group' || github.event_name == 'push' ||
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'pull_request' && needs.changes.outputs.storybook != 'false')) }}
+      ${{ !cancelled() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch' ||
+      needs.changes.result != 'success' || needs.changes.outputs.storybook != 'false') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -698,9 +711,9 @@ jobs:
   infra-validate:
     needs: changes
     if: >-
-      ${{ !cancelled() && (github.event_name == 'merge_group' ||
-      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
-      (github.event_name == 'pull_request' && (needs.changes.result != 'success' || needs.changes.outputs.infra != 'false'))) }}
+      ${{ !cancelled() && (github.event_name == 'push' && github.ref == 'refs/heads/main' ||
+      ((github.event_name == 'pull_request' || github.event_name == 'merge_group') &&
+      (needs.changes.result != 'success' || needs.changes.outputs.infra != 'false'))) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -886,7 +899,7 @@ jobs:
         run: |
           test "$WORKFLOW_LINT" = success || exit 1
           case "$EVENT:$STORYBOOK_NEEDED:$STORYBOOK" in
-            *:*:success|pull_request:false:skipped) ;;
+            *:*:success|pull_request:false:skipped|merge_group:false:skipped) ;;
             *) echo 'Storybook did not pass.'; exit 1 ;;
           esac
           case "$EVENT:$APPLICATION_NEEDED:$APPLICATION_E2E:$PLATFORM_OPERATOR_E2E" in
@@ -917,7 +930,7 @@ jobs:
           fi
           test "$CHANGES:$CHECKS:$FULL_UNIT" = success:success:skipped || exit 1
           case "$EVENT:$INSTALLER_PORTAL_NEEDED:$INSTALLER_PORTAL" in
-            pull_request:false:skipped|pull_request:true:success|merge_group:true:success) ;;
+            pull_request:false:skipped|merge_group:false:skipped|pull_request:true:success|merge_group:true:success) ;;
             *) echo 'Installer portal build did not pass.'; exit 1 ;;
           esac
           case "$EVENT:$REVIEW:$IMAGES" in
@@ -935,6 +948,7 @@ jobs:
             pull_request:*:success|pull_request:false:skipped|merge_group:*:skipped) ;;
             *) exit 1 ;;
           esac
-          test "$INFRA" = success || {
-            test "$EVENT" = pull_request && test "$INFRA_NEEDED" = false && test "$INFRA" = skipped
-          }
+          case "$EVENT:$INFRA_NEEDED:$INFRA" in
+            *:*:success|pull_request:false:skipped|merge_group:false:skipped) ;;
+            *) echo 'Infrastructure validation did not pass.'; exit 1 ;;
+          esac

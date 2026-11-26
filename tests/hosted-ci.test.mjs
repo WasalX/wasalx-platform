@@ -257,11 +257,11 @@ test("tracked tests belong to a named CI runner or the test allowlist", async ()
 test("Storybook selects UI changes and unknown diffs", async (t) => {
   const { jobs } = parse(await read(".github/workflows/ci.yml"));
   const selection = jobs.changes.steps.find(step => step.id === "storybook");
-  assert.equal(selection.if, "github.event_name == 'pull_request'");
+  assert.equal(selection.if, undefined);
+  assert.equal(selection.env.BASE, "${{ steps.selector-base.outputs.sha }}");
   assert.equal(jobs.storybook.needs, "changes");
   assert.match(jobs.storybook.if, /github\.event_name == 'push'/u);
-  assert.match(jobs.storybook.if, /github\.event_name == 'pull_request' && needs\.changes\.outputs\.storybook != 'false'/u);
-  assert.match(jobs.storybook.if, /github\.event_name == 'merge_group'/u);
+  assert.match(jobs.storybook.if, /needs\.changes\.result != 'success' \|\| needs\.changes\.outputs\.storybook != 'false'/u);
   assert.match(jobs.storybook.if, /github\.event_name == 'workflow_dispatch'/u);
   assert(jobs["ci-gate"].needs.includes("storybook"));
   const [gateStep] = jobs["ci-gate"].steps;
@@ -276,10 +276,64 @@ test("Storybook selects UI changes and unknown diffs", async (t) => {
     await writeFile(output, "");
     const result = runWorkflowScript(
       `git() { case " $* " in *" app/ "*) return "$DIFF_STATUS";; *) return 0;; esac; }\n${selection.run}`,
-      { DIFF_STATUS: String(status), GITHUB_OUTPUT: output },
+      { BASE: "a".repeat(40), DIFF_STATUS: String(status), GITHUB_OUTPUT: output },
     );
     assert.equal(result.status, 0, result.stderr);
     assert.equal((await readFile(output, "utf8")).trim(), `needed=${expected}`);
+  }
+});
+
+test("installer portal follows the combined diff without trimming the queue image matrix", async t => {
+  const { jobs: { changes } } = parse(await read(".github/workflows/ci.yml"));
+  const baseStep = changes.steps.find(step => step.id === "selector-base");
+  const matrixStep = changes.steps.find(step => step.id === "matrix");
+  assert.equal(baseStep.env.BASE, "${{ github.event_name == 'pull_request' && 'HEAD^1' || github.event.merge_group.base_sha }}");
+  assert.equal(matrixStep.env.BASE, "${{ steps.selector-base.outputs.sha }}");
+  const directory = await mkdtemp(join(tmpdir(), "queue-installer-selection-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const output = join(directory, "output").replaceAll("\\", "/");
+  const base = "a".repeat(40);
+  const catalog = JSON.stringify({ include: [{ image: "portal" }, { image: "zammad" }] });
+  const mock = String.raw`
+git() {
+  case "$*" in
+    "merge-base --is-ancestor $BASE HEAD") return "$ANCESTOR_STATUS" ;;
+    "diff --quiet --no-ext-diff --no-renames $BASE HEAD -- "*)
+      [[ "$*" == *"scripts/release/installer-stages.mjs"* ]] || exit 99
+      return "$DIFF_STATUS" ;;
+    *) exit 99 ;;
+  esac
+}
+python3() {
+  case "$*" in
+    "scripts/release/images-by-digest.py matrix") printf '%s\n' "$CATALOG" ;;
+    "scripts/release/images-by-digest.py matrix --base-sha $BASE") printf '%s\n' "$AFFECTED" ;;
+    *) exit 99 ;;
+  esac
+}
+`;
+  const check = async (run, env) => {
+    await writeFile(output, "");
+    const result = runWorkflowScript(mock + run, { BASE: base, GITHUB_OUTPUT: output, ...env });
+    assert.equal(result.status, 0, result.error?.message ?? result.stderr);
+    return await readFile(output, "utf8");
+  };
+  assert.equal(await check(baseStep.run, { ANCESTOR_STATUS: "0" }), "sha=" + base + "\n");
+  assert.equal(await check(baseStep.run, { ANCESTOR_STATUS: "1" }), "");
+  for (const [affected, diff, baseRef, needed] of [
+    [[], "0", base, false],
+    [[{ image: "portal" }], "0", base, true],
+    [[], "1", base, true],
+    [[], "128", base, true],
+    [[], "0", "", true],
+  ]) {
+    const result = await check(matrixStep.run, {
+      EVENT: "merge_group", BASE: baseRef, DIFF_STATUS: diff, CATALOG: catalog,
+      AFFECTED: JSON.stringify({ include: affected }),
+    });
+    assert(result.split("\n").includes("matrix=" + catalog));
+    assert(result.split("\n").includes("images=true"));
+    assert(result.split("\n").includes("installer-portal=" + needed));
   }
 });
 
@@ -1067,7 +1121,12 @@ test("CI gate requires each event's jobs and rejects unplanned skips, failures, 
     ["merge queue with Storybook skipped", queue, { STORYBOOK: "skipped" }, 1],
     ["merge queue with failed images", queue, { IMAGES: "failure" }, 1],
     ["merge queue with Zammad compatibility skipped", queue, { ZAMMAD_COMPATIBILITY: "skipped" }, 1],
-    ["merge queue missing the installer portal build", queue, { INSTALLER_PORTAL_NEEDED: "false", INSTALLER_PORTAL: "skipped" }, 1],
+    ["merge queue missing the installer portal build", queue, { INSTALLER_PORTAL_NEEDED: "true", INSTALLER_PORTAL: "skipped" }, 1],
+    ["merge queue with missing installer selection", queue, { INSTALLER_PORTAL_NEEDED: "", INSTALLER_PORTAL: "skipped" }, 1],
+    ["merge queue with optional checks outside the diff", queue, {
+      INSTALLER_PORTAL_NEEDED: "false", INSTALLER_PORTAL: "skipped",
+      STORYBOOK_NEEDED: "false", STORYBOOK: "skipped", INFRA_NEEDED: "false", INFRA: "skipped",
+    }, 0],
     ["main push", push, {}, 0],
     ["main push with Storybook skipped", push, { STORYBOOK: "skipped" }, 1],
     ["main push with skipped units", push, { FULL_UNIT: "skipped" }, 1],
@@ -1363,7 +1422,7 @@ test("optional PR lanes run on diff errors and gate their applicable checks", as
   const [gateStep] = gate.steps;
   assert(!Object.hasOwn(jobs, "terraform-test"));
   assert.equal(job.needs, "changes");
-  assert.equal(job.if, "${{ !cancelled() && (github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && (needs.changes.result != 'success' || needs.changes.outputs.infra != 'false'))) }}");
+  assert.equal(job.if, "${{ !cancelled() && (github.event_name == 'push' && github.ref == 'refs/heads/main' || ((github.event_name == 'pull_request' || github.event_name == 'merge_group') && (needs.changes.result != 'success' || needs.changes.outputs.infra != 'false'))) }}");
   assert.deepEqual(job.permissions, { contents: "read" });
   assert.deepEqual(job.steps.slice(-2).map(({ run, if: condition }) => [run, condition]), [
     ["bash scripts/validate-infra.sh", undefined],
@@ -1405,14 +1464,19 @@ test("optional PR lanes run on diff errors and gate their applicable checks", as
     ].join(" ")],
   ]) {
     const detector = changes.steps.find(step => step.id === id);
-    assert.equal(detector.if, "github.event_name == 'pull_request'");
+    if (id === "infra") {
+      assert.equal(detector.if, undefined);
+      assert.equal(detector.env.BASE, "${{ steps.selector-base.outputs.sha }}");
+    } else {
+      assert.equal(detector.if, "github.event_name == 'pull_request'");
+    }
     for (const [status, needed] of [[0, false], [1, true], [128, true]]) {
       const outputFile = join(directory, `${id}-${status}`);
       const result = runWorkflowScript(`git() {
   test "$*" = "diff --quiet --no-ext-diff --no-renames HEAD^1 HEAD -- $DIFF_PATHS" || exit 99
   return "$DIFF_STATUS"
 }
-${detector.run}`, { GITHUB_OUTPUT: outputFile.replaceAll("\\", "/"), DIFF_PATHS: diffPaths, DIFF_STATUS: String(status) });
+${detector.run}`, { GITHUB_OUTPUT: outputFile.replaceAll("\\", "/"), DIFF_PATHS: diffPaths, DIFF_STATUS: String(status), BASE: "HEAD^1" });
       assert.equal(result.status, 0, result.error?.message ?? result.stderr);
       assert.equal((await readFile(outputFile, "utf8")).trim(), `needed=${needed}`);
     }
@@ -1425,7 +1489,9 @@ ${detector.run}`, { GITHUB_OUTPUT: outputFile.replaceAll("\\", "/"), DIFF_PATHS:
     ["pull_request", "false", "failure", 1],
     ["pull_request", "false", "cancelled", 1],
     ["merge_group", "", "success", 0],
-    ["merge_group", "false", "skipped", 1],
+    ["merge_group", "false", "skipped", 0],
+    ["merge_group", "true", "skipped", 1],
+    ["merge_group", "", "skipped", 1],
     ["merge_group", "", "failure", 1],
   ]) {
     const pr = event === "pull_request";
