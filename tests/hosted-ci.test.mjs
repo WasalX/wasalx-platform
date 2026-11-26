@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, posix } from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -14,6 +14,7 @@ import { unitAllowlist, unitFiles } from "../scripts/test-unit.mjs";
 import { reportTimingsWithQuarantine, validateQuarantine } from "../scripts/hosted-ci-timing-reporter.mjs";
 import { parsePostgresShardArgs, postgresScenarioGroups, verifyPostgresReports } from "../scripts/postgres-scenario-registry.mjs";
 import { discoverBrowserCases } from "../scripts/release/browser-shards.mjs";
+import { journeyCapturePaths } from "./e2e/journey-captures.mjs";
 import { cleanupKeycloakIdentity } from "./support/hosted-keycloak-cleanup.mjs";
 
 const repository = fileURLToPath(new URL("../", import.meta.url));
@@ -861,37 +862,56 @@ test("Hosted browser jobs retain Playwright diagnostics on failure or cancellati
   }
 });
 
-test("Successful owner fixture shards retain only the named journey PNGs", async () => {
+test("Successful owner fixture shards retain every named journey PNG", async t => {
   const { jobs } = parse(await read(".github/workflows/ci.yml"));
-  const uploads = jobs["application-e2e"].steps.filter(step =>
+  const steps = jobs["application-e2e"].steps;
+  const journeys = steps.find(step => step.name === "Test application fixtures");
+  const verify = steps.find(step => step.id === "journey-captures");
+  const uploads = steps.filter(step =>
     step.uses?.startsWith("actions/upload-artifact@") && step.if !== "failure() || cancelled()");
-  const archives = {
-    "workspace-invitation": {
-      "workspace-access-ready": ["light", "dark"],
-      "invitation-incomplete": ["light", "dark-preview"],
-    },
-    "workflow-routing-delivery": {
-      "workflow-automation-list": ["light", "dark"],
-      "workflow-automation-edit": ["light", "dark"],
-      "client-routing-list": ["light", "dark"],
-      "client-routing-edit": ["light", "dark"],
-      "message-delivery-list": ["light", "dark"],
-      "message-delivery-detail": ["light", "dark"],
-    },
-  };
-  assert.equal(uploads.length, Object.keys(archives).length);
-  const localeSuffix = "-${{ matrix.locale }}";
-  for (const [archive, screens] of Object.entries(archives)) {
-    const name = archive + localeSuffix;
-    const upload = uploads.find(step => step.with.name === name);
-    assert(upload, `Missing ${name} upload`);
-    assert.equal(upload.if, "success() && matrix.roles == 'tenant_owner'");
-    assert.equal(upload.with["if-no-files-found"], "error");
-    assert.equal(upload.with["retention-days"], 7);
-    const expected = Object.entries(screens).flatMap(([screen, themes]) =>
-      ["desktop", "mobile-390"].flatMap(viewport => themes.map(theme =>
-        `output/playwright/${archive}/${screen}-${viewport}-${theme}${localeSuffix}.png`)));
-    assert.deepEqual(upload.with.path.trim().split("\n").sort(), expected.sort(), name);
+  assert.equal(uploads.length, 1);
+  const [upload] = uploads;
+  const ownerSuccess = "success() && matrix.roles == 'tenant_owner'";
+  assert(journeys);
+  assert(verify);
+  assert.equal(verify.if, ownerSuccess);
+  assert.equal(upload.if, ownerSuccess);
+  assert(steps.indexOf(verify) > steps.indexOf(journeys));
+  assert(steps.indexOf(upload) > steps.indexOf(verify));
+  assert.equal(upload.with.name, "application-journey-captures-${{ matrix.locale }}");
+  assert.equal(upload.with.path, "${{ steps.journey-captures.outputs.paths }}");
+  assert.equal(upload.with["if-no-files-found"], "error");
+  assert.equal(upload.with["retention-days"], 7);
+  assert.equal(verify.env.CAPTURE_LOCALE, "${{ matrix.locale }}");
+
+  const directory = await mkdtemp(join(tmpdir(), "journey-captures-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const script = "tests/e2e/journey-captures.mjs";
+  await mkdir(join(directory, posix.dirname(script)), { recursive: true });
+  await writeFile(join(directory, script), await read(script));
+
+  for (const locale of ["en", "ar"]) {
+    const paths = journeyCapturePaths(locale);
+    assert(paths.length > 1);
+    assert.equal(new Set(paths).size, paths.length);
+    for (const path of paths) {
+      await mkdir(join(directory, posix.dirname(path)), { recursive: true });
+      await writeFile(join(directory, path), "synthetic capture");
+    }
+
+    const output = join(directory, "outputs");
+    const env = { CAPTURE_LOCALE: locale, GITHUB_OUTPUT: output };
+    const complete = runWorkflowScript(verify.run, env, directory);
+    assert.equal(complete.status, 0, complete.stderr);
+    assert.equal(await readFile(output, "utf8"), `paths<<CAPTURES\n${paths.join("\n")}\nCAPTURES\n`);
+
+    const [first] = paths;
+    await rename(join(directory, first), join(directory, first.replace(/\.png$/u, "-renamed.png")));
+    await rm(output);
+    const partial = runWorkflowScript(verify.run, env, directory);
+    assert.equal(partial.status, 1, partial.stderr);
+    assert(partial.stderr.includes(first), partial.stderr);
+    await assert.rejects(readFile(output), { code: "ENOENT" });
   }
 });
 

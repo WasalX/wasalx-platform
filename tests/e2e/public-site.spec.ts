@@ -4,6 +4,7 @@ import { createDemoWorkspace } from "../../app/marketing-workspace.ts";
 import { englishMarketingMessages } from "../../lib/i18n/messages/en/marketing.ts";
 import { arabicMarketingMessages } from "../../lib/i18n/messages/ar/marketing.ts";
 import { createTranslator } from "../../lib/i18n/translate.ts";
+import { journeyCapturePath } from "./journey-captures.mjs";
 
 const locale = process.env.WASALX_E2E_LOCALE ?? "en";
 const arabic = locale === "ar";
@@ -864,7 +865,7 @@ test("public access pages keep safe invitation fallbacks and keyboard navigation
   await expect(page.locator("main h1")).toHaveText(arabic ? "رابط الدعوة مو كامل" : "This invitation link is incomplete");
   const invitation = page.locator(".public-access-shell");
   const capture = (theme: "light" | "dark-preview") => page.screenshot({
-    path: `output/playwright/workspace-invitation/invitation-incomplete-${testInfo.project.name}-${theme}-${locale}.png`,
+    path: journeyCapturePath("invitation-incomplete", testInfo.project.name, theme, locale),
     fullPage: true,
     animations: "disabled",
     caret: "hide",

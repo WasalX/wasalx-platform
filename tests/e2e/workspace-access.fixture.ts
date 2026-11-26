@@ -6,6 +6,7 @@ import { englishAutomationMessages } from "../../lib/i18n/messages/en/automation
 import { arabicAutomationMessages } from "../../lib/i18n/messages/ar/automation.ts";
 import { formatNumber } from "../../lib/i18n/format.ts";
 import type { NativeAccountObservation, TeamAccessData } from "../../lib/control-plane-data.ts";
+import { journeyCapturePath } from "./journey-captures.mjs";
 
 const expectedObservationFailures = new WeakMap<Page, string[]>();
 export function consumeExpectedObservationFailure(page: Page, message: ConsoleMessage) {
@@ -248,7 +249,7 @@ export async function workspaceAccessJourney(page: Page, testInfo: TestInfo, loc
   expect(width.document).toBeLessThanOrEqual(width.viewport);
   const application = page.locator('[data-application-ready="true"]');
   const capture = (theme: "light" | "dark") => section.screenshot({
-    path: `output/playwright/workspace-invitation/workspace-access-ready-${testInfo.project.name}-${theme}-${locale}.png`,
+    path: journeyCapturePath("workspace-access-ready", testInfo.project.name, theme, locale),
     animations: "disabled",
     caret: "hide",
     scale: "css",

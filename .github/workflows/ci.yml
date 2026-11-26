@@ -546,52 +546,18 @@ jobs:
           WASALX_E2E_LOCALES: ${{ matrix.locale }}
           WASALX_E2E_ROLES: ${{ matrix.roles }}
         run: node scripts/run-application-e2e.mjs
-      - name: Upload synthetic workspace and invitation screenshots
+      - name: Verify every synthetic journey screenshot
+        id: journey-captures
+        if: success() && matrix.roles == 'tenant_owner'
+        env:
+          CAPTURE_LOCALE: ${{ matrix.locale }}
+        run: node tests/e2e/journey-captures.mjs "$CAPTURE_LOCALE"
+      - name: Upload synthetic journey screenshots
         if: success() && matrix.roles == 'tenant_owner'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: workspace-invitation-${{ matrix.locale }}
-          path: |
-            output/playwright/workspace-invitation/workspace-access-ready-desktop-light-${{ matrix.locale }}.png
-            output/playwright/workspace-invitation/workspace-access-ready-desktop-dark-${{ matrix.locale }}.png
-            output/playwright/workspace-invitation/workspace-access-ready-mobile-390-light-${{ matrix.locale }}.png
-            output/playwright/workspace-invitation/workspace-access-ready-mobile-390-dark-${{ matrix.locale }}.png
-            output/playwright/workspace-invitation/invitation-incomplete-desktop-light-${{ matrix.locale }}.png
-            output/playwright/workspace-invitation/invitation-incomplete-desktop-dark-preview-${{ matrix.locale }}.png
-            output/playwright/workspace-invitation/invitation-incomplete-mobile-390-light-${{ matrix.locale }}.png
-            output/playwright/workspace-invitation/invitation-incomplete-mobile-390-dark-preview-${{ matrix.locale }}.png
-          if-no-files-found: error
-          retention-days: 7
-      - name: Upload synthetic workflow, routing, and delivery screenshots
-        if: success() && matrix.roles == 'tenant_owner'
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: workflow-routing-delivery-${{ matrix.locale }}
-          path: |
-            output/playwright/workflow-routing-delivery/workflow-automation-list-desktop-light-${{ matrix.locale }}.png
-            output/playwright/workflow-routing-delivery/workflow-automation-list-desktop-dark-${{ matrix.locale }}.png
-            output/playwright/workflow-routing-delivery/workflow-automation-list-mobile-390-light-${{ matrix.locale }}.png
-            output/playwright/workflow-routing-delivery/workflow-automation-list-mobile-390-dark-${{ matrix.locale }}.png
-            output/playwright/workflow-routing-delivery/workflow-automation-edit-desktop-light-${{ matrix.locale }}.png
-            output/playwright/workflow-routing-delivery/workflow-automation-edit-desktop-dark-${{ matrix.locale }}.png
-            output/playwright/workflow-routing-delivery/workflow-automation-edit-mobile-390-light-${{ matrix.locale }}.png
-            output/playwright/workflow-routing-delivery/workflow-automation-edit-mobile-390-dark-${{ matrix.locale }}.png
-            output/playwright/workflow-routing-delivery/client-routing-list-desktop-light-${{ matrix.locale }}.png
-            output/playwright/workflow-routing-delivery/client-routing-list-desktop-dark-${{ matrix.locale }}.png
-            output/playwright/workflow-routing-delivery/client-routing-list-mobile-390-light-${{ matrix.locale }}.png
-            output/playwright/workflow-routing-delivery/client-routing-list-mobile-390-dark-${{ matrix.locale }}.png
-            output/playwright/workflow-routing-delivery/client-routing-edit-desktop-light-${{ matrix.locale }}.png
-            output/playwright/workflow-routing-delivery/client-routing-edit-desktop-dark-${{ matrix.locale }}.png
-            output/playwright/workflow-routing-delivery/client-routing-edit-mobile-390-light-${{ matrix.locale }}.png
-            output/playwright/workflow-routing-delivery/client-routing-edit-mobile-390-dark-${{ matrix.locale }}.png
-            output/playwright/workflow-routing-delivery/message-delivery-list-desktop-light-${{ matrix.locale }}.png
-            output/playwright/workflow-routing-delivery/message-delivery-list-desktop-dark-${{ matrix.locale }}.png
-            output/playwright/workflow-routing-delivery/message-delivery-list-mobile-390-light-${{ matrix.locale }}.png
-            output/playwright/workflow-routing-delivery/message-delivery-list-mobile-390-dark-${{ matrix.locale }}.png
-            output/playwright/workflow-routing-delivery/message-delivery-detail-desktop-light-${{ matrix.locale }}.png
-            output/playwright/workflow-routing-delivery/message-delivery-detail-desktop-dark-${{ matrix.locale }}.png
-            output/playwright/workflow-routing-delivery/message-delivery-detail-mobile-390-light-${{ matrix.locale }}.png
-            output/playwright/workflow-routing-delivery/message-delivery-detail-mobile-390-dark-${{ matrix.locale }}.png
+          name: application-journey-captures-${{ matrix.locale }}
+          path: ${{ steps.journey-captures.outputs.paths }}
           if-no-files-found: error
           retention-days: 7
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
