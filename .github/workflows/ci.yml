@@ -256,19 +256,11 @@ jobs:
         env:
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '0'
         run: pnpm exec playwright install --no-shell chromium
-      - name: Audit stories and run design system screenshots
+      - name: Audit stories and compare design system screenshots
         run: >-
           node scripts/storybook-visual-regression.mjs --require-browser tests/visual/storybook-ci.spec.ts
           tests/visual/inbox-synthetic.spec.ts tests/visual/design-system.spec.ts
-          --fully-parallel --workers=4 --update-snapshots=all
-      - name: Upload hosted screenshot baselines
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: '!cancelled()'
-        with:
-          name: storybook-linux-baselines
-          path: tests/visual/__screenshots__/linux/*.png
-          if-no-files-found: error
-          retention-days: 7
+          --fully-parallel --workers=4 --update-snapshots=none
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure() || cancelled()
         with: &storybook-audit-artifact
