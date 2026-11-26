@@ -880,8 +880,9 @@ test("Successful owner fixture shards retain only the named journey PNGs", async
     },
   };
   assert.equal(uploads.length, Object.keys(archives).length);
+  const localeSuffix = "-${{ matrix.locale }}";
   for (const [archive, screens] of Object.entries(archives)) {
-    const name = archive + "-${{ matrix.locale }}";
+    const name = archive + localeSuffix;
     const upload = uploads.find(step => step.with.name === name);
     assert(upload, `Missing ${name} upload`);
     assert.equal(upload.if, "success() && matrix.roles == 'tenant_owner'");
@@ -889,7 +890,7 @@ test("Successful owner fixture shards retain only the named journey PNGs", async
     assert.equal(upload.with["retention-days"], 7);
     const expected = Object.entries(screens).flatMap(([screen, themes]) =>
       ["desktop", "mobile-390"].flatMap(viewport => themes.map(theme =>
-        `output/playwright/${archive}/${screen}-${viewport}-${theme}-${{ matrix.locale }}.png`)));
+        `output/playwright/${archive}/${screen}-${viewport}-${theme}${localeSuffix}.png`)));
     assert.deepEqual(upload.with.path.trim().split("\n").sort(), expected.sort(), name);
   }
 });
