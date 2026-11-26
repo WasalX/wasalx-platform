@@ -662,30 +662,77 @@ ${copy.run}`], {
   }
 });
 
-test("workflow lint fails on any actionlint finding or download verification failure", async t => {
+test("workflow lint requires verified tools, both embedded diagnostics, and clean workflows", async t => {
   const { jobs } = parse(await read(".github/workflows/ci.yml"));
   const job = jobs["workflow-lint"];
   const step = job.steps.find(step => step.run);
   assert.equal(job.if, undefined);
+  assert.equal(job["continue-on-error"], undefined);
   assert.equal(step.if, undefined);
   assert.equal(step["continue-on-error"], undefined);
 
   const directory = await mkdtemp(join(tmpdir(), "ci-workflow-lint-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
-  for (const [download, lint, expected] of [[0, 0, 0], [0, 1, 1], [2, 0, 2]]) {
-    const result = runWorkflowScript(`
-mktemp() { pwd; }
+  await writeFile(join(directory, "tool"), [
+    "#!/usr/bin/env bash",
+    "set -eu",
+    'case "${0##*/}" in',
+    '  shellcheck) printf "version: %s\\n" "$SHELLCHECK_VERSION" ;;',
+    '  pyflakes) printf "%s Python 3.12.3 on Linux\\n" "$PYFLAKES_VERSION" ;;',
+    '  python) [[ "$*" == "-m pip --isolated install --disable-pip-version-check --no-index --no-deps "*.whl && -f "$8" ]] ;;',
+    '  actionlint)',
+    '    if [[ "$1" == -version ]]; then echo "actionlint $ACTIONLINT_VERSION"; exit 0; fi',
+    '    [[ "$1" == -shellcheck=*/shellcheck && -x "${1#-shellcheck=}" ]] || exit 99',
+    '    [[ "$2" == -pyflakes=*/pyflakes && -x "${2#-pyflakes=}" ]] || exit 99',
+    '    if [[ $# == 2 ]]; then exit "$REAL_STATUS"; fi',
+    '    [[ $# == 3 && -f "$3" ]] || exit 99',
+    '    if [[ "$MISSING" != shellcheck ]]; then echo "SC2086: quoting [shellcheck]"; fi',
+    "    if [[ \"$MISSING\" != pyflakes ]]; then echo \"undefined name 'missing_name' [pyflakes]\"; fi",
+    '    exit "$FIXTURE_STATUS" ;;',
+    '  *) exit 99 ;;',
+    "esac",
+    "",
+  ].join("\n"), { mode: 0o755 });
+  const mocks = String.raw`
 bash() {
   [[ "$1" == scripts/release/fetch-verified-asset.sh && "$2" == https://* && "$4" =~ ^[a-f0-9]{64}$ ]] || exit 99
-  return "$DOWNLOAD_STATUS"
+  if [[ "$2" == "$FAIL_DOWNLOAD" ]]; then return 2; fi
+  touch "$3"
 }
 tar() {
-  printf '#!/usr/bin/env bash\\nexit %s\\n' "$LINT_STATUS" > "$4/actionlint"
-  chmod +x "$4/actionlint"
+  [[ "$1" == -xzf && -f "$2" && "$3" == -C ]] || exit 99
+  mkdir -p "$(dirname "$4/$5")"
+  cp tool "$4/$5"
 }
-${step.run}`, { ...step.env, DOWNLOAD_STATUS: String(download), LINT_STATUS: String(lint) }, directory);
+python3() {
+  [[ "$1" == -m && "$2" == venv ]] || exit 99
+  mkdir -p "$3/bin"
+  cp tool "$3/bin/python"
+  cp tool "$3/bin/pyflakes"
+}
+`;
+  for (const [name, overrides, expected] of [
+    ["clean", {}, 0],
+    ...["ACTIONLINT_URL", "SHELLCHECK_URL", "PYFLAKES_URL"].map(key => [key, { FAIL_DOWNLOAD: step.env[key] }, 2]),
+    ["wrong actionlint", { ACTIONLINT_VERSION: "1.17.0" }, 1],
+    ["wrong ShellCheck", { SHELLCHECK_VERSION: "0.10.0" }, 1],
+    ["wrong Pyflakes", { PYFLAKES_VERSION: "3.3.0" }, 1],
+    ["missing ShellCheck diagnostic", { MISSING: "shellcheck" }, 1],
+    ["missing Pyflakes diagnostic", { MISSING: "pyflakes" }, 1],
+    ["fixture accepted", { FIXTURE_STATUS: "0" }, 1],
+    ["fixture execution error", { FIXTURE_STATUS: "3" }, 1],
+    ["real finding", { REAL_STATUS: "1" }, 1],
+  ]) {
+    const result = runWorkflowScript(mocks + step.run, {
+      ...step.env,
+      TMPDIR: directory,
+      FAIL_DOWNLOAD: "", ACTIONLINT_VERSION: "1.17.1", SHELLCHECK_VERSION: "0.11.0", PYFLAKES_VERSION: "3.4.0",
+      MISSING: "", FIXTURE_STATUS: "1", REAL_STATUS: "0",
+      ...overrides,
+    }, directory);
     assert.ifError(result.error);
-    assert.equal(result.status, expected, result.stdout + result.stderr);
+    assert.equal(result.status, expected, name + "\n" + result.stdout + result.stderr);
+    assert.equal(result.stdout.includes("Workflow lint passed with zero findings."), expected === 0, name);
   }
 });
 
