@@ -2,6 +2,14 @@
 
 See [Meta upstream message cost estimates](docs/runbooks/meta-cost-reference-tariff.md) for the provider rate catalog and tariff upload.
 
+## Platform console responses
+
+The shared [platform client](lib/platform-client.ts) expects a JSON body on
+success and rejects responses it cannot parse. Use `{ response: "empty" }` only
+for an endpoint that documents HTTP 204 No Content. That option resolves with
+`undefined`. HTTP errors keep their status, and a 401 sends the operator to
+sign-in with the current return location.
+
 ## Zammad ticket context
 
 `GET /internal/v1/zammad/tickets/:ticketId/context` returns

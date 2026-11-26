@@ -24,6 +24,32 @@ test("shared platform request retains platform CSRF, immutable replay body/key a
   }finally{globalThis.fetch=original;}
 });
 
+test("platform JSON requests reject malformed and empty successes and preserve HTTP errors", async (t) => {
+  let response = Response.json({ ok: true });
+  t.mock.method(globalThis, "fetch", async () => response);
+  const request = () => platformRequest<{ ok: boolean }>({ csrfToken: "synthetic-csrf" }, "operations/overview");
+
+  assert.deepEqual(await request(), { ok: true });
+  response = new Response("{", { status: 200 });
+  await assert.rejects(request, SyntaxError);
+  response = new Response(null, { status: 204 });
+  await assert.rejects(request, SyntaxError);
+  response = new Response("{", { status: 502 });
+  await assert.rejects(request, { message: "platform_request_failed", status: 502 });
+});
+
+test("platform requests can explicitly require a no-content response", async (t) => {
+  let response = new Response(null, { status: 204 });
+  t.mock.method(globalThis, "fetch", async () => response);
+  const request = () => platformRequest({ csrfToken: "synthetic-csrf" }, "test/no-content", { response: "empty" });
+
+  assert.equal(await request(), undefined);
+  response = Response.json({ ok: true });
+  await assert.rejects(request, { message: "platform_invalid_response" });
+  response = new Response(null, { status: 503 });
+  await assert.rejects(request, { message: "platform_request_failed", status: 503 });
+});
+
 test("expired platform session preserves the encoded pathname, query and fragment without reflecting server detail",async()=>{
   const originalFetch=globalThis.fetch,originalWindow=Object.getOwnPropertyDescriptor(globalThis,"window"),redirects:string[]=[];
   Object.defineProperty(globalThis,"window",{configurable:true,value:{location:{pathname:"/platform",search:"?state=active&query=Riyadh",hash:"#tenants",assign:(url:string)=>redirects.push(url)}}});
