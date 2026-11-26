@@ -11,7 +11,7 @@ Use the [observability runbook](docs/runbooks/alert-response.md) to triage runti
 - Open PRs from short-lived branches against trunk `main`. Merge, split, or close each PR within two days of its first push. Delete merged branches and branches with no PR after seven days without a push.
 - Workers push their own branches and open PRs under the project's agent identity. The queue squashes and requires every PR in a group to pass.
 - Only critical changes, mapped to paths in [Critical paths](AGENTS.md#critical-paths), get one independent review.
-- For all other changes, the thread that made the change opens its own PR and merges it once required CI is green. No second review, lead sign-off, or Portfolio GO is required. Never bypass required CI or branch protection.
+- For all other changes, the thread that made the change opens its own PR and merges it once required CI is green. No second review or lead sign-off is required. Never bypass required CI or branch protection.
 - For a critical PR, the author enables auto-merge only after the reviewer's passing verdict comment names the current head SHA. Before any later push, disable auto-merge, check queue membership, and remove the PR if queued. A push after the verdict needs a new verdict only when it adds a new critical change. Tests check the fix for a finding, not another review.
 - Update `main` only through the protected queue, which qualifies the exact combined tree. Never force-push or rewrite history.
 - Run agent pushes, PR operations, merges, reruns, and issue and board writes only through the project's reviewed GitHub App helper. Never print its installation token. Use the owner login only for approved settings changes and authorized tag creation.
@@ -73,7 +73,7 @@ The [public privacy workflow](.github/workflows/privacy.yml) scans newly introdu
 
 ## Deploys
 
-- Require a reviewed gate and one Portfolio GO each for DEV host steps and the `stg` RC rehearsal. After its GO, the gate automatically releases changes that pass and must record the deployed commit, image digests, result, and GO reference. A new kind of change or a change to the gate requires a new GO.
+- Require a reviewed gate and one GO from the WasalX Master each for DEV host steps and the `stg` RC rehearsal. After its GO, the gate automatically releases changes that pass and must record the deployed commit, image digests, result, and GO reference. A new kind of change or a change to the gate requires a new GO.
 - GitHub keeps environment deployment records. The recording workflow writes the source commit, image digests, and any DEV receipt code to the Actions run summary. The full gate audit row with the GO reference is pending. See the [deployment recording workflow](.github/workflows/deploy.yml).
 - The owner is the `prod` environment's required reviewer and approves each production deployment there. Only that approval gives GO to release a deployment to production.
 - WasalX Delivery prepares the DEV host packets. Host work runs through the Servers lead, including the planned stager and relay outside this repo.

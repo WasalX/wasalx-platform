@@ -188,7 +188,10 @@ export async function workspaceAccessJourney(page: Page, testInfo: TestInfo, loc
   await expect(section).toContainText(t("tenant.workspaceAccess.state.READY"));
   expect(writes).toHaveLength(2);
   member.sync_state = "UNAVAILABLE";
-  await section.getByRole("button", { name: t("tenant.team.actions.reload"), exact: true }).click();
+  const reload = section.getByRole("button", { name: t("tenant.team.actions.reload"), exact: true });
+  await reload.focus();
+  await expect(reload).toBeFocused();
+  await page.keyboard.press("Enter");
   await expect(section).toContainText(t("tenant.workspaceAccess.state.UNAVAILABLE"));
   expect(writes).toHaveLength(2);
   await section.getByRole("button", { name: t("tenant.workspaceAccess.review") }).click();
@@ -197,6 +200,39 @@ export async function workspaceAccessJourney(page: Page, testInfo: TestInfo, loc
   await dialog.getByRole("button", { name: t("tenant.workspaceAccess.apply") }).click();
   await expect(section).toContainText(t("tenant.workspaceAccess.state.READY"));
   expect(writes).toHaveLength(3);
+  const appShell = page.locator('[data-application-ready="true"]');
+  const expectReloadLabelToFit = async () => {
+    await expect(reload).toBeVisible();
+    const fit = await reload.evaluate(async button => {
+      await document.fonts.ready;
+      const range = document.createRange();
+      range.selectNodeContents(button);
+      const label = range.getBoundingClientRect();
+      const bounds = button.getBoundingClientRect();
+      const header = button.parentElement!;
+      const heading = header.firstElementChild!.getBoundingClientRect();
+      const frame = header.getBoundingClientRect();
+      const style = getComputedStyle(button);
+      return {
+        left: label.left - bounds.left - parseFloat(style.borderLeftWidth) - parseFloat(style.paddingLeft),
+        right: bounds.right - label.right - parseFloat(style.borderRightWidth) - parseFloat(style.paddingRight),
+        withinHeader: bounds.left >= frame.left && bounds.right <= frame.right,
+        sharesHeaderRow: bounds.top < heading.bottom && bounds.bottom > heading.top,
+      };
+    });
+    expect(fit.left, "Reload label fits inside the left padding").toBeGreaterThanOrEqual(-1);
+    expect(fit.right, "Reload label fits inside the right padding").toBeGreaterThanOrEqual(-1);
+    expect(fit.withinHeader).toBe(true);
+    if (testInfo.project.name === "desktop") expect(fit.sharesHeaderRow).toBe(true);
+  };
+  await expect(appShell).toHaveClass("theme-dark");
+  await expectReloadLabelToFit();
+  await page.getByRole("button", { name: t("tenant.theme.switchLight"), exact: true }).click();
+  await expect(appShell).toHaveClass("theme-light");
+  await expectReloadLabelToFit();
+  await testInfo.attach(`workspace-access-light-${locale}`, { body: await section.screenshot(), contentType: "image/png" });
+  await page.getByRole("button", { name: t("tenant.theme.switchDark"), exact: true }).click();
+  await expect(appShell).toHaveClass("theme-dark");
   await expect(page.locator("html")).toHaveAttribute("dir", locale === "ar" ? "rtl" : "ltr");
   const readyMember = section.locator(".team-invite").filter({ hasText: "Amal Rahman" });
   const memberName = await readyMember.getByText("Amal Rahman", { exact: true }).boundingBox();
