@@ -33,6 +33,7 @@ jobs:
       installer-portal: ${{ steps.matrix.outputs.installer-portal }}
       infra: ${{ steps.infra.outputs.needed }}
       dev-install: ${{ steps.dev-install.outputs.needed }}
+      typescript-comparison: ${{ steps.typescript-comparison.outputs.needed }}
       integration: ${{ steps.integration.outputs.needed }}
       storybook: ${{ steps.storybook.outputs.needed }}
       application-e2e: ${{ steps.application-e2e.outputs.needed }}
@@ -130,6 +131,18 @@ jobs:
             tests/outbound-media.test.mjs tests/helpers/operator-input-fixtures.mjs \
             ':(glob)**/package.json' pnpm-lock.yaml pnpm-workspace.yaml .npmrc patches/ \
             .github/actions/ci-pnpm/ .github/workflows/ci.yml .github/workflows/zammad-compatibility.yml; then
+            needed=false
+          fi
+          echo "needed=$needed" >> "$GITHUB_OUTPUT"
+      - id: typescript-comparison
+        if: github.event_name == 'pull_request'
+        run: |
+          needed=true
+          if git diff --quiet --no-ext-diff --no-renames HEAD^1 HEAD -- \
+            ':(glob)**/*.ts' ':(glob)**/*.tsx' ':(glob)**/*.[cm]ts' \
+            ':(glob)**/*.js' ':(glob)**/*.jsx' ':(glob)**/*.[cm]js' ':(glob)**/*.json' \
+            scripts/ tests/ build/ packages/ services/ zammad-package/ \
+            pnpm-lock.yaml pnpm-workspace.yaml .npmrc patches/ .github/workflows/ci.yml; then
             needed=false
           fi
           echo "needed=$needed" >> "$GITHUB_OUTPUT"
@@ -277,6 +290,76 @@ jobs:
           persist-credentials: false
       - name: dev-install-dryrun
         run: python3 -I -B scripts/dev-install/test_dryrun.py --container
+
+  typescript-comparison:
+    needs: changes
+    if: ${{ !cancelled() && github.event_name == 'pull_request' && needs.changes.outputs.typescript-comparison != 'false' }}
+    name: TypeScript comparison
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      GIT_TERMINAL_PROMPT: '0'
+    steps:
+      # The root TypeScript config scans source files below its checkout.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: candidate
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: baseline
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.13.1'
+          package-manager-cache: false
+      - name: Enable pinned pnpm
+        working-directory: candidate
+        run: |
+          corepack enable
+          corepack install
+          echo "PNPM_STORE_PATH=$(pnpm store path --silent)" >> "$GITHUB_ENV"
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.PNPM_STORE_PATH }}
+          key: pnpm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('candidate/pnpm-lock.yaml', 'candidate/pnpm-workspace.yaml', 'candidate/package.json', 'candidate/patches/**') }}
+          restore-keys: pnpm-${{ runner.os }}-${{ runner.arch }}-
+      - name: Install comparison tools
+        id: tools
+        working-directory: candidate
+        run: npm ci --prefix scripts/typescript-comparison --ignore-scripts --no-audit --no-fund
+      - name: Compare the main baseline
+        working-directory: baseline
+        env:
+          COMPARISON_TREE: main
+          EXPECTED_COMPARISON_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          pnpm install --frozen-lockfile --fetch-retries=2
+          pnpm run zammad:package
+          node "$GITHUB_WORKSPACE/candidate/scripts/compare-typescript.mjs" "$GITHUB_WORKSPACE/candidate/scripts/typescript-comparison"
+      - name: Compare the PR candidate
+        id: compare
+        if: ${{ !cancelled() && steps.tools.outcome == 'success' }}
+        working-directory: candidate
+        env:
+          COMPARISON_TREE: candidate
+          EXPECTED_COMPARISON_SHA: ${{ github.sha }}
+        run: |
+          pnpm install --frozen-lockfile --fetch-retries=2
+          pnpm run zammad:package
+          node scripts/compare-typescript.mjs scripts/typescript-comparison
+      - name: Run the unit suite on TypeScript 7 output
+        if: ${{ !cancelled() && steps.compare.outputs.emit == 'different' }}
+        working-directory: candidate
+        run: |
+          if ! ruby -rminitest -e 'puts RUBY_VERSION'; then
+            sudo apt-get -o Acquire::Retries=2 update
+            sudo apt-get -o Acquire::Retries=2 install -y ruby ruby-minitest
+          fi
+          pnpm --dir .zammad-addon install --frozen-lockfile --fetch-retries=2
+          # The package script would rebuild these files with TypeScript 5.
+          node scripts/test-unit.mjs
 
   checks:
     if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
