@@ -73,10 +73,12 @@ class HostPacketTest(unittest.TestCase):
             packet = Path(directory) / "packet"
             result = self.render(packet)
             self.assertEqual(result.returncode, 0, result.stderr)
-            marker = json.loads(self.example.read_bytes())["DEV_STEP_LOCK"]
+            identity = json.loads(self.example.read_bytes())
+            marker = identity["DEV_STEP_LOCK"]
             env = (packet / "host.env").read_text()
             self.assertEqual([line for line in env.splitlines() if marker in line],
                              [f"export DEV_STEP_LOCK={marker}"])
+            self.assertIn(f"export DEV_STEP_RECORD={identity['DISK_STATE']}/dev-step.run\n", env)
             helper = (packet / "dev-step-lock.sh").read_text()
             self.assertIn('exec 7<"$DEV_STEP_LOCK"', helper)
             self.assertIn("flock -n -E 75 7", helper)
@@ -112,6 +114,26 @@ class HostPacketTest(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn(error, result.stderr)
                 self.assertFalse(packet.exists())
+
+    def test_host_record_location_can_be_overridden_outside_the_lock_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            parent = Path(directory)
+            identity = parent / "host-identity.json"
+            fields = json.loads(self.example.read_bytes())
+            record = f"{fields['DISK_STATE']}/lease.run"
+            identity.write_text(json.dumps({**fields, "DEV_STEP_RECORD": record}), encoding="utf-8")
+            packet = parent / "packet"
+            result = self.render(packet, identity=identity)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn(f"export DEV_STEP_RECORD={record}\n", (packet / "host.env").read_text())
+            for invalid in ("relative/lease.run", fields["DEV_STEP_LOCK"] + ".run"):
+                with self.subTest(record=invalid):
+                    identity.write_text(json.dumps({**fields, "DEV_STEP_RECORD": invalid}), encoding="utf-8")
+                    rejected = parent / "rejected"
+                    result = self.render(rejected, identity=identity)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("invalid host path: DEV_STEP_RECORD", result.stderr)
+                    self.assertFalse(rejected.exists())
 
     def test_renderer_seals_host_files_and_derives_measured_leases(self):
         with tempfile.TemporaryDirectory() as directory:

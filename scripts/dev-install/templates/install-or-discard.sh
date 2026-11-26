@@ -18,8 +18,8 @@ case "$mode" in
 install)
     if bash "$action" install "$state"; then
         if grep -q '^DEV_OVERLAY_DONE .* held_smoke=PASS fence=PASS release=HELD$' "$state/install.done"; then
-            printf 'DEV_SIGNED_INSTALL=PASS release=HELD %s\n' "$(date -u +%FT%TZ)"
             finish_dev_step "$state"
+            printf 'DEV_SIGNED_INSTALL=PASS release=HELD %s\n' "$(date -u +%FT%TZ)"
             exit 0
         fi
         failure=75

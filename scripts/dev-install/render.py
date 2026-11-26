@@ -106,7 +106,8 @@ def absolute_path(value):
 
 def render_host(identity, run_id, commit, receipts, bundle):
     fields = set(HOST_PATHS) | HOST_PATTERNS.keys() | set(HOST_NUMBERS) | {"TOP_CHAIN"}
-    if not isinstance(identity, dict) or set(identity) - {"LEASE_RECEIPT_SHA256S", "LEASE_RECEIPT_POLICY"} != fields:
+    optional = {"DEV_STEP_RECORD", "LEASE_RECEIPT_SHA256S", "LEASE_RECEIPT_POLICY"}
+    if not isinstance(identity, dict) or set(identity) - optional != fields:
         raise ValueError("invalid host identity fields")
     for key in HOST_PATHS:
         if not absolute_path(identity[key]):
@@ -138,6 +139,10 @@ def render_host(identity, run_id, commit, receipts, bundle):
     if [hashlib.sha256(raw).hexdigest() for raw in raw_receipts] != expected:
         raise ValueError("lease receipt SHA-256 mismatch")
     maintenance = run_path(str(TEMPLATES / "host-maintenance.py"))
+    record_path = maintenance["dev_step_record_path"](identity)
+    if (not absolute_path(record_path)
+            or PurePosixPath(record_path).is_relative_to(PurePosixPath(identity["DEV_STEP_LOCK"]).parent)):
+        raise ValueError("invalid host path: DEV_STEP_RECORD")
     policy = identity.get("LEASE_RECEIPT_POLICY")
     texts = [raw.decode("utf-8") for raw in raw_receipts]
     leases = maintenance["lease_budgets"](texts if maintenance["lease_receipts_match"](texts, policy) else [])
@@ -147,7 +152,7 @@ def render_host(identity, run_id, commit, receipts, bundle):
 
     env = {
         **identity, **leases, "TOP_CHAIN": json.dumps(chain), "REV": commit,
-        "LEASE_RECEIPT_SHA256S": json.dumps(expected),
+        "DEV_STEP_RECORD": record_path, "LEASE_RECEIPT_SHA256S": json.dumps(expected),
     }
     if "LEASE_RECEIPT_POLICY" in identity:
         env["LEASE_RECEIPT_POLICY"] = json.dumps(policy, sort_keys=True)
