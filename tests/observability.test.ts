@@ -70,6 +70,7 @@ test("structured logs redact phone-shaped numbers and digit strings", () => {
 
 for (const [format, number] of [
   ["local leading zero", "07700900000"],
+  ["dotted 2+2+6", "06.12.345678"],
   ["international 00 prefix", "0012025550102"],
   ["Arabic-Indic digits", "٠٧٧٠٠٩٠٠٠٠٠"],
   ["extended Arabic-Indic digits", "۰۰۱۲۰۲۵۵۵۰۱۰۲"],
@@ -82,7 +83,7 @@ for (const [format, number] of [
   });
 }
 
-for (const key of ["mobile", "msisdn", "tel", "jid", "customer"]) {
+for (const key of ["mobile", "msisdn", "tel", "jid", "customer", "to_number", "caller_number"]) {
   test(`structured logs redact bare phone strings under ${key}`, () => {
     assert.deepEqual(redactLogValue({ [key]: "12025550102" }), { [key]: "[REDACTED]" });
   });
@@ -148,6 +149,16 @@ test("structured logs redact phones after a hyphen and preserve UUIDs and dates 
   assert.equal(redactLogValue(`ID-(202) 555-0102; ${preserved}`), `ID-[PHONE]; ${preserved}`);
   const labelledDates = "date-24-11-2026; date-2026-11-24";
   assert.equal(redactLogValue(labelledDates), labelledDates);
+});
+
+test("structured logs preserve space-separated dates", () => {
+  const detail = "Date 24 11 2026.";
+  assert.deepEqual(redactLogValue({ detail }), { detail });
+});
+
+test("structured logs preserve whitespace-separated number pairs", () => {
+  const detail = "Values 8080 1234567.";
+  assert.deepEqual(redactLogValue({ detail }), { detail });
 });
 
 test("structured logs keep label-hyphen-digit IDs", () => {
