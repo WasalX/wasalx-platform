@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Exercise the rendered packet in a network-isolated Linux container."""
 
-from contextlib import contextmanager, redirect_stdout
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
 import hashlib
+from importlib.util import module_from_spec, spec_from_file_location
 import io
 import json
 import os
@@ -26,6 +27,8 @@ IDENTITY = FIXTURES / "identity.example.json"
 IMAGE = "node:24.22.1-bookworm@sha256:d862bb5d082c5ae0210ac07e8c0344cb8cf7bef6d78e9b8c50c179da923108ea"
 SANDBOX_HOSTNAME = "sandbox.example.test"
 SANDBOX_TIMEOUT = 120
+IMAGE_CHECK_TIMEOUT = 10
+REGISTRY_PULL_TIMEOUT = 75
 CLEANUP_TIMEOUT = 20
 INSTALL_PHASES = ("preflight", "cutover", "smoke")
 INSTALL_ADMISSION_HOLDS = {
@@ -705,13 +708,32 @@ def cleanup_sandbox(suite, name, create_timed_out):
     sandbox_log(suite, "cleanup unconfirmed")
 
 
+def prepare_sandbox_image():
+    started = time.monotonic()
+    image = docker_phase("image", "image-check", started + IMAGE_CHECK_TIMEOUT, "image", "inspect", IMAGE)
+    if image.returncode == 0:
+        return
+
+    spec = spec_from_file_location("image_registry_retry", HERE.parent / "release/image_registry_retry.py")
+    retry = module_from_spec(spec)
+    spec.loader.exec_module(retry)
+
+    def report_failure(attempt, error):
+        outcome = "timed out" if isinstance(error, subprocess.TimeoutExpired) else f"exit={error.returncode}"
+        sandbox_log("image", f"registry fetch attempt {attempt} failed ({outcome})")
+
+    started = time.monotonic()
+    sandbox_log("image", "registry fetch started")
+    try:
+        retry.registry_output("docker", "pull", IMAGE, timeout=REGISTRY_PULL_TIMEOUT, delays=(1, 2),
+                              report_failure=report_failure)
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        raise RuntimeError("DEV dry-run: registry fetch failed for the sandbox image") from None
+    sandbox_log("image", f"registry fetch ready elapsed_ms={int((time.monotonic() - started) * 1000)}")
+
+
 def sandbox(hostname, suite):
     deadline = time.monotonic() + SANDBOX_TIMEOUT
-    image = docker_phase(suite, "image-check", deadline, "image", "inspect", IMAGE)
-    if image.returncode:
-        pull = docker_phase(suite, "pull", deadline, "pull", IMAGE)
-        check(pull.returncode == 0, f"{suite}: pull failed")
-
     name = f"wasalx-dev-dryrun-{uuid4().hex}"
     create = None
     create_timed_out = False
@@ -741,27 +763,38 @@ def sandbox(hostname, suite):
 
 
 class SandboxTest(unittest.TestCase):
-    def test_cold_image_and_attached_start_share_the_deadline(self):
+    def test_registry_fetch_leaves_full_deadline_for_each_suite(self):
         elapsed = 0
         output = io.StringIO()
-        phases = iter(((1, 1), (82, 0), (5, 0), (4, 0)))
+        phases = iter(((1, 1), (0, None), (55, 0), (5, 0), (4, 0), (6, 0), (3, 0)))
+
+        def advance(seconds):
+            nonlocal elapsed
+            elapsed += seconds
 
         def run_docker(args, **options):
-            nonlocal elapsed
             duration, status = next(phases)
-            elapsed += duration
-            return subprocess.CompletedProcess(args, status, stdout=b"DEV_DRYRUN_CHECKPOINT suite-passed\n")
+            if status is None:
+                advance(options["timeout"])
+                raise subprocess.TimeoutExpired(args, options["timeout"])
+            advance(duration)
+            return subprocess.CompletedProcess(args, status, stdout=b"DEV_DRYRUN_CHECKPOINT suite-passed\n", stderr=b"")
 
         with (
             redirect_stdout(output),
             mock.patch.object(time, "monotonic", side_effect=lambda: elapsed),
+            mock.patch.object(time, "sleep", side_effect=advance) as backoff,
             mock.patch.object(subprocess, "run", side_effect=run_docker) as docker,
         ):
-            sandbox(SANDBOX_HOSTNAME, "DispatchTest")
-        inspect, pull, create, start = docker.call_args_list
-        self.assertEqual([call.kwargs["timeout"] for call in docker.call_args_list], [120, 119, 37, 32])
+            container()
+        backoff.assert_called_once_with(1)
+        inspect, failed_pull, pull, create, start, guest_create, guest_start = docker.call_args_list
+        self.assertEqual([call.kwargs["timeout"] for call in docker.call_args_list], [10, 75, 75, 120, 115, 120, 114])
         self.assertEqual(inspect.args[0], ["docker", "image", "inspect", IMAGE])
-        self.assertEqual(pull.args[0], ["docker", "pull", IMAGE])
+        self.assertEqual(pull.args[0], failed_pull.args[0])
+        self.assertEqual(list(pull.args[0]), ["docker", "pull", IMAGE])
+        self.assertEqual(guest_create.args[0][:3], ["docker", "create", "--name"])
+        self.assertEqual(guest_start.args[0], ["docker", "start", "--attach", guest_create.args[0][3]])
         create_args = create.args[0]
         name = create_args[3]
         self.assertEqual(create_args[:3], ["docker", "create", "--name"])
@@ -774,8 +807,44 @@ class SandboxTest(unittest.TestCase):
             IMAGE, "python3", "-I", "-B", "/fixture/scripts/dev-install/test_dryrun.py", "DispatchTest",
         ])
         self.assertEqual(start.args[0], ["docker", "start", "--attach", name])
+        self.assertIn("registry fetch attempt 1 failed (timed out)", output.getvalue())
         self.assertIn("child suite-passed", output.getvalue())
         self.assertIn("cleanup auto-removed", output.getvalue())
+
+    def test_registry_fetch_exhaustion_fails_before_creating_a_container(self):
+        output = io.StringIO()
+        command = ("docker", "pull", IMAGE)
+        failure = subprocess.CalledProcessError(
+            1, command, stderr=b"raw-diagnostic-marker: unexpected status code 503\n",
+        )
+        with (
+            redirect_stdout(output),
+            redirect_stderr(output),
+            mock.patch.object(time, "monotonic", return_value=0),
+            mock.patch.object(time, "sleep") as backoff,
+            mock.patch.object(subprocess, "run", side_effect=[mock.Mock(returncode=1), failure, failure, failure]) as docker,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "registry fetch failed for the sandbox image"):
+                container()
+        self.assertEqual([call.args[0] for call in docker.call_args_list[1:]], [command] * 3)
+        self.assertEqual(backoff.call_args_list, [mock.call(1), mock.call(2)])
+        self.assertEqual(
+            [line for line in output.getvalue().splitlines() if "registry fetch attempt" in line],
+            [f"DEV dry-run image: registry fetch attempt {attempt} failed (exit=1)" for attempt in (1, 2, 3)],
+        )
+        self.assertNotIn("raw-diagnostic-marker", output.getvalue())
+
+    def test_cached_image_needs_no_registry_fetch(self):
+        with (
+            redirect_stdout(io.StringIO()),
+            mock.patch.object(time, "monotonic", return_value=0),
+            mock.patch.object(subprocess, "run", return_value=mock.Mock(returncode=0)) as docker,
+            mock.patch(f"{__name__}.sandbox") as run_sandbox,
+        ):
+            container()
+        self.assertEqual(docker.call_count, 1)
+        self.assertEqual(docker.call_args.args[0], ["docker", "image", "inspect", IMAGE])
+        self.assertEqual(run_sandbox.call_count, 2)
 
     def test_create_or_attach_timeout_attempts_owned_cleanup_with_safe_output(self):
         for phase in ("create", "start-attach"):
@@ -784,7 +853,7 @@ class SandboxTest(unittest.TestCase):
                     ["docker", "raw-command-marker"], SANDBOX_TIMEOUT,
                     output=b"DEV_DRYRUN_CHECKPOINT dispatch-invoke\nDEV_DRYRUN_CHECKPOINT raw-output-marker\n",
                 )
-                results = [mock.Mock(returncode=0)]  # Local image hit.
+                results = []
                 if phase == "start-attach":
                     results.append(mock.Mock(returncode=0))
                 results.extend((timeout, mock.Mock(returncode=0, stderr=b"")))
@@ -796,7 +865,7 @@ class SandboxTest(unittest.TestCase):
                 ):
                     with self.assertRaisesRegex(RuntimeError, f"DispatchTest: {phase} deadline exceeded"):
                         sandbox(SANDBOX_HOSTNAME, "DispatchTest")
-                name = docker.call_args_list[1].args[0][3]
+                name = docker.call_args_list[0].args[0][3]
                 self.assertEqual(docker.call_args.args[0], ["docker", "rm", "--force", "--volumes", name])
                 self.assertEqual(docker.call_args.kwargs["timeout"], CLEANUP_TIMEOUT)
                 self.assertIn("cleanup removed", output.getvalue())
@@ -813,7 +882,7 @@ class SandboxTest(unittest.TestCase):
             "DEV_DRYRUN_CHECKPOINT suite-failed\n"
         ).encode("ascii")
         results = [
-            mock.Mock(returncode=0), mock.Mock(returncode=0),
+            mock.Mock(returncode=0),
             mock.Mock(returncode=1, stdout=child_output),
             subprocess.TimeoutExpired(["docker", "rm"], CLEANUP_TIMEOUT),
         ]
@@ -837,8 +906,6 @@ class SandboxTest(unittest.TestCase):
 
                 def run_docker(args, **options):
                     nonlocal removals
-                    if args[1] == "image":
-                        return subprocess.CompletedProcess(args, 0)
                     if args[1] == "create":
                         sleep(options["timeout"])
                         raise subprocess.TimeoutExpired(args, options["timeout"])
@@ -856,7 +923,7 @@ class SandboxTest(unittest.TestCase):
                 ):
                     with self.assertRaisesRegex(RuntimeError, "DispatchTest: create deadline exceeded"):
                         sandbox(SANDBOX_HOSTNAME, "DispatchTest")
-                _, create, *cleanup = docker.call_args_list
+                create, *cleanup = docker.call_args_list
                 name = create.args[0][3]
                 self.assertTrue(all(call.args[0] == ["docker", "rm", "--force", "--volumes", name] for call in cleanup))
                 expected_attempts = 2 if appears else CLEANUP_TIMEOUT
@@ -870,6 +937,7 @@ class SandboxTest(unittest.TestCase):
 
 def container():
     identity = json.loads(IDENTITY.read_bytes())
+    prepare_sandbox_image()
     sandbox(SANDBOX_HOSTNAME, "DispatchTest")
     sandbox(identity["expected_hostname"], "GuestTest")
 

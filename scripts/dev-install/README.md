@@ -4,7 +4,9 @@ Run the same dry-run as CI with `python3 -I -B scripts/dev-install/test_dryrun.p
 It uses the example identity, a disposable Git bundle, and network-disabled dispatcher and guest containers.
 The fixture runs the native bind-mount, hostname, and review-origin checks and exercises a hung capture
 holding the native stage lock. SSH and Compose calls use recording fakes.
-For each container, the image check or pull, creation, and attached run share one 120-second deadline.
+The runner checks for the pinned image before either container starts and fetches it if missing.
+The fetch makes at most three time-limited attempts with backoff and reports registry failures separately.
+For each container, creation and the attached run share one 120-second deadline.
 The log reports Docker phase durations, a bounded list of fixture checkpoints, and the cleanup result.
 If creation or the attached run fails, a separate cleanup budget targets the named fixture container.
 After a create timeout, cleanup checks for late registration and reports an unconfirmed result
