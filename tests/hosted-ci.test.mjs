@@ -335,7 +335,7 @@ test("TypeScript comparison runs as an advisory job on affected PRs", async t =>
   }
 });
 
-test("nightly install is report-only, read-only and fails open on PR diff errors", async () => {
+test("nightly install is report-only, read-only and runs on schedule, dispatch and RC tags", async () => {
   const path = ".github/workflows/nightly-install.yml";
   const { on, permissions, concurrency, jobs } = parse(await read(path));
   const job = jobs["nightly-install"];
@@ -345,7 +345,6 @@ test("nightly install is report-only, read-only and fails open on PR diff errors
     workflow_dispatch: {
       inputs: { commit: { description: "Exact published main commit SHA (optional)", type: "string", required: false } },
     },
-    pull_request: { branches: ["main"], types: ["opened", "synchronize", "reopened"] },
     push: { tags: ["v*-rc.*"] },
   });
   assert.match(job.if, /\(github\.event_name == 'push' && github\.ref_type == 'tag'\)/u);
