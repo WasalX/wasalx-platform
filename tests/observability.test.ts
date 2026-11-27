@@ -151,14 +151,23 @@ test("structured logs redact phones after a hyphen and preserve UUIDs and dates 
   assert.equal(redactLogValue(labelledDates), labelledDates);
 });
 
-test("structured logs preserve space-separated dates", () => {
-  const detail = "Date 24 11 2026.";
+test("structured logs exempt only recognized space-separated dates from phone redaction", () => {
+  const detail = ["Date 01 01 1900.", "Date 31 12 2099."];
   assert.deepEqual(redactLogValue({ detail }), { detail });
+  for (const value of ["32 01 2000", "01 13 2000", "01 01 2100", "01  01 2000", "01 01 2000 0000"]) {
+    assert.equal(redactLogValue(`Value ${value}.`), "Value [PHONE].", value);
+  }
 });
 
 test("structured logs preserve whitespace-separated number pairs", () => {
   const detail = "Values 8080 1234567.";
   assert.deepEqual(redactLogValue({ detail }), { detail });
+});
+
+test("structured logs redact 4+7 number pairs with a country code", () => {
+  for (const value of ["999 8080 0000000", "+999 8080 0000000"]) {
+    assert.equal(redactLogValue(`Called ${value}.`), "Called [PHONE].", value);
+  }
 });
 
 test("structured logs keep label-hyphen-digit IDs", () => {

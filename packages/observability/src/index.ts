@@ -26,7 +26,8 @@ const phoneZero = String.raw`[0\u0660\u06f0\uff10]`;
 const phoneNonZero = String.raw`[1-9\u0661-\u0669\u06f1-\u06f9\uff11-\uff19]`;
 const barePhonePattern = String.raw`${phoneNonZero}\p{Nd}{9,14}|${phoneZero}\p{Nd}{8,13}|${phoneZero}{2}${phoneNonZero}\p{Nd}{7,13}`;
 const barePhoneLike = new RegExp(`^(?:${barePhonePattern})$`, "u");
-const dateLike = String.raw`(?:\p{Nd}{4}-\p{Nd}{2}-\p{Nd}{2}|\p{Nd}{2}-\p{Nd}{2}-\p{Nd}{4}|\p{Nd}{2}\.\p{Nd}{2}\.\p{Nd}{4}|(?:\p{Nd}{2}\s+){2}\p{Nd}{4})(?![.-]?\p{Nd})`;
+const spacedDateLike = String.raw`(?:0[1-9]|[12]\d|3[01]) (?:0[1-9]|1[0-2]) (?:19|20)\d{2}(?!\s+\p{Nd})`;
+const dateLike = String.raw`(?:\p{Nd}{4}-\p{Nd}{2}-\p{Nd}{2}|\p{Nd}{2}-\p{Nd}{2}-\p{Nd}{4}|\p{Nd}{2}\.\p{Nd}{2}\.\p{Nd}{4}|${spacedDateLike})(?![.-]?\p{Nd})`;
 const phoneStart = String.raw`(?<![\p{L}\p{N}_.]|\p{Nd}-|[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-)(?!${dateLike})`;
 // Only formatted numbers may follow a label hyphen, so label-hyphen-digits IDs (req-<digits>) survive.
 const internationalPrefix = String.raw`(?:\+|${phoneZero}{2}(?=\p{Nd}{0,14}[\s().-]+\p{Nd})[\s.-]*(?=${phoneNonZero}))`;
