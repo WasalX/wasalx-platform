@@ -742,7 +742,7 @@ test("tenant identity and provider visuals stay bidi-safe and token-driven", asy
     read("app/CaseLifecycle.tsx"),
     read("app/globals.css"),
   ]);
-  assert.match(app, /<bdi dir="auto">\{user\.displayName\}<\/bdi>/u);
+  assert.match(app, /<b dir="auto">\{user\.displayName\}<\/b>/u);
   assert.match(cases, /<bdi dir="auto">\{row\.group_name\}<\/bdi>/u);
   for (const token of [
     "--wx-color-brand-start",

@@ -1011,7 +1011,13 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
         self.assertIn(guard, bodies["publish"])
         self.assertIn(guard, bodies["manifest"])
         self.assertNotRegex(bodies["publish"], r"(?m)^    environment:")
-        self.assertIn("BUILD_CACHE: ${{ github.ref_name == 'main' && 'write' || 'off' }}", bodies["publish"])
+        self.assertIn(guard, bodies["queue"])
+        self.assertRegex(bodies["publish"], r"(?m)^    needs: queue$")
+        self.assertIn("ref: ${{ github.sha }}", bodies["publish"])
+        build = 'images-by-digest.py build --cache write --image "$IMAGE" --output "records/$IMAGE.json"'
+        publish = 'images-by-digest.py publish --output "records/$IMAGE.json"'
+        self.assertLess(bodies["publish"].index(build), bodies["publish"].index(publish))
+        self.assertNotIn("actions/download-artifact@", bodies["publish"])
         self.assertNotIn("actions/attest-build-provenance@", text)
         self.assertNotIn("url:", text)
         allowed = {"actions/checkout", "actions/setup-node", "actions/upload-artifact", "actions/download-artifact",

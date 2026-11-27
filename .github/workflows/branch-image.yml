@@ -10,7 +10,41 @@ permissions:
   contents: read
 
 jobs:
+  queue:
+    name: Verify merge-queue qualification
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'WasalX/wasalx-platform'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    permissions:
+      actions: read
+    steps:
+      - name: Require GitHub-hosted execution
+        env:
+          HOSTED_KIND: ${{ runner.environment }}
+        run: test "$HOSTED_KIND" = github-hosted
+      - name: Require the release commit's successful queue gate
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          runs=$(gh api --method GET "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs" \
+            -f event=merge_group -f head_sha="$GITHUB_SHA" -F per_page=100)
+          read -r run attempt < <(jq -ber --arg sha "$GITHUB_SHA" --arg repo "$GITHUB_REPOSITORY" '
+            select(.total_count <= 100) | [.workflow_runs[] |
+              select(.event == "merge_group" and .path == ".github/workflows/ci.yml" and
+                .head_sha == $sha and .head_repository.full_name == $repo and
+                (.head_branch | startswith("gh-readonly-queue/main/")))]
+            | sort_by(.id) | last | [.id, .run_attempt] | @tsv' <<< "$runs")
+          [[ "$run" =~ ^[1-9][0-9]*$ && "$attempt" =~ ^[1-9][0-9]*$ ]]
+          jobs=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run/attempts/$attempt/jobs?per_page=100")
+          jq -e '[.jobs[] | select(.name == "ci-gate")] |
+            length == 1 and .[0].status == "completed" and .[0].conclusion == "success"' <<< "$jobs" >/dev/null
+          # The exact commit SHA binds the Git tree built by both workflows.
+          printf 'Queue ci-gate passed for %s in run %s (attempt %s).\n' "$GITHUB_SHA" "$run" "$attempt" >> "$GITHUB_STEP_SUMMARY"
+
   publish:
+    needs: queue
     name: Publish ${{ matrix.image }}
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'WasalX/wasalx-platform'
     timeout-minutes: 20
@@ -54,6 +88,7 @@ jobs:
         run: test "$HOSTED_KIND" = github-hosted
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
       - name: Resolve catalog entry and add-on pin
         id: image
@@ -83,9 +118,8 @@ jobs:
       - name: Build without cache imports, export layers and inspect
         if: steps.image.outputs.pending == 'false'
         env:
-          BUILD_CACHE: ${{ github.ref_name == 'main' && 'write' || 'off' }}
           PUBLIC_CONTACT_EMAIL: ${{ matrix.image == 'portal' && vars.PUBLIC_CONTACT_EMAIL || '' }}
-        run: python3 scripts/release/images-by-digest.py build --cache "$BUILD_CACHE" --image "$IMAGE" --output "records/$IMAGE.json"
+        run: python3 scripts/release/images-by-digest.py build --cache write --image "$IMAGE" --output "records/$IMAGE.json"
       - if: steps.image.outputs.pending == 'false'
         uses: ./.github/actions/cosign
       - name: Publish, sign, attest and inspect the published digest
