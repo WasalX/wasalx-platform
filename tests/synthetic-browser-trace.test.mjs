@@ -23,22 +23,18 @@ test("synthetic browser traces protect the raw trace", async (t) => {
 
   const output = await mkdtemp(join(tmpdir(), "synthetic-trace-output-"));
   t.after(() => rm(output, { recursive: true, force: true }));
-  const sanitizer = t.mock.method(
-    childProcess,
-    "execFile",
-    (_command, args, done) => {
-      writeFile(args.at(-1), "sanitized trace").then(() => done(null), done);
-    },
-  );
-  t.after(() => {
-    sanitizer.mock.restore();
-    syncBuiltinESMExports();
+  const execFile = childProcess.execFile;
+  const sanitizer = t.mock.fn((_command, args, done) => {
+    writeFile(args.at(-1), "sanitized trace").then(() => done(null), done);
   });
-  // The helper captures the promisified child process function at import time.
+  // Replace the function before import so promisify uses the stub.
+  childProcess.execFile = sanitizer;
   syncBuiltinESMExports();
-  const { syntheticBrowserTrace } = await import(
-    "./helpers/synthetic-browser-trace.mjs"
-  );
+  const { syntheticBrowserTrace } =
+    await import("./helpers/synthetic-browser-trace.mjs").finally(() => {
+      childProcess.execFile = execFile;
+      syncBuiltinESMExports();
+    });
 
   let rawPath;
   let filesBeforeSanitizing;
