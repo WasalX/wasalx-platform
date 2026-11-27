@@ -48,6 +48,28 @@ export async function captureTenantDesign(
         await expect(
           page.getByText(messages["mailboxes.empty"], { exact: true }),
         ).toBeVisible();
+        const mailbox = page.locator(
+          'section[aria-labelledby="mailboxes-heading"]',
+        );
+        const [profile, card, note, prefix, slug] = await Promise.all(
+          [
+            ready.settings,
+            mailbox,
+            mailbox.getByText(messages["mailboxes.empty"], { exact: true }),
+            ready.settings.locator(".input-prefix > span"),
+            ready.settings.locator("#workspace-slug"),
+          ].map(async (target) => (await target.boundingBox())!),
+        );
+        expect(Math.abs(card.x - profile.x)).toBeLessThanOrEqual(1);
+        expect(
+          Math.abs(card.x + card.width - profile.x - profile.width),
+        ).toBeLessThanOrEqual(1);
+        expect(note.x - card.x).toBeGreaterThanOrEqual(12);
+        expect(
+          card.x + card.width - note.x - note.width,
+        ).toBeGreaterThanOrEqual(12);
+        expect(prefix.x + prefix.width).toBeLessThanOrEqual(slug.x + 1);
+        await expect(page.locator(".profile b")).toHaveCSS("direction", "ltr");
       }
       await expect(page.locator('[data-application-ready="true"]')).toHaveClass(
         `theme-${theme}`,
