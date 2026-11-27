@@ -197,10 +197,10 @@ export function ScrollRegion(props: Omit<React.ComponentPropsWithRef<"div">, "ro
   return <div {...props} role="region" tabIndex={0} />;
 }
 
-export function WideTable({ children }: { children: React.ReactNode }) {
+export function WideTable({ children, label }: { children: React.ReactNode; label?: string }) {
   const { t } = useI18n();
   return (
-    <ScrollRegion className="table-scroll" aria-label={t("tenant.accessibility.scrollTable")}>
+    <ScrollRegion className="table-scroll" aria-label={label ?? t("tenant.accessibility.scrollTable")}>
       <span className="table-scroll-cue" aria-hidden="true">
         {t("tenant.accessibility.scrollTableCue")}
       </span>
