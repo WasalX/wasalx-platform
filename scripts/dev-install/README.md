@@ -188,10 +188,11 @@ the actual one-shot exit status.
 Pre-arm and successful install each emit exactly one
 `KEYCLOAK_BOOTSTRAP_NETWORK=PASS keycloak=<id> bootstrap=<id>` line with full
 Docker container IDs. On install that line attests the replacement checked
-before start or the unchanged one-shot when it was reused. The wrapper checks
-the existing binding before installation and reads back the final binding and
-exit code. A recreated one-shot must also report the preserve mode in its
-container configuration. A stale target stops the install before cutover.
+before start or the unchanged one-shot when it was reused. Reuse must leave
+the one-shot stopped. The wrapper checks the existing binding before installation
+and reads back the final binding and exit code. It also checks that reuse kept
+the original start time or that recreation used preserve mode. A stale target
+stops the install before cutover.
 
 ## DEV step lock
 
