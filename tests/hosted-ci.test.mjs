@@ -149,8 +149,12 @@ test("tracked tests belong to a named CI runner or the test allowlist", async ()
     return exe === "pnpm" && (action === "run" ? script : action);
   }).filter(script => script && Object.hasOwn(scripts, script)));
   const runnerNames = [...Object.keys(jobs), ...ciScripts];
-  const runnerText = runner => Object.hasOwn(jobs, runner) ? runText(jobs[runner])
-    : Object.hasOwn(scripts, runner) ? scripts[runner] : "";
+  const runnerText = runner => {
+    const job = jobs[runner];
+    if (!job) return scripts[runner] ?? "";
+    const calledJobs = workflowJobs.get(job.uses?.replace(/^\.\//u, ""));
+    return calledJobs ? Object.values(calledJobs).map(runText).join("\n") : runText(job);
+  };
   assert(runsFile(runnerText("checks"), "scripts/hosted-ci.mjs", "unit"), "The unit inventory must run in CI");
 
   const unitWrappers = await Promise.all(["tests/application-e2e-harness.test.mjs", "tests/ci-phase-admission.test.mjs",
@@ -1635,6 +1639,7 @@ test("optional PR lanes run on diff errors and gate their applicable checks", as
       "services/control-api/", "services/connector-worker/", "packages/", "lib/domain.ts", "lib/literal-matcher.ts",
       "scripts/build-services.mjs", "tsconfig.json", ":(glob)services/*/tsconfig*.json", ".gitattributes",
       "tests/outbound-media.test.mjs", "tests/simulation-portal-reply-browser.test.mjs",
+      "tests/zammad-sidebar-component-harness.test.mjs",
       "scripts/release/simulation-portal-reply-browser.mjs",
       ":(glob)**/package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", ".npmrc", "patches/",
       ".github/actions/ci-pnpm/", ".github/workflows/ci.yml", ".github/workflows/zammad-compatibility.yml",
@@ -1761,6 +1766,7 @@ test("Zammad compatibility selects changes to outbound dependencies and service 
     ["app/api/inbox/attachment/route.ts", true],
     ["lib/i18n/messages/ar/cases.ts", true],
     ["tests/simulation-portal-reply-browser.test.mjs", true],
+    ["tests/zammad-sidebar-component-harness.test.mjs", true],
     ["tests/support/ci-fixture-network.mjs", true],
     ["docs/release.md", false],
   ]) {
@@ -1797,6 +1803,12 @@ test("Zammad compatibility gates CI and reuses the same job on the nightly sched
   assert(Object.hasOwn(compatibility.on, "workflow_call"));
   assert.deepEqual(compatibility.permissions, { contents: "read" });
   assert.equal(compatibility.jobs.compatibility["runs-on"], "ubuntu-24.04");
+  const steps = compatibility.jobs.compatibility.steps;
+  const fetch = steps.findIndex(step => /^pnpm run zammad:fetch$/mu.test(step.run ?? ""));
+  const install = steps.findIndex(step => step["working-directory"] === ".zammad-addon/tests/zammad-sidebar-component"
+    && step.run === "pnpm install --frozen-lockfile");
+  const harness = steps.findIndex(step => runsFile(step.run ?? "", "tests/zammad-sidebar-component-harness.test.mjs"));
+  assert(fetch >= 0 && fetch < install && install < harness);
   const manifest = JSON.parse(await read("infra/docker/full/zammad/typecheck-upstream.json"));
   const dockerfile = (await read("infra/docker/Dockerfile.zammad")).replaceAll("\r\n", "\n");
   assert.match(manifest.revision, /^[a-f0-9]{40}$/u);

@@ -19,7 +19,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: '24.13.1'
+          node-version: '24.22.3'
           package-manager-cache: false
       - id: pnpm
         uses: ./.github/actions/ci-pnpm
@@ -34,6 +34,11 @@ jobs:
         run: |
           pnpm run zammad:fetch
           pnpm exec playwright install --with-deps chromium
+      - name: Install pinned sidebar harness dependencies
+        working-directory: .zammad-addon/tests/zammad-sidebar-component
+        run: pnpm install --frozen-lockfile
+      - name: Test the mounted Zammad sidebar
+        run: node --test tests/zammad-sidebar-component-harness.test.mjs
       - name: Preload the pinned mailbox fixture image
         run: |
           # The fixture uses pull_policy: never and cannot rely on BuildKit's cache.
