@@ -1,5 +1,5 @@
 import { delimiter, dirname, resolve } from "node:path";
-import { defineConfig, devices, type Project } from "@playwright/test";
+import { defineConfig, devices } from "@playwright/test";
 
 const tenantRoles = [
   "tenant_owner",
@@ -85,7 +85,7 @@ export default defineConfig({
     timezoneId: "Asia/Riyadh",
     trace: "retain-on-failure",
   },
-  projects: ([
+  projects: [
     {
       name: "desktop",
       testIgnore: ownerPart === "desktop" ? desktopTransitionSpec : undefined,
@@ -100,7 +100,7 @@ export default defineConfig({
       name: "mobile-390",
       grepInvert: /(?:^|\s)@(?:tablet|desktop)-only(?:\s|$)/u,
       use: {
-        browserName: "chromium",
+        browserName: "chromium" as const,
         deviceScaleFactor: 1,
         hasTouch: true,
         isMobile: true,
@@ -112,14 +112,14 @@ export default defineConfig({
       // Cover shell and inbox layouts, the audit table, group drawer, and Arabic RTL.
       grep: /(?:^|\s)@tablet(?:\s|$)/u,
       use: {
-        browserName: "chromium",
+        browserName: "chromium" as const,
         deviceScaleFactor: 1,
         hasTouch: true,
         isMobile: true,
         viewport: { width: 820, height: 1_180 },
       },
     },
-  ] satisfies Project[]).filter(project => ownerPart !== "desktop" || project.name === "desktop"),
+  ].filter(project => ownerPart !== "desktop" || project.name === "desktop"),
   webServer: platformUrl ? undefined : {
     command: `"${process.execPath}" node_modules/vinext/dist/cli.js start -p ${port} -H localhost`,
     stdout: "pipe",

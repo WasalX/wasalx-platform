@@ -268,9 +268,19 @@ test("CI job timeouts are covered by the measured limits", async () => {
   const timing = JSON.parse(await read(".github/ci-timings.json"));
   const configured = Object.entries(jobs).filter(([, job]) => Object.hasOwn(job, "timeout-minutes"));
   // These jobs landed after the timing sample and still need measurements.
-  const unmeasured = ["application-e2e", "installer-portal", "keycloak-identity", "platform-operator-e2e", "portal-browser-build", "seed-caches"];
+  const unmeasured = ["installer-portal", "keycloak-identity", "platform-operator-e2e", "portal-browser-build", "seed-caches"];
   assert.deepEqual(configured.map(([id]) => id).sort(), [...Object.keys(timing.jobs), ...unmeasured].sort());
-  for (const [id, { p95_minutes: p95 }] of Object.entries(timing.jobs)) {
+  for (const [id, { p95_minutes: p95, owner_parts: ownerParts }] of Object.entries(timing.jobs)) {
+    if (id === "application-e2e") {
+      const ownerSuites = jobs[id].strategy.matrix.suite.filter(suite => suite.roles === "tenant_owner");
+      assert.deepEqual(ownerSuites.map(suite => suite.owner_part).sort(), Object.keys(ownerParts).sort());
+      for (const { owner_part, timeout } of ownerSuites) {
+        const partP95 = ownerParts[owner_part].p95_minutes;
+        assert(Number.isFinite(partP95) && partP95 > 0, owner_part);
+        assert.equal(timeout, Math.ceil(partP95 * 1.25), owner_part);
+      }
+      continue;
+    }
     const timeout = jobs[id]["timeout-minutes"];
     assert(Number.isInteger(timeout) && timeout > 0 && timeout <= Math.ceil(p95 * 1.25), id);
   }
