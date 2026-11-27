@@ -294,13 +294,16 @@ test("CI job timeouts are covered by the measured limits", async () => {
   const release = parse(await read(publish.workflow)).jobs.publish;
   const image = "connector-worker";
   const p95 = publish.image_legs[image].p95_minutes;
-  assert(Number.isFinite(p95) && p95 > 0 && p95 <= publish.p95_minutes);
+  const matrixP95 = publish.p95_minutes;
+  assert(Number.isFinite(matrixP95) && Number.isFinite(p95) && p95 > 0 && p95 <= matrixP95);
   assert(release.strategy.matrix.image.includes(image));
+  const connectorTimeout = Math.ceil(p95 * 1.25);
+  const matrixTimeout = Math.ceil(matrixP95 * 1.25);
   assert.equal(
     release["timeout-minutes"],
-    "${{ matrix.image == '" + image + "' && " + Math.ceil(p95 * 1.25) + " || 20 }}",
+    "${{ matrix.image == '" + image + "' && " + connectorTimeout + " || " + matrixTimeout + " }}",
   );
-  assert.match((await read("DELIVERY.md")).split("\n").find(line => line.startsWith("| §4/§8 ")), /connector-worker publication leg/u);
+  assert.match((await read("DELIVERY.md")).split("\n").find(line => line.startsWith("| §4/§8 ")), /main image publication matrix/u);
 });
 
 test("Storybook selects UI changes and unknown diffs", async (t) => {
@@ -1300,13 +1303,16 @@ test("main pushes only publish and seed caches", async () => {
     { task: "save-build", "dependency-key": dependencyKey },
   ]);
   const lint = "pnpm run lint --cache --cache-strategy content --cache-location .git/hosted-eslint-cache";
-  assert.deepEqual(seed.steps.filter(step => step.run).map(step => step.name), ["Populate ESLint cache", "Prepare pinned actionlint"]);
+  const prepare = jobs["workflow-lint"].steps.find(step => step.name === "Prepare pinned actionlint");
+  assert.deepEqual(seed.steps.flatMap(step => step.run ?? []), [lint, prepare.run]);
   const eslintSave = seed.steps.find(step => step.uses?.startsWith("actions/cache/save@"));
   assert.equal(eslintSave.if, "steps.eslint-cache.outputs.cache-hit != 'true'");
   assert.deepEqual(eslintSave.with, {
     path: ".git/hosted-eslint-cache", key: "${{ steps.eslint-cache.outputs.cache-primary-key }}",
   });
-  assert(seed.steps.findIndex(step => step.run === lint) < seed.steps.indexOf(eslintSave));
+  const lintIndex = seed.steps.findIndex(step => step.run === lint);
+  assert(lintIndex >= 0);
+  assert(lintIndex < seed.steps.indexOf(eslintSave));
 });
 
 test("CI restores pnpm caches and builds cleanly in the merge queue", async t => {
