@@ -79,7 +79,9 @@ test("routing editor focus and sync errors are operator-safe", async () => {
   assert.match(routing, /requestFence\.current\.isCurrent\(request\)/u);
   assert.match(routing, /error\.code === "REAUTHENTICATION_REQUIRED"/u);
   assert.doesNotMatch(routing, /requiresRoutingStepUp|reauthenticate\|أعد التحقق/u);
-  assert.match(routing, /<span aria-hidden="true"> · <\/span>[\s\S]*routing\.versions\.createdAt[\s\S]*<bdi>/u);
+  // The version date sits on its own line, so no visible separator precedes it (#599).
+  assert.doesNotMatch(routing, /<span aria-hidden="true"> · <\/span>\s*<small>\s*<span className="sr-only">\{t\("routing\.versions\.createdAt"\)\}/u);
+  assert.match(routing, /<span className="sr-only">\{t\("routing\.versions\.createdAt"\)\} <\/span>\s*<bdi>/u);
 });
 
 test("new automation hardening copy is complete in English and Arabic", async () => {
