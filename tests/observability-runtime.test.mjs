@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { createRequire } from "node:module";
 import test from "node:test";
+import { promisify } from "node:util";
 
 test("host metrics resolves the patched service-name sanitizer", () => {
   const observability = createRequire(new URL("../packages/observability/package.json", import.meta.url));
@@ -15,7 +17,7 @@ test("host metrics resolves the patched service-name sanitizer", () => {
   assert.equal(sanitizeShellString("WasalX.Service_1-2"), "WasalX.Service_1-2");
 });
 
-test("Node runtime exports WasalX metrics and traces as OTLP protobuf without sensitive dimensions", async (t) => {
+async function listenOtlp(t) {
   const requests = [];
   const server = createServer((request, response) => {
     const chunks = [];
@@ -38,6 +40,11 @@ test("Node runtime exports WasalX metrics and traces as OTLP protobuf without se
 
   const address = server.address();
   assert.ok(address && typeof address === "object");
+  return { endpoint: `http://127.0.0.1:${address.port}`, requests };
+}
+
+test("Node runtime exports WasalX metrics and traces as OTLP protobuf without sensitive dimensions", async (t) => {
+  const { endpoint, requests } = await listenOtlp(t);
   const previous = Object.fromEntries([
     "NODE_ENV",
     "OTEL_EXPORTER_OTLP_ENDPOINT",
@@ -51,7 +58,7 @@ test("Node runtime exports WasalX metrics and traces as OTLP protobuf without se
   ].map((key) => [key, process.env[key]]));
   Object.assign(process.env, {
     NODE_ENV: "test",
-    OTEL_EXPORTER_OTLP_ENDPOINT: `http://127.0.0.1:${address.port}`,
+    OTEL_EXPORTER_OTLP_ENDPOINT: endpoint,
     OTEL_EXPORTER_OTLP_TIMEOUT: "10000",
     OTEL_METRIC_EXPORT_INTERVAL: "5000",
     OTEL_RESOURCE_ATTRIBUTES: "deployment.environment.name=test,tenant.id=tenant-resource-must-never-export,customer.phone=12025550178",
@@ -112,6 +119,38 @@ test("Node runtime exports WasalX metrics and traces as OTLP protobuf without se
   assert.doesNotMatch(exportedPayload, /customer\.phone/u);
   assert.doesNotMatch(exportedPayload, /process\.command_args/u);
   assert.doesNotMatch(exportedPayload, /process\.owner/u);
+});
+
+test("natural Node shutdown logs one redacted SDK failure and exits cleanly", async (t) => {
+  const { endpoint } = await listenOtlp(t);
+  const runtime = new URL("../packages/observability/dist/node.js", import.meta.url);
+  const { stdout, stderr } = await promisify(execFile)(process.execPath, ["--input-type=module", "--eval", `
+    import { startNodeObservability } from ${JSON.stringify(runtime.href)};
+    const sdk = startNodeObservability({ serviceName: "shutdown-test" });
+    const shutdown = sdk.shutdown.bind(sdk);
+    sdk.shutdown = async () => {
+      await shutdown();
+      process.stdout.write("shutdown-complete\\n");
+      throw new Error("Synthetic exporter shutdown detail");
+    };
+  `], {
+    timeout: 10_000,
+    windowsHide: true,
+    env: {
+      ...process.env,
+      NODE_ENV: "test",
+      OTEL_SDK_DISABLED: "false",
+      OTEL_EXPORTER_OTLP_ENDPOINT: endpoint,
+      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: `${endpoint}/v1/traces`,
+      OTEL_EXPORTER_OTLP_METRICS_ENDPOINT: `${endpoint}/v1/metrics`,
+    },
+  });
+  assert.equal(stdout.split(/\r?\n/u).filter((line) => line === "shutdown-complete").length, 1);
+  const errors = stderr.split(/\r?\n/u).filter(Boolean).map((line) => JSON.parse(line));
+  assert.equal(errors.length, 1);
+  const [{ timestamp, ...error }] = errors;
+  assert.ok(Number.isFinite(Date.parse(timestamp)));
+  assert.deepEqual(error, { level: "error", event: "observability.shutdown.failed" });
 });
 
 test("production observability fails closed when the OTLP endpoint is missing", async () => {

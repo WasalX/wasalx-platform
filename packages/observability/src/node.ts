@@ -101,7 +101,9 @@ export async function shutdownNodeObservability() {
 function registerShutdown() {
   if (shutdownRegistered) return;
   shutdownRegistered = true;
-  process.once("beforeExit", () => shutdownNodeObservability().catch(() => undefined));
+  process.once("beforeExit", () => shutdownNodeObservability().catch(() => {
+    recordStructuredLog("error", "observability.shutdown.failed");
+  }));
 }
 
 function normalizedEndpoint(value: string | undefined) {

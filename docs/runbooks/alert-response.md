@@ -127,6 +127,8 @@ For `WasalXRedisMemoryHigh`, compare used memory with configured maxmemory and c
 
 For `WasalXCollectorExportFailure`, check collector readiness, exporter error logs, queue pressure, and downstream availability. Compare Prometheus target health with the presence of current application metrics and sampled traces. Restore export connectivity and confirm failed-export rates fall and fresh telemetry reaches the backend.
 
+`observability.shutdown.failed` means the Node SDK could not confirm its last telemetry flush. Correlate the event with collector health around process exit.
+
 ## Alert delivery verification
 
 After an authorized monitoring update, check that Prometheus loaded the expected rule files. The Helm chart renders a `PrometheusRule` for the standard profile and a ConfigMap for assisted alpha. For assisted alpha, also check that Prometheus loads the ConfigMap's rules file. Set `observability.prometheusRule.runbookBaseUrl` to the published runbook page when overriding the default, and preserve the headings used by the rule links. [Helm values](../../infra/helm/wasalx/values.yaml)
