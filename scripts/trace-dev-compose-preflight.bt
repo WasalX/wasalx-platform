@@ -1,0 +1,97 @@
+struct ipv4_address {
+  uint16 family;
+  uint16 port;
+  uint32 address;
+};
+
+BEGIN
+{
+  @descendant[(uint64)$1] = 1;
+  printf("ready\n");
+}
+
+tracepoint:sched:sched_process_fork /@descendant[tid]/
+{
+  @descendant[(uint64)args->child_pid] = 1;
+}
+
+tracepoint:syscalls:sys_enter_execve /@descendant[tid]/
+{
+  $option = str(args->argv[1]);
+  if ($option == "--debug" && str(args->argv[2]) == "compose") {
+    @exec[tid] = comm == "docker" ? 3 : 1;
+  } else if ($option == "docker-cli-plugin-metadata" && comm == "docker") {
+    @exec[tid] = 2;
+  }
+}
+
+tracepoint:sched:sched_process_exec /@exec[tid]/
+{
+  $phase = @exec[tid];
+  @phase[pid] = $phase;
+  delete(@exec[tid]);
+  if ($phase == 1) {
+    printf("%llu Docker CLI exec\n", nsecs);
+  } else if ($phase == 2) {
+    printf("%llu Compose metadata exec\n", nsecs);
+  } else {
+    printf("%llu Compose config exec\n", nsecs);
+  }
+}
+
+tracepoint:syscalls:sys_enter_write,
+tracepoint:syscalls:sys_enter_writev
+/@phase[pid] && (args->fd == 1 || args->fd == 2) && !@wrote[pid, (uint64)args->fd]/
+{
+  @output[tid] = (uint64)args->fd;
+}
+
+tracepoint:syscalls:sys_exit_write,
+tracepoint:syscalls:sys_exit_writev /@output[tid]/
+{
+  $fd = @output[tid];
+  if (args->ret > 0 && !@wrote[pid, $fd]) {
+    @wrote[pid, $fd] = 1;
+    printf("%llu phase %d first output fd %d\n", nsecs, @phase[pid], $fd);
+  }
+  delete(@output[tid]);
+}
+
+tracepoint:syscalls:sys_enter_connect /@phase[pid]/
+{
+  $endpoint = (struct ipv4_address *)uptr(args->uservaddr);
+  if ($endpoint->family == 2 && $endpoint->port == 0 && $endpoint->address == 0x0100007f) {
+    printf("%llu phase %d connect disconnected Engine endpoint\n", nsecs, @phase[pid]);
+  } else if ($endpoint->family == 1) {
+    $path = str(uptr((char *)args->uservaddr + 2));
+    if ($path == "/var/run/docker.sock" || $path == "/run/docker.sock") {
+      printf("%llu phase %d connect Docker Unix socket\n", nsecs, @phase[pid]);
+    } else {
+      printf("%llu phase %d connect other Unix socket\n", nsecs, @phase[pid]);
+    }
+  } else {
+    printf("%llu phase %d connect other endpoint\n", nsecs, @phase[pid]);
+  }
+}
+
+tracepoint:sched:sched_process_exit /@descendant[tid]/
+{
+  if (pid == tid && @phase[pid]) {
+    printf("%llu phase %d exit\n", nsecs, @phase[pid]);
+    delete(@phase[pid]);
+    delete(@wrote[pid, (uint64)1]);
+    delete(@wrote[pid, (uint64)2]);
+  }
+  delete(@exec[tid]);
+  delete(@descendant[tid]);
+}
+
+END
+{
+  printf("finished\n");
+  clear(@descendant);
+  clear(@exec);
+  clear(@phase);
+  clear(@output);
+  clear(@wrote);
+}
