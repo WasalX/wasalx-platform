@@ -148,8 +148,9 @@ EOF
 }
 
 stage_registry() {
-  local source destination expected manifest platform
+  local source destination expected manifest platform mirrors
   local copy=(skopeo copy --preserve-digests --dest-tls-verify=false)
+  mirrors=$(python3 -B scripts/release/installer-mirror-images.py references)
   mkdir -p "$work/registry"
   # Establish that the exact public probe reference is reachable before the block.
   docker pull "$registry_image"
@@ -160,13 +161,15 @@ stage_registry() {
   } | LC_ALL=C sort -u | node --input-type=module -e '
     import { readFileSync } from "node:fs";
     import { localRegistryReference } from "./scripts/release/installer-hosted-images.mjs";
+    const mirrors = JSON.parse(process.argv[2]);
     const seen = new Set();
     for (const source of readFileSync(0, "utf8").split(/\s+/u).filter(value => value.includes("@"))) {
       const destination = localRegistryReference(process.argv[1], source);
-      if (!seen.has(destination)) console.log(source.replace(/:[^/:]+(?=@)/u, ""), destination);
+      const reference = source.replace(/:[^/:]+(?=@)/u, "");
+      if (!seen.has(destination)) console.log(mirrors[reference] ?? reference, destination);
       seen.add(destination);
     }
-  ' "$registry" > "$work/registry-images"
+  ' "$registry" "$mirrors" > "$work/registry-images"
   test -s "$work/registry-images"
   while read -r source destination; do
     expected=${destination##*@}

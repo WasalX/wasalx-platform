@@ -26,6 +26,9 @@ with patch.object(sys, "path", [str(RELEASE), *sys.path]):
     alias_spec = importlib.util.spec_from_file_location("aliases", RELEASE / "advance-main-image-aliases.py")
     aliases = importlib.util.module_from_spec(alias_spec)
     alias_spec.loader.exec_module(aliases)
+    mirror_spec = importlib.util.spec_from_file_location("mirrors", RELEASE / "installer-mirror-images.py")
+    mirrors = importlib.util.module_from_spec(mirror_spec)
+    mirror_spec.loader.exec_module(mirrors)
 
 
 def alias_environment(directory, commit, *, attempt=2):
@@ -646,6 +649,91 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
                 self.assertIn(f"Image push attempt {attempt}/3 failed.", logs.getvalue())
             self.assertEqual(logs.getvalue().count(diagnostic.decode()), push_failures)
             self.assertEqual(logs.getvalue().count("unknown blob\n"), push_failures)
+
+    def test_mirror_publication_uses_active_and_staged_compose_pins(self):
+        compose = mirrors.load_compose((ROOT / mirrors.COMPOSE).read_bytes())
+        row = compose[mirrors.INVENTORY]["minio"]
+        staged = "quay.io/minio/minio:next@sha256:" + "a" * 64
+        row["staged"] = staged
+        with (tempfile.TemporaryDirectory() as directory, patch.object(mirrors, "publish") as publish,
+              patch.object(sys, "argv", ["installer-mirror-images.py", "publish"])):
+            path = Path(directory) / mirrors.COMPOSE
+            path.write_text(json.dumps(compose), encoding="utf-8")
+            with patch.object(mirrors, "COMPOSE", path):
+                mirrors.main()
+
+        active_digest = compose["services"]["minio"]["image"].split("@")[1]
+        client_digest = compose["services"]["minio-bootstrap"]["image"].split("@")[1]
+        self.assertEqual(publish.call_args_list, [
+            mock.call(f"quay.io/minio/minio@{active_digest}", f"{row['mirror']}@{active_digest}", row["fallback"]),
+            mock.call(staged.replace(":next@", "@"), f"{row['mirror']}@sha256:" + "a" * 64, row["fallback"]),
+            mock.call(f"quay.io/minio/mc@{client_digest}", f"ghcr.io/wasalx/mc@{client_digest}", "ghcr.io/netvark/mc"),
+        ])
+
+    def test_mirror_activation_requires_base_staging_and_matching_public_bytes(self):
+        base = mirrors.load_compose((ROOT / mirrors.COMPOSE).read_bytes())
+        candidate = copy.deepcopy(base)
+        manifest = b'{"schemaVersion":2,"layers":[]}'
+        digest = images.sha256(manifest)
+        staged = f"quay.io/minio/minio:next@{digest}"
+        candidate["services"]["minio"]["image"] = staged
+        rows = list(mirrors.inventory(candidate))
+        inspect = ("docker", "buildx", "imagetools", "inspect", "--raw", f"ghcr.io/wasalx/minio@{digest}")
+
+        with patch.object(subprocess, "run") as run:
+            with self.assertRaisesRegex(ValueError, "stage this exact reference"):
+                mirrors.verify_active(rows, base)
+            run.assert_not_called()
+
+        base[mirrors.INVENTORY]["minio"]["staged"] = staged
+        with patch.object(mirrors, "verify_manifest") as verify:
+            mirrors.verify_active(rows, base)
+            self.assertEqual(verify.call_args_list, [mock.call(row[3]) for row in rows])
+
+        for response, error in [
+            (subprocess.CalledProcessError(1, inspect, stderr=b"manifest unknown"), subprocess.CalledProcessError),
+            (subprocess.CompletedProcess(inspect, 0, stdout=b"wrong bytes"), ValueError),
+        ]:
+            with (self.subTest(error=error), patch.object(subprocess, "run",
+                  side_effect=[response] if isinstance(response, Exception) else None,
+                  return_value=response) as run, patch("time.sleep") as sleep,
+                  redirect_stderr(io.StringIO()), self.assertRaises(error)):
+                mirrors.verify_active(rows, base)
+            run.assert_called_once_with(inspect, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
+            sleep.assert_not_called()
+
+    def test_mirror_read_back_retries_the_published_digest_after_primary_or_fallback_copy(self):
+        manifest = b'{"schemaVersion":2,"layers":[]}'
+        digest = images.sha256(manifest)
+        source = f"quay.io/minio/mc@{digest}"
+        fallback = "ghcr.io/netvark/mc"
+        mirror = f"ghcr.io/wasalx/mc@{digest}"
+        tag = f"ghcr.io/wasalx/mc:sha256-{digest[7:]}"
+        inspect = ("docker", "buildx", "imagetools", "inspect", "--raw", mirror)
+        missing = (f"ERROR: httpReadSeeker: failed open: content at "
+                   f"https://ghcr.io/v2/wasalx/mc/manifests/{digest} not found: not found\n").encode()
+        invisible = subprocess.CalledProcessError(1, inspect, stderr=missing)
+        successful = subprocess.CompletedProcess((), 0, stdout=manifest)
+        failed_copy = subprocess.CalledProcessError(1, "primary copy")
+
+        for use_fallback in (False, True):
+            before_read = [successful, failed_copy, successful, successful] if use_fallback else [successful, successful]
+            with (self.subTest(fallback=use_fallback),
+                  patch.object(subprocess, "run", side_effect=[*before_read, invisible, successful]) as run,
+                  patch("time.sleep") as sleep, redirect_stderr(io.StringIO()) as logs):
+                mirrors.publish(source, mirror, fallback)
+            commands = [call.args[0] for call in run.call_args_list]
+            copy_command = ["docker", "buildx", "imagetools", "create", "--prefer-index=false", "--tag", tag]
+            self.assertEqual(commands[1], [*copy_command, source])
+            if use_fallback:
+                self.assertEqual(commands[3], [*copy_command, f"{fallback}@{digest}"])
+            self.assertEqual(commands[-2:], [inspect, inspect])
+            sleep.assert_called_once_with(10)
+            self.assertIn("Published image manifest is not yet visible", logs.getvalue())
+
+        with (patch.object(subprocess, "run", return_value=subprocess.CompletedProcess((), 0, stdout=b"wrong")),
+              self.assertRaisesRegex(ValueError, "Digest mismatch")):
+            mirrors.publish(source, mirror, fallback)
 
     def test_publication_pushes_only_the_commit_tag_and_uses_the_signing_identity(self):
         commit, tree, digest = "a" * 40, "b" * 40, "sha256:" + "1" * 64
