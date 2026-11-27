@@ -70,8 +70,8 @@
   },
   "devDependencies": {
     "@axe-core/playwright": "4.12.1",
-    "@cloudflare/vite-plugin": "1.70.0",
-    "@cloudflare/workers-types": "^5.20261119.1",
+    "@cloudflare/vite-plugin": "1.70.1",
+    "@cloudflare/workers-types": "^5.20261124.1",
     "@eslint/js": "9.39.5",
     "@next/eslint-plugin-next": "16.4.6",
     "@playwright/test": "1.62.1",
@@ -93,8 +93,8 @@
     "stylelint": "18.1.0",
     "stylelint-config-standard": "41.1.0",
     "typescript": "5.9.3",
-    "typescript-eslint": "8.73.0",
-    "wrangler": "4.165.0",
+    "typescript-eslint": "8.74.0",
+    "wrangler": "4.168.0",
     "yaml": "2.9.1"
   },
   "prettier": {
