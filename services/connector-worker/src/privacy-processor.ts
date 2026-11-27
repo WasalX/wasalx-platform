@@ -17,6 +17,7 @@ export type PrivacyProcessorResult = {
   failedTerminal: number;
   legalHoldBlocked: number;
   leaseLost: number;
+  persistenceFailed: number;
 };
 
 export class PrivacyProcessor {
@@ -42,6 +43,7 @@ export class PrivacyProcessor {
       failedTerminal: 0,
       legalHoldBlocked: 0,
       leaseLost: 0,
+      persistenceFailed: 0,
     };
     for (const job of jobs) {
       const startedAt = Date.now();
@@ -59,7 +61,14 @@ export class PrivacyProcessor {
         }
       } catch (error) {
         const failure = classifyPrivacyFailure(error, job);
-        const persisted = await this.repository.fail(job, leaseId, failure).catch(() => false);
+        let persisted: boolean;
+        try {
+          persisted = await this.repository.fail(job, leaseId, failure);
+        } catch {
+          result.persistenceFailed += 1;
+          recordPrivacyOutcome(job, "persistence_failed", startedAt);
+          continue;
+        }
         if (!persisted) {
           result.leaseLost += 1;
           recordPrivacyOutcome(job, "lease_lost", startedAt);
