@@ -47,7 +47,12 @@ def main(command):
         subprocess.call(
             ["git", "show", "--no-patch", "--format=Checkout %H, tree %T", "HEAD"]
         )
-        if ready and events.endswith(b"finished\n") and not warnings:
+        if (
+            ready
+            and observer.returncode != 124
+            and events.endswith(b"finished\n")
+            and not warnings
+        ):
             print(
                 "DEV Compose phases (monotonic ns, 1=CLI 2=metadata 3=config)",
                 flush=True,

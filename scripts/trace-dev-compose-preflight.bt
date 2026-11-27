@@ -1,7 +1,7 @@
 struct ipv4_address {
-  uint16 family;
-  uint16 port;
-  uint32 address;
+  unsigned short family;
+  unsigned short port;
+  unsigned int address;
 };
 
 BEGIN
