@@ -564,6 +564,9 @@ try {
         await expect(page.locator("#wx-group-message")).toBeEnabled();
         await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
         await expect(groupsMode).toBeFocused();
+
+        await choose("Operations B");
+        await expect(group().getByRole("heading", { name: "Operations B" })).toBeFocused();
       }
       await page.evaluate(() => document.fonts.ready);
       for (const [name, width, height] of [["desktop", 1440, 1000], ["mobile", 390, 844], ["zoom-equivalent", 720, 500]]) {
