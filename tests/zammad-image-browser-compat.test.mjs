@@ -2,6 +2,7 @@ import {requiredOperatorInput} from "../scripts/release/operator-input.mjs";
 import assert from "node:assert/strict";
 import { execFile, execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
+import { EventEmitter, once } from "node:events";
 import { createServer } from "node:http";
 import { isIP } from "node:net";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -1369,6 +1370,29 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
 
     const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, timezoneId: "Asia/Riyadh" });
     const page = await context.newPage();
+    const desktopFormResets = new EventEmitter();
+    page.on("websocket", (socket) => {
+      if (new URL(socket.url()).pathname !== "/cable") return;
+      const resetRequests = new Map();
+      socket.on("framesent", ({ payload }) => {
+        const frame = JSON.parse(String(payload));
+        if (frame.command === "unsubscribe") resetRequests.delete(frame.identifier);
+        if (frame.command !== "message") return;
+        const { operationName, variables } = JSON.parse(frame.data);
+        if (operationName === "formUpdater" && variables?.meta?.reset === true) {
+          resetRequests.set(frame.identifier, variables.meta.formId);
+        }
+      });
+      socket.on("framereceived", ({ payload }) => {
+        const { identifier, message } = JSON.parse(String(payload));
+        const formId = resetRequests.get(identifier);
+        if (!formId || !message?.result) return;
+        resetRequests.delete(identifier);
+        if (message.result.data?.formUpdater?.flags?.newArticlePresent === false) {
+          desktopFormResets.emit(`reset:${formId}`);
+        }
+      });
+    });
     const entryResponse = await fetch(`${zammadOrigin}/?from=wasalx`, { redirect: "manual" });
     assert.equal(entryResponse.status, 302);
     const entryLocation = new URL(entryResponse.headers.get("location") ?? "", entryResponse.url);
@@ -1563,14 +1587,25 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
     const isTicketUpdate = (request, url = request.url()) => new URL(url).pathname.endsWith('/graphql')
       && request.method() === 'POST' && ticketUpdateOperation.test(request.postDataJSON()?.operationName ?? '');
     const submitReplyTicket = async (articleExpected) => {
-      const [response] = await Promise.all([
-        page.waitForResponse(response => isTicketUpdate(response.request(), response.url()), { timeout: 60_000 }),
+      let reset;
+      if (articleExpected) {
+        const formId = await page.locator('#ticketArticleReplyForm [name="body"][data-form-id]').getAttribute("data-form-id");
+        assert.ok(formId, "The native desktop reply must belong to a FormKit form");
+        // A pending draft refresh can outlive ticketUpdate. Wait for Zammad's reset query for this form.
+        reset = once(desktopFormResets, `reset:${formId}`, { signal: AbortSignal.timeout(30_000) }).catch((cause) => {
+          throw new Error("The native desktop reply form did not acknowledge its reset", { cause });
+        });
+      }
+      await Promise.all([
+        page.waitForResponse(response => isTicketUpdate(response.request(), response.url()), { timeout: 60_000 }).then(async (response) => {
+          const data = await response.json();
+          assert.equal(response.status(), 200); assert.ok(!data.errors?.length);
+          assert.ok(!data.data?.ticketUpdate?.errors?.length); assert.ok(data.data?.ticketUpdate?.ticket);
+          assert.equal(response.request().postDataJSON()?.variables?.input?.article != null, articleExpected);
+        }),
         page.getByRole('button', { name: 'Update', exact: true }).click(),
+        reset,
       ]);
-      const data = await response.json();
-      assert.equal(response.status(), 200); assert.ok(!data.errors?.length);
-      assert.ok(!data.data?.ticketUpdate?.errors?.length); assert.ok(data.data?.ticketUpdate?.ticket);
-      assert.equal(response.request().postDataJSON()?.variables?.input?.article != null, articleExpected);
     };
     const assertReplyReset = async (marker = replyMarker) => {
       await page.waitForFunction(marker => ![...document.querySelectorAll('[contenteditable="true"]')]
