@@ -1,4 +1,5 @@
 import { ConflictException, Injectable, OnApplicationBootstrap, OnModuleDestroy, ServiceUnavailableException } from "@nestjs/common";
+import { recordStructuredLog } from "@wasalx/observability";
 import { createHmac } from "node:crypto";
 import type { PoolClient } from "pg";
 import { DatabaseService } from "./database.service.js";
@@ -28,11 +29,27 @@ export class NativeMembershipService implements OnApplicationBootstrap,OnModuleD
   observe(tenantId:string,userIds?:string[],captured?:ReadonlyMap<string,CapturedMembershipIdentity>){return this.observer.observe(tenantId,userIds,captured);}
   onApplicationBootstrap(){this.timer=setInterval(()=>{void this.drain()},15_000);this.timer.unref();}
   onModuleDestroy(){if(this.timer)clearInterval(this.timer);}
-  wake(tenantId:string){void this.syncTenant(tenantId).catch(()=>undefined);}
-  async drain(){
-    if(this.running)return;this.running=true;
-    try{for(const tenantId of await this.database.pendingNativeMembershipTenants())await this.syncTenant(tenantId);}catch{/* Pending intent remains durable; no raw errors or identities in logs. */}
-    finally{this.running=false;}
+  wake(tenantId: string) {
+    void this.syncTenant(tenantId).catch(() => {
+      recordStructuredLog("error", "native_projection.failed", { projection: "membership", phase: "wake" });
+    });
+  }
+  async drain() {
+    if (this.running) return;
+    this.running = true;
+    try {
+      const tenants = await this.database.pendingNativeMembershipTenants().catch(() => {
+        recordStructuredLog("error", "native_projection.failed", { projection: "membership", phase: "discovery" });
+        return [];
+      });
+      for (const tenantId of tenants) {
+        await this.syncTenant(tenantId).catch(() => {
+          recordStructuredLog("error", "native_projection.failed", { projection: "membership", phase: "tenant" });
+        });
+      }
+    } finally {
+      this.running = false;
+    }
   }
   async syncTenant(tenantId:string){
     for(let index=0;index<20;index++){

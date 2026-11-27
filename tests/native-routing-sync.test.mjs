@@ -28,9 +28,9 @@ test("public native routing status expires old readbacks without mutation or per
   }
   assert.deepEqual(row,before);
 });
-function fixture({checkedAt=new Date().toISOString()}={}){
+function fixture({checkedAt=new Date().toISOString(),tenantId=tenant}={}){
   // APPLY lifecycle cases start after a valid NOT_APPLIED readback.
-  const row={tenant_id:tenant,zammad_instance_id:instance,desired_revision:1,applied_revision:0,desired_manifest:null,desired_sha256:null,observed_sha256:null,
+  const row={tenant_id:tenantId,zammad_instance_id:instance,desired_revision:1,applied_revision:0,desired_manifest:null,desired_sha256:null,observed_sha256:null,
     department_defaults:[],sync_state:"PENDING",next_action:"APPLY",attempted_request:null,error_code:null,safe_retry:true,claim_id:null,claim_expires_at:null,last_checked_at:checkedAt};
   let transactions=0;const queries=[],requests=[];let tenantActive=true,linkedInstance=instance;
   const queue=()=>{row.desired_revision++;row.desired_manifest=null;row.desired_sha256=null;
@@ -57,7 +57,7 @@ function fixture({checkedAt=new Date().toISOString()}={}){
     }
     return{rows:[],rowCount:0};
   }};
-  const database={withTenant:async(id,operation)=>{assert.equal(id,tenant);transactions++;try{return await operation(client);}finally{transactions--;}},pendingNativeRoutingTenants:async()=>[tenant]};
+  const database={withTenant:async(id,operation)=>{assert.equal(id,tenantId);transactions++;try{return await operation(client);}finally{transactions--;}},pendingNativeRoutingTenants:async()=>[tenantId]};
   let credentialsHook=()=>{};
   const service=new NativeRoutingSyncService(database,{resolveCredentials:async()=>{assert.equal(transactions,0,"credential HTTP must be outside the source transaction");await credentialsHook();return{apiToken:"synthetic-token",jwtSecret:"synthetic-secret"};}});
   const install=handler=>async(url,options)=>{
@@ -67,10 +67,59 @@ function fixture({checkedAt=new Date().toISOString()}={}){
     if(request.action==="APPLY"){assert.equal(row.sync_state,"APPLYING");assert.deepEqual(row.attempted_request,request);assert.equal(row.safe_retry,false);}
     return Response.json(await handler(request));
   };
-  const success=request=>({schema_version:1,tenant_id:tenant,instance_id:instance,revision:request.revision,desired_sha256:request.desired_sha256,applied_revision:request.revision,observed_sha256:request.desired_sha256,state:"SYNCED",items:[]});
-  return{row,service,client,requests,queries,queue,install,success,setCredentialsHook:hook=>{credentialsHook=hook;},setTenantActive:value=>{tenantActive=value;},setInstance:value=>{linkedInstance=value;}};
+  const success=request=>({schema_version:1,tenant_id:tenantId,instance_id:instance,revision:request.revision,desired_sha256:request.desired_sha256,applied_revision:request.revision,observed_sha256:request.desired_sha256,state:"SYNCED",items:[]});
+  return{row,service,database,client,requests,queries,queue,install,success,setCredentialsHook:hook=>{credentialsHook=hook;},setTenantActive:value=>{tenantActive=value;},setInstance:value=>{linkedInstance=value;}};
 }
 async function usingFetch(implementation,operation){const original=globalThis.fetch;globalThis.fetch=implementation;try{return await operation();}finally{globalThis.fetch=original;}}
+
+test("routing discovery, scheduled tenant and immediate wake failures are redacted and recoverable", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: Date.parse("2026-10-16T10:00:00Z") });
+  const secondTenant = "10000000-0000-4000-8000-000000000002";
+  const a = fixture();
+  const b = fixture({ tenantId: secondTenant });
+  const failure = new Error(`Synthetic failure for ${tenant}`);
+  const visited = [];
+  const logs = [];
+  let discover = false;
+  let rejectClaim = true;
+  t.mock.method(a.database, "pendingNativeRoutingTenants", async () => {
+    if (!discover) throw failure;
+    return [tenant, secondTenant];
+  });
+  const withFirst = a.database.withTenant;
+  t.mock.method(a.database, "withTenant", (id, operation) => {
+    visited.push(id);
+    if (id === secondTenant) return b.database.withTenant(id, operation);
+    if (rejectClaim) return Promise.reject(failure);
+    return withFirst(id, operation);
+  });
+  const fetchFirst = a.install(a.success);
+  const fetchSecond = b.install(b.success);
+  t.mock.method(globalThis, "fetch", (url, options) =>
+    (JSON.parse(options.body).tenant_id === tenant ? fetchFirst : fetchSecond)(url, options));
+  t.mock.method(process.stderr, "write", (line) => { logs.push(JSON.parse(String(line))); return true; });
+
+  await a.service.drain();
+  assert.deepEqual(visited, []);
+  discover = true;
+  await a.service.drain();
+  assert.deepEqual([...new Set(visited)], [tenant, secondTenant]);
+  assert.equal(a.row.sync_state, "PENDING");
+  assert.equal(a.row.claim_id, null);
+  assert.equal(b.row.sync_state, "SYNCED");
+  assert.equal(a.requests.length, 0);
+  assert.equal(b.requests.length, 1);
+  assert.equal(a.service.wake(tenant), undefined);
+  await new Promise(setImmediate);
+  rejectClaim = false;
+  await a.service.drain();
+  assert.equal(a.row.sync_state, "SYNCED");
+  assert.equal(a.requests.length, 1);
+  assert.equal(b.requests.length, 1);
+  assert.deepEqual(logs, ["discovery", "tenant", "wake"].map((phase) => ({
+    timestamp: new Date().toISOString(), level: "error", event: "native_projection.failed", projection: "routing", phase,
+  })));
+});
 
 test("department policy lists cross the PostgreSQL boundary as JSON arrays",async()=>{
   for(const departmentDefaults of [[],[{id:policy,zammadGroupId:"5",zammadOwnerId:"7",enabled:true}]]){
