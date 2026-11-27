@@ -7,6 +7,11 @@ const viewports = ["desktop", "mobile-390"];
 const locales = ["en", "ar"];
 const captures = {
   "workspace-access-ready": themes,
+  "tenant-shell": themes,
+  "tenant-inbox": themes,
+  "tenant-cases": themes,
+  "tenant-settings": themes,
+  "tenant-groups": themes,
   "invitation-incomplete": ["light", "dark-preview"],
   "workflow-automation-list": themes,
   "workflow-automation-edit": themes,
