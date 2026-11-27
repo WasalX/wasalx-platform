@@ -1,11 +1,11 @@
 name: CI pnpm caches
-description: Install workspace dependencies and cache service builds and lint results for hosted CI.
+description: Install workspace dependencies and cache incremental service builds for hosted CI.
 inputs:
   task:
-    description: install, build, save-build, or lint
+    description: install, build, or save-build
     default: install
   seed-dependencies:
-    description: Allow the main cache workflow to seed dependency caches
+    description: Allow the main lint job to seed dependency caches
     default: 'false'
   dependency-key:
     description: Dependency cache key from the install task
@@ -102,25 +102,6 @@ runs:
       run: |
         printf 'pnpm store cache-hit: %s\n\nnode_modules cache-hit: %s\n' \
           "$STORE_HIT" "$MODULES_HIT" >> "$GITHUB_STEP_SUMMARY"
-
-    - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-      id: eslint-cache
-      if: inputs.task == 'lint'
-      with:
-        path: .git/hosted-eslint-cache
-        key: eslint-${{ runner.os }}-${{ hashFiles('eslint.config.*', 'pnpm-lock.yaml') }}-${{ github.sha }}
-        restore-keys: eslint-${{ runner.os }}-${{ hashFiles('eslint.config.*', 'pnpm-lock.yaml') }}-
-    - name: Lint with the ESLint cache
-      if: inputs.task == 'lint'
-      shell: bash
-      run: pnpm run lint --cache --cache-strategy content --cache-location .git/hosted-eslint-cache
-    - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-      if: >-
-        inputs.task == 'lint' && github.event_name == 'push' && github.ref == 'refs/heads/main' &&
-        github.repository == 'WasalX/wasalx-platform' && steps.eslint-cache.outputs.cache-hit != 'true'
-      with:
-        path: .git/hosted-eslint-cache
-        key: ${{ steps.eslint-cache.outputs.cache-primary-key }}
 
     - name: Resolve service build cache key
       id: build-key

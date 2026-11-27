@@ -101,7 +101,9 @@ export function registerOperationsScreenshots(locale: "en" | "ar") {
             await page.evaluate(() =>
               window.scrollTo({ top: 0, behavior: "instant" }),
             );
-            expect(await page.evaluate(() => window.scrollY)).toBe(0);
+            await expect
+              .poll(() => page.evaluate(() => window.scrollY))
+              .toBe(0);
           }
           await page.screenshot({
             path: journeyCapturePath(

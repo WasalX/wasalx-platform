@@ -1,22 +1,21 @@
 # Published product images
 
-The CI workflow builds affected images as PR advisory checks and inspects
-every catalog entry in the merge queue. Queue builds use the public source
-archive and pinned inputs. They upload the inspected image archives and receipts
-for seven days. Queue and PR jobs have no package writes or OIDC.
+The CI workflow requires affected PR image builds and inspects every catalog
+entry in the merge queue. Queue and PR builds use the public source archive
+and pinned inputs. They can import public GHCR cache layers and have read-only
+workflow permissions.
 
 On a push to `main`, CI calls
-[branch-image.yml](../../.github/workflows/branch-image.yml) to resolve the
-successful queue gate for that commit. It verifies the archive digest, image
-config and source receipt from that run attempt before publication. It then
-publishes, signs and verifies the image digests. DEV admission uses the
-successful publish run and complete `images-manifest` for the exact commit.
-Missing queue evidence or an expired artifact blocks publication.
+[branch-image.yml](../../.github/workflows/branch-image.yml). Publication
+requires a successful merge-queue `ci-gate` for the exact commit and tree.
+Each publish job builds and inspects its own image from that commit, exports
+GHCR cache layers for heavy images, then publishes, signs, and verifies the
+image digest. DEV admission uses the successful publish run and complete
+`images-manifest` for the exact commit.
 
-PR builds import public GHCR cache layers exported by the separate [Warm CI
-caches workflow](../../.github/workflows/warm-ci-caches.yml) on main pushes.
-Queue images for publication build without cache imports. Cosign produces the signature and
-SLSA attestation, which includes the queue run, attempt and image archive digest.
+The GHCR cache package must be public for anonymous cache hits. The first
+publish creates the package and seeds the cache. Check anonymous access before
+claiming a warm-cache timing. Cosign produces the signature and SLSA attestation.
 The [registry retry policy](../../scripts/release/image_registry_retry.py)
 allows at most three attempts for recognized transient HTTP and network
 failures or a registry command deadline. The immutable image push also retries
@@ -64,20 +63,6 @@ Digest receipts are build evidence, not application acceptance, native queue
 qualification, release approval or deployment proof. Admission must separately
 bind the reviewed workflow revision, required CI/queue evidence and approved
 source tuple. Partial matrix publication cannot authorize an incomplete release.
-
-## Recover a missing queue archive
-
-Check the add-on source availability in the queue and push logs and the queue
-run's attempt number. A source that becomes available after the queue run can
-make the push expect an archive the queue never built. Re-running only failed
-queue jobs can also leave images in the previous attempt.
-
-Once the build inputs are stable, use **Re-run all jobs** on the original
-merge-group CI run for the exact commit. Confirm that `ci-gate` passed and that
-the new attempt uploaded every expected image archive. Then use **Re-run all
-jobs** on the corresponding main CI run so it resolves the new queue attempt.
-If the original exact-commit queue run cannot produce the required evidence,
-qualify a new commit through the protected merge queue.
 
 ## Public visibility and anonymous pulls
 
@@ -235,8 +220,8 @@ The full installer nightly stages the signed product images and pinned dependenc
 the registry read-only, blocks public registry access for Docker, and checks the
 loaded registry digests and container identity through the existing admission
 and smoke stages. It copies the Linux AMD64 manifests plus their original
-multi-platform indexes. In PR rehearsals, smoke checks the running Zammad
-package against the catalog at the signed image publication's source commit.
+multi-platform indexes. The smoke stage checks the running Zammad package
+against the catalog at the signed image publication's source commit.
 Failed smoke checks report a check name or verifier line and a redacted reason.
 
 ## Public build inputs and inspection
@@ -286,7 +271,7 @@ cannot turn LF line endings in the committed source into CRLF in the build conte
 Public dependency registries and the reviewed
 Dockerfiles remain build inputs. The builder uses the public archive, pinned
 inputs and no secret or SSH mounts. Only the main publish lane authenticates
-to GHCR to publish images.
+to GHCR to export cache layers and publish images.
 Default BuildKit provenance is disabled; the inspected public predicate is
 attested explicitly instead.
 

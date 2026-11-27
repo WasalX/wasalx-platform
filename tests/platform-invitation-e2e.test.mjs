@@ -1,9 +1,11 @@
 import AxeBuilder from "@axe-core/playwright";
+import { expect } from "@playwright/test";
 import assert from "node:assert/strict";
 import test from "node:test";
+import { arabicPlatformMessages } from "../lib/i18n/messages/ar/platform.ts";
 import { expiredInvitationToken, invitationToken, sha256, storedSession, tenantId, withSignedPlatformFixture, waitFor } from "./support/signed-platform-fixture.mjs";
 
-test("platform and invitation journeys cross signed OIDC, portal, API, Redis, and PostgreSQL", { timeout: 300_000 }, async () => {
+test("platform and invitation journeys cross signed OIDC, portal, API, Redis, and PostgreSQL", { timeout: 300_000 }, async (t) => {
   await withSignedPlatformFixture(async ({ resources, portalOrigin, signIn }) => {
     const context = await resources.browser.newContext();
     const page = await context.newPage();
@@ -33,6 +35,33 @@ test("platform and invitation journeys cross signed OIDC, portal, API, Redis, an
     const mobileGeometry = await page.evaluate(() => ({ viewport: window.innerWidth, root: document.documentElement.scrollWidth }));
     assert.ok(mobileGeometry.root <= mobileGeometry.viewport, `platform root overflows mobile viewport: ${JSON.stringify(mobileGeometry)}`);
     await page.setViewportSize({ width: 1280, height: 720 });
+    const tenantOperations = await (await context.request.get(`${portalOrigin}/api/platform-console/operations/tenants?limit=50`)).json();
+
+    await t.test("Arabic platform workspace operations localize failed provisioning", async () => {
+      const arabic = await resources.browser.newContext({ storageState: await context.storageState(), locale: "ar-SA" });
+      try {
+        await arabic.addCookies([{ name: "wasalx_locale", value: "ar", url: portalOrigin }]);
+        const arabicPage = await arabic.newPage();
+        const englishError = "The provisioning worker could not finish its last step.";
+        await arabicPage.route("**/api/platform-console/operations/tenants?*", (route) => route.fulfill({
+          json: {
+            ...tenantOperations,
+            items: tenantOperations.items.map(operation => ({
+              ...operation, status: "FAILED", error_code: "PROVISIONING_FAILED", safe_error: englishError,
+            })),
+          },
+        }));
+        await arabicPage.goto(`${portalOrigin}/platform#tenants`);
+        await expect(arabicPage.locator("html")).toHaveAttribute("lang", "ar");
+        await arabicPage.getByRole("textbox", { name: arabicPlatformMessages["platform.tenants.searchLabel"], exact: true })
+          .fill("Invitation Proof Workspace");
+        const row = arabicPage.getByRole("row").filter({ hasText: "Invitation Proof Workspace" });
+        await expect(row.getByText(arabicPlatformMessages["platform.tenants.operationFailed"], { exact: true })).toBeVisible();
+        await expect(arabicPage.getByText(englishError, { exact: false })).toHaveCount(0);
+      } finally {
+        await arabic.close();
+      }
+    });
 
     const forbiddenSuspend = await page.evaluate(async (id) => {
       const response = await fetch(`/api/platform-console/tenants/${id}/suspend`, {

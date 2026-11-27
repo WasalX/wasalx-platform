@@ -26,3 +26,4 @@ tests/fixtures/dev-live-compose/* -text
 /tests/fixtures/native-group/provenance.json linguist-generated
 /tests/fixtures/native-group/video.mp4 linguist-generated
 /tests/fixtures/waha/synthetic-qr.png linguist-generated
+/tests/visual/__screenshots__/linux/*.png linguist-generated

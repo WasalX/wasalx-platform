@@ -152,7 +152,7 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
         self.assertIn("\nARG PUBLIC_CONTACT_EMAIL=\nRUN pnpm build\n", build_stage)
         binding = "          PUBLIC_CONTACT_EMAIL: ${{ matrix.image == 'portal' && vars.PUBLIC_CONTACT_EMAIL || '' }}"
         for name, step_name in [("ci.yml", "Build and inspect without publication"),
-                                ("branch-image.yml", "Publish, sign, attest and inspect the published digest")]:
+                                ("branch-image.yml", "Build without cache imports, export layers and inspect")]:
             with self.subTest(workflow=name):
                 workflow = (ROOT / ".github/workflows" / name).read_text()
                 step = workflow.split(f"      - name: {step_name}\n", 1)[1].split("\n      - ", 1)[0]
@@ -169,66 +169,35 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
                     archive.add(ROOT / row["dockerfile"], arcname=row["dockerfile"])
             return subprocess.CompletedProcess(args, 0)
 
-        for image, contact_email, mode in [
-            ("portal", " synthetic-contact ", "off"),
-            ("portal", "", "queue"),
-            ("secret-sidecar", " synthetic-contact ", "off"),
-            ("portal", " synthetic-contact ", "write"),
-        ]:
+        for image, contact_email in [("portal", " synthetic-contact "), ("portal", ""),
+                                     ("secret-sidecar", " synthetic-contact ")]:
             row = {"image": image, "dockerfile": "Dockerfile." + image}
-            event = "merge_group" if mode == "queue" else "push"
-            env = {"GITHUB_EVENT_NAME": event, "GITHUB_REF": "refs/heads/main", "GITHUB_REPOSITORY": images.REPOSITORY,
-                   "GITHUB_RUN_ID": "123", "GITHUB_RUN_ATTEMPT": "2", "SOURCE_DATE_EPOCH": "1",
-                   "PUBLIC_CONTACT_EMAIL": contact_email}
-            with self.subTest(image=image, mode=mode), tempfile.TemporaryDirectory() as directory, \
+            with self.subTest(image=image, empty=not contact_email), tempfile.TemporaryDirectory() as directory, \
                     patch.object(images, "catalog", return_value=[row]), \
                     patch.object(images, "coordinates", return_value=(commit, tree)), \
                     patch.object(images, "run", return_value=epoch) as git, \
                     patch.object(images.subprocess, "run", side_effect=invoke) as execute, \
-                    patch.object(images, "inspect_image", return_value={}) as inspect, \
-                    patch.dict(images.os.environ, env):
+                    patch.object(images, "inspect_image", return_value={}), \
+                    patch.dict(images.os.environ, {"SOURCE_DATE_EPOCH": "1", "PUBLIC_CONTACT_EMAIL": contact_email}):
                 path = Path(directory) / "receipt.json"
-                archive_path = Path(directory) / "image.tar" if mode == "queue" else None
-                if archive_path:
-                    archive_path.write_bytes(b"inspected queue image")
-                images.build(image, path, "write" if mode == "write" else "off", archive=archive_path)
+                images.build(image, path)
+                raw_receipt = path.read_text()
                 git.assert_called_once_with("git", "log", "-1", "--format=%ct", commit, cwd=ROOT)
                 args = execute.call_args.args[0]
                 build_args = [value for flag, value in zip(args, args[1:]) if flag == "--build-arg"]
                 self.assertEqual(args[:3], ("docker", "buildx", "build"))
-                exporter = "type=cacheonly" if mode == "write" else "type=docker,rewrite-timestamp=true"
-                self.assertEqual(args[args.index("--output") + 1], exporter)
+                self.assertEqual(args[args.index("--output") + 1], "type=docker,rewrite-timestamp=true")
                 self.assertIn("SOURCE_DATE_EPOCH=" + epoch, build_args)
                 self.assertEqual([arg for arg in build_args if arg.startswith("PUBLIC_CONTACT_EMAIL")],
                                  ["PUBLIC_CONTACT_EMAIL"] if image == "portal" else [])
                 self.assertIn("--provenance=false", args)
                 self.assertIn("--sbom=false", args)
-                if mode == "write":
-                    self.assertIn("--cache-to", args)
-                    inspect.assert_not_called()
-                    self.assertFalse(path.exists())
-                    continue
-                raw_receipt = path.read_text()
                 receipt = json.loads(raw_receipt)
-                if archive_path:
-                    self.assertEqual(inspect.call_args.kwargs, {"export_path": archive_path})
-                    self.assertEqual(receipt["queue"], {
-                        "runId": "123", "attempt": "2", "archiveDigest": images.sha256(b"inspected queue image"),
-                    })
                 if image == "portal":
                     self.assertEqual(receipt["contactEmailSha256"], images.sha256(contact_email.encode()))
                 else:
                     self.assertNotIn("contactEmailSha256", receipt)
                 self.assertNotIn("synthetic-contact", raw_receipt)
-
-    def test_archive_requires_a_cache_free_merge_group_build(self):
-        for event, cache in [("push", "off"), ("pull_request", "off"), ("merge_group", "read")]:
-            with (self.subTest(event=event, cache=cache),
-                  patch.dict(os.environ, {"GITHUB_EVENT_NAME": event}),
-                  patch.object(images, "catalog") as catalog):
-                with self.assertRaisesRegex(ValueError, "Only cache-free merge queue builds"):
-                    images.build("portal", "receipt.json", cache, archive="image.tar")
-                catalog.assert_not_called()
 
     def test_loaded_config_checks_exported_bytes_and_manifest_binding(self):
         raw = b'{"os":"linux","architecture":"amd64","config":{"Labels":{}}}'
@@ -323,6 +292,7 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
                          ["portal", "control-api", "connector-worker", "foundation-postgres"])
         self.assertEqual(images.matrix(["docs/guide/intro.md", "unmapped/new-file"], pull_request=True),
                          {"include": []})
+        self.assertIn("A PR path that matches no image input selects no image.", (ROOT / "DELIVERY.md").read_text(encoding="utf-8"))
 
     def test_pull_request_matrix_selects_addon_staging_inputs(self):
         addon_images = {"zammad", "workspace-configurator"}
@@ -523,37 +493,36 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
             with self.subTest(key=key), self.assertRaises(ValueError):
                 images.assemble(bad)
 
-    def test_collector_module_transport_is_scoped_to_the_build(self):
-        dockerfile = (ROOT / "Dockerfile.production-otel").read_text(encoding="utf-8")
-        build, runtime = dockerfile.rsplit("\nFROM ", 1)
-        self.assertIn("ENV GODEBUG=http2client=0", build.splitlines())
-        self.assertNotIn("GOSUMDB=off", build)
-        self.assertNotIn("GODEBUG", runtime)
+    def test_go_module_transport_is_scoped_to_the_build(self):
+        for image in ("alertmanager", "cloudflared", "otel", "prometheus"):
+            with self.subTest(image=image):
+                dockerfile = (ROOT / f"Dockerfile.production-{image}").read_text(encoding="utf-8")
+                build, runtime = dockerfile.rsplit("\nFROM ", 1)
+                if image == "prometheus":
+                    self.assertNotIn("GODEBUG", build)
+                else:
+                    self.assertIn("ENV GODEBUG=http2client=0", build.splitlines())
+                self.assertNotIn("GOSUMDB=off", build)
+                self.assertNotIn("GODEBUG", runtime)
 
     def test_registry_cache_roles_are_disjoint(self):
-        self.assertEqual(len(images.CACHED_IMAGES), 11)
+        self.assertEqual(len(images.CACHED_IMAGES), 12)
         self.assertLessEqual(images.CACHED_IMAGES, {row["image"] for row in images.catalog()})
         main = {"GITHUB_EVENT_NAME": "push", "GITHUB_REF": "refs/heads/main", "GITHUB_REPOSITORY": images.REPOSITORY}
-        ref = "type=registry,ref=ghcr.io/wasalx/buildcache:production-prometheus"
+        ref = "type=registry,ref=ghcr.io/wasalx/buildcache:"
         with mock.patch.dict(os.environ, main, clear=True):
-            self.assertEqual(images.cache_options("production-prometheus", "write"), ["--cache-to", ref + ",mode=max"])
+            for image in ("production-prometheus", "production-alertmanager"):
+                self.assertEqual(images.cache_options(image, "write"), ["--cache-to", ref + image + ",mode=max,ignore-error=true"])
             self.assertEqual(images.cache_options("portal", "off"), [])
-            with self.assertRaisesRegex(ValueError, "Image has no cache export configured"):
-                images.cache_options("postgres", "write")
+            self.assertEqual(images.cache_options("postgres", "write"), [])
             with self.assertRaises(ValueError):
                 images.cache_options("portal", "read")
         for event in ["pull_request", "merge_group"]:
             with mock.patch.dict(os.environ, {"GITHUB_EVENT_NAME": event}, clear=True):
-                self.assertEqual(images.cache_options("production-prometheus", "read"), ["--cache-from", ref])
+                for image in ("production-prometheus", "production-alertmanager"):
+                    self.assertEqual(images.cache_options(image, "read"), ["--cache-from", ref + image])
                 with self.assertRaises(ValueError):
                     images.cache_options("portal", "write")
-
-    def test_cache_plan_selects_only_affected_cacheable_images_with_available_source(self):
-        with patch.object(images, "public_addon_source", return_value=None):
-            planned = {row["image"] for row in images.matrix(cacheable_only=True)["include"]}
-            self.assertEqual(planned, images.CACHED_IMAGES - images.addon_images(images.catalog()))
-            affected = images.matrix(["app/page.tsx"], cacheable_only=True)["include"]
-            self.assertEqual([row["image"] for row in affected], ["portal"])
 
     def test_docker_pull_retries_only_the_pull(self):
         command = ("docker", "pull", "--platform", "linux/amd64", "base")
@@ -697,75 +666,6 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
             with self.subTest(event=event, ref=ref), patch.dict(os.environ, {"GITHUB_EVENT_NAME": event, "GITHUB_REF": ref}):
                 with self.assertRaisesRegex(ValueError, "requires a main push"):
                     images.publish("unused")
-
-    def test_publication_requires_the_inspected_archive_from_the_queue_attempt(self):
-        commit, tree = "a" * 40, "b" * 40
-        env = {"GITHUB_EVENT_NAME": "push", "GITHUB_REF": "refs/heads/main",
-               "QUEUE_RUN_ID": "123", "QUEUE_RUN_ATTEMPT": "2"}
-        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, env, clear=True), \
-                patch.object(images, "coordinates", return_value=(commit, tree)), \
-                patch.object(images, "registry_output") as registry, \
-                patch.object(images, "loaded_config") as verify, \
-                patch.object(images.subprocess, "run") as docker:
-            archive = Path(directory) / "image.tar"
-            archive.write_bytes(b"inspected queue image")
-            path = Path(directory) / "receipt.json"
-            queue = {"runId": "123", "attempt": "2", "archiveDigest": images.archive_digest(archive)}
-            receipt = {"image": "control-api", "commit": commit, "tree": tree, "status": "built",
-                       "reference": "ghcr.io/wasalx/control-api:" + commit,
-                       "inspection": {"configDigest": "sha256:" + "c" * 64}}
-            for bad_queue in ({**queue, "attempt": "1"}, {**queue, "archiveDigest": "sha256:" + "0" * 64}):
-                images.write(path, {**receipt, "queue": bad_queue})
-                with self.assertRaisesRegex(ValueError, "archive or attempt differs"):
-                    images.publish(path, archive=archive)
-            verify.assert_not_called()
-            docker.assert_not_called()
-            registry.assert_not_called()
-            images.write(path, {**receipt, "queue": queue})
-            verify.side_effect = ValueError("Loaded config differs")
-            with self.assertRaisesRegex(ValueError, "Loaded config differs"):
-                images.publish(path, archive=archive)
-            docker.assert_not_called()
-            registry.assert_not_called()
-
-    def test_publish_loads_the_inspected_archive_and_attests_its_queue_identity(self):
-        commit, tree = "a" * 40, "b" * 40
-        config = b'{"os":"linux","architecture":"amd64"}'
-        config_digest = images.sha256(config)
-        inspection = {"configDigest": config_digest, "addonLicenses": {}}
-        receipt = {"image": "control-api", "commit": commit, "tree": tree, "status": "built",
-                   "reference": "ghcr.io/wasalx/control-api:" + commit, "inspection": inspection,
-                   "sourceArchiveDigest": "", "addonSource": None, "dockerfileDigest": ""}
-        manifest = json.dumps({"mediaType": "application/vnd.oci.image.manifest.v1+json",
-                               "config": {"digest": config_digest}}).encode()
-        env = {"GITHUB_EVENT_NAME": "push", "GITHUB_REF": "refs/heads/main", "GITHUB_WORKFLOW_SHA": commit,
-               "GITHUB_RUN_ID": "321", "GITHUB_RUN_ATTEMPT": "1", "QUEUE_RUN_ID": "123", "QUEUE_RUN_ATTEMPT": "2"}
-        with (tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, env, clear=True),
-              patch.object(images, "coordinates", return_value=(commit, tree)),
-              patch.object(images.subprocess, "run") as docker,
-              patch.object(images, "registry_output", side_effect=[b"digest: sha256:" + b"d" * 64, manifest, b"", b""]),
-              patch.object(images, "verify_signatures"), patch.object(images, "pull"),
-              patch.object(images, "inspect_image", return_value=inspection)):
-            archive = Path(directory) / "image.tar"
-            member_name = "blobs/sha256/" + config_digest.removeprefix("sha256:")
-            archive_manifest = json.dumps([{"Config": member_name}]).encode()
-            with tarfile.open(archive, "w") as output:
-                for name, data in [(member_name, config), ("manifest.json", archive_manifest)]:
-                    member = tarfile.TarInfo(name)
-                    member.size = len(data)
-                    output.addfile(member, io.BytesIO(data))
-            queue = {"runId": "123", "attempt": "2", "archiveDigest": images.archive_digest(archive)}
-            path = Path(directory) / "receipt.json"
-            images.write(path, {**receipt, "queue": queue})
-
-            images.publish(path, archive=archive)
-
-            docker.assert_called_once_with(["docker", "load", "--input", str(archive)], check=True)
-            published = json.loads(path.read_text())
-            self.assertEqual(published["status"], "published")
-            self.assertTrue(published["verified"])
-            predicate = json.loads(path.with_suffix(".json.predicate.json").read_text())
-            self.assertEqual(predicate["invocation"]["parameters"]["queue"], queue)
 
     def test_main_alias_advances_to_a_descendant_and_skips_a_late_older_publish_or_unknown_revision(self):
         raw = b'{"schemaVersion":2}'
@@ -1112,10 +1012,12 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
         self.assertIn(guard, bodies["manifest"])
         self.assertNotRegex(bodies["publish"], r"(?m)^    environment:")
         self.assertIn(guard, bodies["queue"])
-        self.assertNotIn("images-by-digest.py build", bodies["publish"])
-        self.assertIn('publish --archive "records/$IMAGE.tar"', bodies["publish"])
-        self.assertIn('QUEUE_RUN_ID: ${{ needs.queue.outputs.run }}', bodies["publish"])
-        self.assertIn('QUEUE_RUN_ATTEMPT: ${{ needs.queue.outputs.attempt }}', bodies["publish"])
+        self.assertRegex(bodies["publish"], r"(?m)^    needs: queue$")
+        self.assertIn("ref: ${{ github.sha }}", bodies["publish"])
+        build = 'images-by-digest.py build --cache write --image "$IMAGE" --output "records/$IMAGE.json"'
+        publish = 'images-by-digest.py publish --output "records/$IMAGE.json"'
+        self.assertLess(bodies["publish"].index(build), bodies["publish"].index(publish))
+        self.assertNotIn("actions/download-artifact@", bodies["publish"])
         self.assertNotIn("actions/attest-build-provenance@", text)
         self.assertNotIn("url:", text)
         allowed = {"actions/checkout", "actions/setup-node", "actions/upload-artifact", "actions/download-artifact",

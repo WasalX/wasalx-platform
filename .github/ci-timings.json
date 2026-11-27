@@ -1,45 +1,54 @@
 {
-  "measured_at": "2026-11-23",
+  "measured_at": "2026-11-24",
   "workflow": ".github/workflows/ci.yml",
-  "runs": 100,
-  "first_run": 45011784054,
-  "last_run": 45261612898,
+  "runs": 58,
+  "first_run": 45424559667,
+  "last_run": 45469519734,
   "jobs": {
     "changes": {
-      "p95_minutes": 0.1333
+      "p95_minutes": 0.1833
+    },
+    "workflow-lint": {
+      "p95_minutes": 0.2
+    },
+    "storybook": {
+      "p95_minutes": 4.4333
     },
     "dependency-review": {
-      "p95_minutes": 0.1
+      "p95_minutes": 0.25
     },
     "dev-install-dryrun": {
-      "p95_minutes": 0.7
+      "p95_minutes": 0.6333
     },
     "checks": {
-      "p95_minutes": 2.2833
+      "p95_minutes": 6.6667
+    },
+    "full-unit": {
+      "p95_minutes": 2.2167
     },
     "integration": {
-      "p95_minutes": 2.8333
+      "p95_minutes": 3.05
     },
     "portal-integration": {
-      "p95_minutes": 2.6833
+      "p95_minutes": 2.75
     },
     "integration-coverage": {
-      "p95_minutes": 0.5833
+      "p95_minutes": 0.9833
     },
     "infra-validate": {
-      "p95_minutes": 0.6
+      "p95_minutes": 0.6667
     },
     "images": {
-      "p95_minutes": 2.95
+      "p95_minutes": 3.4667
     },
     "pr-images": {
-      "p95_minutes": 2.9167
+      "p95_minutes": 3.15
     },
     "pr-image-results": {
-      "p95_minutes": 0.0833
+      "p95_minutes": 0.1333
     },
     "ci-gate": {
-      "p95_minutes": 0.1
+      "p95_minutes": 0.2833
     }
   }
 }

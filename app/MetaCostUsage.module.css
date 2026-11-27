@@ -28,6 +28,23 @@
 .fieldset label{display:flex;flex-direction:column;gap:var(--wx-space-2);margin-block:var(--wx-space-3)}
 .fieldset select,.fieldset input[type=file]{max-width:100%;color:inherit;font:inherit}
 .fieldset select{padding:var(--wx-space-2);background:var(--wx-color-surface);border:1px solid var(--wx-color-border)}
+.filePicker {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--wx-space-2);
+  margin-block: var(--wx-space-3);
+}
+.filePicker > label { position: relative; max-inline-size: 100%; margin: 0; }
+.filePicker input:focus-visible + span { outline: 2px solid var(--wx-color-accent); outline-offset: 2px; }
+.filePicker input:disabled + span { cursor: not-allowed; opacity: 0.56; }
+.fileStatus { min-inline-size: 0; color: var(--wx-color-text-muted); overflow-wrap: anywhere; }
+@media (forced-colors: active) {
+  .filePicker input:focus-visible + span { outline-color: Highlight; }
+}
+@media (any-pointer: coarse) {
+  .filePicker input + span { min-block-size: 44px; }
+}
 .version{border-block-end:1px solid var(--wx-color-border);padding-block:var(--wx-space-3)}
 .version:last-child{border:0}
 .digest{overflow-wrap:anywhere;font-size:var(--wx-font-size-1)}

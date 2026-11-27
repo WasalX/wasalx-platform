@@ -11,15 +11,12 @@ permissions:
 
 jobs:
   queue:
-    name: Resolve the successful merge-queue build
+    name: Verify merge-queue qualification
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'WasalX/wasalx-platform'
     runs-on: ubuntu-24.04
     timeout-minutes: 2
     permissions:
       actions: read
-    outputs:
-      run: ${{ steps.source.outputs.run }}
-      attempt: ${{ steps.source.outputs.attempt }}
     steps:
       - name: Require GitHub-hosted execution
         env:
@@ -33,7 +30,7 @@ jobs:
         run: |
           runs=$(gh api --method GET "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs" \
             -f event=merge_group -f head_sha="$GITHUB_SHA" -F per_page=100)
-          read -r run attempt < <(jq -er --arg sha "$GITHUB_SHA" --arg repo "$GITHUB_REPOSITORY" '
+          read -r run attempt < <(jq -ber --arg sha "$GITHUB_SHA" --arg repo "$GITHUB_REPOSITORY" '
             select(.total_count <= 100) | [.workflow_runs[] |
               select(.event == "merge_group" and .path == ".github/workflows/ci.yml" and
                 .head_sha == $sha and .head_repository.full_name == $repo and
@@ -43,7 +40,8 @@ jobs:
           jobs=$(gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/actions/runs/$run/attempts/$attempt/jobs?per_page=100")
           jq -e '[.[].jobs[] | select(.name == "ci-gate")] |
             length == 1 and .[0].status == "completed" and .[0].conclusion == "success"' <<< "$jobs" >/dev/null
-          printf 'run=%s\nattempt=%s\n' "$run" "$attempt" >> "$GITHUB_OUTPUT"
+          # The exact commit SHA binds the Git tree built by both workflows.
+          printf 'Queue ci-gate passed for %s in run %s (attempt %s).\n' "$GITHUB_SHA" "$run" "$attempt" >> "$GITHUB_STEP_SUMMARY"
 
   publish:
     needs: queue
@@ -52,7 +50,6 @@ jobs:
     timeout-minutes: 20
     runs-on: ubuntu-24.04
     permissions:
-      actions: read
       contents: read
       packages: write
       id-token: write
@@ -91,6 +88,7 @@ jobs:
         run: test "$HOSTED_KIND" = github-hosted
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
       - name: Resolve catalog entry and add-on pin
         id: image
@@ -101,13 +99,10 @@ jobs:
           addon_source=$(jq -c '.addonSource' <<< "$row")
           echo "pending=$pending" >> "$GITHUB_OUTPUT"
           echo "PUBLIC_ADDON_SOURCE=$addon_source" >> "$GITHUB_ENV"
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        if: steps.image.outputs.pending == 'false'
+      - if: steps.image.outputs.pending == 'false'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          name: image-queue-${{ needs.queue.outputs.attempt }}-${{ matrix.image }}
-          path: records
-          github-token: ${{ github.token }}
-          run-id: ${{ needs.queue.outputs.run }}
+          node-version: 22.23.4
       - if: steps.image.outputs.pending == 'false'
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
         with:
@@ -120,15 +115,16 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build without cache imports, export layers and inspect
+        if: steps.image.outputs.pending == 'false'
+        env:
+          PUBLIC_CONTACT_EMAIL: ${{ matrix.image == 'portal' && vars.PUBLIC_CONTACT_EMAIL || '' }}
+        run: python3 scripts/release/images-by-digest.py build --cache write --image "$IMAGE" --output "records/$IMAGE.json"
       - if: steps.image.outputs.pending == 'false'
         uses: ./.github/actions/cosign
       - name: Publish, sign, attest and inspect the published digest
         if: steps.image.outputs.pending == 'false'
-        env:
-          QUEUE_RUN_ID: ${{ needs.queue.outputs.run }}
-          QUEUE_RUN_ATTEMPT: ${{ needs.queue.outputs.attempt }}
-          PUBLIC_CONTACT_EMAIL: ${{ matrix.image == 'portal' && vars.PUBLIC_CONTACT_EMAIL || '' }}
-        run: python3 scripts/release/images-by-digest.py publish --archive "records/$IMAGE.tar" --output "records/$IMAGE.json"
+        run: python3 scripts/release/images-by-digest.py publish --output "records/$IMAGE.json"
       - name: Record pending add-on source
         if: steps.image.outputs.pending == 'true'
         run: python3 scripts/release/images-by-digest.py pending --image "$IMAGE" --output "records/$IMAGE.json"

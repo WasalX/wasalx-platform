@@ -248,12 +248,22 @@ export async function workspaceAccessJourney(page: Page, testInfo: TestInfo, loc
   const width = await page.evaluate(() => ({ viewport: innerWidth, document: document.documentElement.scrollWidth }));
   expect(width.document).toBeLessThanOrEqual(width.viewport);
   const application = page.locator('[data-application-ready="true"]');
-  const capture = (theme: "light" | "dark") => section.screenshot({
-    path: journeyCapturePath("workspace-access-ready", testInfo.project.name, theme, locale),
-    animations: "disabled",
-    caret: "hide",
-    scale: "css",
-  });
+  const capture = async (theme: "light" | "dark") => {
+    const path = journeyCapturePath(
+      "workspace-access-ready",
+      testInfo.project.name,
+      theme,
+      locale,
+    );
+    const screenshot = await section.screenshot({
+      path,
+      animations: "disabled",
+      caret: "hide",
+      scale: "css",
+    });
+    process.stdout.write(`Wrote journey capture: ${path}\n`);
+    return screenshot;
+  };
   await expect(application).toHaveClass("theme-dark");
   const dark = await capture("dark");
   await testInfo.attach(`workspace-access-${locale}`, { body: dark, contentType: "image/png" });
