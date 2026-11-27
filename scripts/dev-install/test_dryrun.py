@@ -341,6 +341,67 @@ def assert_step_result(test, case, result, returncode, stdout="", stderr=""):
 
 
 class DispatchTest(unittest.TestCase):
+    def test_keycloak_bootstrap_install_requires_current_network_and_preserve_exit(self):
+        for scenario in ("preserve", "stale-target", "wrong-mode", "nonzero-exit", "missing-attestation"):
+            with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as directory:
+                work = Path(directory)
+                target, old, new = (char * 64 for char in "abc")
+                (work / "host.env").write_text(
+                    f'STAGING="{work}" GUEST_RUN_SCRIPT=/fixture/guest.py GUEST_HOSTNAME=fixture.example.test\n'
+                    "GUEST_KNOWN_HOSTS=/fixture/known-hosts GUEST_KEY=/fixture/key GUEST_ADDRESS=127.0.0.1\n"
+                    "GUEST_USER=fixture GUEST_PORT=22 REVIEW_SUFFIX=.example.test\n",
+                    encoding="ascii",
+                )
+                (work / "dev-step-lock.sh").write_text(
+                    "hold_dev_step_lock() { :; }\nfinish_dev_step() { :; }\n", encoding="ascii",
+                )
+                (work / "run-id").touch()
+                (work / "guard-closed.py").touch()
+                (work / "transfer.sh").touch()
+                (work / "pre-arm-preflight.log").write_text(
+                    f"PRE_ARM_RECREATABILITY=PASS sha256={target} services=keycloak-bootstrap\n"
+                    f"KEYCLOAK_BOOTSTRAP_NETWORK=PASS keycloak={target} bootstrap={old}\n",
+                    encoding="ascii",
+                )
+                invocation = r"""
+export fixture_state="$2" scenario="$3" target="$4" old="$5" new="$6"
+ssh() {
+    local command="${*: -1}" network="container:$target" mode=preserve-existing status=0
+    case "$command" in
+        true|*'docker info'*) ;;
+        hostname) echo fixture.example.test ;;
+        *'WASALX_INSTALL_EXPECTED_HOSTNAME='*) echo GUARD_AND_CLOSED=PASS ;;
+        *'docker inspect'*" $target $old")
+            if [[ "$scenario" == stale-target ]]; then network="container:$new"; fi
+            printf '%s\n' "$target fixture keycloak running 0 fixture" "$old fixture keycloak-bootstrap exited 0 $network"
+            ;;
+        *'docker inspect'*" $target $new")
+            if [[ "$scenario" == wrong-mode ]]; then mode=reconcile; fi
+            if [[ "$scenario" == nonzero-exit ]]; then status=1; fi
+            printf '%s\n' "$target fixture keycloak running 0 fixture" \
+                "$new fixture keycloak-bootstrap exited $status $network $mode"
+            ;;
+        *"WASALX_KEYCLOAK_BOOTSTRAP_MODE=preserve-existing WASALX_KEYCLOAK_EXPECTED_CONTAINER_ID=$target "*"--pre-arm-sha256 $target")
+            touch "$fixture_state/guest-ran"
+            if [[ "$scenario" != missing-attestation ]]; then
+                echo "KEYCLOAK_BOOTSTRAP_NETWORK=PASS keycloak=$target bootstrap=$new"
+            fi
+            echo 'BOOTSTRAP_RECREATE=PASS services=keycloak-bootstrap'
+            echo 'BOOTSTRAP_NON_EFFECTS=PASS unchanged_ids_and_started_at=3'
+            echo 'GUEST_HELD_INSTALL=PASS both_shipped_fences=PASS mailer=no/0/max1 release=HELD'
+            ;;
+        *) return 96 ;;
+    esac
+}
+export -f ssh
+exec bash "$1" install "$2"
+"""
+                result = host_step(work, invocation, HERE / "templates" / "dev-guest-phase.sh",
+                                   work, scenario, target, old, new)
+                self.assertEqual(result.returncode, 0 if scenario == "preserve" else 75,
+                                 (result.stdout, result.stderr))
+                self.assertEqual((work / "guest-ran").exists(), scenario != "stale-target")
+
     def test_overlay_holds_after_controller_exit_until_verified_handback(self):
         with tempfile.TemporaryDirectory() as directory:
             work = Path(directory)

@@ -175,7 +175,26 @@ verified handback. If a phase fails after the overlay is armed, have Servers
 resolve the run record through the [DEV step handback](#dev-step-lock) before
 registering the authorized rollback with `register.sh rollback "$STATE"`.
 
+### Existing DEV Keycloak
+
+The existing-DEV wrapper passes `WASALX_KEYCLOAK_BOOTSTRAP_MODE=preserve-existing`
+to the signed guest runner. The runner must forward it to Compose and use the
+project's running Keycloak container as the network target. In the install phase
+it must also match `WASALX_KEYCLOAK_EXPECTED_CONTAINER_ID`, carried from the
+pre-arm check. Before starting a recreated one-shot, the runner must inspect its
+network mode and require `container:<current-keycloak-id>`. It must propagate
+the actual one-shot exit status.
+
+Pre-arm and successful install each emit exactly one
+`KEYCLOAK_BOOTSTRAP_NETWORK=PASS keycloak=<id> bootstrap=<id>` line with full
+Docker container IDs. On install that line attests the replacement checked
+before start or the unchanged one-shot when it was reused. The wrapper checks
+the existing binding before installation and reads back the final binding and
+exit code. A recreated one-shot must also report the preserve mode in its
+container configuration. A stale target stops the install before cutover.
+
 ## DEV step lock
+
 
 Set `DEV_STEP_LOCK` in the private host identity to the absolute path of the
 host-provided marker. WasalX holds an exclusive, nonblocking `flock` on that

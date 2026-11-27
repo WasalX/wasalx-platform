@@ -442,7 +442,7 @@ test("full Compose exposes bootstrap identity overrides with the public fixture 
   }
 });
 
-test("Keycloak bootstrap validates existing usernames before writing and reconciles matching identities", async (t) => {
+test("Keycloak bootstrap preserves existing state in read-only mode and reconciles matching identities in setup mode", async (t) => {
   const ownerId = "10000000-0000-4000-8000-000000000001";
   const isolationId = "isolation-id";
   const operatorId = "10000000-0000-4000-8000-000000000002";
@@ -452,12 +452,21 @@ test("Keycloak bootstrap validates existing usernames before writing and reconci
   const ownerPath = `${tenantUsers}/${ownerId}`;
   const isolationPath = `${tenantUsers}/${isolationId}`;
   const operatorPath = `${platformUsers}/${operatorId}`;
+  const preserve = "preserve-existing";
   const scenarios = [
     { name: "the default owner matches and the missing isolation user is created" },
     { name: "all three overrides are trimmed, lowercased, and used", overrides: true, existingIsolation: "custom.isolation" },
     { name: "a seeded owner mismatch prevents every write", existingOwner: "custom.owner", error: "QUALIFICATION_OWNER" },
     { name: "an isolation email match with a different username prevents every write", existingIsolation: "custom.isolation", error: "ISOLATION_OWNER" },
     { name: "platform mismatch prevents every write", existingOperator: "custom.platform", error: "PLATFORM_OPERATOR" },
+    { name: "preserve verifies both realms, configured users and all clients", mode: preserve, existingIsolation: "example.isolation" },
+    { name: "preserve fails closed on a lookup error", mode: preserve, realmStatus: 503, preserveError: /wasalx realm lookup/u },
+    { name: "preserve refuses a missing required isolation owner", mode: preserve, preserveError: /seeded isolation user is missing/u },
+    { name: "preserve refuses an ambiguous user lookup", mode: preserve, ambiguousUser: true, preserveError: /user lookup was ambiguous/u },
+    { name: "preserve refuses an ambiguous client lookup", mode: preserve, existingIsolation: "example.isolation",
+      clientCount: 2, preserveError: /client lookup was ambiguous/u },
+    { name: "preserve refuses a missing client", mode: preserve, existingIsolation: "example.isolation",
+      clientCount: 0, preserveError: /seeded client is missing/u },
   ];
   for (const scenario of scenarios) {
     await t.test(scenario.name, async (subtest) => {
@@ -468,9 +477,10 @@ test("Keycloak bootstrap validates existing usernames before writing and reconci
         KEYCLOAK_ADMIN: "synthetic-admin",
         KEYCLOAK_ADMIN_PASSWORD: "synthetic-admin-password",
         KEYCLOAK_BASE_URL: "http://127.0.0.1:8080",
-        WASALX_QUALIFICATION_OWNER_PASSWORD: "synthetic-owner-password",
-        WASALX_ISOLATION_OWNER_PASSWORD: "synthetic-isolation-password",
-        WASALX_PLATFORM_OPERATOR_PASSWORD: "synthetic-operator-password",
+        WASALX_KEYCLOAK_BOOTSTRAP_MODE: scenario.mode,
+        WASALX_QUALIFICATION_OWNER_PASSWORD: scenario.mode ? undefined : "synthetic-owner-password",
+        WASALX_ISOLATION_OWNER_PASSWORD: scenario.mode ? undefined : "synthetic-isolation-password",
+        WASALX_PLATFORM_OPERATOR_PASSWORD: scenario.mode ? undefined : "synthetic-operator-password",
         WASALX_QUALIFICATION_OWNER_EMAIL: "",
         WASALX_ISOLATION_OWNER_EMAIL: isolationEmail,
         WASALX_KEYCLOAK_SMTP_HOST: "",
@@ -501,21 +511,36 @@ test("Keycloak bootstrap validates existing usernames before writing and reconci
         users.set(isolationPath, { id: isolationId, username: scenario.existingIsolation, email: isolationEmail });
       }
       const writes: { method: string; path: string; body: Record<string, unknown> }[] = [];
+      const adminRequests: { method: string; path: string; clientId: string | null }[] = [];
       const lookedUpUsernames = new Set<string>();
       subtest.mock.method(globalThis, "fetch", (input: string, init?: RequestInit) => {
         const { pathname: path, searchParams } = new URL(input);
         const method = init?.method ?? "GET";
         if (path === "/realms/master/protocol/openid-connect/token") {
+          assert.equal(method, "POST");
           return Response.json({ access_token: "synthetic-token".repeat(3) });
         }
+        adminRequests.push({ method, path, clientId: searchParams.get("clientId") });
+        if (scenario.mode && method !== "GET") return new Response(null, { status: 403 });
         if (method !== "GET") {
           const body = JSON.parse(String(init?.body));
           writes.push({ method, path, body });
           if (method === "POST" && path === tenantUsers) users.set(isolationPath, { ...body, id: isolationId });
           return new Response(null, { status: method === "POST" ? 201 : 204 });
         }
-        if (path.endsWith("/clients") || path.endsWith("/credentials")) return Response.json([]);
+        if (path === "/admin/realms/wasalx" || path === "/admin/realms/wasalx-platform") {
+          return scenario.realmStatus
+            ? new Response("synthetic private error payload", { status: scenario.realmStatus })
+            : Response.json({ realm: path.split("/").at(-1) });
+        }
+        if (path.endsWith("/clients")) {
+          const clientId = searchParams.get("clientId");
+          return Response.json(Array.from({ length: scenario.clientCount ?? (scenario.mode ? 1 : 0) },
+            (_, index) => ({ id: `client-${index}`, clientId })));
+        }
+        if (path.endsWith("/credentials")) return Response.json([]);
         if (path === tenantUsers || path === platformUsers) {
+          if (scenario.ambiguousUser) return Response.json([{ id: "first" }, { id: "second" }]);
           const field = searchParams.has("email") ? "email" : "username";
           const value = searchParams.get(field);
           if (field === "username" && value !== null) lookedUpUsernames.add(value);
@@ -540,6 +565,23 @@ test("Keycloak bootstrap validates existing usernames before writing and reconci
       } finally {
         stderr.mock.restore();
         process.exitCode = previousExitCode;
+      }
+      if (scenario.mode) {
+        assert.ok(adminRequests.length > 0);
+        assert.ok(adminRequests.every(({ method, path }) => method === "GET" && path.startsWith("/admin/realms/")));
+        assert.doesNotMatch(errors.join(""), /synthetic private error payload/u);
+        if (scenario.preserveError) {
+          assert.equal(exitCode, 1);
+          assert.match(errors.join(""), scenario.preserveError);
+        } else {
+          assert.deepEqual(errors, []);
+          assert.equal(exitCode, previousExitCode);
+          assert.deepEqual(adminRequests.map(({ path, clientId }) => clientId ?? path).sort(), [
+            "/admin/realms/wasalx", "/admin/realms/wasalx-platform", ownerPath, tenantUsers, operatorPath,
+            "wasalx-portal", "wasalx-00000000000040008000000000000001", "wasalx-platform-portal",
+          ].sort());
+        }
+        return;
       }
       if (scenario.error) {
         assert.equal(exitCode, 1);
