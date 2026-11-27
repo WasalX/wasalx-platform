@@ -176,6 +176,20 @@ jobs:
           printf 'matrix=%s\nimages=%s\ninstaller-portal=%s\n' \
             "$matrix" "$images" "$installer_portal" >> "$GITHUB_OUTPUT"
 
+      - name: Verify active installer object-storage mirrors
+        env:
+          BASE: ${{ steps.selector-base.outputs.sha }}
+          DOCKER_CONFIG: ${{ runner.temp }}/public-mirror-docker
+        run: |
+          if [[ -z "$BASE" ]] || ! git diff --quiet --no-ext-diff --no-renames "$BASE" HEAD -- \
+            compose.full.yaml .github/workflows/ci.yml .github/workflows/mirror-images.yml \
+            scripts/release/installer-mirror-images.py scripts/release/image_registry_retry.py \
+            scripts/release/installer-nightly.sh scripts/release/installer-nightly.compose.yaml; then
+            base_sha=$(git rev-parse --verify "$BASE^{commit}")
+            # Leave time in the one-minute changes job for checkout and selection.
+            timeout 40s python3 -B scripts/release/installer-mirror-images.py verify --base "$base_sha"
+          fi
+
   workflow-lint:
     if: github.event_name != 'push'
     runs-on: ubuntu-24.04

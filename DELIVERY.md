@@ -76,7 +76,9 @@ The byte-line scan exempts PNGs directly in the Linux visual baseline directory 
 ## Releases
 
 - The [image publication workflow](.github/workflows/branch-image.yml) builds and publishes images for each qualified `main` commit with `max-parallel: 21` and records manifest completeness in the CI run summary. The [main image aliases workflow](.github/workflows/main-image-aliases.yml) uses that CI run's manifest after a successful push run. See the [image publication runbook](docs/runbooks/images-by-digest.md) for retry and alias outcomes.
-- The manual [image mirror workflow](.github/workflows/mirror-images.yml) runs only from `main`. It copies the installer's pinned object-storage images to the project registry and fails on any digest mismatch.
+- Stage an object-storage update by setting the service's `staged` reference in the [full Compose inventory](compose.full.yaml). After the PR merges, the [image mirror workflow](.github/workflows/mirror-images.yml) publishes that exact digest and verifies it by digest. In a second PR, move the staged reference to the service's `image` field and clear `staged`. PR and merge-queue CI require the new reference to be staged on the base and verify the active mirror anonymously. The nightly rehearsal stages dependencies from those same mirror digests.
+- Rename a mirror or retire an inventory row in the same PR as the corresponding CI script change, with a critical-path review.
+- A protected `main` push that touches a [mirror workflow trigger path](.github/workflows/mirror-images.yml) republishes deleted or broken mirrors. If a missing active mirror blocks CI, rerun a retained `main` mirror job for that digest.
 - Publish one GitHub Release per release milestone. Cut immutable, annotated `vMAJOR.MINOR.PATCH-rc.N` and `vMAJOR.MINOR.PATCH` tags using the identity authorized by the release tag ruleset. Promote the same image digests across environments. PR builds never publish release images.
 - Follow the [release criteria and nightly installer evidence rules](docs/release.md) for digest promotion, installer rehearsals, and stable release.
 

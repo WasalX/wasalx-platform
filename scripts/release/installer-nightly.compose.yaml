@@ -10,11 +10,6 @@ services:
         fi
         exec /opt/keycloak/bin/kc.sh "$$@"
       - --
-  # WasalX GHCR mirrors the exact full installer digests for hosted rehearsals.
-  minio:
-    image: ghcr.io/wasalx/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
-  minio-bootstrap:
-    image: ghcr.io/wasalx/mc@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
   grafana:
     # The installer's Compose --wait must also wait for Grafana's HTTP listener.
     healthcheck:

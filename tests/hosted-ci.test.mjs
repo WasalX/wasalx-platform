@@ -500,18 +500,53 @@ phase fresh-smoke 3m node scripts/release/installer-stages.mjs smoke
   assert.equal((await readFile(join(directory, "installer.log"), "utf8")).trim(), diagnostic);
 });
 
-test("nightly MinIO mirrors retain the full installer content digests", async () => {
-  const loadServices = async file => parse(await read(file), { logLevel: "silent" }).services;
-  const [full, nightly] = await Promise.all([
-    loadServices("compose.full.yaml"),
-    loadServices("scripts/release/installer-nightly.compose.yaml"),
-  ]);
-  for (const [service, repositoryName] of [["minio", "minio"], ["minio-bootstrap", "mc"]]) {
-    const [repository, digest] = nightly[service].image.split("@");
-    assert.equal(repository, `ghcr.io/wasalx/${repositoryName}`);
+test("nightly installer uses the active full Compose mirror without a second digest pin", async () => {
+  const full = parse(await read("compose.full.yaml"), { logLevel: "silent" });
+  const nightly = parse(await read("scripts/release/installer-nightly.compose.yaml"), { logLevel: "silent" });
+  const rehearsal = await read("scripts/release/installer-nightly.sh");
+  assert.match(rehearsal, /mirrors=\$\(python3 -B scripts\/release\/installer-mirror-images\.py references\)/u);
+
+  const python = process.platform === "win32" ? "python" : "python3";
+  const references = execFileSync(python, ["-B", "scripts/release/installer-mirror-images.py", "references"], {
+    cwd: repository, encoding: "utf8", timeout: 10_000,
+  });
+  const rows = JSON.parse(references);
+  const inventory = full["x-object-storage-mirrors"];
+  assert.deepEqual(Object.keys(inventory).sort(), ["minio", "minio-bootstrap"]);
+  const sources = Object.entries(inventory).map(([service, row], index) => {
+    assert.equal(nightly.services[service], undefined);
+    const image = full.services[service].image;
+    const source = image.replace(/:[^/:]+(?=@)/u, "");
+    const digest = source.split("@")[1];
     assert.match(digest, /^sha256:[0-9a-f]{64}$/u);
-    assert.equal(digest, full[service].image.split("@")[1]);
-  }
+    assert.deepEqual(rows[index], { source, mirror: `${row.mirror}@${digest}` });
+    return image;
+  });
+  assert.equal(rows.length, sources.length);
+
+  const registry = "127.0.0.1:5007";
+  const ordinary = `docker.io/library/redis@sha256:${"d".repeat(64)}`;
+  const staging = rehearsal.match(/node --input-type=module -e '([^']+)' "\$registry" "\$mirrors"/u);
+  assert.ok(staging, "missing the nightly registry plan");
+  const plan = (catalog, input) => spawnSync(process.execPath, ["--input-type=module", "-e", staging[1], registry, catalog], {
+    cwd: repository, input: input.join("\n"), encoding: "utf8", timeout: 5_000,
+  });
+  const result = plan(references, [...sources, ordinary]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(result.stdout.trim().split(/\r?\n/u), [...rows.map(row => row.mirror), ordinary].map(reference => {
+    const digest = reference.split("@")[1];
+    return `${reference} ${registry}/staged/${digest.slice(7)}@${digest}`;
+  }));
+
+  const missing = plan(JSON.stringify([{ source: rows[0].source }, ...rows.slice(1)]), [...sources, ordinary]);
+  assert.equal(missing.status, 1, missing.stderr);
+  assert.match(missing.stderr, /Missing mirror for /u);
+  assert.equal(missing.stdout, "");
+
+  const absent = plan(references, [...sources.slice(1), ordinary]);
+  assert.equal(absent.status, 1, absent.stderr);
+  assert.match(absent.stderr, /Inventory source absent from resolved images/u);
+  assert.equal(absent.stdout, "");
 });
 
 test("nightly binds qualification to a complete main publication", async t => {
@@ -655,79 +690,81 @@ gh() {
   }
 });
 
-test("MinIO mirror is dispatch-only on main and verifies the raw manifest digest", async t => {
-  const { on, permissions, jobs } = parse(await read(".github/workflows/mirror-images.yml"));
-  const { mirror } = jobs;
-  assert.deepEqual(on, { workflow_dispatch: null });
-  assert.deepEqual(permissions, {});
-  assert.deepEqual(Object.keys(jobs), ["mirror"]);
+test("object-storage mirrors publish only on main and qualify through read-only CI", async () => {
+  const publisher = parse(await read(".github/workflows/mirror-images.yml"));
+  const { mirror } = publisher.jobs;
+  const inputs = [
+    "compose.full.yaml",
+    ".github/workflows/mirror-images.yml",
+    "scripts/release/installer-mirror-images.py",
+    "scripts/release/image_registry_retry.py",
+  ];
+  assert.deepEqual(publisher.on, { push: { branches: ["main"], paths: inputs } });
+  assert.deepEqual(publisher.permissions, {});
+  assert.deepEqual(Object.keys(publisher.jobs), ["mirror"]);
   assert.deepEqual(mirror.permissions, { contents: "read", packages: "write" });
-  assert.equal(mirror.if, "github.repository == 'WasalX/wasalx-platform' && github.ref == 'refs/heads/main'");
+  assert.equal(mirror.if,
+    "github.event_name == 'push' && github.repository == 'WasalX/wasalx-platform' && github.ref == 'refs/heads/main'");
   assert.equal(mirror["runs-on"], "ubuntu-24.04");
   const actions = mirror.steps.filter(step => step.uses);
   assert(actions.every(step => /@[0-9a-f]{40}$/u.test(step.uses)));
   assert.equal(actions.find(step => step.uses.startsWith("actions/checkout@")).with["persist-credentials"], false);
   assert.equal(actions.find(step => step.uses.startsWith("docker/login-action@")).with.password, "${{ github.token }}");
   assert(!JSON.stringify(mirror).includes("secrets."));
+  assert.match(mirror.steps.find(step => step.run).run, /^python3 -B scripts\/release\/installer-mirror-images\.py publish/u);
 
-  const copy = mirror.steps.find(step => step.run);
-  assert.equal(copy.shell, "bash");
-  const index = JSON.stringify({ schemaVersion: 2, mediaType: "application/vnd.oci.image.index.v1+json", manifests: [
-    { digest: `sha256:${"a".repeat(64)}`, platform: { architecture: "amd64", os: "linux" } },
-    { digest: `sha256:${"b".repeat(64)}`, platform: { architecture: "arm64", os: "linux" } },
-  ] }, null, 2);
-  const manifest = '{"schemaVersion":2, "mediaType":"application/vnd.oci.image.manifest.v1+json", "layers":[]}';
-  const digest = raw => `sha256:${createHash("sha256").update(raw).digest("hex")}`;
-  const directory = await mkdtemp(join(tmpdir(), "wasalx-minio-mirror-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
-  await writeFile(join(directory, "compose.full.yaml"), `services:
-  minio:
-    image: quay.io/minio/minio:release@${digest(index)}
-  minio-bootstrap:
-    image: quay.io/minio/mc:release@${digest(manifest)}
-`);
-
-  const bash = process.platform === "win32" ? "C:/Program Files/Git/bin/bash.exe" : "bash";
-  for (const [scenario, expectedStatus] of [
-    ["quay", 0], ["fallback", 0], ["source-mismatch", 1], ["mirror-mismatch", 1], ["inspect-failure", 7],
+  const ci = parse(await read(".github/workflows/ci.yml"));
+  const { changes, "ci-gate": gate } = ci.jobs;
+  assert.deepEqual(ci.permissions, { contents: "read" });
+  assert.equal(changes.if, "github.event_name == 'pull_request' || github.event_name == 'merge_group'");
+  assert(gate.needs.includes("changes"));
+  const step = changes.steps.find(row => row.name === "Verify active installer object-storage mirrors");
+  assert.equal(step.if, undefined);
+  assert.equal(step["continue-on-error"], undefined);
+  assert.deepEqual(step.env, {
+    BASE: "${{ steps.selector-base.outputs.sha }}",
+    DOCKER_CONFIG: "${{ runner.temp }}/public-mirror-docker",
+  });
+  for (const input of inputs) assert(step.run.includes(input));
+  assert.match(step.run, /timeout 40s python3/u);
+  const sha = "a".repeat(40);
+  for (const [base, diff, verify, called, status] of [
+    ["HEAD^1", 0, 0, false, 0],
+    ["HEAD^1", 1, 0, true, 0],
+    [sha, 1, 1, true, 1],
+    ["", 0, 0, false, 2],
   ]) {
-    const result = spawnSync(bash, ["--noprofile", "--norc", "-e", "-o", "pipefail", "-c", `docker() {
-  [[ "$1 $2" == 'buildx imagetools' ]] || exit 98
-  local reference="\${!#}"
-  case "$3:$reference" in
-    create:quay.io/minio/*@sha256:*|create:ghcr.io/netvark/*@sha256:*)
-      [[ "$4 $5" == '--prefer-index=false --tag' ]] || exit 98
-      echo "Copy $reference"
-      [[ "$SCENARIO" != fallback || "$reference" == ghcr.io/netvark/* ]]
+    const result = runWorkflowScript(`
+git() {
+  case "$1" in
+    diff) return "$DIFF" ;;
+    rev-parse)
+      [[ "$2" == --verify && "$3" == "$BASE^{commit}" && -n "$BASE" ]] || return 2
+      echo "$SHA"
       ;;
-    inspect:ghcr.io/wasalx/*:sha256-*|inspect:*@sha256:*)
-      [[ "$# $4" == '5 --raw' ]] || exit 98
-      case "$reference:$SCENARIO" in
-        ghcr.io/wasalx/*:mirror-mismatch|*@sha256:*:source-mismatch) printf '%s' wrong; return ;;
-      esac
-      case "$reference" in
-        */minio[@:]*) printf '%s' "$RAW_INDEX" ;;
-        */mc[@:]*) printf '%s' "$RAW_MANIFEST" ;;
-        *) exit 98 ;;
-      esac
-      if [[ "$SCENARIO" == inspect-failure ]]; then return 7; fi
-      ;;
-    *) exit 98 ;;
+    *) return 99 ;;
   esac
 }
-${copy.run}`], {
-      cwd: directory, env: { ...process.env, SCENARIO: scenario, RAW_INDEX: index, RAW_MANIFEST: manifest },
-      encoding: "utf8", timeout: 10_000, windowsHide: true,
-    });
-    assert.equal(result.status, expectedStatus, result.error?.message ?? result.stdout);
-    assert.equal(result.stdout.includes("Copy ghcr.io/netvark/"), scenario === "fallback");
-    if (expectedStatus === 0) {
-      assert(result.stdout.includes(`Verified ghcr.io/wasalx/minio@${digest(index)}`));
-      assert(result.stdout.includes(`Verified ghcr.io/wasalx/mc@${digest(manifest)}`));
-    } else if (expectedStatus === 1) {
-      assert.match(result.stdout, /::error::Digest mismatch/u);
-    }
+timeout() {
+  [[ "$1" == 40s ]] || return 98
+  shift
+  "$@"
+}
+python3() {
+  [[ "$1 $2 $3 $4" == '-B scripts/release/installer-mirror-images.py verify --base' && "$5" == "$SHA" ]]
+  echo verified
+  return "$VERIFY"
+}
+${step.run}`, { BASE: base, DIFF: diff, VERIFY: verify, SHA: sha });
+    assert.equal(result.status, status, result.error?.message ?? result.stderr);
+    assert.equal(result.stdout.includes("verified"), called);
   }
+
+  const delivery = await read("DELIVERY.md");
+  assert.match(delivery, /set(?:ting)? the service's `staged` reference in the \[full Compose inventory\]/u);
+  assert.doesNotMatch(delivery, /manual \[image mirror workflow\]/u);
+  const dependabot = await read(".github/dependabot.yml");
+  assert.doesNotMatch(dependabot, /manual ghcr\.io\/wasalx mirror dispatch/u);
 });
 
 test("workflow lint requires verified tools, both embedded diagnostics, and clean workflows", async t => {

@@ -1,13 +1,19 @@
 name: mirror-images
 
 on:
-  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - compose.full.yaml
+      - .github/workflows/mirror-images.yml
+      - scripts/release/installer-mirror-images.py
+      - scripts/release/image_registry_retry.py
 
 permissions: {}
 
 jobs:
   mirror:
-    if: github.repository == 'WasalX/wasalx-platform' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && github.repository == 'WasalX/wasalx-platform' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions: {contents: read, packages: write}
@@ -24,37 +30,5 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ github.token }}
-      - name: Mirror and verify the full installer MinIO digests
-        shell: bash
-        run: |
-          manifest_digest() {
-            local checksum
-            checksum=$(docker buildx imagetools inspect --raw "$1" | sha256sum) || return
-            printf 'sha256:%s\n' "${checksum%% *}"
-          }
-
-          for image in minio mc; do
-            digest=$(sed -nE "s|^[[:space:]]+image: quay\.io/minio/$image(:[^@]+)?@(sha256:[0-9a-f]{64})[[:space:]]*$|\2|p" compose.full.yaml)
-            if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
-              echo "::error::Expected one full installer digest for $image"
-              exit 1
-            fi
-
-            source="quay.io/minio/$image@$digest"
-            repository="ghcr.io/wasalx/$image"
-            tag="$repository:sha256-${digest#sha256:}"
-            # A single image manifest must retain its media type and digest.
-            if ! docker buildx imagetools create --prefer-index=false --tag "$tag" "$source"; then
-              echo "::notice::Quay copy failed for $image. Trying the same digest from the fallback."
-              source="ghcr.io/netvark/$image@$digest"
-              docker buildx imagetools create --prefer-index=false --tag "$tag" "$source"
-            fi
-
-            source_digest=$(manifest_digest "$source")
-            mirrored_digest=$(manifest_digest "$tag")
-            if [[ "$source_digest" != "$digest" || "$mirrored_digest" != "$digest" ]]; then
-              echo "::error::Digest mismatch for $repository (expected $digest, source $source_digest, mirror $mirrored_digest)"
-              exit 1
-            fi
-            echo "Verified $repository@$digest"
-          done
+      - name: Publish and verify installer object-storage mirrors
+        run: python3 -B scripts/release/installer-mirror-images.py publish
