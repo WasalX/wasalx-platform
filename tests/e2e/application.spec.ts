@@ -21,6 +21,7 @@ import { registerOperationsScreenshots } from "./operations-screenshots.fixture"
 import type { TeamAccessData } from "../../lib/control-plane-data";
 import { expectAxeClean } from "../helpers/axe";
 import { captureTenantDesign, verifyRuleModalLabels } from "./design-evidence.fixture";
+import { registerConnectionListJourneys } from "./connection-list.fixture";
 import { expect, test, type Page } from "@playwright/test";
 
 const role = process.env.WASALX_E2E_ROLE ?? "tenant_owner";
@@ -315,6 +316,7 @@ async function open(page: Page, view = "overview") {
 }
 
 if (role === "tenant_owner") {
+  registerConnectionListJourneys("en", open);
   test("owner captures tenant surfaces in light and dark", async ({ page }, testInfo) => {
     await captureTenantDesign(page, testInfo, "en", open);
   });
