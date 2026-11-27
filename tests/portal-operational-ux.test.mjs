@@ -110,7 +110,7 @@ test("overview metric titles carry no empty info marks", async () => {
   assert.match(app, /<span>\s*\{t\("tenant\.overview\.workingConnections"\)\}\s*<\/span>/u);
 });
 
-test("visible refresh lets slow requests finish and recovers after cancellation and callback failure", async () => {
+test("visible refresh preserves slow requests, coalesces foreground events and recovers after cancellation or failure", async () => {
   const source = await read("app/use-visible-refresh.ts");
   const emitted = ts.transpileModule(source, {
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ES2022 },
@@ -143,30 +143,44 @@ test("visible refresh lets slow requests finish and recovers after cancellation 
 
   tick(); await flushFrame();
   assert.equal(requests.length, 1);
-  tick(); browser.dispatchEvent(new Event("focus")); await flushFrame();
-  assert.equal(requests.length, 1, "a pending request survives later polling ticks");
-  assert.equal(requests[0].signal.aborted, false);
-  requests[0].resolve(); await drain();
   tick(); await flushFrame();
-  assert.equal(requests.length, 2, "polling resumes after the request finishes");
+  assert.equal(requests[0].signal.aborted, false);
+  requests[0].resolve(); await drain(); await flushFrame();
+  assert.equal(requests.length, 1, "polling during a pending request does not queue another request");
 
+  tick(); await flushFrame();
+  browser.dispatchEvent(new Event("focus"));
+  browser.dispatchEvent(new Event("focus"));
+  await flushFrame();
+  assert.equal(requests.length, 2, "foreground events wait for the current request");
+  assert.equal(requests[1].signal.aborted, false);
+  requests[1].resolve(); await drain(); await flushFrame();
+  assert.equal(requests.length, 3, "the queued focus refresh starts without another polling tick");
+  requests[2].resolve(); await drain(); await flushFrame();
+  assert.equal(requests.length, 3, "multiple foreground events coalesce into one refresh");
+
+  tick(); await flushFrame();
+  browser.dispatchEvent(new Event("focus"));
   document.visibilityState = "hidden";
   document.dispatchEvent(new Event("visibilitychange"));
-  assert.equal(requests[1].signal.aborted, true);
+  assert.equal(requests[3].signal.aborted, true);
   document.visibilityState = "visible";
   document.dispatchEvent(new Event("visibilitychange")); await flushFrame();
-  assert.equal(requests.length, 3, "returning to the tab starts fresh work");
-  requests[1].resolve(); await drain();
+  assert.equal(requests.length, 5, "returning to the tab starts fresh work");
+  requests[3].resolve(); await drain();
   tick(); await flushFrame();
-  assert.equal(requests.length, 3, "settling an aborted request cannot clear a newer pending request");
-  requests[2].resolve(); await drain();
+  assert.equal(requests.length, 5, "settling an aborted request cannot clear a newer pending request");
+  requests[4].resolve(); await drain(); await flushFrame();
+  assert.equal(requests.length, 5, "hiding the tab clears the queued focus refresh");
 
   fail = true; tick(); await flushFrame();
   fail = false; tick(); await flushFrame();
-  assert.equal(requests.length, 4, "a synchronous callback error does not stop future polling");
+  assert.equal(requests.length, 6, "a synchronous callback error does not stop future polling");
+  browser.dispatchEvent(new Event("focus"));
   for (const cleanup of cleanups) cleanup?.();
-  assert.equal(requests[3].signal.aborted, true);
+  assert.equal(requests[5].signal.aborted, true);
   assert.equal(tick, null);
+  requests[5].resolve(); await drain();
   browser.dispatchEvent(new Event("focus"));
   assert.equal(frames.size, 0);
 });
