@@ -150,6 +150,27 @@ export function registerOperationsScreenshots(locale: "en" | "ar") {
         await capture("list", screen.listReady(page));
         if (screen.area === "client-routing") {
           await expectInlineBadgeDots(page);
+          // A connector card's two actions share one row; on phones they stack at equal full width.
+          const actionLabels = ["routing.sources.copy", "routing.sources.syncNow", "routing.sources.retry", "routing.sources.requesting"].map((key) => messages[key]!);
+          const actionPairs = await page.locator(".routing-source-list li").evaluateAll((cards, labels) =>
+            cards.map((card) => [...card.querySelectorAll("button")].filter((button) => labels.includes(button.textContent!.trim())).map((button) => {
+              const box = button.getBoundingClientRect();
+              return { left: box.left, top: box.top, width: box.width };
+            })).filter((pair) => pair.length === 2),
+          actionLabels);
+          expect(actionPairs.length).toBeGreaterThan(0);
+          for (const [first, second] of actionPairs) {
+            if (testInfo.project.name === "mobile-390") {
+              expect(second.top).toBeGreaterThan(first.top);
+              expect(Math.abs(second.width - first.width)).toBeLessThanOrEqual(1);
+              expect(Math.abs(second.left - first.left)).toBeLessThanOrEqual(1);
+            } else {
+              expect(Math.abs(second.top - first.top)).toBeLessThanOrEqual(1);
+              // The first action sits at the inline start, so Arabic mirrors the row.
+              if (locale === "ar") expect(second.left).toBeLessThan(first.left);
+              else expect(second.left).toBeGreaterThan(first.left);
+            }
+          }
           const table = page.getByRole("region", { name: messages["routing.clients.tableLabel"], exact: true });
           const fit = await table.evaluate((region) => ({
             overflows: region.scrollWidth > region.clientWidth + 1,
