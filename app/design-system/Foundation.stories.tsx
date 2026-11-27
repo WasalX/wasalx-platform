@@ -67,7 +67,7 @@ function TokenReference() {
 function ThemeParityReference() {
   return (
     <main className="wx-story-section">
-      <header>
+      <header style={{ paddingInlineStart: "var(--wx-space-4)" }}>
         <small>THEME CONTRACT</small>
         <h1>Light and dark are peers</h1>
         <p>The same semantic surfaces and statuses are reviewed in both themes before a component is accepted.</p>
