@@ -96,6 +96,23 @@ export function registerOperationsScreenshots(locale: "en" | "ar") {
         const capture = async (state: string, ready: Locator) => {
           await expect(ready).toBeVisible();
           await expect(application).toHaveCSS("color-scheme", theme);
+          // The root canvas follows the theme, so a full-page capture never ends in a white band.
+          const background = (target: Locator) =>
+            target.evaluate(
+              (element) => getComputedStyle(element).backgroundColor,
+            );
+          expect(await background(page.locator("html"))).toBe(
+            await background(application),
+          );
+          if (screen.area === "message-delivery" && state === "list") {
+            // Every delivery's status and actions fit without sideways scrolling, on phones too.
+            const table = page.locator(".table-scroll").filter({ has: ready });
+            expect(
+              await table.evaluate(
+                (element) => element.scrollWidth - element.clientWidth,
+              ),
+            ).toBeLessThanOrEqual(0);
+          }
           const fullPage = state !== "detail";
           if (fullPage) {
             await page.evaluate(() =>
