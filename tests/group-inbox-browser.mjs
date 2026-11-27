@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { chromium, expect } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
+import { languageTag } from "../lib/i18n/locales.ts";
 
 const base = process.env.WASALX_STORYBOOK_URL ?? "http://127.0.0.1:6227";
 const output = process.env.WASALX_SYNTHETIC_UI_OUTPUT ?? "output/playwright/inbox";
@@ -12,6 +13,7 @@ const MEDIA = "51000000-0000-4000-8000-000000000003", BM = "51000000-0000-4000-8
 const NEWEST = "51000000-0000-4000-8000-000000000005";
 const ANCIENT = "51000000-0000-4000-8000-000000000006";
 const stamp = "2026-10-18T09:00:00.000Z";
+const ancientMessageTime = "2026-10-17T22:30:00.000Z";
 const recoveryKey = "wasalx:group-receipts:storybook:group-ui:synthetic-operator";
 const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l9sAAAAASUVORK5CYII=", "base64");
 const summary = [];
@@ -93,7 +95,7 @@ async function fixture(page) {
         (input.scope !== "TEAM" || group.id === B)), next_cursor: null });
       case "GROUP_SHOW": return reply(groups.find(group => group.id === input.group_id));
       case "GROUP_MESSAGES": return reply({ items: input.before ? [input.before === OLD
-        ? message(ANCIENT, "Customer request before the historical source.", { provider_timestamp: "2026-10-18T07:00:00.000Z" })
+        ? message(ANCIENT, "Customer request before the historical source.", { provider_timestamp: ancientMessageTime })
         : message(OLD, "Earlier original customer request.", { provider_timestamp: "2026-10-18T08:00:00.000Z" })] : messages.get(input.group_id),
         next_cursor: input.before || input.group_id !== A ? null : MEDIA });
       case "GROUP_CONTEXT": return reply({ items: [message(input.message_id, "Earlier original customer request.", {
@@ -388,6 +390,16 @@ try {
     await button("groups.older").click();
     await historicalPage;
     await expect(row(ANCIENT)).toBeVisible();
+    const messageTime = row(ANCIENT).locator("time");
+    const expectedMessageTime = await page.evaluate(
+      ({ tag, instant }) => new Intl.DateTimeFormat(tag, {
+        dateStyle: "medium", timeStyle: "short", timeZone: "Asia/Riyadh",
+      }).format(new Date(instant)),
+      { tag: languageTag(locale), instant: ancientMessageTime },
+    );
+    await expect(messageTime).toBeVisible();
+    await expect(messageTime).toHaveText(expectedMessageTime);
+    await expect(messageTime).toHaveAttribute("datetime", ancientMessageTime);
     await expect(button("groups.older")).toHaveCount(0);
     await exerciseReadCallbacks();
     await expect(button("groups.latest")).toBeVisible();
