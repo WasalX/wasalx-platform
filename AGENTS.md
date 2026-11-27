@@ -71,7 +71,7 @@ Only a critical change gets a review: one independent full-diff review at the ex
 - **Real people's or customer data** — [control API migrations](services/control-api/migrations/), deletion and retention, audit logs and history, backups and restore, sign-in and permissions, and the personal data an API response, export, or outbound message carries. The server is the exposure boundary, so a UI that only shows fields the API already returns is not critical.
 - **Making anything public** — including `tests/no-agent-instruction-files.test.mjs`.
 - **Hosts, networks, and firewalls** — including network and access-control configuration.
-- **Repo settings, branch protection, and release gates** — rulesets, required checks, `.github/`, CI scripts, `scripts/release/`, the privacy deny check, and deleting, skipping, or weakening a test.
+- **Repo settings, branch protection, and release gates** — rulesets, required checks, `.github/`, CI scripts, `scripts/release/`, the privacy deny check, and deleting, skipping, or weakening a test. Source-gate settings include `.pre-commit-config.yaml`, `.rubocop.yml`, `eslint.config.mjs`, `.gitignore`, the `prettier`, `stylelint`, and `scripts` blocks of `package.json`, and any added formatter or linter configuration or ignore file (such as `.prettierignore` or `.stylelintignore`).
 
 WasalX records no safety-critical domain rules.
 
