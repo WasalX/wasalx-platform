@@ -149,8 +149,12 @@ test("tracked tests belong to a named CI runner or the test allowlist", async ()
     return exe === "pnpm" && (action === "run" ? script : action);
   }).filter(script => script && Object.hasOwn(scripts, script)));
   const runnerNames = [...Object.keys(jobs), ...ciScripts];
-  const runnerText = runner => Object.hasOwn(jobs, runner) ? runText(jobs[runner])
-    : Object.hasOwn(scripts, runner) ? scripts[runner] : "";
+  const runnerText = runner => {
+    const job = jobs[runner];
+    if (!job) return scripts[runner] ?? "";
+    const calledJobs = workflowJobs.get(job.uses?.replace(/^\.\//u, ""));
+    return calledJobs ? Object.values(calledJobs).map(runText).join("\n") : runText(job);
+  };
   assert(runsFile(runnerText("checks"), "scripts/hosted-ci.mjs", "unit"), "The unit inventory must run in CI");
 
   const unitWrappers = await Promise.all(["tests/application-e2e-harness.test.mjs", "tests/ci-phase-admission.test.mjs",
@@ -173,10 +177,18 @@ test("tracked tests belong to a named CI runner or the test allowlist", async ()
       "tests/visual/inbox-synthetic.spec.ts", "scripts/storybook-visual-regression.mjs", "scripts/run-application-e2e.mjs"].map(read));
   const operatorRunner = await read("tests/hosted-platform-operator.mjs");
   const identityRunner = await read("tests/hosted-keycloak-identity.mjs");
-  const fixtureSpecs = new Map(jobs["application-e2e"].strategy.matrix.locale.map(locale => {
-    const cases = discoverBrowserCases({ argv: ["pnpm", "test:e2e"], env: {
-      WASALX_E2E_LOCALES: locale, WASALX_E2E_ROLES: "tenant_owner", WASALX_E2E_PLATFORM_URL: "",
-    } });
+  const applicationMatrix = jobs["application-e2e"].strategy.matrix;
+  const ownerSuites = applicationMatrix.suite.filter(suite => suite.roles === "tenant_owner");
+  const fixtureSpecs = new Map(applicationMatrix.locale.map(locale => {
+    const argv = ["pnpm", "test:e2e"];
+    const env = { WASALX_E2E_LOCALES: locale, WASALX_E2E_ROLES: "tenant_owner",
+      WASALX_E2E_PLATFORM_URL: "", WASALX_E2E_OWNER_PART: "" };
+    const cases = discoverBrowserCases({ argv, env });
+    const splitCases = ownerSuites.flatMap(suite => discoverBrowserCases({
+      argv, env: { ...env, WASALX_E2E_OWNER_PART: suite.owner_part },
+    }));
+    assert.deepEqual(splitCases.sort((a, b) => a.id.localeCompare(b.id, "en")), cases,
+      `Owner shards must run every ${locale} case exactly once`);
     return [locale, new Set(cases.filter(row => row.expectedStatus !== "skipped").map(row => posix.join("tests/e2e", row.file)))];
   }));
   const runsTofu = /^\s+"\$\{TOFU\[@\]\}" -chdir=infra\/terraform test -no-color$/mu.test(validation)
@@ -260,9 +272,19 @@ test("CI job timeouts are covered by the measured limits", async () => {
   const timing = JSON.parse(await read(".github/ci-timings.json"));
   const configured = Object.entries(jobs).filter(([, job]) => Object.hasOwn(job, "timeout-minutes"));
   // These jobs landed after the timing sample and still need measurements.
-  const unmeasured = ["application-e2e", "installer-portal", "keycloak-identity", "platform-operator-e2e", "portal-browser-build", "seed-caches"];
+  const unmeasured = ["installer-portal", "keycloak-identity", "platform-operator-e2e", "portal-browser-build", "seed-caches"];
   assert.deepEqual(configured.map(([id]) => id).sort(), [...Object.keys(timing.jobs), ...unmeasured].sort());
-  for (const [id, { p95_minutes: p95 }] of Object.entries(timing.jobs)) {
+  for (const [id, { p95_minutes: p95, owner_parts: ownerParts }] of Object.entries(timing.jobs)) {
+    if (id === "application-e2e") {
+      const ownerSuites = jobs[id].strategy.matrix.suite.filter(suite => suite.roles === "tenant_owner");
+      assert.deepEqual(ownerSuites.map(suite => suite.owner_part).sort(), Object.keys(ownerParts).sort());
+      for (const { owner_part, timeout } of ownerSuites) {
+        const partP95 = ownerParts[owner_part].p95_minutes;
+        assert(Number.isFinite(partP95) && partP95 > 0, owner_part);
+        assert.equal(timeout, Math.ceil(partP95 * 1.25), owner_part);
+      }
+      continue;
+    }
     const timeout = jobs[id]["timeout-minutes"];
     assert(Number.isInteger(timeout) && timeout > 0 && timeout <= Math.ceil(p95 * 1.25), id);
   }
@@ -892,14 +914,18 @@ test("Application browser CI shards roles and locales and reuses the portal buil
   assert.match(application.if, /needs\.changes\.outputs\.application-e2e != 'false'/u);
   assert.deepEqual(application.needs, ["changes", "portal-browser-build"]);
   assert.deepEqual(application.strategy.matrix.locale, ["en", "ar"]);
-  assert.deepEqual(application.strategy.matrix.roles.flatMap(roles => roles.split(",")),
-    ["tenant_owner", "tenant_admin", "supervisor", "agent", "auditor"]);
+  assert.equal(application["timeout-minutes"], "${{ matrix.suite.timeout }}");
+  assert.deepEqual(application.strategy.matrix.suite.map(({ roles, owner_part }) => [roles, owner_part]), [
+    ["tenant_owner", "desktop"], ["tenant_owner", "mobile-tablet"],
+    ["tenant_admin,supervisor", undefined], ["agent,auditor", undefined],
+  ]);
   assert(build.steps.some(step => step.run === "pnpm run build"));
   const run = application.steps.find(step => runsFile(step.run ?? "", "scripts/run-application-e2e.mjs"));
   assert.deepEqual(run.env, {
     WASALX_E2E_SKIP_BUILD: "1",
     WASALX_E2E_LOCALES: "${{ matrix.locale }}",
-    WASALX_E2E_ROLES: "${{ matrix.roles }}",
+    WASALX_E2E_ROLES: "${{ matrix.suite.roles }}",
+    WASALX_E2E_OWNER_PART: "${{ matrix.suite.owner_part }}",
   });
   const artifact = build.steps.find(step => step.uses?.startsWith("actions/upload-artifact@")).with.name;
   for (const job of [portal, application]) {
@@ -1006,7 +1032,7 @@ test("Hosted browser jobs retain Playwright diagnostics on failure or cancellati
   const { jobs } = parse(await read(".github/workflows/ci.yml"));
   const diagnostics = {
     "application-e2e": {
-      name: "application-e2e-${{ matrix.locale }}-${{ matrix.roles }}",
+      name: "application-e2e-${{ matrix.locale }}-${{ matrix.suite.roles }}${{ matrix.suite.owner_part && format('-{0}', matrix.suite.owner_part) || '' }}",
       paths: ["output/playwright/application*/*/report/**", "output/playwright/application*/*/results/**"],
     },
     storybook: {
@@ -1033,18 +1059,21 @@ test("Successful owner fixture shards retain every named journey PNG", async t =
     step.uses?.startsWith("actions/upload-artifact@") && step.if !== "failure() || cancelled()");
   assert.equal(uploads.length, 1);
   const [upload] = uploads;
-  const ownerSuccess = "success() && matrix.roles == 'tenant_owner'";
+  const ownerSuccess = "success() && matrix.suite.roles == 'tenant_owner'";
   assert(journeys);
   assert(verify);
   assert.equal(verify.if, ownerSuccess);
   assert.equal(upload.if, ownerSuccess);
   assert(steps.indexOf(verify) > steps.indexOf(journeys));
   assert(steps.indexOf(upload) > steps.indexOf(verify));
-  assert.equal(upload.with.name, "application-journey-captures-${{ matrix.locale }}");
+  assert.equal(upload.with.name, "application-journey-captures-${{ matrix.locale }}-${{ matrix.suite.owner_part }}");
   assert.equal(upload.with.path, "${{ steps.journey-captures.outputs.paths }}");
   assert.equal(upload.with["if-no-files-found"], "error");
   assert.equal(upload.with["retention-days"], 7);
-  assert.equal(verify.env.CAPTURE_LOCALE, "${{ matrix.locale }}");
+  assert.deepEqual(verify.env, {
+    CAPTURE_LOCALE: "${{ matrix.locale }}",
+    CAPTURE_VIEWPORT: "${{ matrix.suite.owner_part == 'desktop' && 'desktop' || 'mobile-390' }}",
+  });
 
   const directory = await mkdtemp(join(tmpdir(), "journey-captures-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
@@ -1053,27 +1082,32 @@ test("Successful owner fixture shards retain every named journey PNG", async t =
   await writeFile(join(directory, script), await read(script));
 
   for (const locale of ["en", "ar"]) {
-    const paths = journeyCapturePaths(locale);
-    assert(paths.length > 1);
-    assert.equal(new Set(paths).size, paths.length);
-    for (const path of paths) {
-      await mkdir(join(directory, posix.dirname(path)), { recursive: true });
-      await writeFile(join(directory, path), "synthetic capture");
+    const viewports = ["desktop", "mobile-390"];
+    const allPaths = journeyCapturePaths(locale);
+    assert.deepEqual(viewports.flatMap(viewport => journeyCapturePaths(locale, viewport)).sort(), allPaths.sort());
+    assert.equal(new Set(allPaths).size, allPaths.length);
+    for (const viewport of viewports) {
+      const paths = journeyCapturePaths(locale, viewport);
+      assert(paths.length > 1);
+      for (const path of paths) {
+        await mkdir(join(directory, posix.dirname(path)), { recursive: true });
+        await writeFile(join(directory, path), "synthetic capture");
+      }
+
+      const output = join(directory, "outputs");
+      const env = { CAPTURE_LOCALE: locale, CAPTURE_VIEWPORT: viewport, GITHUB_OUTPUT: output };
+      const complete = runWorkflowScript(verify.run, env, directory);
+      assert.equal(complete.status, 0, complete.stderr);
+      assert.equal(await readFile(output, "utf8"), `paths<<CAPTURES\n${paths.join("\n")}\nCAPTURES\n`);
+
+      const [first] = paths;
+      await rename(join(directory, first), join(directory, first.replace(/\.png$/u, "-renamed.png")));
+      await rm(output);
+      const partial = runWorkflowScript(verify.run, env, directory);
+      assert.equal(partial.status, 1, partial.stderr);
+      assert(partial.stderr.includes(first), partial.stderr);
+      await assert.rejects(readFile(output), { code: "ENOENT" });
     }
-
-    const output = join(directory, "outputs");
-    const env = { CAPTURE_LOCALE: locale, GITHUB_OUTPUT: output };
-    const complete = runWorkflowScript(verify.run, env, directory);
-    assert.equal(complete.status, 0, complete.stderr);
-    assert.equal(await readFile(output, "utf8"), `paths<<CAPTURES\n${paths.join("\n")}\nCAPTURES\n`);
-
-    const [first] = paths;
-    await rename(join(directory, first), join(directory, first.replace(/\.png$/u, "-renamed.png")));
-    await rm(output);
-    const partial = runWorkflowScript(verify.run, env, directory);
-    assert.equal(partial.status, 1, partial.stderr);
-    assert(partial.stderr.includes(first), partial.stderr);
-    await assert.rejects(readFile(output), { code: "ENOENT" });
   }
 });
 
@@ -1635,6 +1669,7 @@ test("optional PR lanes run on diff errors and gate their applicable checks", as
       "services/control-api/", "services/connector-worker/", "packages/", "lib/domain.ts", "lib/literal-matcher.ts",
       "scripts/build-services.mjs", "tsconfig.json", ":(glob)services/*/tsconfig*.json", ".gitattributes",
       "tests/outbound-media.test.mjs", "tests/simulation-portal-reply-browser.test.mjs",
+      "tests/zammad-sidebar-component-harness.test.mjs",
       "scripts/release/simulation-portal-reply-browser.mjs",
       ":(glob)**/package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", ".npmrc", "patches/",
       ".github/actions/ci-pnpm/", ".github/workflows/ci.yml", ".github/workflows/zammad-compatibility.yml",
@@ -1761,6 +1796,7 @@ test("Zammad compatibility selects changes to outbound dependencies and service 
     ["app/api/inbox/attachment/route.ts", true],
     ["lib/i18n/messages/ar/cases.ts", true],
     ["tests/simulation-portal-reply-browser.test.mjs", true],
+    ["tests/zammad-sidebar-component-harness.test.mjs", true],
     ["tests/support/ci-fixture-network.mjs", true],
     ["docs/release.md", false],
   ]) {
@@ -1797,6 +1833,12 @@ test("Zammad compatibility gates CI and reuses the same job on the nightly sched
   assert(Object.hasOwn(compatibility.on, "workflow_call"));
   assert.deepEqual(compatibility.permissions, { contents: "read" });
   assert.equal(compatibility.jobs.compatibility["runs-on"], "ubuntu-24.04");
+  const steps = compatibility.jobs.compatibility.steps;
+  const fetch = steps.findIndex(step => /^pnpm run zammad:fetch$/mu.test(step.run ?? ""));
+  const install = steps.findIndex(step => step["working-directory"] === ".zammad-addon/tests/zammad-sidebar-component"
+    && step.run === "pnpm install --frozen-lockfile");
+  const harness = steps.findIndex(step => runsFile(step.run ?? "", "tests/zammad-sidebar-component-harness.test.mjs"));
+  assert(fetch >= 0 && fetch < install && install < harness);
   const manifest = JSON.parse(await read("infra/docker/full/zammad/typecheck-upstream.json"));
   const dockerfile = (await read("infra/docker/Dockerfile.zammad")).replaceAll("\r\n", "\n");
   assert.match(manifest.revision, /^[a-f0-9]{40}$/u);

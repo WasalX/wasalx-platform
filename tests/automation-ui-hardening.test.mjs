@@ -23,6 +23,7 @@ test("workflow editing protects recovery drafts and manages operator focus", asy
   assert.match(bot, /setPresentation\(\(current\) => \{[\s\S]*\.\.\.current\.nodePositions, \[nodeId\]: position/u);
   assert.match(bot, /scrollIntoView\(\{ behavior: "auto", block: "center" \}\)/u);
   assert.match(bot, /<FlowSimulator key=\{String\(row\.flow_version_id\)\}/u);
+  assert.match(bot, /<pre dir="ltr" aria-label=\{t\("bot\.flow\.schema\.label"\)\}>/u, "flow schema JSON keeps left-to-right order on RTL pages");
   assert.doesNotMatch(bot, /<code>\{node\.id\}<\/code>/u);
   assert.doesNotMatch(bot, /\{nodeTitle\(node\.type, t\)\} · \{node\.id\}/u);
   assert.match(canvas, /ariaLabel: t\("bot\.canvas\.edge", \{ from: stepLabel\(node\.id\), to: stepLabel\(transition\.target\)/u);
@@ -79,7 +80,9 @@ test("routing editor focus and sync errors are operator-safe", async () => {
   assert.match(routing, /requestFence\.current\.isCurrent\(request\)/u);
   assert.match(routing, /error\.code === "REAUTHENTICATION_REQUIRED"/u);
   assert.doesNotMatch(routing, /requiresRoutingStepUp|reauthenticate\|أعد التحقق/u);
-  assert.match(routing, /<span aria-hidden="true"> · <\/span>[\s\S]*routing\.versions\.createdAt[\s\S]*<bdi>/u);
+  // The version date sits on its own line, so no visible separator precedes it (#599).
+  assert.doesNotMatch(routing, /<span aria-hidden="true"> · <\/span>\s*<small>\s*<span className="sr-only">\{t\("routing\.versions\.createdAt"\)\}/u);
+  assert.match(routing, /<span className="sr-only">\{t\("routing\.versions\.createdAt"\)\} <\/span>\s*<bdi>/u);
 });
 
 test("new automation hardening copy is complete in English and Arabic", async () => {

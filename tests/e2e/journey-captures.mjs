@@ -36,11 +36,12 @@ export function journeyCapturePath(capture, viewport, theme, locale) {
   return `output/playwright/journey-captures/${capture}-${viewport}-${theme}-${locale}.png`;
 }
 
-export function journeyCapturePaths(locale) {
+export function journeyCapturePaths(locale, viewport) {
+  const selectedViewports = viewport === undefined ? viewports : [viewport];
   return Object.entries(captures).flatMap(([capture, captureThemes]) =>
-    viewports.flatMap((viewport) =>
+    selectedViewports.flatMap((captureViewport) =>
       captureThemes.map((theme) =>
-        journeyCapturePath(capture, viewport, theme, locale),
+        journeyCapturePath(capture, captureViewport, theme, locale),
       ),
     ),
   );
@@ -50,7 +51,7 @@ if (
   process.argv[1] &&
   resolve(process.argv[1]) === fileURLToPath(import.meta.url)
 ) {
-  const paths = journeyCapturePaths(process.argv[2]);
+  const paths = journeyCapturePaths(process.argv[2], process.argv[3]);
   const missing = paths.filter((path) => {
     const file = lstatSync(path, { throwIfNoEntry: false });
     return !file?.isFile() || !file.size;

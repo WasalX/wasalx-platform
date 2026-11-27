@@ -119,7 +119,7 @@ test("operator failures and unknown states never expose raw internal copy", asyn
   assert.match(shell, /function ruleReadinessIssue/u);
   assert.match(shell, /tenant\.rules\.readiness\.issue\.unknown/u);
   assert.doesNotMatch(shell, /String\(item\.message\)|label\(item\.code\)/u);
-  assert.match(styles, /\.routing-table-wrap:focus-visible\{outline:2px solid var\(--accent\)/u);
+  assert.match(styles, /\.table-scroll:focus-visible\{outline:2px solid var\(--accent\)/u);
   assert.doesNotMatch(styles, /var\(--focus\)/u);
 
   for (const dictionary of [englishTenantMessages, arabicTenantMessages]) {
