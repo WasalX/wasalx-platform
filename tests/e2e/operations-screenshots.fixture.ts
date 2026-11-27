@@ -151,7 +151,7 @@ export function registerOperationsScreenshots(locale: "en" | "ar") {
         if (screen.area === "client-routing") {
           await expectInlineBadgeDots(page);
           // A connector card's two actions share one row; on phones they stack at equal full width.
-          const actionLabels = ["routing.sources.copy", "routing.sources.syncNow", "routing.sources.retry", "routing.sources.requesting"].map((key) => messages[key]!);
+          const actionLabels = (["routing.sources.copy", "routing.sources.syncNow", "routing.sources.retry", "routing.sources.requesting"] as const).map((key) => messages[key]);
           const actionPairs = await page.locator(".routing-source-list li").evaluateAll((cards, labels) =>
             cards.map((card) => [...card.querySelectorAll("button")].filter((button) => labels.includes(button.textContent!.trim())).map((button) => {
               const box = button.getBoundingClientRect();
