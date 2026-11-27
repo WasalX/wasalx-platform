@@ -625,6 +625,17 @@ try {
         await expect(groupsMode).toHaveCSS("align-items", "center");
         await expect(groupsMode).toHaveCSS("outline-width", "2px");
         await expect(groupsMode).toHaveCSS("outline-style", "solid");
+        // Card actions (DESIGN.md): one row in reading order on desktop; an equal full-width stack at 760 px and below.
+        const actionRows = await group().locator(".wx-group-messages button").evaluateAll((buttons, names) => [...new Set(buttons
+          .filter(item => names.includes(item.textContent)).map(item => item.parentElement))].map(row => ({ rtl: getComputedStyle(row).direction === "rtl",
+          width: row.getBoundingClientRect().width, items: [...row.children].map(item => item.getBoundingClientRect()).filter(box => box.width)
+            .map(box => ({ left: box.left, right: box.right, width: box.width, middle: (box.top + box.bottom) / 2 })) })),
+        [t("groups.quoteReply"), t("groups.createTicket"), t("groups.linkTicket")]);
+        assert.ok(actionRows.some(row => row.items.length >= 3), `${locale}:${theme}:${name}: message actions render`);
+        for (const { rtl, width: rowWidth, items } of actionRows) items.forEach((item, index) => assert.ok(width <= 760
+          ? Math.abs(item.width - rowWidth) <= 1 && Math.abs(item.left - items[0].left) <= 1
+          : Math.abs(item.middle - items[0].middle) <= 1 && (!index || (rtl ? item.right <= items[index - 1].left : item.left >= items[index - 1].right)),
+        `${locale}:${theme}:${name}: message action ${index} breaks the card actions layout: ${JSON.stringify({ rowWidth, items })}`));
         await page.screenshot({ path: `${output}/group-${locale}-${theme}-${name}.png`, fullPage: true });
         const accessibility = await new AxeBuilder({ page }).include(".wx-group").withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze();
         assert.deepEqual(accessibility.violations.map(item => ({ id: item.id, impact: item.impact })), [], `${locale}:${theme}:${name}: axe`);
@@ -678,7 +689,7 @@ try {
   await page.locator(".wx-group-choice").filter({ hasText: "Customers A" }).click();
   await expect(page.locator(".wx-group-header h2")).toHaveText("Customers A");
   await expect(page.locator("#wx-group-message")).toHaveCount(0);
-  await expect(page.locator(".wx-group-messages .wx-group-actions")).toHaveCount(0);
+  await expect(page.locator(".wx-group-messages .wx-card-actions")).toHaveCount(0);
   assert.equal(state.writes.length, 0);
   assert.equal(state.count("GROUP_READ"), 0, "read-only view does not advance team read markers");
   await context.close();

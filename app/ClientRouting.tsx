@@ -893,7 +893,7 @@ function SourceList({
                 </p>
               ) : null}
               {webhookPath || (canWrite && state) ? (
-                <div className="routing-source-actions">
+                <div className="routing-source-actions wx-card-actions">
                   {webhookPath ? (
                     <button
                       type="button"

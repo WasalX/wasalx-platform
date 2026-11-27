@@ -164,7 +164,7 @@ One neutral zinc ramp, one violet accent, three status colors and two provider m
 - **Direction:** logical properties only (`inline-start/end`, `padding-inline`, `text-align: start`). Physical `left/right` is a defect. A known gap: `primitives.css` `.wx-data-panel th, td` use `text-align: left`; fix this before the primitive is used in the product.
 - **Code and data fields** (JSON, IDs, template names, keys) set `dir="ltr"` so they keep left-to-right order on RTL pages; their labels and errors follow the page direction.
 - **Tables:** 37 px headers, 57 px rows; wide tables sit in an `overflow-x: auto` wrapper and never scroll the whole page. On phones (760 px and below) a table whose status or row actions would scroll off screen stacks each row instead, as Message delivery does (`.delivery-table`), with each status badge at the inline end of the card's first row.
-- **Card actions:** a card's actions share one row, in reading order, when they fit; at 760 px and below they stack at equal full width, as Client routing connector cards do (`.routing-source-actions`).
+- **Card actions:** a card's actions share one row, in reading order, when they fit; at 760 px and below they stack at equal full width. The shared `.wx-card-actions` primitive gives this layout to Client routing connector cards and group message actions.
 
 ## Elevation & Depth
 
