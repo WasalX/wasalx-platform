@@ -604,6 +604,7 @@ export const englishAutomationMessages = {
   "automation.status.needsAttention": "Needs attention",
   "routing.starter.name": "Client ownership",
   "routing.starter.source": "Manual overrides",
+  "routing.sample.notionSource": "Notion client directory",
   "routing.errors.connectorStatus": "Connector status is unavailable.",
   "routing.errors.unavailable": "Client routing is unavailable.",
   "routing.errors.externalDisabled": "Data source connections are not enabled for this workspace.",
