@@ -274,64 +274,44 @@ test("CI job timeouts are covered by the measured limits", async () => {
   assert.equal(timing.workflow, workflow);
   assert.deepEqual(Object.keys(timing.jobs).sort(), Object.keys(jobs).sort());
   const images = JSON.parse(await read("scripts/release/product-images.json")).map(({ image }) => image);
-  const matrixAxes = {
-    checks: ["name", jobs.checks.strategy.matrix.include.map(({ name }) => name)],
-    "full-unit": ["name", jobs["full-unit"].strategy.matrix.include.map(({ name }) => name)],
-    integration: ["shard", jobs.integration.strategy.matrix.shard.map(String)],
-    "platform-operator-e2e": ["locale", jobs["platform-operator-e2e"].strategy.matrix.locale],
-    images: ["image", images],
-    "pr-images": ["image", images],
+  const { locale, suite } = jobs["application-e2e"].strategy.matrix;
+  const matrixLegs = {
+    checks: jobs.checks.strategy.matrix.include.map(({ name }) => name),
+    "full-unit": jobs["full-unit"].strategy.matrix.include.map(({ name }) => name),
+    integration: jobs.integration.strategy.matrix.shard.map(String),
+    "application-e2e": suite.flatMap(({ roles, owner_part }) =>
+      locale.map(language => [language, roles, owner_part].filter(Boolean).join(", "))),
+    "platform-operator-e2e": jobs["platform-operator-e2e"].strategy.matrix.locale,
+    images,
+    "pr-images": images,
   };
-  const cap = ({ p95_minutes: p95, runs }, id, minimum = 5) => {
+  const measuredP95 = ({ p95_minutes: p95, runs }, id) => {
     assert(Number.isFinite(p95) && p95 > 0, id);
-    assert(Number.isInteger(runs) && runs >= minimum, id);
-    return Math.ceil(p95 * 1.25);
+    assert(Number.isInteger(runs) && runs >= 5, id);
+    return p95;
   };
   for (const [id, job] of Object.entries(jobs)) {
     const record = timing.jobs[id];
-    const timeout = job["timeout-minutes"];
-    // The combined TypeScript comparison landed with four eligible runs.
-    const jobCap = cap(record, id, id === "typescript-comparison" ? 4 : 5);
+    let p95 = measuredP95(record, id);
     if (job.uses) {
       assert.equal(job.uses, "./" + record.workflow, id);
       continue;
     }
-    if (id === "application-e2e") {
-      const { locale, suite } = job.strategy.matrix;
-      const limits = Object.fromEntries(suite.flatMap(({ roles, owner_part, timeout }) => {
-        assert.deepEqual(Object.keys(timeout).sort(), [...locale].sort());
-        return locale.map(language => [
-          [language, roles, owner_part].filter(Boolean).join(", "), timeout[language],
-        ]);
-      }));
-      assert.deepEqual(limits, Object.fromEntries(Object.entries(record.legs).map(([leg, sample]) => [leg, cap(sample, leg)])));
-      continue;
-    }
-    if (Object.hasOwn(matrixAxes, id)) {
-      const [axis, legs] = matrixAxes[id];
+    const legs = matrixLegs[id];
+    assert.equal(Boolean(job.strategy?.matrix), Boolean(legs), id);
+    if (legs) {
       assert.deepEqual(Object.keys(record.legs).sort(), [...legs].sort(), id);
-      const limits = Object.fromEntries(legs.map(leg => [leg, cap(record.legs[leg], id + "/" + leg)]));
-      assert.equal(jobCap, Math.max(...Object.values(limits)), id);
-      if (Number.isInteger(timeout)) {
-        for (const limit of Object.values(limits)) assert.equal(timeout, limit, id);
-      } else {
-        const expression = /^\$\{\{ fromJSON\('\s*(\{.*\})\s*'\)\[(.+)\] \}\}$/u.exec(timeout);
-        assert(expression, id);
-        const lookup = axis === "shard" ? "format('{0}', matrix.shard)" : `matrix.${axis}`;
-        assert.equal(expression[2], lookup, id);
-        assert.deepEqual(JSON.parse(expression[1]), limits, id);
-      }
-      continue;
+      p95 = Math.max(...legs.map(leg => measuredP95(record.legs[leg], id + "/" + leg)));
+      assert.equal(record.p95_minutes, p95, id);
     }
-    assert.equal(job.strategy?.matrix, undefined, id);
-    assert.equal(timeout, jobCap, id);
+    assert.equal(job["timeout-minutes"], Math.ceil(p95 * 1.25), id);
   }
 
   const { publish } = timing.jobs;
   assert.equal(publish.workflow, ".github/workflows/branch-image.yml");
   const release = parse(await read(publish.workflow)).jobs.publish;
   assert.deepEqual(Object.keys(publish.image_legs).sort(), [...release.strategy.matrix.image].sort());
-  for (const [leg, sample] of Object.entries(publish.image_legs)) cap(sample, "publish/" + leg);
+  for (const [leg, sample] of Object.entries(publish.image_legs)) measuredP95(sample, "publish/" + leg);
   const image = "connector-worker";
   const p95 = publish.image_legs[image].p95_minutes;
   const matrixP95 = publish.p95_minutes;
@@ -1064,7 +1044,6 @@ test("Application browser CI shards roles and locales and reuses the portal buil
   assert.match(application.if, /needs\.changes\.outputs\.application-e2e != 'false'/u);
   assert.deepEqual(application.needs, ["changes", "portal-browser-build"]);
   assert.deepEqual(application.strategy.matrix.locale, ["en", "ar"]);
-  assert.equal(application["timeout-minutes"], "${{ matrix.suite.timeout[matrix.locale] }}");
   assert.deepEqual(application.strategy.matrix.suite.map(({ roles, owner_part }) => [roles, owner_part]), [
     ["tenant_owner", "desktop"], ["tenant_owner", "mobile-tablet"],
     ["tenant_admin,supervisor", undefined], ["agent,auditor", undefined],

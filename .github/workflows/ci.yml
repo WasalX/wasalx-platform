@@ -424,8 +424,7 @@ jobs:
     if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
     name: ${{ matrix.name }}
     runs-on: ubuntu-24.04
-    timeout-minutes: >-
-      ${{ fromJSON('{"Collection": 2, "Lint": 3, "Typecheck": 2, "Unit 1/2": 3, "Unit 2/2": 3}')[matrix.name] }}
+    timeout-minutes: 3
     strategy:
       fail-fast: false
       max-parallel: 5
@@ -621,8 +620,7 @@ jobs:
       (github.event_name == 'pull_request' && (needs.changes.result != 'success' || needs.changes.outputs.integration != 'false'))) }}
     name: PostgreSQL ${{ matrix.shard }}/4
     runs-on: ubuntu-24.04
-    timeout-minutes: >-
-      ${{ fromJSON('{"1": 4, "2": 3, "3": 4, "4": 4}')[format('{0}', matrix.shard)] }}
+    timeout-minutes: 4
     permissions:
       contents: read
     strategy:
@@ -765,7 +763,7 @@ jobs:
       needs.changes.outputs.application-e2e != 'false') }}
     name: Application E2E (${{ matrix.locale }}, ${{ matrix.suite.roles }}${{ matrix.suite.owner_part && format(', {0}', matrix.suite.owner_part) || '' }})
     runs-on: ubuntu-24.04
-    timeout-minutes: ${{ matrix.suite.timeout[matrix.locale] }}
+    timeout-minutes: 13
     env: *portal-browser-env
     strategy:
       fail-fast: false
@@ -774,14 +772,10 @@ jobs:
         suite:
           - roles: tenant_owner
             owner_part: desktop
-            timeout: {en: 10, ar: 8}
           - roles: tenant_owner
             owner_part: mobile-tablet
-            timeout: {en: 9, ar: 9}
           - roles: 'tenant_admin,supervisor'
-            timeout: {en: 13, ar: 12}
           - roles: 'agent,auditor'
-            timeout: {en: 5, ar: 5}
     steps:
       - *integration-checkout
       - *integration-node
@@ -912,16 +906,7 @@ jobs:
     if: ${{ !cancelled() && github.event_name == 'merge_group' && needs.changes.outputs.images == 'true' }}
     name: Build ${{ matrix.image }}${{ matrix.pending && ' (pending add-on source)' || '' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: >-
-      ${{ fromJSON('{
-      "connector-worker": 3, "control-api": 4, "foundation-keycloak": 3,
-      "foundation-postgres": 1, "identity-policy-activator": 3, "invitation-mailer": 3,
-      "portal": 3, "production-alertmanager": 1, "production-cloudflared": 2,
-      "production-ingress": 2, "production-otel": 1, "production-prometheus": 2,
-      "secret-sidecar": 2, "tenant-provisioner": 3, "tenant-workspace-controller": 3,
-      "workspace-configurator": 2, "workspace-provider": 2, "zammad": 4,
-      "zammad-memcached": 1, "zammad-nginx": 1, "zammad-redis": 1
-      }')[matrix.image] }}
+    timeout-minutes: 4
     strategy:
       fail-fast: false
       max-parallel: 21
@@ -971,16 +956,7 @@ jobs:
     if: ${{ !cancelled() && github.event_name == 'pull_request' && needs.changes.outputs.images == 'true' }}
     name: Build ${{ matrix.image }}${{ matrix.pending && ' (pending add-on source)' || '' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: >-
-      ${{ fromJSON('{
-      "connector-worker": 3, "control-api": 3, "foundation-keycloak": 4,
-      "foundation-postgres": 1, "identity-policy-activator": 3, "invitation-mailer": 3,
-      "portal": 3, "production-alertmanager": 2, "production-cloudflared": 2,
-      "production-ingress": 2, "production-otel": 2, "production-prometheus": 5,
-      "secret-sidecar": 2, "tenant-provisioner": 3, "tenant-workspace-controller": 3,
-      "workspace-configurator": 2, "workspace-provider": 3, "zammad": 4,
-      "zammad-memcached": 2, "zammad-nginx": 1, "zammad-redis": 1
-      }')[matrix.image] }}
+    timeout-minutes: 5
     strategy:
       fail-fast: false
       max-parallel: 8
