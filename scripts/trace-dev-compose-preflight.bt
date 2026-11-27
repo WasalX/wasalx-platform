@@ -63,7 +63,7 @@ tracepoint:syscalls:sys_enter_connect /@phase[pid]/
   if ($endpoint->family == 2 && $endpoint->port == 0 && $endpoint->address == 0x0100007f) {
     printf("%llu phase %d connect disconnected Engine endpoint\n", nsecs, @phase[pid]);
   } else if ($endpoint->family == 1) {
-    $path = str(uptr((char *)args->uservaddr + 2));
+    $path = str(uptr((uint8 *)((uint64)args->uservaddr + 2)));
     if ($path == "/var/run/docker.sock" || $path == "/run/docker.sock") {
       printf("%llu phase %d connect Docker Unix socket\n", nsecs, @phase[pid]);
     } else {
