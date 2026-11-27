@@ -142,8 +142,12 @@ class HostPacketTest(unittest.TestCase):
             install_text = lease_receipt("install", 24 * SECOND, timing("install", "full-top-hash", 8 * SECOND, 2 * SECOND))
             install.write_text(receipt_origin() + install_text, encoding="utf-8")
             rollback = parent / "rollback.raw"
-            rollback.write_text(receipt_origin(captured_ns=CAPTURED_NS + 1) + lease_receipt("rollback", 7 * SECOND),
-                                encoding="utf-8")
+            rollback.write_text(
+                receipt_origin(captured_ns=CAPTURED_NS + 1) + lease_receipt("rollback", 7 * SECOND) + "\n"
+                + receipt_origin(captured_ns=CAPTURED_NS + 11 * SECOND)
+                + lease_receipt("rollback", 7 * SECOND, lease_start=CAPTURED_NS + 10 * SECOND),
+                encoding="utf-8",
+            )
             receipt_hashes = [hashlib.sha256(path.read_bytes()).hexdigest() for path in (install, rollback)]
             identity = parent / "identity.json"
             fields = {**json.loads(self.example.read_bytes()), "LEASE_RECEIPT_POLICY": POLICY,
@@ -208,6 +212,8 @@ class HostPacketTest(unittest.TestCase):
             install.write_text(receipt_origin() + lease_receipt(
                 "install", 24 * SECOND, timing("install", "full-top-hash", 8 * SECOND, 2 * SECOND)), encoding="utf-8")
             fresh = lease_receipt("rollback", 7 * SECOND)
+            resumed = lease_receipt("rollback", 7 * SECOND, lease_start=CAPTURED_NS + 10 * SECOND)
+            future_tick = lease_receipt("rollback", RENDER_NS - LEASE_START_NS + 1)
             # Starts just before the oldest allowed tick and ends after capture, so only the stale start is wrong.
             stale = lease_receipt("rollback", 25 * SECOND, lease_start=RENDER_NS - 60 * SECOND - 1)
             for name, override, text in (
@@ -216,8 +222,12 @@ class HostPacketTest(unittest.TestCase):
                 ("other-inode", {"disk_inode": 20}, fresh),
                 ("expired", {"captured_ns": RENDER_NS - 60 * SECOND - 1}, fresh),
                 ("future", {"captured_ns": RENDER_NS + 1}, fresh),
+                ("malformed-origin", {"captured_ns": "invalid"}, fresh),
                 ("older-timings", {"captured_ns": CAPTURED_NS + 8 * SECOND}, fresh),
                 ("stale-lease-start", {}, stale),
+                ("future-tick", {}, future_tick),
+                ("missing-resumed-origin", {}, fresh + "\n" + resumed),
+                ("nonadjacent-origin", {}, fresh + "\n" + receipt_origin() + "diagnostic output\n" + resumed),
             ):
                 with self.subTest(name=name):
                     rollback.write_text(receipt_origin(**override) + text, encoding="utf-8")
@@ -232,6 +242,23 @@ class HostPacketTest(unittest.TestCase):
                     self.assertIn("export DISCARD_SECONDS=11400", env)
                     self.assertIn("export HASH_NS_PER_GB=0", env)
                     self.assertIn("export COMMIT_FALLBACK_SECONDS=25050", env)
+
+    def test_renderer_rejects_invalid_lease_receipt_policy(self):
+        with tempfile.TemporaryDirectory() as directory:
+            packet = Path(directory) / "packet"
+            identity = json.loads(self.example.read_bytes())
+            invalid_policies = [
+                True, "policy", {**POLICY, "extra": 1},
+                *({**POLICY, key: value}
+                  for key in ("disk_device", "disk_inode", "max_age_seconds")
+                  for value in (True, str(POLICY[key]))),
+            ]
+            for policy in invalid_policies:
+                with self.subTest(policy=policy):
+                    fields = {**identity, "LEASE_RECEIPT_POLICY": policy}
+                    with self.assertRaisesRegex(ValueError, "invalid LEASE_RECEIPT_POLICY"):
+                        renderer.render_host(fields, "20000101T000000Z", "1" * 40, [], packet)
+                    self.assertFalse(packet.exists())
 
     def test_renderer_seals_reviewed_reservations_and_refuses_hand_typed_budgets(self):
         with tempfile.TemporaryDirectory() as directory:

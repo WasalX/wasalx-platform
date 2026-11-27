@@ -310,6 +310,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Test disk proof and lease inputs
+        run: &test-frozen-disk python3 -I -B scripts/dev-install/test_frozen_disk.py -v
       - name: dev-install-dryrun
         run: python3 -I -B scripts/dev-install/test_dryrun.py --container
 
@@ -593,6 +595,9 @@ jobs:
     timeout-minutes: 4
     steps:
       - *integration-checkout
+      - name: Test disk proof and lease inputs
+        if: github.event_name != 'pull_request'
+        run: *test-frozen-disk
       - name: dev-install-dryrun
         if: github.event_name != 'pull_request'
         run: python3 -I -B scripts/dev-install/test_dryrun.py --container

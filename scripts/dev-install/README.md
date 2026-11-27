@@ -81,9 +81,9 @@ with 25% headroom on the sum.
 
 Record the independently checked SHA-256 of each raw receipt in the host identity's
 `LEASE_RECEIPT_SHA256S` array, in the order passed below. The renderer checks the
-exact receipt bytes against that array before reading their timings. Each new raw
-receipt records an application-specific host identifier, TOP filesystem device and
-inode, and the UTC capture instant in epoch nanoseconds.
+exact receipt bytes against that array before reading their timings. Each lease
+start must immediately follow an origin line with the WasalX host digest, TOP
+filesystem device and inode, and the UTC capture instant in epoch nanoseconds.
 
 Set the optional `LEASE_RECEIPT_POLICY` object in the private host identity to
 enable measured budgets. From the verified packet, run
@@ -93,8 +93,8 @@ Use its `host_sha256` string, `disk_device` and `disk_inode` integers, and set a
 independently of the timing receipts. Without a policy, or if any requested
 receipt is unbound, belongs to another host or disk, is from the future, or is
 older than the configured maximum, the renderer uses the documented fallback
-leases. The sealed host environment records the policy, input hashes and budget
-sources.
+leases. Invalid policy fields stop rendering. The sealed host environment
+records the policy, input hashes and budget sources.
 
 ```sh
 python3 -I -B scripts/dev-install/render.py --host-identity "$HOST_IDENTITY" \
