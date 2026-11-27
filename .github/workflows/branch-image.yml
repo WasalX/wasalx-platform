@@ -47,7 +47,7 @@ jobs:
     needs: queue
     name: Publish ${{ matrix.image }}
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'WasalX/wasalx-platform'
-    timeout-minutes: 20
+    timeout-minutes: ${{ matrix.image == 'connector-worker' && 6 || 11 }}
     runs-on: ubuntu-24.04
     permissions:
       contents: read
