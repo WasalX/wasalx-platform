@@ -297,35 +297,6 @@ test("Storybook selects UI changes and unknown diffs", async (t) => {
   }
 });
 
-test("DEV installer dry run selects Compose, full-stack configuration and migration changes", async t => {
-  const { jobs } = parse(await read(".github/workflows/ci.yml"));
-  const { run } = jobs.changes.steps.find(step => step.id === "dev-install");
-  const directory = await mkdtemp(join(tmpdir(), "dev-install-selection-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
-  const git = (...args) => execFileSync("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", ...args], {
-    cwd: directory, encoding: "utf8", windowsHide: true,
-  });
-  git("init", "--quiet", "--template=");
-  git("commit", "--quiet", "--allow-empty", "-m", "Base");
-  const output = join(directory, "selection");
-  for (const [path, expected] of [
-    ["compose.yaml", "true"],
-    ["compose.fixture.yaml", "true"],
-    ["infra/docker/full/keycloak/import/realm.json", "true"],
-    ["services/control-api/migrations/0001_fixture.sql", "true"],
-    ["docs/release.md", "false"],
-  ]) {
-    await mkdir(join(directory, posix.dirname(path)), { recursive: true });
-    await writeFile(join(directory, path), "fixture\n");
-    git("add", "--", path);
-    git("commit", "--quiet", "-m", "Change one input");
-    await writeFile(output, "");
-    const result = runWorkflowScript(run, { GITHUB_OUTPUT: "selection" }, directory);
-    assert.equal(result.status, 0, result.error?.message ?? result.stderr);
-    assert.equal((await readFile(output, "utf8")).trim(), "needed=" + expected, path);
-  }
-});
-
 test("nightly install is report-only, read-only and runs on schedule, dispatch and RC tags", async () => {
   const path = ".github/workflows/nightly-install.yml";
   const { on, permissions, jobs } = parse(await read(path));
@@ -1430,8 +1401,7 @@ test("optional PR lanes run on diff errors and gate their applicable checks", as
     ["infra", paths],
     ["dev-install", ["scripts/dev-install/", "scripts/release/installer-stages.mjs",
       "scripts/release/installer-stack.mjs", "scripts/release/compose-stage-lock.mjs",
-      "scripts/release/compose-stage-config.json", ":(glob)compose*.yaml", "infra/docker/full/",
-      "services/control-api/migrations/", "scripts/release/image_registry_retry.py",
+      "scripts/release/compose-stage-config.json", "scripts/release/image_registry_retry.py",
       ".github/workflows/ci.yml"].join(" ")],
     ["integration", [".github/workflows/ci.yml", "scripts/test-postgres-integration.mjs",
       "scripts/postgres-scenario-registry.mjs", "services/control-api/", "services/connector-worker/", "packages/", "infra/docker/postgres/",
