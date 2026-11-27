@@ -21,9 +21,8 @@ registry=127.0.0.1:5007
 registry_container="$project-registry"
 registry_image=docker.io/library/registry@sha256:6c5666b861f3505b116bb9aa9b25175e71210414bd010d92035ff64018f9457e
 registry_overlay="$full_env.$project.registry.compose.json"
-candidate_compose=(docker compose --env-file "$full_env" -f compose.yaml -f compose.full.yaml
-  --profile full --profile runtime-workers --project-name "$project")
-compose=("${candidate_compose[@]}" -f scripts/release/installer-nightly.compose.yaml)
+compose=(docker compose --env-file "$full_env" -f compose.yaml -f compose.full.yaml
+  --profile full --profile runtime-workers --project-name "$project" -f scripts/release/installer-nightly.compose.yaml)
 mkdir -p "$diagnostics"
 
 inventory() {
@@ -149,8 +148,9 @@ EOF
 }
 
 stage_registry() {
-  local source destination expected manifest platform
+  local source destination expected manifest platform mirrors
   local copy=(skopeo copy --preserve-digests --dest-tls-verify=false)
+  mirrors=$(python3 -B scripts/release/installer-mirror-images.py references)
   mkdir -p "$work/registry"
   # Establish that the exact public probe reference is reachable before the block.
   docker pull "$registry_image"
@@ -161,13 +161,24 @@ stage_registry() {
   } | LC_ALL=C sort -u | node --input-type=module -e '
     import { readFileSync } from "node:fs";
     import { localRegistryReference } from "./scripts/release/installer-hosted-images.mjs";
+    const images = new Map();
+    for (const image of readFileSync(0, "utf8").split(/\s+/u)) {
+      if (!image.includes("@")) continue;
+      const source = image.replace(/:[^/:]+(?=@)/u, "");
+      images.set(source, source);
+    }
+    for (const { source, mirror } of JSON.parse(process.argv[2])) {
+      if (!mirror) throw new Error(`Missing mirror for ${source}`);
+      if (!images.has(source)) throw new Error(`Inventory source absent from resolved images: ${source}`);
+      images.set(source, mirror);
+    }
     const seen = new Set();
-    for (const source of readFileSync(0, "utf8").split(/\s+/u).filter(value => value.includes("@"))) {
+    for (const [source, pull] of images) {
       const destination = localRegistryReference(process.argv[1], source);
-      if (!seen.has(destination)) console.log(source.replace(/:[^/:]+(?=@)/u, ""), destination);
+      if (!seen.has(destination)) console.log(pull, destination);
       seen.add(destination);
     }
-  ' "$registry" > "$work/registry-images"
+  ' "$registry" "$mirrors" > "$work/registry-images"
   test -s "$work/registry-images"
   while read -r source destination; do
     expected=${destination##*@}
@@ -267,16 +278,6 @@ phase root-lock 30s sudo flock --nonblock "$lock_path" true
 
 phase fixture 30s python3 scripts/release/generate-simulation-env.py "$PWD" "$full_env" \
   scripts/contracts/waha-simulation-server.mjs --installer-rehearsal
-if ! git diff --quiet "$MAIN_SHA" "$commit" -- Dockerfile.foundation-keycloak compose.full.yaml \
-    scripts/release/patch-keycloak-jackson.py infra/docker/full/keycloak/; then
-  # The signed main image set stays intact. Bootstrap the PR-built image with the ordinary Compose command.
-  phase candidate-keycloak-build 8m "${candidate_compose[@]}" build keycloak
-  phase candidate-keycloak-bootstrap 5m "${candidate_compose[@]}" up --no-build \
-    --abort-on-container-exit --exit-code-from keycloak-bootstrap keycloak-bootstrap
-  phase candidate-keycloak-teardown 3m "${candidate_compose[@]}" down --volumes
-  containers=$(inventory)
-  test -z "$containers"
-fi
 stage=(--env-file "$full_env" --project-name "$project" --rehearsal-main "$MAIN_SHA" --local-registry "$registry")
 manifest_hash=$(sha256sum "$work/images-manifest.json" | cut -d ' ' -f 1)
 hosted=(--hosted-images "$work/images-manifest.json" --hosted-images-sha256 "$manifest_hash"

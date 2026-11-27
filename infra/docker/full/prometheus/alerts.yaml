@@ -127,6 +127,13 @@ groups:
         annotations:
           summary: A privacy or retention job failed terminally.
           runbook_url: https://github.com/WasalX/wasalx-platform/blob/main/docs/runbooks/alert-response.md#privacy-failure
+      - alert: WasalXPrivacyFailurePersistenceFailed
+        expr: sum(increase(wasalx_privacy_job_total{result="persistence_failed"}[15m])) > 0
+        for: 1m
+        labels: { severity: critical, owner: privacy }
+        annotations:
+          summary: A privacy or retention job failure could not be saved.
+          runbook_url: https://github.com/WasalX/wasalx-platform/blob/main/docs/runbooks/alert-response.md#privacy-failure-persistence
       - alert: WasalXMediaQuarantineSpike
         expr: sum(increase(wasalx_media_quarantine_total{result="created"}[10m])) > 10
         for: 1m

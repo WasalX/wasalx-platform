@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { chromium, expect } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
+import { languageTag } from "../lib/i18n/locales.ts";
+import { syntheticBrowserTrace } from "./helpers/synthetic-browser-trace.mjs";
 
 const base = process.env.WASALX_STORYBOOK_URL ?? "http://127.0.0.1:6227";
 const output = process.env.WASALX_SYNTHETIC_UI_OUTPUT ?? "output/playwright/inbox";
@@ -12,6 +14,7 @@ const MEDIA = "51000000-0000-4000-8000-000000000003", BM = "51000000-0000-4000-8
 const NEWEST = "51000000-0000-4000-8000-000000000005";
 const ANCIENT = "51000000-0000-4000-8000-000000000006";
 const stamp = "2026-10-18T09:00:00.000Z";
+const ancientMessageTime = "2026-10-17T22:30:00.000Z";
 const recoveryKey = "wasalx:group-receipts:storybook:group-ui:synthetic-operator";
 const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l9sAAAAASUVORK5CYII=", "base64");
 const summary = [];
@@ -93,7 +96,7 @@ async function fixture(page) {
         (input.scope !== "TEAM" || group.id === B)), next_cursor: null });
       case "GROUP_SHOW": return reply(groups.find(group => group.id === input.group_id));
       case "GROUP_MESSAGES": return reply({ items: input.before ? [input.before === OLD
-        ? message(ANCIENT, "Customer request before the historical source.", { provider_timestamp: "2026-10-18T07:00:00.000Z" })
+        ? message(ANCIENT, "Customer request before the historical source.", { provider_timestamp: ancientMessageTime })
         : message(OLD, "Earlier original customer request.", { provider_timestamp: "2026-10-18T08:00:00.000Z" })] : messages.get(input.group_id),
         next_cursor: input.before || input.group_id !== A ? null : MEDIA });
       case "GROUP_CONTEXT": return reply({ items: [message(input.message_id, "Earlier original customer request.", {
@@ -187,13 +190,16 @@ async function instrumentation(context) {
 }
 
 const browser = await chromium.launch({ ...(process.env.WASALX_VISUAL_BROWSER_PATH ? { executablePath: process.env.WASALX_VISUAL_BROWSER_PATH } : {}), headless: true });
+const trace = syntheticBrowserTrace(browser, base, output);
 await mkdir(output, { recursive: true });
 try {
   for (const locale of ["en", "ar"]) {
     const t = await translations(locale);
-    const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+    const context = await trace.newContext({ locale: locale === "ar" ? "en-US" : "ar-SA", viewport: { width: 1440, height: 1000 } });
     await instrumentation(context);
     const page = await context.newPage(), state = await fixture(page), pageErrors = [];
+    // Enable Playwright's asynchronous chooser interception before navigation.
+    page.on("filechooser", () => undefined);
     await page.clock.install();
     page.on("pageerror", error => pageErrors.push(error.message));
     const story = `${base}/iframe.html?id=product-group-inbox--${locale === "ar" ? "arabic" : "english"}`;
@@ -220,21 +226,61 @@ try {
     await expect(group().getByRole("heading", { name: "Customers A" })).toBeFocused();
     await page.locator("#wx-group-message").fill("Draft A");
     await row(M).getByRole("button", { name: t("groups.quoteReply"), exact: true }).click();
+    const historyFixture = state.messages.get(B);
+    state.messages.set(B, [...historyFixture, ...Array.from({ length: 12 }, (_, index) =>
+      message(`history-${index}`, `Earlier operations update ${index + 1}`, {
+        provider_timestamp: new Date(Date.parse(stamp) - (index + 1) * 60_000).toISOString(),
+      }))]);
     await choose("Operations B");
+    const history = group().getByRole("region", { name: t("groups.history"), exact: true });
+    await expect(history.locator("li")).toHaveCount(13);
+    state.messages.set(B, historyFixture);
+    await expect(group().getByRole("heading", { name: "Operations B" })).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(history).toBeFocused();
+    const { top, max } = await history.evaluate(element => ({ top: element.scrollTop, max: element.scrollHeight - element.clientHeight }));
+    expect(max).toBeGreaterThan(1);
+    await page.keyboard.press(top > 1 ? "ArrowUp" : "ArrowDown");
+    await expect.poll(() => history.evaluate(element => element.scrollTop)).not.toBe(top);
+    await page.screenshot({ path: `${output}/group-history-keyboard-${locale}.png` });
     await page.locator("#wx-group-message").fill("Draft B");
-    await choose("Customers A");
+    const lateLoad = state.hold("GROUP_SHOW", (input) => input.group_id === A);
+    const showsBefore = state.count("GROUP_SHOW");
+    await group().getByRole("button", { name: /Customers A/u }).click();
+    await expect.poll(() => state.count("GROUP_SHOW")).toBe(showsBefore + 1);
+    // The button mounts after the load. Hold its queued focus frame until the operator moves focus.
+    await page.clock.pauseAt(new Date((await page.evaluate(() => Date.now())) + 1000));
+    lateLoad.resolve();
+    const attachmentButton = button("attachments.choose");
+    await expect(attachmentButton).toBeEnabled();
+    await attachmentButton.focus();
+    await page.clock.resume();
+    await page.evaluate(
+      () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
+    );
+    await expect(attachmentButton).toBeFocused();
     await expect(page.locator("#wx-group-message")).toHaveValue("Draft A");
     await expect(button("groups.cancelQuote")).toBeVisible();
 
     // A later upload failure must keep the file already acknowledged by the server.
-    state.failUploadAt = state.uploadAttempts + 2;
-    await page.locator("#wx-group-files").setInputFiles([
+    state.failUploadAt = state.uploadAttempts + 3;
+    await expect(page.locator("#wx-group-files")).toBeHidden();
+    await expect(button("attachments.choose")).toHaveAccessibleDescription(t("attachments.none"));
+    const [chooser] = await Promise.all([page.waitForEvent("filechooser"), page.keyboard.press("Space")]);
+    assert.equal(chooser.isMultiple(), true);
+    await chooser.setFiles([
       { name: "kept.txt", mimeType: "text/plain", buffer: Buffer.from("keep") },
+      { name: "remove.txt", mimeType: "text/plain", buffer: Buffer.from("drop") },
       { name: "failed.txt", mimeType: "text/plain", buffer: Buffer.from("fail") },
     ]);
     await expect(group().getByRole("button", { name: t("groups.removeAttachment", { filename: "kept.txt" }), exact: true })).toBeVisible();
     await expect(group().getByRole("button", { name: t("groups.removeAttachment", { filename: "failed.txt" }), exact: true })).toHaveCount(0);
-    assert.equal(state.uploads.length, 1);
+    await expect(button("attachments.choose")).not.toHaveAccessibleDescription(t("attachments.none"));
+    assert.equal(state.uploads.length, 2);
+    const removeFile = group().getByRole("button", { name: t("groups.removeAttachment", { filename: "remove.txt" }), exact: true });
+    await removeFile.click();
+    await expect(removeFile).toHaveCount(0);
+    await expect(group().getByRole("button", { name: t("groups.removeAttachment", { filename: "kept.txt" }), exact: true })).toBeVisible();
     await button("groups.mention").click();
     await group().getByRole("button", { name: /Resolved phone/u }).click();
     await expect(page.locator("#wx-group-message")).toHaveValue("Draft A @12025550142 ");
@@ -346,6 +392,16 @@ try {
     await button("groups.older").click();
     await historicalPage;
     await expect(row(ANCIENT)).toBeVisible();
+    const messageTime = row(ANCIENT).locator("time");
+    const expectedMessageTime = await page.evaluate(
+      ({ tag, instant }) => new Intl.DateTimeFormat(tag, {
+        dateStyle: "medium", timeStyle: "short", timeZone: "Asia/Riyadh",
+      }).format(new Date(instant)),
+      { tag: languageTag(locale), instant: ancientMessageTime },
+    );
+    await expect(messageTime).toBeVisible();
+    await expect(messageTime).toHaveText(expectedMessageTime);
+    await expect(messageTime).toHaveAttribute("datetime", ancientMessageTime);
     await expect(button("groups.older")).toHaveCount(0);
     await exerciseReadCallbacks();
     await expect(button("groups.latest")).toBeVisible();
@@ -541,11 +597,47 @@ try {
 
     // Both themes/locale layouts, mobile chooser focus and keyboard controls.
     for (const theme of ["light", "dark"]) {
-      if (theme === "dark") { await page.goto(`${story}&globals=theme:dark`, { waitUntil: "networkidle" }); await choose("Operations B"); }
+      if (theme === "dark") {
+        await page.goto(`${story}&globals=theme:dark`, { waitUntil: "networkidle" });
+        // A group that finishes loading after the operator moved focus must not take focus back.
+        const lateShow = state.hold("GROUP_SHOW", input => input.group_id === B), showsBefore = state.count("GROUP_SHOW");
+        if (await group().locator(".wx-group-back").isVisible()) await button("groups.back").click();
+        await group().getByRole("button", { name: /Operations B/u }).click();
+        await expect.poll(() => state.count("GROUP_SHOW")).toBe(showsBefore + 1);
+        await groupsMode.focus();
+        lateShow.resolve();
+        await expect(group().getByRole("heading", { name: "Operations B" })).toBeVisible();
+        await expect(page.locator("#wx-group-message")).toBeEnabled();
+        await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+        await expect(groupsMode).toBeFocused();
+
+        await choose("Operations B");
+        await expect(group().getByRole("heading", { name: "Operations B" })).toBeFocused();
+      }
       await page.evaluate(() => document.fonts.ready);
       for (const [name, width, height] of [["desktop", 1440, 1000], ["mobile", 390, 844], ["zoom-equivalent", 720, 500]]) {
         await page.setViewportSize({ width, height });
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false, `${locale}:${theme}:${name}: overflow`);
+        const ticketsMode = page.getByRole("button", { name: t("inbox.conversations"), exact: true });
+        await ticketsMode.focus();
+        await page.keyboard.press("Tab");
+        await expect(groupsMode).toBeFocused();
+        await expect(groupsMode).toHaveAttribute("aria-pressed", "true");
+        await expect(groupsMode).toHaveCSS("display", "flex");
+        await expect(groupsMode).toHaveCSS("align-items", "center");
+        await expect(groupsMode).toHaveCSS("outline-width", "2px");
+        await expect(groupsMode).toHaveCSS("outline-style", "solid");
+        // Card actions (DESIGN.md): one row in reading order on desktop; an equal full-width stack at 760 px and below.
+        const actionRows = await group().locator(".wx-group-messages button").evaluateAll((buttons, names) => [...new Set(buttons
+          .filter(item => names.includes(item.textContent)).map(item => item.parentElement))].map(row => ({ rtl: getComputedStyle(row).direction === "rtl",
+          width: row.getBoundingClientRect().width, items: [...row.children].map(item => item.getBoundingClientRect()).filter(box => box.width)
+            .map(box => ({ left: box.left, right: box.right, width: box.width, middle: (box.top + box.bottom) / 2 })) })),
+        [t("groups.quoteReply"), t("groups.createTicket"), t("groups.linkTicket")]);
+        assert.ok(actionRows.some(row => row.items.length >= 3), `${locale}:${theme}:${name}: message actions render`);
+        for (const { rtl, width: rowWidth, items } of actionRows) items.forEach((item, index) => assert.ok(width <= 760
+          ? Math.abs(item.width - rowWidth) <= 1 && Math.abs(item.left - items[0].left) <= 1
+          : Math.abs(item.middle - items[0].middle) <= 1 && (!index || (rtl ? item.right <= items[index - 1].left : item.left >= items[index - 1].right)),
+        `${locale}:${theme}:${name}: message action ${index} breaks the card actions layout: ${JSON.stringify({ rowWidth, items })}`));
         await page.screenshot({ path: `${output}/group-${locale}-${theme}-${name}.png`, fullPage: true });
         const accessibility = await new AxeBuilder({ page }).include(".wx-group").withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze();
         assert.deepEqual(accessibility.violations.map(item => ({ id: item.id, impact: item.impact })), [], `${locale}:${theme}:${name}: axe`);
@@ -561,10 +653,10 @@ try {
     summary.push({ locale, mode: "synthetic-component-ui", writes: state.writes.map(write => ({ operation: write.operation,
       request_token: write.input.request_token })), checks: state.calls.length, themes: ["light", "dark"], screenshots: ["desktop", "mobile", "zoom-equivalent"],
       untested: ["actual provider", "actual native gateway", "real microphone hardware", "human screen reader", "physical touch"] });
-    await context.close();
+    await trace.closeContext(context);
   }
   for (const locale of ["en", "ar"]) {
-    const t = await translations(locale), context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+    const t = await translations(locale), context = await trace.newContext({ viewport: { width: 1440, height: 1000 } });
     const page = await context.newPage(), state = await fixture(page);
     await page.goto(`${base}/iframe.html?id=product-group-inbox--source-lifecycle-${locale === "ar" ? "arabic" : "english"}`, { waitUntil: "networkidle" });
     const group = page.locator(".wx-group");
@@ -584,18 +676,28 @@ try {
     await expect(page.locator('[data-source-harness="navigation"]')).toHaveText("0");
     await expect(page.locator('[data-source-harness="outside"]')).toBeVisible();
     await expect(page.locator(".wx-group")).toHaveCount(0);
-    await context.close();
+    await trace.closeContext(context);
   }
-  const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+  const context = await trace.newContext({ hasTouch: true, viewport: { width: 1440, height: 1000 } });
   const page = await context.newPage(), state = await fixture(page);
   await page.goto(`${base}/iframe.html?id=product-group-inbox--read-only`, { waitUntil: "networkidle" });
+  assert.equal(await page.evaluate(() => matchMedia("(any-pointer: coarse)").matches), true);
+  const switchButtons = page.locator(".wx-inbox-switch").getByRole("button");
+  await expect(switchButtons).toHaveCount(2);
+  for (const button of await switchButtons.all()) {
+    await expect(button).toHaveCSS("min-inline-size", "44px");
+    await expect(button).toHaveCSS("min-block-size", "44px");
+  }
   await page.locator(".wx-group-choice").filter({ hasText: "Customers A" }).click();
   await expect(page.locator(".wx-group-header h2")).toHaveText("Customers A");
   await expect(page.locator("#wx-group-message")).toHaveCount(0);
-  await expect(page.locator(".wx-group-messages .wx-group-actions")).toHaveCount(0);
+  await expect(page.locator(".wx-group-messages .wx-card-actions")).toHaveCount(0);
   assert.equal(state.writes.length, 0);
   assert.equal(state.count("GROUP_READ"), 0, "read-only view does not advance team read markers");
-  await context.close();
+  await trace.closeContext(context);
+} catch (error) {
+  await trace.retainFailure();
+  throw error;
 } finally { await browser.close(); }
 await writeFile(`${output}/group-browser-proof.json`, `${JSON.stringify(summary, null, 2)}\n`);
 console.log("Group component EN/AR draft, quote, mention, upload, recovery, navigation, cleanup and accessibility checks passed.");

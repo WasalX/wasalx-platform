@@ -4,6 +4,9 @@ import { createHash } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import { chromium, expect } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
+import { formatNumber } from "../lib/i18n/format.ts";
+import { languageTag } from "../lib/i18n/locales.ts";
+import { syntheticBrowserTrace } from "./helpers/synthetic-browser-trace.mjs";
 
 async function assertMobileAssignment(page, locale) {
   const result = await page.locator("#inbox-team").evaluate(team => {
@@ -24,12 +27,19 @@ async function assertMobileAssignment(page, locale) {
 
 const base = process.env.WASALX_STORYBOOK_URL ?? "http://127.0.0.1:6227";
 const output = process.env.WASALX_SYNTHETIC_UI_OUTPUT ?? "output/playwright/inbox";
+const articleCreatedAt = "2026-10-17T22:30:00.000Z";
 await mkdir(output, { recursive: true });
 const browser = await chromium.launch({ ...(process.env.WASALX_VISUAL_BROWSER_PATH ? { executablePath: process.env.WASALX_VISUAL_BROWSER_PATH } : {}), headless: true });
+const trace = syntheticBrowserTrace(browser, base, output);
 try {
   for (const locale of ["en", "ar"]) {
-    const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+    const context = await trace.newContext({ locale: locale === "ar" ? "en-US" : "ar-SA", viewport: { width: 1440, height: 1000 } });
+    const attachmentName = locale === "ar" ? "إرفاق ملفات" : "Attach files";
+    const noAttachments = locale === "ar" ? "لا توجد ملفات مرفقة" : "No files attached";
+    const attachFiles = page => page.getByRole("button", { name: attachmentName, exact: true });
     const page = await context.newPage();
+    // Enable Playwright's asynchronous chooser interception before navigation.
+    page.on("filechooser", () => undefined);
     await page.clock.install();
     const tickets = [
       { id: "42", number: "1042", title: "Delivery update", customer: "Ahmed", team: "Customer support",
@@ -39,7 +49,8 @@ try {
     ];
     const history = new Map(tickets.map(ticket => [ticket.id, [{
       id: "1", body: '<img src=x onerror="window.unsafeArticle=true"> Where is my order?',
-      internal: false, author: ticket.customer, sender: "Customer", created_at: ticket.updated_at,
+      internal: false, author: ticket.customer, sender: "Customer",
+      created_at: ticket.id === "42" ? articleCreatedAt : ticket.updated_at,
       attachments: [{ id: "5", filename: "request.txt", size: 28 }],
     }]]));
     const receipts = new Map(), createReceipts = new Map(), uploads = new Map();
@@ -55,14 +66,17 @@ try {
     const digest = body => createHash("sha256").update(body).digest("hex");
     const articlePage = article => { const points = Array.from(article.body); return { ...article, body: points.slice(0, 50_000).join(""), body_complete: points.length <= 50_000,
       body_sha256: digest(article.body), total_characters: points.length }; };
-    let createWrites = 0, loseCreate = false, rejectUpdate = false;
+    let createWrites = 0, createGate, rejectUpdate = false;
+    const deliverLateArticles = locale === "ar";
     let sequence = 10, writes = 0, loseReply = false, revoked = false, checkUnavailable = false, paginate = false;
     let releasePage, enteredPage, releaseArticles, enteredArticles, listGate;
     await page.route("**/api/inbox/attachment", route => route.fulfill({
       status: 200, contentType: "application/octet-stream", body: "Synthetic customer attachment",
     }));
     await page.route("**/api/inbox/upload", route => {
-      const id = String(70 + uploads.size), file = { id, filename: "outgoing.txt", mime_type: "text/plain", size: 12 };
+      const filename = /filename="([^"]+)"/u.exec(route.request().postData() ?? "")?.[1];
+      assert.ok(filename, "expected a staged file");
+      const id = String(70 + uploads.size), file = { id, filename, mime_type: "text/plain", size: 12 };
       uploads.set(id, file); return route.fulfill({ status: 200, json: { items: [file] } });
     });
     await page.route("**/api/inbox", async route => {
@@ -91,6 +105,9 @@ try {
       }
       if (operation === "CREATE_TICKET") {
         if (createReceipts.has(input.operation_id)) return reply(createReceipts.get(input.operation_id));
+        const heldCreate = createGate;
+        createGate = undefined;
+        if (heldCreate) await heldCreate;
         const ticket = { ...tickets[0], id: String(44 + createWrites), number: String(1044 + createWrites), title: input.title, team_id: input.group_id,
           team: input.group_id === "3" ? "Accounts" : "Customer support", channel: input.internal ? "other" : "email" };
         tickets.push(ticket); createWrites++;
@@ -98,7 +115,8 @@ try {
           attachments: (input.attachment_ids ?? []).map(id => uploads.get(id)) }]);
         const result = { state: "APPLIED", operation_id: input.operation_id, ticket_id: ticket.id, ticket_number: ticket.number, article_id: "1" };
         createReceipts.set(input.operation_id, result);
-        if (loseCreate) { loseCreate = false; return route.abort("failed"); } return reply(result);
+        if (heldCreate) return route.abort("failed");
+        return reply(result);
       }
       if (operation === "REMOVE_UPLOAD") { uploads.delete(input.upload_store_id); return reply({ removed: true }); }
       const ticket = tickets.find(item => item.id === input.ticket_id);
@@ -109,7 +127,14 @@ try {
         owners: [{ id: "12", name: "Maya" }, { id: "13", name: "Omar" }],
         states: [{ id: "2", name: "open", closed: false }, { id: "4", name: "closed", closed: true }] });
       if (operation === "ARTICLES") {
-        if (ticket.id === "43" && enteredArticles) { enteredArticles(); await new Promise(resolve => { releaseArticles = resolve; }); }
+        if (ticket.id === "43" && enteredArticles) {
+          const gate = Promise.withResolvers();
+          releaseArticles = gate.resolve;
+          enteredArticles(route.request());
+          enteredArticles = undefined;
+          await gate.promise;
+          if (!deliverLateArticles) return route.abort("aborted");
+        }
         return reply({ items: [...history.get(ticket.id)].reverse().map(articlePage), next_cursor: null });
       }
       if (operation === "ARTICLE_CONTENT") {
@@ -147,6 +172,16 @@ try {
     await ticket42.click();
     await expect(page.locator("#inbox-message")).toBeVisible();
     await expect(page.locator("h2", { hasText: "Delivery update" })).toBeVisible();
+    const articleTime = page.locator('[data-article-id="1"] time');
+    const expectedArticleTime = await page.evaluate(
+      ({ tag, instant }) => new Intl.DateTimeFormat(tag, {
+        dateStyle: "medium", timeStyle: "short", timeZone: "Asia/Riyadh",
+      }).format(new Date(instant)),
+      { tag: languageTag(locale), instant: articleCreatedAt },
+    );
+    await expect(articleTime).toBeVisible();
+    await expect(articleTime).toHaveText(expectedArticleTime);
+    await expect(articleTime).toHaveAttribute("datetime", articleCreatedAt);
     assert.equal(await page.evaluate(() => window.unsafeArticle), undefined);
     const downloadEvent = page.waitForEvent("download");
     await page.getByRole("button", { name: locale === "ar" ? "تنزيل request.txt" : "Download request.txt" }).click();
@@ -281,9 +316,22 @@ try {
     await page.getByRole("button", { name: locale === "ar" ? "حفظ التغييرات" : "Save changes", exact: true }).click();
     await expect(page.locator("#inbox-team")).toHaveValue("3");
     await expect(page.locator("#inbox-owner")).toHaveValue("13");
-    await expect(page.locator("#inbox-files")).toBeEnabled();
-    await page.locator("#inbox-files").setInputFiles({ name: "outgoing.txt", mimeType: "text/plain", buffer: Buffer.from("Synthetic UI") });
-    await expect(page.getByRole("button", { name: locale === "ar" ? "إزالة outgoing.txt" : "Remove outgoing.txt" })).toBeVisible();
+    await expect(page.locator("#inbox-files")).toBeHidden();
+    await expect(attachFiles(page)).toBeEnabled();
+    await expect(attachFiles(page)).toHaveAccessibleDescription(noAttachments);
+    const [chooser] = await Promise.all([page.waitForEvent("filechooser"), attachFiles(page).press("Enter")]);
+    assert.equal(chooser.isMultiple(), true);
+    await chooser.setFiles([
+      { name: "outgoing.txt", mimeType: "text/plain", buffer: Buffer.from("Synthetic UI") },
+      { name: "remove.txt", mimeType: "text/plain", buffer: Buffer.from("Remove this") },
+    ]);
+    const keepFile = page.getByRole("button", { name: locale === "ar" ? "إزالة outgoing.txt" : "Remove outgoing.txt" });
+    const removeFile = page.getByRole("button", { name: locale === "ar" ? "إزالة remove.txt" : "Remove remove.txt" });
+    await expect(keepFile).toBeVisible();
+    await expect(attachFiles(page)).not.toHaveAccessibleDescription(noAttachments);
+    await removeFile.click();
+    await expect(removeFile).toHaveCount(0);
+    await expect(keepFile).toBeVisible();
     await page.locator("#inbox-message").fill("");
     await expect(page.locator('form').last().locator(".wx-button-primary")).toBeDisabled();
     await page.getByRole("button", { name: locale === "ar" ? "معاينة الرد" : "Preview reply", exact: true }).click();
@@ -293,19 +341,30 @@ try {
     await page.locator("#inbox-message").fill("");
     await page.getByRole("button", { name: locale === "ar" ? "معاينة الرد" : "Preview reply", exact: true }).click();
     await page.locator('form').last().locator(".wx-button-primary").click();
-    await expect(page.locator("#inbox-files")).toBeVisible();
+    await expect(attachFiles(page)).toBeVisible();
+    await expect(attachFiles(page)).toHaveAccessibleDescription(noAttachments);
     await expect(page.getByRole("button", { name: locale === "ar" ? "إزالة outgoing.txt" : "Remove outgoing.txt" })).toHaveCount(0);
-    const longBody = "أ😀".repeat(25001); history.get("42").push({ id: "99", body: longBody, internal: false, author: "Ahmed", sender: "Customer", created_at: tickets[0].updated_at, attachments: [] });
-    await page.getByRole("button").filter({ hasText: "#1043" }).click(); await page.getByRole("button").filter({ hasText: "#1042" }).click();
-    const fullArticle = page.locator(".wx-ticket-full-article").last();
+    // Keep the surrogate pair at the preview boundary without shaping one enormous bidi word.
+    const longBody = `${"Synthetic article body. ".repeat(2_174).slice(0, 49_997)} أ😀أ😀`;
+    const longArticle = { ...history.get("42")[0], id: "99", body: longBody, attachments: [] };
+    const trailingBody = "Synthetic article after the long message";
+    history.get("42").push(longArticle, { ...longArticle, id: "100", body: trailingBody });
+    await ticket43.click();
+    await expect(page.getByRole("heading", { name: "Invoice question", exact: true })).toBeVisible();
+    await ticket42.click();
+    await expect(page.getByRole("heading", { name: "Delivery update", exact: true })).toBeVisible();
+    await expect(page.locator('[data-article-id="100"]')).toContainText(trailingBody);
+    const fullArticle = page.locator('[data-article-id="99"] .wx-ticket-full-article');
     const previewBody = Array.from(longBody).slice(0, 50_000).join("");
     await expect(fullArticle.locator('p[dir="auto"]')).toHaveText(previewBody);
-    const format = new Intl.NumberFormat(locale);
+    const format = { format: value => formatNumber(value, locale) };
     await expect(fullArticle.locator("p").nth(1)).toHaveText(locale === "ar"
       ? `يُعرض ${format.format(50_000)} من أصل ${format.format(50_002)} حرفًا.`
       : `Showing ${format.format(50_000)} of ${format.format(50_002)} characters.`);
     assert.equal(Array.from(previewBody).at(-1), "😀");
-    await page.getByRole("button", { name: locale === "ar" ? "قراءة بقية الرسالة" : "Read more of this message" }).click();
+    await fullArticle
+      .getByRole("button", { name: locale === "ar" ? "قراءة بقية الرسالة" : "Read more of this message" })
+      .click();
     await expect(fullArticle.locator('p[dir="auto"]')).toHaveText(longBody);
     await expect(fullArticle.getByRole("button")).toHaveCount(0);
     await expect(fullArticle.locator("p")).toHaveCount(1);
@@ -314,12 +373,33 @@ try {
     await page.locator("#wx-ticket-customer-query").fill("Synthetic");
     await expect(page.locator("#wx-ticket-customer option[value='20']")).toHaveCount(1);
     await page.locator("#wx-ticket-customer").selectOption("20");
-    await page.locator("#wx-ticket-title").fill("Synthetic attachment-only email");
+    const createTitle = "Synthetic attachment-only email";
+    await page.locator("#wx-ticket-title").fill(createTitle);
     await page.locator("#wx-ticket-mode").selectOption("email");
+    await expect(attachFiles(page.getByRole("dialog"))).toHaveAccessibleDescription(noAttachments);
     await page.locator("#inbox-create-files").setInputFiles({ name: "outgoing.txt", mimeType: "text/plain", buffer: Buffer.from("Synthetic UI") });
     await expect(page.locator("#wx-ticket-create-body")).not.toHaveAttribute("required", "");
-    loseCreate = true;
+    const create = Promise.withResolvers();
+    createGate = create.promise;
+    const lostCreate = page.waitForEvent("requestfailed", {
+      predicate: (request) =>
+        request.url().endsWith("/api/inbox") &&
+        request.postDataJSON()?.operation === "CREATE_TICKET" &&
+        request.postDataJSON().input.title === createTitle,
+    });
     await page.getByRole("button", { name: locale === "ar" ? "إنشاء تذكرة وإرسال بريد للعميل" : "Create ticket and email customer", exact: true }).click();
+    const checkSubmission = page.getByRole("dialog").getByRole("button", {
+      name: locale === "ar" ? "التحقق من الإرسال" : "Check submission",
+      exact: true,
+    });
+    // Recovery controls can render while the write is still held.
+    await expect(checkSubmission).toBeDisabled();
+    assert.equal(createWrites, 0);
+    create.resolve();
+    const failedCreate = await lostCreate;
+    assert.equal(failedCreate.failure()?.errorText, "net::ERR_FAILED");
+    assert.equal(createReceipts.get(failedCreate.postDataJSON().input.operation_id)?.state, "APPLIED");
+    await expect(checkSubmission).toBeEnabled();
     await expect(page.getByText(locale === "ar" ? "لم تتأكد النتيجة بعد. تحقق من الإجراء الحالي قبل إنشاء تذكرة أخرى." : "The result has not been confirmed. Check the existing submission before creating another ticket.").first()).toBeVisible();
     assert.equal(createWrites, 1);
     await page.reload({ waitUntil: "networkidle" });
@@ -361,18 +441,65 @@ try {
     paginate = false;
     await page.locator("#inbox-search").fill("");
     await page.setViewportSize({ width: 1440, height: 1000 });
-    const pendingArticles = new Promise(resolve => { enteredArticles = resolve; });
-    await page.getByRole("button").filter({ hasText: "#1043" }).click(); await pendingArticles;
+    if (deliverLateArticles) {
+      // Keep the transport alive once so the stale body reaches the app after denial.
+      await page.evaluate(() => {
+        const originalFetch = window.fetch.bind(window);
+        window.fetch = (resource, init) => {
+          if (resource === "/api/inbox") {
+            const { operation, input } = JSON.parse(init.body);
+            if (operation === "ARTICLES" && input.ticket_id === "43") {
+              window.fetch = originalFetch;
+              return originalFetch(resource, { ...init, signal: undefined });
+            }
+          }
+          return originalFetch(resource, init);
+        };
+      });
+    }
+    const pendingArticles = new Promise((resolve) => {
+      enteredArticles = resolve;
+    });
+    await ticket43.click();
+    const heldArticles = await pendingArticles;
+    const isHeldArticles = (request) => request === heldArticles;
+    const settledArticles = Promise.race([
+      page.waitForEvent("requestfailed", { predicate: isHeldArticles }),
+      page.waitForEvent("requestfinished", { predicate: isHeldArticles }),
+    ]);
+    const denial = page.waitForResponse(
+      (response) =>
+        response.url().endsWith("/api/inbox") &&
+        response.request().postDataJSON()?.operation === "CHECK" &&
+        response.status() === 403,
+    );
     revoked = true;
     await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await denial;
+    await expect(
+      page.getByRole("button", { name: locale === "ar" ? "تذكرة جديدة" : "New ticket", exact: true }),
+    ).toBeDisabled();
     await expect(page.locator("#inbox-message")).toHaveCount(0);
     await expect(page.getByText("Preserve this reply", { exact: true })).toHaveCount(0);
-    const oldArticles = page.waitForResponse(response => response.request().postDataJSON()?.operation === "ARTICLES");
-    releaseArticles(); await oldArticles;
-    await page.evaluate(() => new Promise(requestAnimationFrame));
+    releaseArticles();
+    const terminalArticles = await settledArticles;
+    if (deliverLateArticles) {
+      assert.equal(terminalArticles.failure(), null);
+      assert.equal((await terminalArticles.response())?.status(), 200);
+    } else {
+      assert.equal(terminalArticles.failure()?.errorText, "net::ERR_ABORTED");
+    }
+    await page.evaluate(
+      () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
+    );
     await expect(page.locator("#inbox-message")).toHaveCount(0);
     await expect(page.locator("h2", { hasText: "Invoice question" })).toHaveCount(0);
+    await expect(page.locator("[data-article-id]")).toHaveCount(0);
+    console.log(`${locale}: held ARTICLES ${deliverLateArticles ? "answered late" : "aborted"} after access denial`);
     console.log(`${locale}: drafts survive outage/reply, stale pagination and post-denial detail fenced, corrupt recovery rejected, unknown result/reload reconciled, mobile/keyboard/RTL passed; writes=${writes}`);
-    await context.close();
+    await trace.closeContext(context);
   }
+} catch (error) {
+  await trace.retainFailure();
+  throw error;
 } finally { await browser.close(); }

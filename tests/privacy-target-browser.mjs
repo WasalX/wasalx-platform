@@ -4,17 +4,19 @@ import { mkdir } from "node:fs/promises";
 import { chromium, expect } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 import { getMessages } from "../lib/i18n/messages/index.ts";
+import { syntheticBrowserTrace } from "./helpers/synthetic-browser-trace.mjs";
 
 const base = process.env.WASALX_STORYBOOK_URL ?? "http://127.0.0.1:6227";
 const output = process.env.WASALX_SYNTHETIC_UI_OUTPUT ?? "output/playwright/inbox";
 await mkdir(output, { recursive: true });
 const browser = await chromium.launch({ ...(process.env.WASALX_VISUAL_BROWSER_PATH ? { executablePath: process.env.WASALX_VISUAL_BROWSER_PATH } : {}), headless: true });
+const trace = syntheticBrowserTrace(browser, base, output);
 try {
   for (const [locale, width] of [["en", 1440], ["ar", 390]]) {
     const t = key => getMessages(locale)[key];
     for (const kind of ["export", "hold", "delete"]) {
-      const context = await browser.newContext({ viewport: { width, height: 1000 } }), page = await context.newPage();
-      let stale = false, deny = false, malformed = false, releaseOld, enteredOld, finishOld;
+      const context = await trace.newContext({ viewport: { width, height: 1000 } }), page = await context.newPage();
+      let stale = false, holdBlocked = false, deny = false, malformed = false, releaseOld, enteredOld, finishOld;
       const oldFinished = new Promise(resolve => { finishOld = resolve; });
       const mutations = [];
       await page.route("**/api/privacy/target", async route => {
@@ -32,6 +34,7 @@ try {
       await page.route(/\/api\/privacy\/(holds|requests)$/u, route => {
         mutations.push(route.request().postDataJSON());
         return malformed ? route.fulfill({ status: 202, json: {} }) : stale ? route.fulfill({ status: 409, json: { code: "CONFLICT" } })
+          : holdBlocked ? route.fulfill({ status: 409, json: { error: "An active legal hold blocks this deletion scope", code: "LEGAL_HOLD_ACTIVE" } })
           : route.fulfill({ status: kind === "hold" ? 201 : 202, json: { id: "10000000-0000-4000-8000-000000000001", state: kind === "hold" ? "ACTIVE" : "QUEUED" } });
       });
       await page.route("**/api/privacy/receipt", route => route.fulfill({ status: 200, json: malformed
@@ -55,6 +58,15 @@ try {
       releaseOld(); await oldFinished; await page.evaluate(() => new Promise(requestAnimationFrame));
       await expect(readback).not.toContainText("#1042");
       await confirm();
+      if (kind === "delete") { // A hold refusal names the hold and keeps the checked target.
+        holdBlocked = true; await submit.click();
+        await expect(dialog.getByRole("alert")).toContainText(t("tenant.privacy.error.holdBlocksDeletion"));
+        await expect(dialog.getByRole("alert")).not.toContainText(t("tenant.privacy.target.stale"));
+        await expect(readback).toContainText("#1043");
+        holdBlocked = false;
+        await dialog.getByRole("button", { name: t("tenant.privacy.recovery.cancel"), exact: true }).click();
+        await expect(readback).toContainText("#1043"); await expect(submit).toBeEnabled();
+      }
       stale = true; await submit.click();
       await expect(dialog.getByRole("alert")).toContainText(t("tenant.privacy.target.stale"));
       await expect(readback).toHaveCount(0); await expect(submit).toBeDisabled();
@@ -75,6 +87,7 @@ try {
       const axe = await new AxeBuilder({ page }).include("dialog").withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze();
       assert.deepEqual(axe.violations.map(row => ({ id: row.id, nodes: row.nodes.map(node => node.target) })), []);
       assert.equal(await dialog.evaluate(node => node.scrollWidth <= node.clientWidth + 1), true);
+      if (locale === "ar") assert.deepEqual(await page.evaluate(() => [...document.querySelectorAll('[dir="rtl"] *:not(code)')].filter(node => !["normal", "0px"].includes(getComputedStyle(node).letterSpacing)).map(node => node.className)), []);
       await page.screenshot({ path: `${output}/privacy-${kind}-${locale}.png`, fullPage: true });
       stale = false; malformed = true; await submit.click();
       await expect(dialog.getByRole("alert")).toContainText(t("tenant.privacy.recovery.unknown"));
@@ -90,8 +103,11 @@ try {
       const body = mutations.at(-1);
       assert.equal(body.scopeType, "ZAMMAD_USER"); assert.equal(body.scopeValue, "customer@example.invalid"); assert.equal(body.selection_sha256, "c".repeat(64));
       assert.ok(!("internal_id" in body));
-      await context.close();
+      await trace.closeContext(context);
     }
   }
   console.log("Synthetic privacy dialogs: EN desktop / AR mobile; stale lookup, denial, readback/hash, submit, keyboard and Axe checks passed.");
+} catch (error) {
+  await trace.retainFailure();
+  throw error;
 } finally { await browser.close(); }

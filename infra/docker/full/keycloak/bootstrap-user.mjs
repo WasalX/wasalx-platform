@@ -11,65 +11,20 @@ const platformOperatorUsernameEnv = "WASALX_PLATFORM_OPERATOR_USERNAME";
 const qualificationOwnerUsername = readUsername(qualificationOwnerUsernameEnv, "example.owner");
 const isolationOwnerUsername = readUsername(isolationOwnerUsernameEnv, "example.isolation");
 const platformOperatorUsername = readUsername(platformOperatorUsernameEnv, "example.platform");
+const mode = process.env.WASALX_KEYCLOAK_BOOTSTRAP_MODE ?? "reconcile";
+if (mode !== "reconcile" && mode !== "preserve-existing") {
+  throw new Error("WASALX_KEYCLOAK_BOOTSTRAP_MODE must be reconcile or preserve-existing");
+}
 const adminUsername = required("KEYCLOAK_ADMIN");
 const adminPassword = required("KEYCLOAK_ADMIN_PASSWORD");
-const qualificationOwnerPassword = required("WASALX_QUALIFICATION_OWNER_PASSWORD");
-const isolationOwnerPassword = required("WASALX_ISOLATION_OWNER_PASSWORD");
-const platformPassword = required("WASALX_PLATFORM_OPERATOR_PASSWORD");
 const qualificationOwnerEmail = (process.env.WASALX_QUALIFICATION_OWNER_EMAIL ?? "").trim();
 const isolationOwnerEmail = (process.env.WASALX_ISOLATION_OWNER_EMAIL ?? "").trim();
-const smtp = {
-  host: (process.env.WASALX_KEYCLOAK_SMTP_HOST ?? "").trim(),
-  port: (process.env.WASALX_KEYCLOAK_SMTP_PORT ?? "").trim(),
-  from: (process.env.WASALX_KEYCLOAK_SMTP_FROM ?? "").trim(),
-  user: (process.env.WASALX_KEYCLOAK_SMTP_USER ?? "").trim(),
-  password: process.env.WASALX_KEYCLOAK_SMTP_PASSWORD ?? "",
-};
 const baseUrl = adminBaseUrl();
-const publicOrigin = (name, fallback) => {
-  const value = (process.env[name] ?? fallback).replace(/\/$/u, "");
-  const url = new URL(value);
-  if (url.username || url.password || url.pathname !== "/" || url.search || url.hash ||
-      (url.protocol !== "https:" && url.hostname !== "127.0.0.1")) throw new Error(`${name} is invalid`);
-  return value;
-};
-const portalOrigin = publicOrigin("WASALX_PORTAL_PUBLIC_ORIGIN", "http://127.0.0.1:3000");
-// Local full shares the existing edge network; browser loopback is not the IdP host.
-const portalBackchannelOrigin = new URL(portalOrigin).hostname === "127.0.0.1" ? "http://portal:3000" : portalOrigin;
-const zammadOrigin = publicOrigin("WASALX_ZAMMAD_PUBLIC_ORIGIN", "http://127.0.0.1:8081");
-// Browser loopback belongs to the host; logout originates in Keycloak's network.
-const zammadBackchannelOrigin = new URL(zammadOrigin).hostname === "127.0.0.1"
-  ? "http://zammad-nginx:8080" : zammadOrigin;
-const smtpConfigured = Object.values(smtp).every(Boolean);
-const passwordResetEnabled = process.env.WASALX_KEYCLOAK_PASSWORD_RESET_ENABLED === "true";
-const routableEmail = value => {
-  const domain = value.slice(value.lastIndexOf("@") + 1).toLowerCase();
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(value)
-    && !/(?:^|\.)(?:invalid|local|localhost|example|test)$/u.test(domain)
-    && !/(?:^|\.)example\.(?:com|net|org)$/u.test(domain);
-};
+const portalClientId = "wasalx-portal";
+const qualificationZammadClientId = "wasalx-00000000000040008000000000000001";
+const platformClientId = "wasalx-platform-portal";
 
-if (Object.values(smtp).some(Boolean) && !smtpConfigured) {
-  throw new Error("Keycloak SMTP configuration must be complete");
-}
-if (smtpConfigured && (!/^[1-9]\d{0,4}$/u.test(smtp.port) || Number(smtp.port) > 65_535 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(smtp.from))) {
-  throw new Error("Keycloak SMTP configuration is invalid");
-}
-if (qualificationOwnerEmail && !routableEmail(qualificationOwnerEmail)) {
-  throw new Error("WASALX_QUALIFICATION_OWNER_EMAIL must be a routable email address");
-}
-if (smtpConfigured && passwordResetEnabled && !qualificationOwnerEmail) {
-  throw new Error("WASALX_QUALIFICATION_OWNER_EMAIL is required when password recovery is enabled");
-}
-
-if (new Set([adminPassword, qualificationOwnerPassword, isolationOwnerPassword, platformPassword]).size !== 4) {
-  throw new Error("Keycloak qualification passwords must be distinct");
-}
-if (isolationOwnerEmail) {
-  if (!routableEmail(isolationOwnerEmail)) {
-    throw new Error("WASALX_ISOLATION_OWNER_EMAIL must be a routable email address");
-  }
-}
+class BootstrapLookupError extends Error {}
 
 async function findUser(token, realm, username) {
   stage = `${realm} user lookup`;
@@ -87,13 +42,14 @@ async function lookupUserForReconciliation(token, realm, desired, usernameEnv) {
   let existing;
   if (desired.id) {
     const lookup = await adminRequest(baseUrl, token, realm, `/users/${encodeURIComponent(desired.id)}`);
-    if (lookup.status === 404) throw new Error(`Keycloak seeded user is missing for ${realm}`);
+    if (lookup.status === 404) throw new BootstrapLookupError(`Keycloak seeded user is missing for ${realm}`);
     if (!lookup.ok) throw new Error(`Keycloak user lookup failed for ${realm}`);
     existing = await readJson(lookup);
   } else {
     for (const filter of [{ email: desired.email }, { username: desired.username }]) {
       const matches = await findUsers(baseUrl, token, realm, filter);
-      if (!Array.isArray(matches) || matches.length > 1) throw new Error(`Keycloak user lookup was ambiguous for ${realm}`);
+      if (!Array.isArray(matches)) throw new BootstrapLookupError(`Keycloak user lookup returned invalid data for ${realm}`);
+      if (matches.length > 1) throw new BootstrapLookupError(`Keycloak user lookup was ambiguous for ${realm}`);
       if (matches.length === 1) {
         existing = matches[0];
         break;
@@ -104,8 +60,10 @@ async function lookupUserForReconciliation(token, realm, desired, usernameEnv) {
   if (existing?.username !== desired.username) {
     throw new UsernameMismatchError(`Keycloak existing user has a different username in ${realm}. Set ${usernameEnv} to its current username.`);
   }
-  if (typeof existing.id !== "string") throw new Error(`Keycloak user lookup returned no ID for ${realm}`);
-  return desired.id ?? existing.id;
+  if (typeof existing.id !== "string" || !existing.id || (desired.id && existing.id !== desired.id)) {
+    throw new BootstrapLookupError(`Keycloak user lookup returned an invalid ID for ${realm}`);
+  }
+  return existing.id;
 }
 
 async function reconcileUser(token, realm, desired, existingId) {
@@ -189,7 +147,7 @@ async function reconcileTotpEnrollment(token, realm, username) {
   if (updateResponse.status !== 204) throw new Error(`Keycloak OTP enrollment reconciliation failed for ${realm}`);
 }
 
-async function reconcileRealmPresentation(token, realm) {
+async function reconcileRealmPresentation(token, realm, { smtp, smtpConfigured, passwordResetEnabled }) {
   stage = `${realm} presentation reconciliation`;
   const realmSmtpEnabled = realm === "wasalx" && smtpConfigured;
   const response = await fetch(`${baseUrl}/admin/realms/${encodeURIComponent(realm)}`, {
@@ -220,19 +178,25 @@ async function reconcileRealmPresentation(token, realm) {
   if (response.status !== 204) throw new Error(`Keycloak presentation reconciliation failed for ${realm}`);
 }
 
-async function reconcilePublicClient(token, realm, desired) {
+async function lookupClient(token, realm, clientId) {
   stage = `${realm} client lookup`;
-  const query = new URLSearchParams({ clientId: desired.clientId, max: "2" });
-  const lookup = await fetch(`${baseUrl}/admin/realms/${encodeURIComponent(realm)}/clients?${query}`, {
-    headers: { authorization: `Bearer ${token}` },
-    signal: AbortSignal.timeout(10_000),
-  });
+  const query = new URLSearchParams({ clientId, max: "2" });
+  const lookup = await adminRequest(baseUrl, token, realm, `/clients?${query}`);
   if (!lookup.ok) throw new Error(`Keycloak client lookup failed for ${realm}`);
   const matches = await readJson(lookup);
-  if (!Array.isArray(matches) || matches.length > 1) throw new Error(`Keycloak client lookup was ambiguous for ${realm}`);
+  if (!Array.isArray(matches)) throw new BootstrapLookupError(`Keycloak client lookup returned invalid data for ${realm}`);
+  if (matches.length > 1) throw new BootstrapLookupError(`Keycloak client lookup was ambiguous for ${realm}`);
+  if (matches.length === 0) return undefined;
+  const [client] = matches;
+  if (client?.clientId !== clientId || typeof client.id !== "string" || !client.id) {
+    throw new BootstrapLookupError(`Keycloak client lookup returned an unexpected client for ${realm}`);
+  }
+  return client.id;
+}
 
+async function reconcilePublicClient(token, realm, desired) {
+  const existingId = await lookupClient(token, realm, desired.clientId);
   stage = `${realm} client reconciliation`;
-  const existingId = matches[0]?.id;
   const response = await fetch(
     existingId
       ? `${baseUrl}/admin/realms/${encodeURIComponent(realm)}/clients/${encodeURIComponent(existingId)}`
@@ -250,39 +214,81 @@ async function reconcilePublicClient(token, realm, desired) {
   if (response.status !== (existingId ? 204 : 201)) throw new Error(`Keycloak client reconciliation failed for ${realm}`);
 }
 
-let stage = "administrator authentication";
-try {
-  const token = await login(baseUrl, { username: adminUsername, password: adminPassword }, 12);
-  const qualificationOwner = {
-    id: "10000000-0000-4000-8000-000000000001",
-    username: qualificationOwnerUsername,
-    email: qualificationOwnerEmail || "fixture-0006@example.test",
-    emailVerified: true,
-    enabled: true,
-    firstName: "Qualification",
-    lastName: "Owner",
-    requiredActions: ["CONFIGURE_TOTP"],
+function readReconciliationConfig() {
+  const qualificationOwnerPassword = required("WASALX_QUALIFICATION_OWNER_PASSWORD");
+  const isolationOwnerPassword = required("WASALX_ISOLATION_OWNER_PASSWORD");
+  const platformPassword = required("WASALX_PLATFORM_OPERATOR_PASSWORD");
+  const smtp = {
+    host: (process.env.WASALX_KEYCLOAK_SMTP_HOST ?? "").trim(),
+    port: (process.env.WASALX_KEYCLOAK_SMTP_PORT ?? "").trim(),
+    from: (process.env.WASALX_KEYCLOAK_SMTP_FROM ?? "").trim(),
+    user: (process.env.WASALX_KEYCLOAK_SMTP_USER ?? "").trim(),
+    password: process.env.WASALX_KEYCLOAK_SMTP_PASSWORD ?? "",
   };
-  const isolationOwner = {
-    username: isolationOwnerUsername,
-    email: isolationOwnerEmail,
-    emailVerified: true,
-    enabled: true,
-    firstName: "Isolation",
-    lastName: "Owner",
-    requiredActions: ["CONFIGURE_TOTP"],
+  const publicOrigin = (name, fallback) => {
+    const value = (process.env[name] ?? fallback).replace(/\/$/u, "");
+    let url;
+    try {
+      url = new URL(value);
+    } catch {
+      throw new Error(`${name} is invalid`);
+    }
+    if (url.username || url.password || url.pathname !== "/" || url.search || url.hash ||
+        (url.protocol !== "https:" && url.hostname !== "127.0.0.1")) throw new Error(`${name} is invalid`);
+    return value;
   };
-  const qualificationOwnerId = await lookupUserForReconciliation(token, "wasalx", qualificationOwner, qualificationOwnerUsernameEnv);
-  const isolationOwnerId = isolationOwnerEmail
-    ? await lookupUserForReconciliation(token, "wasalx", isolationOwner, isolationOwnerUsernameEnv)
-    : undefined;
-  await lookupUserForReconciliation(token, "wasalx-platform", {
-    id: "10000000-0000-4000-8000-000000000002",
-    username: platformOperatorUsername,
-  }, platformOperatorUsernameEnv);
+  const portalOrigin = publicOrigin("WASALX_PORTAL_PUBLIC_ORIGIN", "http://127.0.0.1:3000");
+  // Local full shares the existing edge network; browser loopback is not the IdP host.
+  const portalBackchannelOrigin = new URL(portalOrigin).hostname === "127.0.0.1" ? "http://portal:3000" : portalOrigin;
+  const zammadOrigin = publicOrigin("WASALX_ZAMMAD_PUBLIC_ORIGIN", "http://127.0.0.1:8081");
+  // Browser loopback belongs to the host; logout originates in Keycloak's network.
+  const zammadBackchannelOrigin = new URL(zammadOrigin).hostname === "127.0.0.1"
+    ? "http://zammad-nginx:8080" : zammadOrigin;
+  const smtpConfigured = Object.values(smtp).every(Boolean);
+  const passwordResetEnabled = process.env.WASALX_KEYCLOAK_PASSWORD_RESET_ENABLED === "true";
+  const routableEmail = value => {
+    const domain = value.slice(value.lastIndexOf("@") + 1).toLowerCase();
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(value)
+      && !/(?:^|\.)(?:invalid|local|localhost|example|test)$/u.test(domain)
+      && !/(?:^|\.)example\.(?:com|net|org)$/u.test(domain);
+  };
 
-  await reconcileRealmPresentation(token, "wasalx");
-  await reconcileRealmPresentation(token, "wasalx-platform");
+  if (Object.values(smtp).some(Boolean) && !smtpConfigured) {
+    throw new Error("Keycloak SMTP configuration must be complete");
+  }
+  if (smtpConfigured && (!/^[1-9]\d{0,4}$/u.test(smtp.port) || Number(smtp.port) > 65_535 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(smtp.from))) {
+    throw new Error("Keycloak SMTP configuration is invalid");
+  }
+  if (qualificationOwnerEmail && !routableEmail(qualificationOwnerEmail)) {
+    throw new Error("WASALX_QUALIFICATION_OWNER_EMAIL must be a routable email address");
+  }
+  if (smtpConfigured && passwordResetEnabled && !qualificationOwnerEmail) {
+    throw new Error("WASALX_QUALIFICATION_OWNER_EMAIL is required when password recovery is enabled");
+  }
+
+  if (new Set([adminPassword, qualificationOwnerPassword, isolationOwnerPassword, platformPassword]).size !== 4) {
+    throw new Error("Keycloak qualification passwords must be distinct");
+  }
+  if (isolationOwnerEmail) {
+    if (!routableEmail(isolationOwnerEmail)) {
+      throw new Error("WASALX_ISOLATION_OWNER_EMAIL must be a routable email address");
+    }
+  }
+
+  return {
+    qualificationOwnerPassword, isolationOwnerPassword, platformPassword,
+    portalOrigin, portalBackchannelOrigin, zammadBackchannelOrigin,
+    presentation: { smtp, smtpConfigured, passwordResetEnabled },
+  };
+}
+
+async function reconcile(token, qualificationOwner, qualificationOwnerId, isolationOwner, isolationOwnerId, config) {
+  const {
+    qualificationOwnerPassword, isolationOwnerPassword, platformPassword,
+    portalOrigin, portalBackchannelOrigin, zammadBackchannelOrigin, presentation,
+  } = config;
+  await reconcileRealmPresentation(token, "wasalx", presentation);
+  await reconcileRealmPresentation(token, "wasalx-platform", presentation);
   await reconcileUser(token, "wasalx", qualificationOwner, qualificationOwnerId);
   if (isolationOwnerEmail) {
     await reconcileUser(token, "wasalx", isolationOwner, isolationOwnerId);
@@ -296,7 +302,7 @@ try {
     await reconcileTotpEnrollment(token, "wasalx", isolationOwnerUsername);
   }
   await reconcilePublicClient(token, "wasalx", {
-    clientId: "wasalx-portal",
+    clientId: portalClientId,
     name: "WasalX Portal",
     enabled: true,
     publicClient: true,
@@ -331,7 +337,7 @@ try {
     optionalClientScopes: ["address", "phone", "offline_access", "microprofile-jwt"],
   });
   await reconcilePublicClient(token, "wasalx", {
-    clientId: "wasalx-00000000000040008000000000000001",
+    clientId: qualificationZammadClientId,
     name: "WasalX Qualification Zammad",
     enabled: false,
     publicClient: true,
@@ -354,7 +360,7 @@ try {
     defaultClientScopes: ["basic", "web-origins", "acr", "roles", "profile", "email"],
   });
   await reconcilePublicClient(token, "wasalx-platform", {
-    "clientId": "wasalx-platform-portal",
+    "clientId": platformClientId,
     "name": "WasalX Platform Operations Portal",
     "enabled": true,
     "publicClient": true,
@@ -414,8 +420,67 @@ try {
   await resetPassword(token, "wasalx-platform", platformOperatorUsername, platformPassword);
   await reconcileTotpEnrollment(token, "wasalx-platform", platformOperatorUsername);
   process.stdout.write("Keycloak local users initialized.\n");
+}
+
+const reconciliationConfig = mode === "reconcile" ? readReconciliationConfig() : undefined;
+let stage = "administrator authentication";
+try {
+  const token = await login(baseUrl, { username: adminUsername, password: adminPassword }, mode === "preserve-existing" ? 1 : 12);
+  if (mode === "preserve-existing") {
+    for (const realm of ["wasalx", "wasalx-platform"]) {
+      stage = `${realm} realm lookup`;
+      const response = await adminRequest(baseUrl, token, realm, "");
+      if (response.status === 404) throw new BootstrapLookupError(`Keycloak realm is missing for ${realm}`);
+      if (!response.ok || (await readJson(response))?.realm !== realm) throw new Error("Keycloak realm lookup failed");
+    }
+  }
+  const qualificationOwner = {
+    id: "10000000-0000-4000-8000-000000000001",
+    username: qualificationOwnerUsername,
+    email: qualificationOwnerEmail || "fixture-0006@example.test",
+    emailVerified: true,
+    enabled: true,
+    firstName: "Qualification",
+    lastName: "Owner",
+    requiredActions: ["CONFIGURE_TOTP"],
+  };
+  const isolationOwner = {
+    username: isolationOwnerUsername,
+    email: isolationOwnerEmail,
+    emailVerified: true,
+    enabled: true,
+    firstName: "Isolation",
+    lastName: "Owner",
+    requiredActions: ["CONFIGURE_TOTP"],
+  };
+  const qualificationOwnerId = await lookupUserForReconciliation(token, "wasalx", qualificationOwner, qualificationOwnerUsernameEnv);
+  const isolationOwnerId = isolationOwnerEmail
+    ? await lookupUserForReconciliation(token, "wasalx", isolationOwner, isolationOwnerUsernameEnv)
+    : undefined;
+  await lookupUserForReconciliation(token, "wasalx-platform", {
+    id: "10000000-0000-4000-8000-000000000002",
+    username: platformOperatorUsername,
+  }, platformOperatorUsernameEnv);
+
+  if (mode === "preserve-existing") {
+    if (isolationOwnerEmail && !isolationOwnerId) {
+      throw new BootstrapLookupError("Keycloak seeded isolation user is missing for wasalx");
+    }
+    for (const [realm, clientId] of [
+      ["wasalx", portalClientId],
+      ["wasalx", qualificationZammadClientId],
+      ["wasalx-platform", platformClientId],
+    ]) {
+      if (!await lookupClient(token, realm, clientId)) {
+        throw new BootstrapLookupError(`Keycloak seeded client is missing for ${realm} (${clientId})`);
+      }
+    }
+    process.stdout.write("Keycloak existing realms, users and clients verified.\n");
+  } else {
+    await reconcile(token, qualificationOwner, qualificationOwnerId, isolationOwner, isolationOwnerId, reconciliationConfig);
+  }
 } catch (error) {
-  process.stderr.write(error instanceof UsernameMismatchError
+  process.stderr.write(error instanceof UsernameMismatchError || error instanceof BootstrapLookupError
     ? `${error.message}\n`
     : `Keycloak local-user bootstrap failed during ${stage}.\n`);
   process.exitCode = 1;

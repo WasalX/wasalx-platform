@@ -27,7 +27,7 @@ Live-provider qualification is a separate release milestone.
 - Build the portal with `pnpm run build` and the services with `pnpm run build:services`.
 - For affected checks, use `pnpm run lint`, `pnpm run typecheck`, and the relevant test runner. For a focused Node test, use `node --test path/to/test-file.mjs` after building its prerequisites.
 - On Windows, put `jq` on your PATH. In Git Bash, run `jq --version` before running `node --test tests/hosted-ci.test.mjs` from the same shell.
-- There is no formatter command yet. See the [delivery deviations](DELIVERY.md#deviations).
+- Run `pnpm run format <paths>` to format JavaScript, TypeScript, or CSS and `pnpm run format:check <paths>` to check formatting. See [source checks](DELIVERY.md#source-checks) for the other languages.
 - Run the root suite with `pnpm test`. Unit tests require a Ruby toolchain for the add-on. Database integration uses `pnpm run test:postgres` with disposable PostgreSQL and both admin and application database URLs. Browser integration uses `pnpm run test:e2e` with Playwright Chromium and its fixture services. Run the full release checks through CI. See [Checks](DELIVERY.md#checks).
 
 ## Architecture and single sources
@@ -71,7 +71,7 @@ Only a critical change gets a review: one independent full-diff review at the ex
 - **Real people's or customer data** — [control API migrations](services/control-api/migrations/), deletion and retention, audit logs and history, backups and restore, sign-in and permissions, and the personal data an API response, export, or outbound message carries. The server is the exposure boundary, so a UI that only shows fields the API already returns is not critical.
 - **Making anything public** — including `tests/no-agent-instruction-files.test.mjs`.
 - **Hosts, networks, and firewalls** — including network and access-control configuration.
-- **Repo settings, branch protection, and release gates** — rulesets, required checks, `.github/`, CI scripts, `scripts/release/`, the privacy deny check, and deleting, skipping, or weakening a test.
+- **Repo settings, branch protection, and release gates** — rulesets, required checks, `.github/`, CI scripts, `scripts/release/`, the privacy deny check, and deleting, skipping, or weakening a test. Source-gate settings include `.pre-commit-config.yaml`, `.rubocop.yml`, `eslint.config.mjs`, `.gitignore`, the `prettier`, `stylelint`, and `scripts` blocks of `package.json`, and any added formatter or linter configuration or ignore file (such as `.prettierignore` or `.stylelintignore`).
 
 WasalX records no safety-critical domain rules.
 

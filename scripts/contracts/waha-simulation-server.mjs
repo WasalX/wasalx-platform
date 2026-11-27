@@ -202,8 +202,22 @@ export function createWahaSimulation({additionalDiscoveryGroupIds=[],participant
     const results=[];
     for(const w of targets){
       const headers={'content-type':'application/json','x-webhook-hmac-algorithm':'sha512','x-webhook-hmac':createHmac('sha512',w.hmac.key).update(saved.bytes).digest('hex'),'x-webhook-timestamp':String(saved.timestamp)};
-      try{const response=await fetch(webhookDestination(w.url),{method:'POST',headers,body:saved.bytes,redirect:'error',signal:AbortSignal.timeout(webhookTimeoutMs)});const receipt=await ingressReceipt(response);results.push({status:response.status,outcome:'http-response',...(receipt?{receipt}:{})});}
-      catch(error){results.push({status:null,outcome:error?.name==='TimeoutError'?'timeout':'network-or-redirect-error'});}
+      const controller = new AbortController();
+      // Keep the deadline alive until the receipt body is consumed, even after fetch returns headers.
+      const deadline = setTimeout(() => {
+        controller.abort(new DOMException('Webhook request timed out', 'TimeoutError'));
+      }, webhookTimeoutMs);
+      try {
+        const response = await fetch(webhookDestination(w.url), {
+          method: 'POST', headers, body: saved.bytes, redirect: 'error', signal: controller.signal,
+        });
+        const receipt = await ingressReceipt(response);
+        results.push({ status: response.status, outcome: 'http-response', ...(receipt ? { receipt } : {}) });
+      } catch (error) {
+        results.push({ status: null, outcome: error?.name === 'TimeoutError' ? 'timeout' : 'network-or-redirect-error' });
+      } finally {
+        clearTimeout(deadline);
+      }
     }
     saved.results=results;persist();
     return {eventId,bodySha256:hash(saved.bytes),results};

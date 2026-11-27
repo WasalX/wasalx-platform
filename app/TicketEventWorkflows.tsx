@@ -2,8 +2,7 @@
 
 import { Fragment, useCallback, useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { parseTicketEventFlow, ticketEvents, type TicketEvent, type TicketEventDefinition } from "../packages/core/src/ticket-event-flow.ts";
-import { operatorResponseFailure } from "../lib/operator-ui.ts";
-import { localizedUiError } from "../lib/ui-error.ts";
+import { operatorFailureMessage, operatorLocalFailure, operatorResponseFailure } from "../lib/operator-ui.ts";
 import { useI18n } from "./I18nProvider.tsx";
 import { InlineConfirmation } from "./ModalDialog.tsx";
 import { TicketEventEditor, TicketEventPreviewPanel, ticketEventStarter } from "./TicketEventEditor.tsx";
@@ -92,7 +91,7 @@ export function TicketEventWorkflows({ active, flows, canWrite, workspaceId, mut
     return () => window.clearTimeout(timer);
   }, [draft?.recoveryWritable, draft?.storageKey, draftText]);
   function showError(problem: unknown) {
-    setError(problem instanceof Error && "code" in problem ? problem.message : localizedUiError(locale, problem).message);
+    setError(operatorFailureMessage(problem, t("common.errors.generic"), locale));
   }
   async function refreshConfiguration() {
     try { setConfiguration(await read<Configuration>("/api/bot-flows/ticket-events")); setConfigurationError(false); }
@@ -127,7 +126,7 @@ export function TicketEventWorkflows({ active, flows, canWrite, workspaceId, mut
   }
   function checkMembers(definition: TicketEventDefinition) {
     if (definition.permission?.mode === "SPECIFIC" && (!configuration || definition.permission.memberIds.some(member => !configuration.members.some(option => option.id === member)))) {
-      throw Object.assign(new Error(t("ticketEvent.membersUnavailable")), { code: "VALIDATION_ERROR" });
+      throw operatorLocalFailure(t("ticketEvent.membersUnavailable"));
     }
   }
   async function saveDraft(event: FormEvent) {

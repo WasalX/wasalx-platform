@@ -2,6 +2,7 @@ import {requiredOperatorInput} from "../scripts/release/operator-input.mjs";
 import assert from "node:assert/strict";
 import { execFile, execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
+import { EventEmitter, once } from "node:events";
 import { createServer } from "node:http";
 import { isIP } from "node:net";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -1309,7 +1310,11 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
             else if (chooser?.contains(target)) {
               clickTarget = target.closest(seededOption) ? 'seeded-option' : target.closest('[role="option"]') ? 'other-option' : 'chooser-other';
             }
-            clicks.push({ target: clickTarget, ...state });
+            clicks.push({
+              target: clickTarget,
+              ...state,
+              modalReady: Boolean(chooser?.closest(".modal.in.modal--ready")),
+            });
           }
           return state;
         };
@@ -1333,13 +1338,28 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
           return { clicks, opened, closedAfterOpen, replaced, optionExposed, final };
         };
       }, machineUiSeed.group_id);
-      await withNativeDiagnostic(t, 'queue chooser', async () => ({ scenario: scenario.name, chooser: await collectChooser() }), async () => {
-        await newGrant.locator('.js-groupListItemAddNew .js-input').click();
-        await newGrant.getByRole('option', { name: 'Operations', exact: true }).click();
-        await newGrant.locator('input[value="full"]').locator('..').click();
-        await newGrant.locator('.js-add').click();
-        assert.equal(await fullGrant.isChecked(), true);
-      }, scenario === scenarios[0]);
+      await withNativeDiagnostic(
+        t,
+        "queue chooser",
+        async () => ({
+          scenario: scenario.name,
+          chooser: await collectChooser(),
+        }),
+        async () => {
+          // Zammad marks the modal ready after the opening transition and autofocus.
+          await newGrant
+            .locator(".js-groupListItemAddNew .js-input")
+            .and(adminPage.locator(".modal.in.modal--ready .js-input"))
+            .click();
+          await newGrant
+            .getByRole("option", { name: "Operations", exact: true })
+            .click();
+          await newGrant.locator('input[value="full"]').locator("..").click();
+          await newGrant.locator(".js-add").click();
+          assert.equal(await fullGrant.isChecked(), true);
+        },
+        scenario === scenarios[0],
+      );
       await new Promise((resolve, reject) => {
         if (coreWorkflowResponses.size) return resolve();
         const timeout = setTimeout(() => reject(new Error('No matching Users Full-grant CoreWorkflow websocket response')), 30_000);
@@ -1388,6 +1408,32 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
 
     const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, timezoneId: "Asia/Riyadh" });
     const page = await context.newPage();
+    const desktopFormResets = new EventEmitter();
+    page.on("websocket", (socket) => {
+      if (new URL(socket.url()).pathname !== "/cable") return;
+      const resetRequests = new Map();
+      socket.on("framesent", ({ payload }) => {
+        const frame = JSON.parse(String(payload));
+        if (frame.command === "unsubscribe") resetRequests.delete(frame.identifier);
+        if (frame.command !== "message") return;
+        const { operationName, variables } = JSON.parse(frame.data);
+        const formId = variables?.meta?.formId;
+        const article = variables?.data?.article;
+        // The form updater can coalesce the reset with a ticket refresh in the same tick.
+        if (operationName === "formUpdater" && formId && !article?.articleType && !article?.body) {
+          resetRequests.set(frame.identifier, formId);
+        }
+      });
+      socket.on("framereceived", ({ payload }) => {
+        const { identifier, message } = JSON.parse(String(payload));
+        const formId = resetRequests.get(identifier);
+        if (!formId || !message?.result) return;
+        resetRequests.delete(identifier);
+        if (message.result.data?.formUpdater?.flags?.newArticlePresent === false) {
+          desktopFormResets.emit(`reset:${formId}`);
+        }
+      });
+    });
     const entryResponse = await fetch(`${zammadOrigin}/?from=wasalx`, { redirect: "manual" });
     assert.equal(entryResponse.status, 302);
     const entryLocation = new URL(entryResponse.headers.get("location") ?? "", entryResponse.url);
@@ -1585,20 +1631,41 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
     const isTicketUpdate = (request, url = request.url()) => new URL(url).pathname.endsWith('/graphql')
       && request.method() === 'POST' && ticketUpdateOperation.test(request.postDataJSON()?.operationName ?? '');
     const submitReplyTicket = async (articleExpected) => {
-      const [response] = await Promise.all([
-        page.waitForResponse(response => isTicketUpdate(response.request(), response.url()), { timeout: 60_000 }),
+      let reset;
+      if (articleExpected) {
+        const formId = await page.locator('#ticketArticleReplyForm [name="body"][data-form-id]').getAttribute("data-form-id");
+        assert.ok(formId, "The native desktop reply must belong to a FormKit form");
+        // A pending draft refresh can outlive ticketUpdate. Wait for Zammad's reset query for this form.
+        reset = once(desktopFormResets, `reset:${formId}`, { signal: AbortSignal.timeout(30_000) }).catch((cause) => {
+          throw new Error("The native desktop reply form did not acknowledge its reset", { cause });
+        });
+      }
+      await Promise.all([
+        page.waitForResponse(response => isTicketUpdate(response.request(), response.url()), { timeout: 60_000 }).then(async (response) => {
+          const data = await response.json();
+          assert.equal(response.status(), 200); assert.ok(!data.errors?.length);
+          assert.ok(!data.data?.ticketUpdate?.errors?.length); assert.ok(data.data?.ticketUpdate?.ticket);
+          assert.equal(response.request().postDataJSON()?.variables?.input?.article != null, articleExpected);
+        }),
         page.getByRole('button', { name: 'Update', exact: true }).click(),
+        reset,
       ]);
-      const data = await response.json();
-      assert.equal(response.status(), 200); assert.ok(!data.errors?.length);
-      assert.ok(!data.data?.ticketUpdate?.errors?.length); assert.ok(data.data?.ticketUpdate?.ticket);
-      assert.equal(response.request().postDataJSON()?.variables?.input?.article != null, articleExpected);
     };
     const assertReplyReset = async (marker = replyMarker) => {
-      await page.waitForFunction(marker => ![...document.querySelectorAll('[contenteditable="true"]')]
-        .some(node => node.textContent.includes(marker)), marker, { timeout: 30_000 });
-      await page.getByRole('button', { name: 'Discard unsaved reply', exact: true }).waitFor({ state: 'hidden', timeout: 30_000 });
-      await page.getByText('Discard your unsaved changes', { exact: true }).waitFor({ state: 'hidden', timeout: 30_000 });
+      await withNativeDiagnostic(t, "desktop reply reset", () => readNativeDiagnostic(page.evaluate((text) => ({
+        panelOpen: Boolean(document.getElementById("ticketArticleReplyForm")),
+        remainingDrafts: [...document.querySelectorAll("[contenteditable]")]
+          .filter(node => node.textContent.includes(text))
+          .map(node => ({
+            inReplyPanel: Boolean(node.closest("#ticketArticleReplyForm")),
+            inHiddenForm: Boolean(node.closest("#wrapper-form-ticket-edit")),
+          })),
+      }), marker)), async () => {
+        await page.waitForFunction(marker => ![...document.querySelectorAll('[contenteditable="true"]')]
+          .some(node => node.textContent.includes(marker)), marker, { timeout: 30_000 });
+        await page.getByRole('button', { name: 'Discard unsaved reply', exact: true }).waitFor({ state: 'hidden', timeout: 30_000 });
+        await page.getByText('Discard your unsaved changes', { exact: true }).waitFor({ state: 'hidden', timeout: 30_000 });
+      }, false);
     };
     // The plugin screenshot selected WasalX operations; native fields are rendered
     // only while the Ticket sidebar is selected. This changes no persisted state.
@@ -1963,6 +2030,11 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
     };
     let nativeMobileStorageState;
     let mobilePhase = "navigation";
+    const channelChooser = mobilePage.getByRole("dialog", {
+      name: "Dialog window with selections",
+      exact: true,
+    });
+    const whatsAppChannel = channelChooser.getByRole("option", { name: "WhatsApp", exact: true });
     mobilePage.on("request", (request) => {
       if (request.method() !== "POST" || !new URL(request.url()).pathname.endsWith("/graphql")) return;
       const payload = request.postDataJSON();
@@ -2151,12 +2223,14 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
       await mobilePage.waitForURL((url) => url.pathname === "/mobile/wasalx/groups" && url.searchParams.get("message") === existingMessageId);
       await mobilePage.locator(`[data-message-id="${existingMessageId}"]`).waitFor();
       await mobilePage.goto(`${zammadOrigin}/mobile/tickets/${state.ticketId}`, { waitUntil: "domcontentloaded" });
-      mobilePhase = "reply-draft-attachment-discard";
+      mobilePhase = "reply-channel-chooser";
       await mobilePage.getByRole("button", { name: "Add reply", exact: true }).click();
       const reply = mobilePage.getByRole("dialog", { name: "Add reply", exact: true });
       await reply.getByRole("combobox", { name: "Channel", exact: true }).click();
-      await mobilePage.getByRole("dialog", { name: "Dialog window with selections", exact: true }).getByRole("option", { name: "WhatsApp", exact: true }).click();
+      await whatsAppChannel.click();
+      await channelChooser.waitFor({ state: "hidden" });
       assert.ok((await reply.getByRole("combobox", { name: "Channel", exact: true }).innerText()).includes("WhatsApp"));
+      mobilePhase = "reply-draft-attachment-discard";
       const mobileDraft = "Mobile draft \u2014 do not send.";
       const collectEditor = await observeNativeDom(mobilePage, draft => {
         const listener = new AbortController();
@@ -2186,11 +2260,26 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
           obsoletePreview: pathMatched && methodMatched && typeof body === 'string' && !fullDraft && mobileDraft.startsWith(body.trim()) };
       });
       await withNativeDiagnostic(t, 'mobile preview', async () => ({ ...collectPreview(), editor: await collectEditor() }), async () => {
+        const draftEditor = reply.locator('[contenteditable="true"]');
+        // Move focus after the first input to exercise the partial-draft regression.
+        await draftEditor.evaluate((editor) => {
+          editor.addEventListener("input", () => editor.blur(), { once: true });
+        });
         const [preview] = await Promise.all([
-          mobilePage.waitForResponse(response => response.request().method() === "POST"
-            && new URL(response.url()).pathname === previewPath
-            && response.request().postDataJSON()?.body?.trim() === mobileDraft),
-          reply.locator('[contenteditable="true"]').pressSequentially(mobileDraft, { delay: 20 }),
+          mobilePage.waitForResponse(
+            (response) =>
+              response.request().method() === "POST" &&
+              new URL(response.url()).pathname === previewPath &&
+              response.request().postDataJSON()?.body?.trim() === mobileDraft,
+          ),
+          (async () => {
+            await draftEditor.fill(mobileDraft);
+            assert.equal(
+              (await draftEditor.textContent())?.trim(),
+              mobileDraft,
+              "The editor must hold the full draft",
+            );
+          })(),
         ]);
         assert.equal(preview.status(), 200, "The pinned add-on must preview the unsent draft");
         assert.equal((await preview.json()).text.trim(), mobileDraft);
@@ -2248,6 +2337,16 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
       mobilePhase = "collected-failure-union";
       assert.deepEqual(mobileFailures, [], "native mobile collected failure union");
     } catch (error) {
+      const chooser = mobilePhase === "reply-channel-chooser"
+        ? await readNativeDiagnostic(Promise.all([channelChooser.count(), whatsAppChannel.count(), whatsAppChannel.first().isVisible()])
+          .then(([dialogs, options, optionVisible]) => ({ dialogs, options, optionVisible })))
+        : null;
+      await writeFile(join(evidenceDirectory, "native-mobile-public-failure.json"), JSON.stringify({
+        phase: mobilePhase,
+        kind: error?.name === "TimeoutError" ? "timeout" : error instanceof assert.AssertionError ? "assertion" : "error",
+        chooser,
+        checks: mobileFailures.map(({ surface, check }) => ({ surface, check })),
+      }, null, 2)).catch(() => t.diagnostic("Unable to retain the public native mobile failure diagnostics."));
       const failureStateBeforeCapture = await mobileState().catch((stateError) => ({ error: String(stateError) }));
       const screenshotError = await mobilePage.screenshot({ path: join(evidenceDirectory, "native-mobile-failure.png"), fullPage: false })
         .then(() => null, (captureError) => String(captureError));

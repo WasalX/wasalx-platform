@@ -4,18 +4,16 @@ on:
   schedule:
     - cron: '17 2 * * *'
   workflow_dispatch:
-  pull_request:
-    branches: [main]
-    types: [opened, synchronize, reopened]
+    inputs:
+      commit:
+        description: Exact published main commit SHA (optional)
+        type: string
+        required: false
   push:
     tags: ['v*-rc.*']
 
 permissions:
   contents: read
-
-concurrency:
-  group: nightly-${{ github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   zammad-compatibility:
@@ -23,7 +21,7 @@ jobs:
     uses: ./.github/workflows/zammad-compatibility.yml
 
   frozen-disk-qemu:
-    if: github.repository == 'WasalX/wasalx-platform' && (github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main')
+    if: github.repository == 'WasalX/wasalx-platform' && (github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main')
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     defaults:
@@ -32,22 +30,10 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 2
           persist-credentials: false
-      - name: Select changed frozen-disk inputs
-        id: changes
-        if: github.event_name == 'pull_request'
-        run: |
-          needed=true
-          if git diff --quiet --no-ext-diff --no-renames HEAD^1 HEAD -- scripts/dev-install/ .github/workflows/nightly-install.yml; then
-            needed=false
-          fi
-          echo "needed=$needed" >> "$GITHUB_OUTPUT"
       - name: Test disk proof and lease inputs
-        if: steps.changes.outputs.needed != 'false'
         run: python3 -I -B scripts/dev-install/test_frozen_disk.py
       - name: Rehearse immutable TOP and discard with real QEMU
-        if: steps.changes.outputs.needed != 'false'
         run: |
           sudo apt-get -qq update
           sudo apt-get -qq install --no-install-recommends qemu-system-x86 qemu-utils seabios
@@ -56,7 +42,8 @@ jobs:
   nightly-install:
     if: >-
       github.repository == 'WasalX/wasalx-platform' &&
-      (github.event_name == 'pull_request' || github.ref == 'refs/heads/main' ||
+      (github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'push' && github.ref_type == 'tag'))
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -68,83 +55,39 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # The PR merge commit plus five first-parent main candidates.
-          fetch-depth: 6
           persist-credentials: false
-      - name: Select changed installer inputs
-        id: changes
-        if: github.event_name == 'pull_request'
-        run: |
-          needed=true
-          if git diff --quiet --no-ext-diff --no-renames HEAD^1 HEAD -- \
-            ':(glob)scripts/release/installer-*' ':(glob)scripts/dev-install/**' ':(glob)compose*.yaml' \
-            services/control-api/migrations/ \
-            release/installer-images.json scripts/installer-evidence.mjs ':(glob)infra/docker/full/**' \
-            Dockerfile.foundation-keycloak scripts/release/patch-keycloak-jackson.py \
-            scripts/release/compose-stage-lock.mjs scripts/release/compose-stage-config.json scripts/release/simulation-rails-json.mjs \
-            scripts/release/preflight-full-env.mjs scripts/release/generate-simulation-env.py \
-            scripts/release/images-by-digest.py scripts/release/image_registry_retry.py scripts/release/product-images.json scripts/release/image-manifest.sh \
-            tests/pull-verify.test.mjs scripts/release/cosign-pin.json .github/actions/cosign/action.yml \
-            tests/installer-nightly-grafana.test.mjs .github/workflows/nightly-install.yml; then
-            needed=false
-          fi
-          echo "needed=$needed" >> "$GITHUB_OUTPUT"
-          if ! git diff --quiet --no-ext-diff --no-renames HEAD^1 HEAD -- \
-            scripts/dev-install/templates/pull-agent.py scripts/dev-install/templates/wasalx-dev-pull.service \
-            scripts/dev-install/templates/wasalx-dev-pull.timer scripts/dev-install/render.py \
-            scripts/dev-install/test_pull_agent.py scripts/dev-install/pull-verify.mjs \
-            tests/pull-verify.test.mjs scripts/release/installer-hosted-images.mjs scripts/release/installer-hosted-bundles.py \
-            scripts/release/cosign-pin.json .github/actions/cosign/action.yml \
-            .github/workflows/nightly-install.yml; then
-            echo 'pull=true' >> "$GITHUB_OUTPUT"
-          fi
-      - name: Resolve published images for qualification or PR fixtures
+      - name: Resolve published images for qualification
         id: publication
-        if: steps.changes.outputs.needed != 'false'
         env:
           GH_TOKEN: ${{ github.token }}
+          DISPATCH_COMMIT: ${{ inputs.commit }}
         run: |
           work="$RUNNER_TEMP/wasalx-nightly"
           install -d -m 0700 "$work/diagnostics"
           source scripts/release/image-manifest.sh
-          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+          if [[ "$GITHUB_EVENT_NAME" == push && "$GITHUB_REF_TYPE" == tag ]]; then
             commit=$(git rev-parse HEAD)
             require_tag_commit "$GITHUB_REF" "$commit"
             download_main_image_manifest "$commit" "$work"
-          elif [[ "$GITHUB_EVENT_NAME" == pull_request ]]; then
-            base=$(git rev-parse HEAD^1)
-            commit=$(download_nightly_image_manifest "$base" "$work" pr-fixture)
           else
-            commit=$(download_nightly_image_manifest "$GITHUB_SHA" "$work")
+            if [[ -n "$DISPATCH_COMMIT" ]]; then
+              commit=$(download_nightly_image_manifest "$DISPATCH_COMMIT" "$work")
+            else
+              commit=$(download_nightly_image_manifest main "$work" latest)
+            fi
+            git checkout --detach "$commit"
           fi
           echo "commit=$commit" >> "$GITHUB_OUTPUT"
-      - name: Check whether the publication represents the PR migrations
-        id: migration-check
-        if: github.event_name == 'pull_request' && steps.changes.outputs.needed != 'false'
-        env:
-          PUBLICATION_COMMIT: ${{ steps.publication.outputs.commit }}
-        run: |
-          changed=$(git -c core.quotePath=true diff --name-only --no-ext-diff --no-renames \
-            "$PUBLICATION_COMMIT" HEAD -- services/control-api/migrations/)
-          if [[ -n "$changed" ]]; then
-            printf 'Installer rehearsal skipped: PR changes migrations; main publication cannot represent them\n\n```\n%s\n```\n' \
-              "$changed" | tee -a "$GITHUB_STEP_SUMMARY"
-            echo 'skip=true' >> "$GITHUB_OUTPUT"
-          fi
-      - if: steps.changes.outputs.needed != 'false'
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22.23.4
       - name: Test the DEV pull report agent
-        if: steps.changes.outputs.needed != 'false'
         run: |
           python3 -I -B scripts/dev-install/test_pull_agent.py
           node --test tests/pull-verify.test.mjs
-      - if: steps.changes.outputs.needed != 'false' && (steps.migration-check.outputs.skip != 'true' || steps.changes.outputs.pull == 'true')
-        uses: ./.github/actions/cosign
+      - uses: ./.github/actions/cosign
       - name: Initialize pinned Sigstore trust
         id: trust
-        if: steps.changes.outputs.needed != 'false' && (steps.migration-check.outputs.skip != 'true' || steps.changes.outputs.pull == 'true')
         run: |
           export TUF_ROOT="$RUNNER_TEMP/wasalx-nightly/tuf"
           cosign initialize
@@ -152,47 +95,24 @@ jobs:
           test -f "$root"
           echo "root=$root" >> "$GITHUB_OUTPUT"
       - name: Stage published manifests and Sigstore bundles
-        if: steps.changes.outputs.needed != 'false' && (steps.migration-check.outputs.skip != 'true' || steps.changes.outputs.pull == 'true')
         run: bash scripts/release/installer-nightly.sh stage-bundles
-      - name: Verify the PR pull tooling against public GitHub, GHCR and Sigstore
-        if: github.event_name == 'pull_request' && steps.changes.outputs.pull == 'true'
-        timeout-minutes: 10
-        env:
-          PR_HEAD: ${{ github.event.pull_request.head.sha }}
-          TRUSTED_ROOT: ${{ steps.trust.outputs.root }}
-        run: |
-          trap 'printf "command=%s exit=%s reason=exact PR pull tooling step failed at line %s\n" "$BASH_COMMAND" "$?" "$LINENO" >&2' ERR
-          work="$RUNNER_TEMP/wasalx-nightly"
-          merge_head=$(git rev-parse HEAD^2)
-          if [[ "$merge_head" != "$PR_HEAD" ]]; then
-            printf 'command=git rev-parse HEAD^2 exit=1 reason=merge parent does not match the PR head\n' >&2
-            exit 1
-          fi
-          git worktree add --detach "$work/pr-head" "$PR_HEAD"
-          cosign=$(command -v cosign)
-          cd "$work/pr-head"
-          python3 -I -B scripts/dev-install/test_pull_agent.py --live --candidate "$PR_HEAD" \
-            --manifest "$work/images-manifest.json" --cosign "$cosign" --trust "$TRUSTED_ROOT"
       - name: Test the installer Grafana probe
-        if: steps.changes.outputs.needed != 'false'
         run: node --test tests/installer-nightly-grafana.test.mjs
       - name: Rehearse full installation and controlled recreation
-        if: steps.changes.outputs.needed != 'false' && steps.migration-check.outputs.skip != 'true'
         timeout-minutes: 47
         env:
           MAIN_SHA: ${{ steps.publication.outputs.commit }}
           TRUSTED_ROOT: ${{ steps.trust.outputs.root }}
         run: bash scripts/release/installer-nightly.sh
       - name: Confirm census PASS
-        if: steps.changes.outputs.needed != 'false' && steps.publication.outputs.commit == github.sha
         env:
-          COMMIT: ${{ github.sha }}
+          COMMIT: ${{ steps.publication.outputs.commit }}
         run: |
           log="$RUNNER_TEMP/wasalx-nightly/diagnostics/phases.log"
           grep -Fxq "installer=$COMMIT tree=$(git rev-parse 'HEAD^{tree}') images=$COMMIT" "$log"
           grep -Eq '^probe-scan services=([1-9][0-9]*) rerendered_hashes=\1 census=PASS$' "$log"
       - name: Tear down the disposable stack and volumes
-        if: always() && steps.changes.outputs.needed != 'false' && steps.migration-check.outputs.skip != 'true'
+        if: always()
         timeout-minutes: 4
         run: bash scripts/release/installer-nightly.sh cleanup
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

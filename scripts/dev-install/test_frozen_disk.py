@@ -73,19 +73,21 @@ class HostPacketTest(unittest.TestCase):
             packet = Path(directory) / "packet"
             result = self.render(packet)
             self.assertEqual(result.returncode, 0, result.stderr)
-            marker = json.loads(self.example.read_bytes())["DEV_STEP_LOCK"]
+            identity = json.loads(self.example.read_bytes())
+            marker = identity["DEV_STEP_LOCK"]
             env = (packet / "host.env").read_text()
             self.assertEqual([line for line in env.splitlines() if marker in line],
                              [f"export DEV_STEP_LOCK={marker}"])
+            self.assertIn(f"export DEV_STEP_RECORD={identity['DISK_STATE']}/dev-step.run\n", env)
             helper = (packet / "dev-step-lock.sh").read_text()
             self.assertIn('exec 7<"$DEV_STEP_LOCK"', helper)
             self.assertIn("flock -n -E 75 7", helper)
             self.assertNotIn(marker, helper)
             for name, state, lock, first_action in (
-                ("register.sh", "STATE", "(hold_dev_step_lock)", 'exec 9>"$STATE/install-registration.lock"'),
-                ("install-or-discard.sh", "state", "hold_dev_step_lock", "sha256sum --check"),
-                ("overlay-action.sh", "STATE", "hold_dev_step_lock", "stamp lease start"),
-                ("dev-guest-phase.sh", "state", "hold_dev_step_lock", "stamp ssh-ready start"),
+                ("register.sh", "STATE", "dev_step_record check || exit 75", 'exec 9>"$STATE/install-registration.lock"'),
+                ("install-or-discard.sh", "state", 'hold_dev_step_lock "$run" "$mode" lease', "sha256sum --check"),
+                ("overlay-action.sh", "STATE", 'hold_dev_step_lock "$RUN" "$MODE"', "stamp lease start"),
+                ("dev-guest-phase.sh", "state", 'hold_dev_step_lock "$(cat "$state/run-id")" "guest-$phase"', "stamp ssh-ready start"),
             ):
                 with self.subTest(step=name):
                     script = (packet / name).read_text()
@@ -113,6 +115,26 @@ class HostPacketTest(unittest.TestCase):
                 self.assertIn(error, result.stderr)
                 self.assertFalse(packet.exists())
 
+    def test_host_record_location_can_be_overridden_outside_the_lock_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            parent = Path(directory)
+            identity = parent / "host-identity.json"
+            fields = json.loads(self.example.read_bytes())
+            record = f"{fields['DISK_STATE']}/lease.run"
+            identity.write_text(json.dumps({**fields, "DEV_STEP_RECORD": record}), encoding="utf-8")
+            packet = parent / "packet"
+            result = self.render(packet, identity=identity)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn(f"export DEV_STEP_RECORD={record}\n", (packet / "host.env").read_text())
+            for invalid in ("relative/lease.run", fields["DEV_STEP_LOCK"] + ".run"):
+                with self.subTest(record=invalid):
+                    identity.write_text(json.dumps({**fields, "DEV_STEP_RECORD": invalid}), encoding="utf-8")
+                    rejected = parent / "rejected"
+                    result = self.render(rejected, identity=identity)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("invalid host path: DEV_STEP_RECORD", result.stderr)
+                    self.assertFalse(rejected.exists())
+
     def test_renderer_seals_host_files_and_derives_measured_leases(self):
         with tempfile.TemporaryDirectory() as directory:
             parent = Path(directory)
@@ -120,8 +142,12 @@ class HostPacketTest(unittest.TestCase):
             install_text = lease_receipt("install", 24 * SECOND, timing("install", "full-top-hash", 8 * SECOND, 2 * SECOND))
             install.write_text(receipt_origin() + install_text, encoding="utf-8")
             rollback = parent / "rollback.raw"
-            rollback.write_text(receipt_origin(captured_ns=CAPTURED_NS + 1) + lease_receipt("rollback", 7 * SECOND),
-                                encoding="utf-8")
+            rollback.write_text(
+                receipt_origin(captured_ns=CAPTURED_NS + 1) + lease_receipt("rollback", 7 * SECOND) + "\n"
+                + receipt_origin(captured_ns=CAPTURED_NS + 11 * SECOND)
+                + lease_receipt("rollback", 7 * SECOND, lease_start=CAPTURED_NS + 10 * SECOND),
+                encoding="utf-8",
+            )
             receipt_hashes = [hashlib.sha256(path.read_bytes()).hexdigest() for path in (install, rollback)]
             identity = parent / "identity.json"
             fields = {**json.loads(self.example.read_bytes()), "LEASE_RECEIPT_POLICY": POLICY,
@@ -133,7 +159,9 @@ class HostPacketTest(unittest.TestCase):
                 renderer.render_host(fields, "20000101T000000Z", "1" * 40, [install, rollback], packet)
             hashes = dict(line.split("  ", 1)[::-1] for line in (packet / "SHA256SUMS").read_text().splitlines())
             self.assertEqual(set(hashes), {file.name for file in packet.iterdir()} - {"SHA256SUMS"})
-            self.assertTrue({"overlay-action.sh", "frozen-disk.py", "register.sh", "host.env"}.issubset(hashes))
+            self.assertTrue(
+                {"overlay-action.sh", "frozen-disk.py", "register.sh", "run-install.sh", "host.env"}.issubset(hashes)
+            )
             self.assertFalse({"packet.json", "receive.py", "dispatch.py"}.intersection(hashes))
             for name, sha256 in hashes.items():
                 self.assertEqual(hashlib.sha256((packet / name).read_bytes()).hexdigest(), sha256)
@@ -184,6 +212,8 @@ class HostPacketTest(unittest.TestCase):
             install.write_text(receipt_origin() + lease_receipt(
                 "install", 24 * SECOND, timing("install", "full-top-hash", 8 * SECOND, 2 * SECOND)), encoding="utf-8")
             fresh = lease_receipt("rollback", 7 * SECOND)
+            resumed = lease_receipt("rollback", 7 * SECOND, lease_start=CAPTURED_NS + 10 * SECOND)
+            future_tick = lease_receipt("rollback", RENDER_NS - LEASE_START_NS + 1)
             # Starts just before the oldest allowed tick and ends after capture, so only the stale start is wrong.
             stale = lease_receipt("rollback", 25 * SECOND, lease_start=RENDER_NS - 60 * SECOND - 1)
             for name, override, text in (
@@ -192,8 +222,12 @@ class HostPacketTest(unittest.TestCase):
                 ("other-inode", {"disk_inode": 20}, fresh),
                 ("expired", {"captured_ns": RENDER_NS - 60 * SECOND - 1}, fresh),
                 ("future", {"captured_ns": RENDER_NS + 1}, fresh),
+                ("malformed-origin", {"captured_ns": "invalid"}, fresh),
                 ("older-timings", {"captured_ns": CAPTURED_NS + 8 * SECOND}, fresh),
                 ("stale-lease-start", {}, stale),
+                ("future-tick", {}, future_tick),
+                ("missing-resumed-origin", {}, fresh + "\n" + resumed),
+                ("nonadjacent-origin", {}, fresh + "\n" + receipt_origin() + "diagnostic output\n" + resumed),
             ):
                 with self.subTest(name=name):
                     rollback.write_text(receipt_origin(**override) + text, encoding="utf-8")
@@ -208,6 +242,23 @@ class HostPacketTest(unittest.TestCase):
                     self.assertIn("export DISCARD_SECONDS=11400", env)
                     self.assertIn("export HASH_NS_PER_GB=0", env)
                     self.assertIn("export COMMIT_FALLBACK_SECONDS=25050", env)
+
+    def test_renderer_rejects_invalid_lease_receipt_policy(self):
+        with tempfile.TemporaryDirectory() as directory:
+            packet = Path(directory) / "packet"
+            identity = json.loads(self.example.read_bytes())
+            invalid_policies = [
+                True, "policy", {**POLICY, "extra": 1},
+                *({**POLICY, key: value}
+                  for key in ("disk_device", "disk_inode", "max_age_seconds")
+                  for value in (True, str(POLICY[key]))),
+            ]
+            for policy in invalid_policies:
+                with self.subTest(policy=policy):
+                    fields = {**identity, "LEASE_RECEIPT_POLICY": policy}
+                    with self.assertRaisesRegex(ValueError, "invalid LEASE_RECEIPT_POLICY"):
+                        renderer.render_host(fields, "20000101T000000Z", "1" * 40, [], packet)
+                    self.assertFalse(packet.exists())
 
     def test_renderer_seals_reviewed_reservations_and_refuses_hand_typed_budgets(self):
         with tempfile.TemporaryDirectory() as directory:

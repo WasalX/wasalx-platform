@@ -5,6 +5,17 @@ name: wasalx
 # Add --profile runtime-workers only when live invitation delivery is configured.
 # The base file remains the fast fixture-backed developer stack.
 
+# Stage new upstream pins here before moving them to the service's image field.
+x-object-storage-mirrors:
+  minio:
+    mirror: ghcr.io/wasalx/minio
+    fallback: ghcr.io/netvark/minio
+    staged: null
+  minio-bootstrap:
+    mirror: ghcr.io/wasalx/mc
+    fallback: ghcr.io/netvark/mc
+    staged: null
+
 x-full-zammad-environment: &full-zammad-environment
   MEMCACHE_SERVERS: zammad-memcached:11211
   POSTGRESQL_DB: zammad_production
@@ -461,6 +472,7 @@ services:
     image: node:22-bookworm-slim@sha256:e9f565d32859f0cbfb52125eafe8be39390f24dac302dc3cdf566e8ba3ab21ee
     entrypoint: [node, /bootstrap/bootstrap-user.mjs]
     environment:
+      WASALX_KEYCLOAK_BOOTSTRAP_MODE: ${WASALX_KEYCLOAK_BOOTSTRAP_MODE-reconcile}
       KEYCLOAK_ADMIN: ${WASALX_FULL_KEYCLOAK_ADMIN_USER:-example-admin}
       KEYCLOAK_ADMIN_PASSWORD: ${WASALX_FULL_KEYCLOAK_ADMIN_PASSWORD:?Set WASALX_FULL_KEYCLOAK_ADMIN_PASSWORD}
       WASALX_QUALIFICATION_OWNER_USERNAME: ${WASALX_FULL_QUALIFICATION_OWNER_USERNAME:-example.owner}

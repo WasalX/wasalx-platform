@@ -106,7 +106,7 @@ export function Rules({
             <h2>{t(rows.length ? "tenant.rules.activeSet" : "tenant.rules.noActiveSet")}</h2>
             <p>{rows.length ? <>{t("tenant.rules.governedVersion")} <bdi>{formatNumber(Number(rows[0]?.version ?? 0), locale)}</bdi></> : t("tenant.rules.noActiveSetBody")}</p>
           </div>
-          {canCreate && <button className="button" onClick={() => setCreating(true)}>＋ {t("tenant.rules.new")}</button>}
+          {canCreate && <button className="button icon-action" onClick={() => setCreating(true)}><MarketingIcon name="plus" />{t("tenant.rules.new")}</button>}
         </div>
         <div className="rule-list">
           {rows.map((rule) => (

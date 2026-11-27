@@ -112,7 +112,7 @@ WasalX is an Operate surface. Operators route WhatsApp and email conversations, 
 The public pages (marketing, invitations, privacy) share the tokens but may be more expressive. The signed-in portal (`/app`, `/platform`) stays quiet.
 
 **Key Characteristics:**
-- Dark and light themes, chosen by the user or by `prefers-color-scheme` (`app/boundary-preferences.ts`); both are first-class.
+- Dark and light themes, chosen by the user or by `prefers-color-scheme` (`app/boundary-preferences.ts`); both are first-class. The root canvas (`html`) takes the active theme's page color, so overscroll and the area past the content never show the browser default.
 - English and Arabic, with `dir` set on `<html>` from the locale (`app/layout.tsx`). Every layout must mirror correctly.
 - Density over whitespace: 12-14 px working text, 34-36 px controls, tables as the main pattern.
 - Tonal layering, not shadows, separates surfaces.
@@ -150,6 +150,7 @@ One neutral zinc ramp, one violet accent, three status colors and two provider m
 - **Title** (650, 14-16 px, -0.015em): panel and section heads.
 - **Body** (400, 13-14 px, line height 1.43; 1.6 for prose, max 45-65ch).
 - **Label / table** (550, 12 px): table headers, badges, field labels, buttons.
+- **Right-to-left:** no letter-spacing on any text except codes; Arabic letters join.
 - **Display** (750, `--wx-font-size-display` 60 px, -0.04em): the public-page hero only, fluid from 32 px.
 - **Mono** (12 px): only for values an operator may copy (codes, references). Never for raw ids or internal names.
 
@@ -159,9 +160,12 @@ One neutral zinc ramp, one violet accent, three status colors and two provider m
 
 - **Shell:** a fixed start-side sidebar (`--wx-sidebar-width` 15rem) plus the content area (`--wx-content-max` 90rem). The workspace toolbar is at least 57 px and grows with its text, so it never overflows onto the sidebar (`globals.css`); `--wx-topbar-height` (3.5rem) is used by the platform console.
 - **At 760 px and below** (the shell breakpoint): the sidebar becomes a top bar with one grid (the workspace switcher on row 1, the menu toggle and profile on row 2, the navigation below), the brand and system health are hidden, and the app shell is a block. Individual screens refine at other widths (for example 520 px and 480 px); new screens use 760 px unless their layout needs another.
+- **Tabs and relative times:** a tab strip (`.tabs`) keeps each label and its count on one line and scrolls sideways inside its own strip when the tabs do not fit. Relative times never wrap; on a phone card a secondary action such as "Create a corrected support reply" moves to its own row instead of squeezing the time (`.delivery-table`).
 - **Spacing:** `--wx-space-1..16` (4 px base: 4, 8, 12, 16, 24, 32, 48, 64). **The Spacing Rule.** `padding`, `margin`, `gap` and `inset` and their longhands use only a defined `var(--wx-space-*)` step, `0` or a 1 px hairline (`calc()`, `max()` and `clamp()` of these, `%`, `vw`, `env()` and `auto` are fine). A negative offset is `calc(-1 * var(--wx-space-*))`. There are no in-between steps: snap to the nearest one, and on a tie take the smaller unless that drops a 44 px or 24 px target. Width, height and `min-*` target sizes are not spacing. The governance test enforces this for every app stylesheet.
 - **Direction:** logical properties only (`inline-start/end`, `padding-inline`, `text-align: start`). Physical `left/right` is a defect. A known gap: `primitives.css` `.wx-data-panel th, td` use `text-align: left`; fix this before the primitive is used in the product.
-- **Tables:** 37 px headers, 57 px rows; wide tables sit in an `overflow-x: auto` wrapper and never scroll the whole page.
+- **Code and data fields** (JSON, IDs, template names, keys) set `dir="ltr"` so they keep left-to-right order on RTL pages; their labels and errors follow the page direction.
+- **Tables:** 37 px headers, 57 px rows; wide tables sit in an `overflow-x: auto` wrapper and never scroll the whole page. On phones (760 px and below) a table whose status or row actions would scroll off screen stacks each row instead, as Message delivery does (`.delivery-table`), with each status badge at the inline end of the card's first row.
+- **Card actions:** a card's actions share one row, in reading order, when they fit; at 760 px and below they stack at equal full width. The shared `.wx-card-actions` primitive gives this layout to Client routing connector cards and group message actions.
 
 ## Elevation & Depth
 
@@ -179,13 +183,14 @@ Three radii: control 6 px, panel 8 px, dialog 12 px (also the pill radius of sta
 The target set is the primitives in `app/design-system/primitives.tsx` and `primitives.css` (Storybook "Foundation", "Controls", "OperationalStates"). The React primitives are used only in Storybook; the `.wx-button` classes already ship on some portal screens, and the rest of the portal uses the legacy `.button`, `.status` and table rules in `globals.css`. New screens use the primitives; legacy screens converge on them when they are touched.
 
 - **Button** (`Button` / `.wx-button`): 36 px high, 12 px/550, control radius. Variants: `secondary` (the default, raised), `primary` (solid violet), `danger` (danger text plus a tinted border). It has a loading spinner, `disabled` at 0.56 opacity, and focus as a 2 px violet `outline` with a 2 px offset. **Drift:** legacy `.button` is 34 px high, and legacy `.button.primary` is inverted text-on-background (near-black in light, white in dark), not violet. Follow the primitive.
+- **Icons** (`MarketingIcon` in `app/MarketingIcon.tsx`): 24 px line icons in `currentColor`, always `aria-hidden`. A button that starts with an icon, such as a plus on a create action, adds `.icon-action` so the icon sits at `--wx-icon-size-inline` (16 px) before its label. Never use a text glyph such as the fullwidth plus (U+FF0B); the app fonts have no glyph for it.
 - **Status badge** (`StatusBadge` / `.wx-status`): pill, dot plus label, tones neutral/success/warning/danger.
 - **Operational state** (`OperationalState`): one panel for loading (skeleton), empty, partial, fatal and recovery states, with a title, one plain sentence and at most one action. Every data view must have all of these states. While a lazy part of a panel, drawer or dialog loads, it shows the compact `SectionLoading` state ("Loading this section…"); `WorkspaceLoading` is only for whole views. Both are a plain `role="status"` region without `aria-busy`, and a slot that always loads beside another uses `quiet` so the text is announced once, unless the other slot's code is already loaded. A skeleton loader puts `aria-busy="true"` on the skeleton and announces through one plain `role="status"` text inside it, never a busy live region.
 - **Data panel** (`DataPanel`): bordered panel with a header row and a table; sparse or dense density.
-- **Dialog** (`ModalDialog.tsx`): at most 520 px, dialog radius, dialog shadow, scroll inside, focus trapped, Escape closes.
+- **Dialog** (`ModalDialog.tsx`): at most 520 px, dialog radius, dialog shadow, scroll inside, focus trapped, Escape closes. Header, body and footer share one 16 px inline inset, and the header and footer dividers run edge to edge.
 - **Scroll region** (`ScrollRegion` in `app/tenant-ui.tsx`): any area that scrolls on its own (wide table, drawer body, transcript) uses it; it requires a name (`aria-label` or `aria-labelledby`) and sets `role="region"` and `tabIndex={0}` so keyboard users can scroll it. `WideTable` wraps it.
 - **Toast**: bottom, inline-end, inverted colors, at most 520 px.
-- **Inputs**: 34-38 px, raised background, `border-strong`; focus = violet border, a 3 px `accent-wash` ring and the shared 2 px violet outline (`Highlight` in forced colors). A field inside a container with its own focus ring (the search box) hides its outline except in forced colors; a danger field uses a danger-colored outline.
+- **Inputs**: 34-38 px, raised background, `border-strong`, body text size (14 px); a screen's fields share one field rule (Workflows and Client routing: the `.bot-automation`/`.routing-workspace` rule in `app/globals.css`); focus = violet border, a 3 px `accent-wash` ring and the shared 2 px violet outline (`Highlight` in forced colors). A field inside a container with its own focus ring (the search box) hides its outline except in forced colors; a danger field uses a danger-colored outline.
 
 ## Do's and Don'ts
 

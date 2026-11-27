@@ -34,7 +34,7 @@ RERUN_ALL = {
     "zammad-addon.json",  # Pins the public add-on source passed to image builds.
 }
 CACHED_IMAGES = {
-    "production-prometheus", "zammad", "production-otel", "control-api", "connector-worker", "portal",
+    "production-alertmanager", "production-prometheus", "zammad", "production-otel", "control-api", "connector-worker", "portal",
     "tenant-provisioner", "tenant-workspace-controller", "workspace-provider", "identity-policy-activator",
     "invitation-mailer",
 }
@@ -43,7 +43,7 @@ CREDENTIAL = re.compile(rb"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----\r?\
 PEM = re.compile(rb"-----BEGIN ((?:RSA |EC |OPENSSH )?PRIVATE KEY)-----\r?\n"
                  rb"(?:[A-Za-z0-9+/=]+\r?\n)+-----END \1-----")
 # Public built-in hello-world TLS key: cloudflared 2026.9.1, tlsconfig/hello_ca.go.
-CLOUDFLARED_SOURCE = "e75d9a314ae07ae42564c0d3115b9e33d8a7329d99771951ab7b67144461bd84"
+CLOUDFLARED_SOURCE = "https://github.com/cloudflare/cloudflared.git#f11dea9cb7079e90a982c1a2d5548ab40847fdcf"
 PUBLIC_KEYS = {"production-cloudflared": {"usr/local/bin/cloudflared": {
     "17ac4c2ca3deb87202cd2c101d4da9d4f4c0ec3d51a0381729329102b28e61a4"}}}
 ZAMMAD_PUBLIC_BASE = "ghcr.io/zammad/zammad@sha256:390705d0eefd8a473293c1f9130cb2f40a2484bd629dd3b33aa0e700ee86d13b"
@@ -374,9 +374,8 @@ def inspect_layers(archive, layers, base_layers, public_keys=None, licenses=None
 def inspect_image(reference, row, commit, tree, directory, licenses=None):
     text = (ROOT / row["dockerfile"]).read_text()
     if row["image"] in PUBLIC_KEYS:
-        require("ADD --checksum=sha256:" + CLOUDFLARED_SOURCE in text and
-                "https://github.com/cloudflare/cloudflared/archive/refs/tags/2026.9.1.tar.gz" in text,
-                "Public key-content allowance requires the reviewed source archive")
+        require(f"ADD {CLOUDFLARED_SOURCE} /src" in instructions(text),
+                "Public key-content allowance requires the reviewed source commit")
     public_keys = PUBLIC_KEYS.get(row["image"], {})
     public_members = {}
     if row["image"] == "zammad":
@@ -573,12 +572,13 @@ def publish(receipt_path):
         contact_digest = receipt.get("contactEmailSha256")
         require(isinstance(contact_digest, str) and DIGEST.fullmatch(contact_digest), "Invalid portal contact email digest")
         contact_input["contactEmailSha256"] = contact_digest
-    result = registry_output("docker", "push", receipt["reference"]).decode("utf-8")
+    result = registry_output("docker", "push", receipt["reference"], retry_unknown_blob=True).decode("utf-8")
     matches = re.findall(r"digest: (sha256:[0-9a-f]{64})", result)
     require(len(set(matches)) == 1, "Missing unique published digest")
     digest = matches[0]
     reference = repository + "@" + digest
-    raw = registry_output("docker", "buildx", "imagetools", "inspect", "--raw", reference)
+    raw = registry_output("docker", "buildx", "imagetools", "inspect", "--raw", reference,
+                          retry_missing_manifest=True)
     # The digest is checked over registry bytes by the client; never hash whitespace-normalized JSON.
     verify_manifest(json.loads(raw), receipt["inspection"]["configDigest"])
     receipt.update({"digest": digest, "configDigest": receipt["inspection"]["configDigest"],

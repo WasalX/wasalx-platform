@@ -77,6 +77,11 @@ test("rules sample keeps an explicit accessible label with prefilled text", asyn
   assert.match(html, /<textarea[^>]*id="rule-test-sample"[^>]*aria-labelledby="rule-test-sample-label"[^>]*>[^<]+<\/textarea>/);
 });
 
+test("audit scope cannot change before hydration", async () => {
+  const html = await (await render("/app?view=audit")).text();
+  assert.match(html, /<select\b[^>]*\sdisabled=""[^>]*><option value="exclude"/u);
+});
+
 test("public and app pages serve the WX browser icon with a purple X", async () => {
   for (const path of ["/", "/app"]) {
     const html = await (await render(path)).text();

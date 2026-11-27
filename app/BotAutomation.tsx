@@ -42,7 +42,7 @@ import {
   type BotFlowInput,
   type BotFlowNode,
 } from "../packages/core/src/bot-flow";
-import { operatorFailureMessage, operatorLocalFailure, createLatestRequestFence, operatorResponseFailure, type CodedOperatorError } from "../lib/operator-ui";
+import { operatorFailure, operatorFailureMessage, operatorLocalFailure, createLatestRequestFence, operatorResponseFailure, type CodedOperatorError, type OperatorFailure } from "../lib/operator-ui";
 import { useI18n } from "./I18nProvider";
 import { MarketingIcon } from "./MarketingIcon";
 import { InlineConfirmation, ModalDialog } from "./ModalDialog";
@@ -1252,7 +1252,7 @@ function FlowDetail({
             <details className="routing-raw">
               <summary>{t("bot.flow.schema.title")}</summary>
               <p>{t("bot.flow.schema.help")}</p>
-              <pre aria-label={t("bot.flow.schema.label")}><code>{JSON.stringify(definition, null, 2)}</code></pre>
+              <pre dir="ltr" aria-label={t("bot.flow.schema.label")}><code>{JSON.stringify(definition, null, 2)}</code></pre>
             </details>
           ) : null}
           <FlowSimulator key={String(row.flow_version_id)} definition={definition} actions={actions} supportTeams={supportTeams} />
@@ -1343,6 +1343,7 @@ function FlowSimulator({
         {t("bot.simulator.values")}
         <textarea
           id="bot-simulator-variables"
+          dir="ltr"
           value={variablesText}
           onChange={(event) => {
             setVariablesText(event.target.value);
@@ -2143,7 +2144,7 @@ export function PluginCatalog({
   canWrite: boolean;
   mutationHeaders: Record<string, string>;
 }) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const requestError = useCallback((status: number) => t("automation.common.requestFailed", { status }), [t]);
   const [actions, setActions] = useState<Row[]>([]);
   const [actionCursor, setActionCursor] = useState<string | null>(null);
@@ -2154,7 +2155,7 @@ export function PluginCatalog({
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [mutationError, setMutationError] = useState<CodedOperatorError | null>(null);
+  const [mutationError, setMutationError] = useState<OperatorFailure | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const saveIntent = useRef<{ fingerprint: string; credentialKey: string; actionKey: string } | null>(null);
   const restoreKeys = useRef(new Map<string,string>());
@@ -2230,9 +2231,7 @@ export function PluginCatalog({
       await load(true);
       return true;
     } catch (problem) {
-      setMutationError(problem instanceof Error && "code" in problem
-        ? problem as CodedOperatorError
-        : Object.assign(new Error(operatorFailureMessage(problem, t("bot.errors.change"))), { code: "UNKNOWN" as const }));
+      setMutationError(operatorFailure(problem, t("bot.errors.change"), locale));
       return false;
     } finally {
       setSaving(false);
@@ -2245,8 +2244,12 @@ export function PluginCatalog({
       const response=await fetch(`/api/bot-flows/actions/${encodeURIComponent(actionKey)}/revisions/${revision}/restore`,{method:"POST",headers:{...mutationHeaders,"idempotency-key":key},body:JSON.stringify({expectedRevision})});
       if(!response.ok)throw await operatorResponseFailure(response,requestError(response.status));
       restoreKeys.current.delete(intent);setNotice(t("plugins.history.restored",{revision}));await load(true);return true;
-    }catch(problem){setMutationError(problem instanceof Error&&"code" in problem?problem as CodedOperatorError:Object.assign(new Error(operatorFailureMessage(problem, t("bot.errors.change"))),{code:"UNKNOWN" as const}));return false}
-    finally{setSaving(false)}
+    } catch (problem) {
+      setMutationError(operatorFailure(problem, t("bot.errors.change"), locale));
+      return false;
+    } finally {
+      setSaving(false);
+    }
   };
   if (loadError && !loading && !actions.length) return <section className="panel settings-load-error" role="alert"><span>!</span><div><p>{loadError}</p><button className="button small" onClick={() => void load()}>{t("automation.common.reload")}</button></div></section>;
   if (loading && !actions.length) return <section className="panel bot-loading" aria-busy="true"><p className="sr-only" role="status" aria-label={t("plugins.loading")}>{t("plugins.loading")}</p><span aria-hidden="true" /><span aria-hidden="true" /><span aria-hidden="true" /></section>;
@@ -2276,7 +2279,7 @@ function Actions({
   integrations: Row[];
   canWrite: boolean;
   saving: boolean;
-  mutationError: CodedOperatorError | null;
+  mutationError: OperatorFailure | null;
   clearMutationError: () => void;
   mutationHeaders: Record<string, string>;
   saveAction: (body: Record<string, unknown>, credential: string) => Promise<boolean>;
@@ -2475,7 +2478,7 @@ function ActionForm({
   row: Row;
   integrations: Row[];
   saving: boolean;
-  mutationError: CodedOperatorError | null;
+  mutationError: OperatorFailure | null;
   mutationHeaders: Record<string, string>;
   cancel: () => void;
   save: (body: Record<string, unknown>, credential: string) => Promise<void>;

@@ -26,6 +26,9 @@ with patch.object(sys, "path", [str(RELEASE), *sys.path]):
     alias_spec = importlib.util.spec_from_file_location("aliases", RELEASE / "advance-main-image-aliases.py")
     aliases = importlib.util.module_from_spec(alias_spec)
     alias_spec.loader.exec_module(aliases)
+    mirror_spec = importlib.util.spec_from_file_location("mirrors", RELEASE / "installer-mirror-images.py")
+    mirrors = importlib.util.module_from_spec(mirror_spec)
+    mirror_spec.loader.exec_module(mirrors)
 
 
 def alias_environment(directory, commit, *, attempt=2):
@@ -292,6 +295,7 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
                          ["portal", "control-api", "connector-worker", "foundation-postgres"])
         self.assertEqual(images.matrix(["docs/guide/intro.md", "unmapped/new-file"], pull_request=True),
                          {"include": []})
+        self.assertIn("A PR path that matches no image input selects no image.", (ROOT / "DELIVERY.md").read_text(encoding="utf-8"))
 
     def test_pull_request_matrix_selects_addon_staging_inputs(self):
         addon_images = {"zammad", "workspace-configurator"}
@@ -492,27 +496,51 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
             with self.subTest(key=key), self.assertRaises(ValueError):
                 images.assemble(bad)
 
-    def test_collector_module_transport_is_scoped_to_the_build(self):
-        dockerfile = (ROOT / "Dockerfile.production-otel").read_text(encoding="utf-8")
-        build, runtime = dockerfile.rsplit("\nFROM ", 1)
-        self.assertIn("ENV GODEBUG=http2client=0", build.splitlines())
-        self.assertNotIn("GOSUMDB=off", build)
-        self.assertNotIn("GODEBUG", runtime)
+    def test_dockerfiles_do_not_fetch_github_generated_archives(self):
+        tracked = subprocess.check_output(
+            ["git", "ls-files", "-z", "--", ":(glob)**/Dockerfile*"],
+            cwd=ROOT, timeout=10,
+        ).decode().split("\0")
+        dockerfiles = {row["dockerfile"] for row in images.catalog()}
+        dockerfiles.update(path for path in tracked if path and not path.endswith(".dockerignore"))
+        generated_archive = re.compile(
+            r"https?://(?:github\.com/[^/\s]+/[^/\s]+/archive/|codeload\.github\.com/|"
+            r"api\.github\.com/repos/[^/\s]+/[^/\s]+/(?:tarball|zipball)\b)", re.IGNORECASE,
+        )
+        for path in sorted(dockerfiles):
+            with self.subTest(dockerfile=path):
+                source = (ROOT / path).read_text(encoding="utf-8")
+                self.assertIsNone(generated_archive.search(source),
+                                  "Use a commit-pinned Git source or a checksum-pinned release asset")
+
+    def test_go_module_transport_is_scoped_to_the_build(self):
+        for image in ("alertmanager", "cloudflared", "otel", "prometheus"):
+            with self.subTest(image=image):
+                dockerfile = (ROOT / f"Dockerfile.production-{image}").read_text(encoding="utf-8")
+                build, runtime = dockerfile.rsplit("\nFROM ", 1)
+                if image == "prometheus":
+                    self.assertNotIn("GODEBUG", build)
+                else:
+                    self.assertIn("ENV GODEBUG=http2client=0", build.splitlines())
+                self.assertNotIn("GOSUMDB=off", build)
+                self.assertNotIn("GODEBUG", runtime)
 
     def test_registry_cache_roles_are_disjoint(self):
-        self.assertEqual(len(images.CACHED_IMAGES), 11)
+        self.assertEqual(len(images.CACHED_IMAGES), 12)
         self.assertLessEqual(images.CACHED_IMAGES, {row["image"] for row in images.catalog()})
         main = {"GITHUB_EVENT_NAME": "push", "GITHUB_REF": "refs/heads/main", "GITHUB_REPOSITORY": images.REPOSITORY}
-        ref = "type=registry,ref=ghcr.io/wasalx/buildcache:production-prometheus"
+        ref = "type=registry,ref=ghcr.io/wasalx/buildcache:"
         with mock.patch.dict(os.environ, main, clear=True):
-            self.assertEqual(images.cache_options("production-prometheus", "write"), ["--cache-to", ref + ",mode=max,ignore-error=true"])
+            for image in ("production-prometheus", "production-alertmanager"):
+                self.assertEqual(images.cache_options(image, "write"), ["--cache-to", ref + image + ",mode=max,ignore-error=true"])
             self.assertEqual(images.cache_options("portal", "off"), [])
             self.assertEqual(images.cache_options("postgres", "write"), [])
             with self.assertRaises(ValueError):
                 images.cache_options("portal", "read")
         for event in ["pull_request", "merge_group"]:
             with mock.patch.dict(os.environ, {"GITHUB_EVENT_NAME": event}, clear=True):
-                self.assertEqual(images.cache_options("production-prometheus", "read"), ["--cache-from", ref])
+                for image in ("production-prometheus", "production-alertmanager"):
+                    self.assertEqual(images.cache_options(image, "read"), ["--cache-from", ref + image])
                 with self.assertRaises(ValueError):
                     images.cache_options("portal", "write")
 
@@ -550,6 +578,7 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
             (("cosign", "verify"), b"error: no matching signatures"),
             (("cosign", "attest"), b"error: invalid provenance"),
             (("cosign", "verify-attestation"), b"error: no matching attestations"),
+            (("docker", "pull"), b"unknown blob"),
             (("docker", "pull"), b"error: digest mismatch"),
             (("docker", "pull"), b"x509: certificate signed by unknown authority"),
             (("docker", "pull"), b""),
@@ -561,6 +590,172 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
                 images.registry_output(*command)
             run.assert_called_once()
             sleep.assert_not_called()
+
+    def test_publication_retries_only_push_blob_and_exact_digest_read_back_failures(self):
+        commit, tree, digest = "a" * 40, "b" * 40, "sha256:" + "1" * 64
+        inspection = {"configDigest": "sha256:" + "2" * 64, "addonLicenses": {}}
+        manifest = json.dumps({"mediaType": "application/vnd.oci.image.manifest.v1+json",
+                               "config": {"digest": inspection["configDigest"]}}).encode()
+        env = {"GITHUB_EVENT_NAME": "push", "GITHUB_REF": "refs/heads/main", "GITHUB_WORKFLOW_SHA": commit,
+               "GITHUB_RUN_ID": "1", "GITHUB_RUN_ATTEMPT": "1"}
+        reference = f"ghcr.io/wasalx/zammad-nginx:{commit}"
+        receipt = {"image": "zammad-nginx", "reference": reference, "commit": commit, "tree": tree,
+                   "status": "built", "inspection": inspection, "sourceArchiveDigest": "",
+                   "addonSource": None, "dockerfileDigest": ""}
+        command = ("docker", "push", reference)
+        diagnostic = b"sha256:" + b"3" * 64 + b" HTTP/1.1 404 Not Found"
+        failure = subprocess.CalledProcessError(1, command, output=diagnostic + b"\n", stderr=b"unknown blob\n")
+        inspect = ("docker", "buildx", "imagetools", "inspect", "--raw", f"ghcr.io/wasalx/zammad-nginx@{digest}")
+        missing_diagnostic = (f"ERROR: httpReadSeeker: failed open: content at "
+                              f"https://ghcr.io/v2/wasalx/zammad-nginx/manifests/{digest} not found: not found\n").encode()
+        missing = subprocess.CalledProcessError(1, inspect, stderr=missing_diagnostic)
+        wrong_digest = subprocess.CalledProcessError(
+            1, inspect, stderr=missing_diagnostic.replace(digest.encode(), b"sha256:" + b"9" * 64))
+        pushed = subprocess.CompletedProcess(command, 0, stdout=f"digest: {digest}".encode())
+        inspected = subprocess.CompletedProcess(inspect, 0, stdout=manifest)
+        signing = [subprocess.CompletedProcess((), 0, stdout=b"")] * 4
+        cases = [
+            ("push recovers", [failure, pushed, inspected, *signing], 2, 1, [10], True),
+            ("push exhausted", [failure] * 3, 3, 0, [10, 20], False),
+            ("digest becomes visible", [pushed, missing, inspected, *signing], 1, 2, [10], True),
+            ("digest remains missing", [pushed, missing, missing, missing], 1, 3, [10, 20], False),
+            ("different digest fails immediately", [pushed, wrong_digest], 1, 1, [], False),
+        ]
+        for name, results, push_count, inspect_count, delays, published in cases:
+            with (self.subTest(name=name), tempfile.TemporaryDirectory() as directory,
+                  patch.dict(os.environ, env, clear=True), patch.object(images, "coordinates", return_value=(commit, tree)),
+                  patch.object(images, "pull"), patch.object(images, "inspect_image", return_value=inspection),
+                  patch.object(subprocess, "run", side_effect=results) as run,
+                  patch("time.sleep") as sleep, redirect_stderr(io.StringIO()) as logs):
+                path = Path(directory) / "receipt.json"
+                images.write(path, receipt)
+                if published:
+                    images.publish(path)
+                    record = json.loads(path.read_text())
+                    self.assertEqual((record["digest"], record["status"]), (digest, "published"))
+                    self.assertTrue(record["verified"])
+                else:
+                    with self.assertRaises(subprocess.CalledProcessError) as raised:
+                        images.publish(path)
+                    self.assertEqual(raised.exception.returncode, 1)
+                    self.assertEqual(json.loads(path.read_text()), receipt)
+                    self.assertFalse(path.with_suffix(".json.predicate.json").exists())
+                    self.assertEqual(run.call_count, push_count + inspect_count)
+            commands = [call.args[0] for call in run.call_args_list]
+            self.assertEqual(commands[:push_count + inspect_count], [command] * push_count + [inspect] * inspect_count)
+            self.assertEqual(sleep.call_args_list, [mock.call(delay) for delay in delays])
+            push_failures = results.count(failure)
+            for attempt in range(1, push_failures + 1):
+                self.assertIn(f"Image push attempt {attempt}/3 failed.", logs.getvalue())
+            self.assertEqual(logs.getvalue().count(diagnostic.decode()), push_failures)
+            self.assertEqual(logs.getvalue().count("unknown blob\n"), push_failures)
+
+    def test_mirror_publication_uses_active_and_staged_compose_pins(self):
+        compose = mirrors.load_compose((ROOT / mirrors.COMPOSE).read_bytes())
+        row = compose[mirrors.INVENTORY]["minio"]
+        staged = "quay.io/minio/minio:next@sha256:" + "a" * 64
+        row["staged"] = staged
+        with (tempfile.TemporaryDirectory() as directory, patch.object(mirrors, "publish") as publish,
+              patch.object(sys, "argv", ["installer-mirror-images.py", "publish"])):
+            path = Path(directory) / mirrors.COMPOSE
+            path.write_text(json.dumps(compose), encoding="utf-8")
+            with patch.object(mirrors, "COMPOSE", path):
+                mirrors.main()
+
+        active_digest = compose["services"]["minio"]["image"].split("@")[1]
+        client_digest = compose["services"]["minio-bootstrap"]["image"].split("@")[1]
+        self.assertEqual(publish.call_args_list, [
+            mock.call(f"quay.io/minio/minio@{active_digest}", f"{row['mirror']}@{active_digest}", row["fallback"]),
+            mock.call(staged.replace(":next@", "@"), f"{row['mirror']}@sha256:" + "a" * 64, row["fallback"]),
+            mock.call(f"quay.io/minio/mc@{client_digest}", f"ghcr.io/wasalx/mc@{client_digest}", "ghcr.io/netvark/mc"),
+        ])
+
+    def test_mirror_activation_requires_base_staging_and_matching_public_bytes(self):
+        base = mirrors.load_compose((ROOT / mirrors.COMPOSE).read_bytes())
+        candidate = copy.deepcopy(base)
+        manifest = b'{"schemaVersion":2,"layers":[]}'
+        digest = images.sha256(manifest)
+        staged = f"quay.io/minio/minio:next@{digest}"
+        candidate["services"]["minio"]["image"] = staged
+        rows = list(mirrors.inventory(candidate))
+        inspect = ("docker", "buildx", "imagetools", "inspect", "--raw", f"ghcr.io/wasalx/minio@{digest}")
+
+        with patch.object(subprocess, "run") as run:
+            with self.assertRaisesRegex(ValueError, "stage this exact reference"):
+                mirrors.verify_active(rows, base)
+            run.assert_not_called()
+
+        base[mirrors.INVENTORY]["minio"]["staged"] = staged
+        with patch.object(mirrors, "verify_manifest") as verify:
+            mirrors.verify_active(rows, base)
+            self.assertEqual(verify.call_args_list, [mock.call(row[3], timeout=4, delays=(1, 2)) for row in rows])
+
+        for response, error in [
+            (subprocess.CalledProcessError(1, inspect, stderr=b"manifest unknown"), subprocess.CalledProcessError),
+            (subprocess.CompletedProcess(inspect, 0, stdout=b"wrong bytes"), ValueError),
+        ]:
+            with (self.subTest(error=error), patch.object(subprocess, "run",
+                  side_effect=[response] if isinstance(response, Exception) else None,
+                  return_value=response) as run, patch("time.sleep") as sleep,
+                  redirect_stderr(io.StringIO()), self.assertRaises(error)):
+                mirrors.verify_active(rows, base)
+            run.assert_called_once_with(inspect, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=4)
+            sleep.assert_not_called()
+
+    def test_active_mirror_retries_transient_registry_errors_within_budget(self):
+        manifest = b'{"schemaVersion":2,"layers":[]}'
+        digest = images.sha256(manifest)
+        source = f"quay.io/minio/minio@{digest}"
+        repository = "ghcr.io/wasalx/minio"
+        compose = {
+            "services": {"minio": {"image": source}},
+            mirrors.INVENTORY: {"minio": {"mirror": repository, "fallback": "ghcr.io/netvark/minio", "staged": None}},
+        }
+        rows = list(mirrors.inventory(compose))
+        inspect = ("docker", "buildx", "imagetools", "inspect", "--raw", f"{repository}@{digest}")
+        for reason in [b"unexpected HTTP status: 502", b"unexpected HTTP status: 429", b"net/http: TLS handshake timeout"]:
+            failure = subprocess.CalledProcessError(1, inspect, stderr=reason)
+            success = subprocess.CompletedProcess(inspect, 0, stdout=manifest)
+            with (self.subTest(reason=reason),
+                  patch.object(subprocess, "run", side_effect=[failure, failure, success]) as run,
+                  patch("time.sleep") as sleep, redirect_stderr(io.StringIO())):
+                mirrors.verify_active(rows, compose)
+            expected = mock.call(inspect, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=4)
+            self.assertEqual(run.call_args_list, [expected] * 3)
+            self.assertEqual(sleep.call_args_list, [mock.call(1), mock.call(2)])
+
+    def test_mirror_read_back_retries_the_published_digest_after_primary_or_fallback_copy(self):
+        manifest = b'{"schemaVersion":2,"layers":[]}'
+        digest = images.sha256(manifest)
+        source = f"quay.io/minio/mc@{digest}"
+        fallback = "ghcr.io/netvark/mc"
+        mirror = f"ghcr.io/wasalx/mc@{digest}"
+        tag = f"ghcr.io/wasalx/mc:sha256-{digest[7:]}"
+        inspect = ("docker", "buildx", "imagetools", "inspect", "--raw", mirror)
+        missing = (f"ERROR: httpReadSeeker: failed open: content at "
+                   f"https://ghcr.io/v2/wasalx/mc/manifests/{digest} not found: not found\n").encode()
+        invisible = subprocess.CalledProcessError(1, inspect, stderr=missing)
+        successful = subprocess.CompletedProcess((), 0, stdout=manifest)
+        failed_copy = subprocess.CalledProcessError(1, "primary copy")
+
+        for use_fallback in (False, True):
+            before_read = [successful, failed_copy, successful, successful] if use_fallback else [successful, successful]
+            with (self.subTest(fallback=use_fallback),
+                  patch.object(subprocess, "run", side_effect=[*before_read, invisible, successful]) as run,
+                  patch("time.sleep") as sleep, redirect_stderr(io.StringIO()) as logs):
+                mirrors.publish(source, mirror, fallback)
+            commands = [call.args[0] for call in run.call_args_list]
+            copy_command = ["docker", "buildx", "imagetools", "create", "--prefer-index=false", "--tag", tag]
+            self.assertEqual(commands[1], [*copy_command, source])
+            if use_fallback:
+                self.assertEqual(commands[3], [*copy_command, f"{fallback}@{digest}"])
+            self.assertEqual(commands[-2:], [inspect, inspect])
+            sleep.assert_called_once_with(10)
+            self.assertIn("Published image manifest is not yet visible", logs.getvalue())
+
+        with (patch.object(subprocess, "run", return_value=subprocess.CompletedProcess((), 0, stdout=b"wrong")),
+              self.assertRaisesRegex(ValueError, "Digest mismatch")):
+            mirrors.publish(source, mirror, fallback)
 
     def test_publication_pushes_only_the_commit_tag_and_uses_the_signing_identity(self):
         commit, tree, digest = "a" * 40, "b" * 40, "sha256:" + "1" * 64
@@ -605,7 +800,7 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
                 run.assert_any_call("cosign", "verify", "--certificate-identity", identity,
                                     "--certificate-oidc-issuer", "https://token.actions.githubusercontent.com", reference)
                 self.assertEqual([call for call in run.call_args_list if call.args[:2] == ("docker", "push")],
-                                 [mock.call("docker", "push", receipt["reference"])])
+                                 [mock.call("docker", "push", receipt["reference"], retry_unknown_blob=True)])
 
         for event, ref in (("push", "refs/heads/dev"), ("push", "refs/heads/feature"), ("pull_request", "refs/heads/main")):
             with self.subTest(event=event, ref=ref), patch.dict(os.environ, {"GITHUB_EVENT_NAME": event, "GITHUB_REF": ref}):
@@ -956,7 +1151,13 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
         self.assertIn(guard, bodies["publish"])
         self.assertIn(guard, bodies["manifest"])
         self.assertNotRegex(bodies["publish"], r"(?m)^    environment:")
-        self.assertIn("BUILD_CACHE: ${{ github.ref_name == 'main' && 'write' || 'off' }}", bodies["publish"])
+        self.assertIn(guard, bodies["queue"])
+        self.assertRegex(bodies["publish"], r"(?m)^    needs: queue$")
+        self.assertIn("ref: ${{ github.sha }}", bodies["publish"])
+        build = 'images-by-digest.py build --cache write --image "$IMAGE" --output "records/$IMAGE.json"'
+        publish = 'images-by-digest.py publish --output "records/$IMAGE.json"'
+        self.assertLess(bodies["publish"].index(build), bodies["publish"].index(publish))
+        self.assertNotIn("actions/download-artifact@", bodies["publish"])
         self.assertNotIn("actions/attest-build-provenance@", text)
         self.assertNotIn("url:", text)
         allowed = {"actions/checkout", "actions/setup-node", "actions/upload-artifact", "actions/download-artifact",

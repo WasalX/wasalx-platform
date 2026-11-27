@@ -6,7 +6,7 @@ Use the alert's `severity` and `owner` labels to route the incident through Wasa
 
 1. Record the environment, alert name, first firing time in UTC, and deployed commit or release tag. In Prometheus, confirm the alert is firing and check the relevant targets for scrape failures or missing series. The **WasalX Pilot Operations** dashboard shows queue age, latency, delivery exceptions, and infrastructure signals. [Dashboard](../../infra/docker/full/grafana/dashboards/wasalx-pilot.json)
 2. Check the affected service through its configured endpoint. Use portal `/api/health`, control API `/health/ready`, and connector worker `/livez` and `/readyz`. A live worker can still be unready. Use its readiness response to identify the failing dependency.
-3. Search structured service logs around the alert time by `trace_id` or `request_id` when present. Use the matching sampled trace if available. Keep evidence to system IDs, timestamps, and safe error codes. Review excerpts for sensitive fields before sharing. [Logging and data rules](../../AGENTS.md#data-safety) [Log redaction](https://github.com/WasalX/wasalx-platform/pull/239)
+3. Search structured service logs around the alert time by `trace_id` or `request_id` when present. Use the matching sampled trace if available. The shared redactor masks recognized phone fields and phone numbers in free text, including grouped international formats. Keep evidence to system IDs, timestamps, and safe error codes. Review excerpts for sensitive fields before sharing. [Logging and data rules](../../AGENTS.md#data-safety) [Shared redactor](../../packages/observability/src/index.ts)
 4. After mitigation, confirm the signal has recovered, the backlog is draining where applicable, and a synthetic journey passes in an authorized environment. If the incident followed a deploy, send the evidence to WasalX Delivery for the environment's [rollback procedure](../../DELIVERY.md#rollback).
 
 ## Inbound queue stalled
@@ -20,6 +20,8 @@ For `WasalXOutboundQueueStalled`, compare delivery queue age and depth with work
 ## Durable work queue stalled
 
 For `WasalXDurableWorkQueueStalled`, break down queue age and depth by `queue`. Compare the affected queue with scheduler heartbeat, worker readiness, and database metrics. Inspect the oldest item's safe state for a blocked lease, scheduled retry, or terminal error. Recover the affected processor and confirm work resumes through its normal lease path.
+
+For `native_projection.failed`, use `projection` to locate the membership or routing worker. The `discovery` phase ends the current pass. The `tenant` phase allows the pass to continue, and `wake` identifies an immediate background operation. After restoring the dependency, confirm eligible work advances on the next scheduled pass and use the existing reconciliation flow for uncertain native effects.
 
 ## Inbound latency
 
@@ -81,13 +83,25 @@ For `WasalXAuthorizationAnomaly`, correlate denied requests with audit events by
 
 For `WasalXProvisioningTerminalFailure`, identify the failed operation and stage from the provisioner and workspace controller. Check workspace-provider readiness and the relevant operator or dependency. Retain partial resources and send the recorded stage to the provisioning owner for recovery through the normal reconciliation path.
 
+For `NOTION_OAUTH_RECOVERY_PENDING`, refresh the tenant's Connections view and use the integration ID to check its audit and secret cleanup task. A committed activation remains connected. If the callback could not abort an incomplete setup, the scheduled secret cleanup worker retires the aged stage after one hour and retries eligible deletions through its outbox. Keep OAuth codes, state values and secret references out of support records. Reconnect a working connection to the same workspace. Reconnecting a revoked connection creates a fresh binding, which an administrator can select when qualifying its routing source.
+
 ## Privacy failure
 
 For `WasalXPrivacyTerminalFailure`, inspect the authorized job and audit history by ID for the failed scope, dependency, and any legal hold. Route to the privacy owner before further action. Preserve job evidence and verify the resulting state through the supported workflow.
 
+`wasalx_privacy_job_total` with `result=lease_lost` records a checked lease mismatch and is metric-only.
+
+## Privacy failure persistence
+
+`WasalXPrivacyFailurePersistenceFailed` alerts on an increase in `wasalx_privacy_job_total` with `result=persistence_failed`. The worker could not confirm the failure-state write. Find the `privacy.failure_persistence_failed` entry and use the tenant ID, privacy job ID and error code to inspect the authorized job. Check database availability and verify stuck work recovers through normal lease expiry and reacquisition. Route the incident to the privacy owner.
+
 ## Media quarantine spike
 
 For `WasalXMediaQuarantineSpike`, compare quarantine reason codes with media traffic and scanner or object-storage readiness. Determine whether detection increased or a dependency is failing. Keep quarantined media isolated and confirm scanning and quarantine rates normalize after mitigation.
+
+## Unresolved statement source write
+
+If a statement source write remains unresolved, inspect the admitted attempt in the authorized statement view. Use the existing reconciliation action when terminal storage evidence confirms the outcome. The write fence prevents a second upload from starting while settlement is unresolved.
 
 ## Database saturation
 
@@ -120,6 +134,8 @@ For `WasalXRedisMemoryHigh`, compare used memory with configured maxmemory and c
 ## Collector export failure
 
 For `WasalXCollectorExportFailure`, check collector readiness, exporter error logs, queue pressure, and downstream availability. Compare Prometheus target health with the presence of current application metrics and sampled traces. Restore export connectivity and confirm failed-export rates fall and fresh telemetry reaches the backend.
+
+`observability.shutdown.failed` means the Node SDK could not confirm its last telemetry flush. Correlate the event with collector health around process exit.
 
 ## Alert delivery verification
 

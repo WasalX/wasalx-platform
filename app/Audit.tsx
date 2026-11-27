@@ -60,6 +60,7 @@ export function Audit({ rows, showDiagnostics, canExport }: { rows: RecordRow[];
   const [exportError, setExportError] = useState<string | null>(null);
   const [exportNotice, setExportNotice] = useState<string | null>(null);
   const [includeRoutine, setIncludeRoutine] = useState(false);
+  const [scopeReady, setScopeReady] = useState(false);
   const [scopeLoading, setScopeLoading] = useState(false);
   useEffect(() => {
     let cancelled = false;
@@ -69,6 +70,8 @@ export function Audit({ rows, showDiagnostics, canExport }: { rows: RecordRow[];
         const incoming = new Set(rows.map((row) => String(row.id)));
         return [...rows, ...current.filter((row) => !incoming.has(String(row.id)))];
       });
+      // The server-rendered select cannot apply a scope change before Audit hydrates.
+      setScopeReady(true);
     });
     return () => { cancelled = true; };
   }, [rows]);
@@ -187,7 +190,13 @@ export function Audit({ rows, showDiagnostics, canExport }: { rows: RecordRow[];
       </div>
       {exportNotice ? <div className="bulk-feedback success" role="status"><span>✓</span><p>{exportNotice}</p><button className="text-button" aria-label={t("tenant.audit.export.dismissLabel")} onClick={() => setExportNotice(null)}>{t("tenant.audit.actions.dismiss")}</button></div> : null}
       <Toolbar query={query} setQuery={setQuery} placeholder={t("tenant.audit.search")}>
-        <label className="filter-select"><span className="sr-only">{t("tenant.audit.scope.label")}</span><select disabled={scopeLoading} value={includeRoutine ? "include" : "exclude"} onChange={(event)=>void changeRoutineScope(event.target.value==="include")}><option value="exclude">{t("tenant.audit.scope.relevant")}</option><option value="include">{t("tenant.audit.scope.all")}</option></select></label>
+        <label className="filter-select">
+          <span className="sr-only">{t("tenant.audit.scope.label")}</span>
+          <select disabled={!scopeReady || scopeLoading} value={includeRoutine ? "include" : "exclude"} onChange={(event) => void changeRoutineScope(event.target.value === "include")}>
+            <option value="exclude">{t("tenant.audit.scope.relevant")}</option>
+            <option value="include">{t("tenant.audit.scope.all")}</option>
+          </select>
+        </label>
         <span className="tag" role="status" aria-live="polite">{t(filteredEntries.length === 1 ? "tenant.audit.filteredCount.one" : "tenant.audit.filteredCount", { count: formatNumber(filteredEntries.length, locale) })}</span>
       </Toolbar>
       <ol className="timeline" role="list">

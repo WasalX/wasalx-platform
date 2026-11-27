@@ -1,5 +1,6 @@
 import { installWorkspaceReadFixture } from "./workspace-read.fixture";
 import { auditWorkspaceJourney } from "./audit-workspace.fixture";
+import { consumeExpectedPrivacyResponse, registerPrivacySettingsJourneys } from "./privacy-settings.fixture";
 import { consumeExpectedLegacyDenial, metaLegacyMigrationJourney } from "./meta-legacy-migration.fixture";
 import { consumeExpectedRoutingDenial, installMetaRoutingReadFixture, metaRoutingJourney } from "./meta-routing.fixture";
 import { consumeExpectedCoexistenceDenial, metaCoexistenceJourney } from "./meta-coexistence.fixture";
@@ -16,11 +17,16 @@ import { accountObservationJourney, consumeExpectedObservationFailure, workspace
 import { consumeExpectedDirectSetupDenial, metaDirectConsentJourney } from "./meta-direct-consent.fixture";
 import { consumeExpectedSignupDenial, metaSignupJourney } from "./meta-signup.fixture";
 import { ticketEventWorkflowJourney } from "./ticket-event-workflows.fixture";
+import { registerOperationsScreenshots } from "./operations-screenshots.fixture";
 import type { TeamAccessData } from "../../lib/control-plane-data";
 import { expectAxeClean } from "../helpers/axe";
+import { captureTenantDesign, verifyRuleModalLabels } from "./design-evidence.fixture";
+import { registerConnectionListJourneys } from "./connection-list.fixture";
 import { expect, test, type Page } from "@playwright/test";
 
 const role = process.env.WASALX_E2E_ROLE ?? "tenant_owner";
+registerPrivacySettingsJourneys("en", role);
+if (role === "tenant_owner") registerOperationsScreenshots("en");
 test("Audit uses localized workspace actions and truthful actors with permitted CSV export", { tag: "@tablet" }, async ({ page }, testInfo) => {
   await auditWorkspaceJourney(page, "en", role, testInfo);
 });
@@ -283,7 +289,7 @@ test.beforeEach(async ({ page }) => {
   expectedNetworkErrors.set(page, []);
   page.on("console", (message) => {
     if (message.type() === "error") {
-      if (consumeExpectedNumberReleaseDenial(page, message) || consumeExpectedActivationDenial(page, message) || consumeExpectedDirectSetupDenial(page, message) || consumeExpectedSignupDenial(page, message) || consumeExpectedReconnectDenial(page, message) || consumeExpectedCoexistenceDenial(page, message) || consumeExpectedAddAccessDenial(page, message) || consumeExpectedRoutingDenial(page, message) || consumeExpectedTemplateDenial(page, message) || consumeExpectedLegacyDenial(page, message) || consumeExpectedObservationFailure(page, message)) return;
+      if (consumeExpectedNumberReleaseDenial(page, message) || consumeExpectedPrivacyResponse(page, message) || consumeExpectedActivationDenial(page, message) || consumeExpectedDirectSetupDenial(page, message) || consumeExpectedSignupDenial(page, message) || consumeExpectedReconnectDenial(page, message) || consumeExpectedCoexistenceDenial(page, message) || consumeExpectedAddAccessDenial(page, message) || consumeExpectedRoutingDenial(page, message) || consumeExpectedTemplateDenial(page, message) || consumeExpectedLegacyDenial(page, message) || consumeExpectedObservationFailure(page, message)) return;
       const location = message.location().url;
       if (
         message.text().startsWith("Failed to load resource:") &&
@@ -307,6 +313,17 @@ async function open(page: Page, view = "overview") {
   // vinext optimization and prefetch traffic.
   await expect(page.locator('[data-application-ready="true"]')).toBeVisible();
   await expect(page).toHaveTitle(`${titles[view]} · WasalX`);
+}
+
+if (role === "tenant_owner") {
+  registerConnectionListJourneys("en", open);
+  test("owner captures tenant surfaces in light and dark", async ({ page }, testInfo) => {
+    await captureTenantDesign(page, testInfo, "en", open);
+  });
+  test("rule modal labels every visible field", async ({ page }, testInfo) => {
+    await open(page, "rules");
+    await verifyRuleModalLabels(page, testInfo, "en");
+  });
 }
 
 function escapeRegExp(value: string) {
@@ -953,19 +970,34 @@ test("mobile and tablet navigation keep content bounded and role-appropriate", {
 
   await open(page, "deliveries");
   await page.locator("html").evaluate((element) => { element.style.fontSize = "200%"; });
+  await page.route("**/api/deliveries/*", async (route) => {
+    const response = await route.fetch();
+    expect(response.ok()).toBe(true);
+    const detail = await response.json();
+    await route.fulfill({ response, json: { ...detail, delivery_attempts: Array.from({ length: 8 }, (_, index) => ({
+      ...detail.delivery_attempts[0], id: `fixture-attempt-${index + 1}`, attempt_number: index + 1,
+    })) } });
+  });
   await page.getByRole("button", { name: "Inspect" }).first().click();
   const drawer = page.getByRole("dialog", { name: "Delivery timeline" });
-  const body = drawer.locator(".operational-drawer-body");
+  const body = drawer.getByRole("region", { name: "Delivery timeline", exact: true });
+  await expect(body).toBeVisible();
   const geometry = await body.evaluate((element) => ({
     clientWidth: element.clientWidth, scrollWidth: element.scrollWidth,
     clientHeight: element.clientHeight, scrollHeight: element.scrollHeight,
   }));
   expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.clientWidth + 1);
   expect(geometry.scrollHeight).toBeGreaterThan(geometry.clientHeight);
-  await body.evaluate((element) => { element.scrollTop = element.scrollHeight; });
+  const close = drawer.getByRole("button", { name: "Close delivery details" });
+  await expect(close).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(body).toBeFocused();
+  const top = await body.evaluate((element) => element.scrollTop);
+  await page.keyboard.press("ArrowDown");
+  await expect.poll(() => body.evaluate((element) => element.scrollTop)).toBeGreaterThan(top);
+  await page.keyboard.press("End");
   await expect(body.locator(":scope > section").last()).toBeInViewport();
-  await drawer.getByRole("button", { name: "Close delivery details" }).focus();
-  await expect(drawer.getByRole("button", { name: "Close delivery details" })).toBeFocused();
+  await testInfo.attach("delivery-timeline-keyboard", { body: await page.screenshot(), contentType: "image/png" });
   await expectAxeClean(page);
 });
 
@@ -2320,6 +2352,33 @@ test("duplicate cleanup reconciles the connection list immediately on close", as
   await expect(page.getByRole("button", { name: "Save policy" })).toBeDisabled();
   await open(page, "audit");
   await expect(page.getByRole("button", { name: "Export CSV…" })).toBeVisible();
+});
+
+// #540: the privacy panel must reflow at 390 and 320 px (WCAG 2.2 reflow) in both directions.
+(role === "tenant_owner" ? test : test.skip)("privacy panel fits narrow viewports and reaches every action", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "mobile-390");
+  await open(page, "settings");
+  await page.getByRole("tab", { name: "Privacy & retention" }).click();
+  const panel = page.getByRole("tabpanel");
+  for (const language of ["English", "العربية"]) {
+    if (language !== "English") {
+      await page.getByRole("button", { name: language }).click();
+      // #569: the switch reloads the document; wait for the Arabic one before reading the panel.
+      await expect(page.locator("html")).toHaveAttribute("lang", "ar");
+    }
+    await expect(panel.getByRole("table")).toHaveCount(2);
+    for (const width of [390, 320]) {
+      await page.setViewportSize({ width, height: 844 });
+      const box = await panel.boundingBox();
+      expect(box, `privacy panel at ${width} px in ${language}`).not.toBeNull();
+      expect(box!.x).toBeGreaterThanOrEqual(0);
+      expect(box!.x + box!.width).toBeLessThanOrEqual(width);
+      for (const action of await panel.getByRole("button").all()) {
+        await action.scrollIntoViewIfNeeded();
+        await expect(action).toBeInViewport();
+      }
+    }
+  }
 });
 
 (role === "tenant_owner" ? test : test.skip)("async page failure exposes a plain-language recovery action", async ({ page }, testInfo) => {

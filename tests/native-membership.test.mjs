@@ -28,7 +28,7 @@ function worker(row,reply,{instance=instanceId,failResultCommit=false,tenantActi
   }};
   let transactions=0;
   const database={withTenant:async(id,fn)=>{
-    assert.equal(id,tenantId);transactions++;const committed={...row};
+    assert.equal(id,row.tenant_id);transactions++;const committed={...row};
     try{const result=await fn(client);if(failResultCommit&&transactions===2)throw new Error("result commit failed");return result;}
     catch(error){Object.assign(row,committed);throw error;}
   },rows:async(id,sql,values)=>(await client.query(sql,values)).rows};
@@ -36,12 +36,60 @@ function worker(row,reply,{instance=instanceId,failResultCommit=false,tenantActi
   const fetch=async(url,options)=>{
     calls++;assert.equal(String(url),"https://native.example.test/api/v1/wasalx/membership");
     assert.equal(options.headers["x-wasalx-signature"],createHmac("sha256",secret).update(`${options.headers["x-wasalx-timestamp"]}\n${options.body}`).digest("hex"));
-    const sent=JSON.parse(options.body);assert.equal(sent.subject,row.oidc_subject);assert.equal(sent.tenant_id,tenantId);assert.equal(sent.revision,row.revision);
+    const sent=JSON.parse(options.body);assert.equal(sent.subject,row.oidc_subject);assert.equal(sent.tenant_id,row.tenant_id);assert.equal(sent.revision,row.revision);
     if(reply instanceof Error)throw reply;
     return new Response(JSON.stringify(reply),{status:200,headers:{"content-type":"application/json"}});
   };
-  return{service,fetch,queries,calls:()=>calls};
+  return{service,database,fetch,queries,calls:()=>calls};
 }
+
+test("membership discovery, scheduled tenant and immediate wake failures are redacted and recoverable", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: Date.parse("2026-10-16T10:00:00Z") });
+  const first = snapshot();
+  const second = { ...snapshot(), tenant_id: "10000000-0000-4000-8000-000000000002" };
+  const reply = { state: "READY", native_user_id: "12", revision: 4 };
+  const a = worker(first, reply);
+  const b = worker(second, reply);
+  const failure = new Error(`Synthetic failure for ${first.tenant_id}`);
+  const visited = [];
+  const logs = [];
+  let discover = false;
+  let rejectClaim = true;
+  a.database.pendingNativeMembershipTenants = async () => {
+    if (!discover) throw failure;
+    return [first.tenant_id, second.tenant_id];
+  };
+  const withFirst = a.database.withTenant;
+  t.mock.method(a.database, "withTenant", (id, operation) => {
+    visited.push(id);
+    if (id === second.tenant_id) return b.database.withTenant(id, operation);
+    if (rejectClaim) return Promise.reject(failure);
+    return withFirst(id, operation);
+  });
+  t.mock.method(globalThis, "fetch", (url, options) =>
+    (JSON.parse(options.body).tenant_id === first.tenant_id ? a : b).fetch(url, options));
+  t.mock.method(process.stderr, "write", (line) => { logs.push(JSON.parse(String(line))); return true; });
+
+  await a.service.drain();
+  assert.deepEqual(visited, []);
+  discover = true;
+  await a.service.drain();
+  assert.deepEqual([...new Set(visited)], [first.tenant_id, second.tenant_id]);
+  assert.equal(first.sync_state, "PENDING");
+  assert.equal(second.sync_state, "READY");
+  assert.equal(a.calls(), 0);
+  assert.equal(b.calls(), 1);
+  assert.equal(a.service.wake(first.tenant_id), undefined);
+  await new Promise(setImmediate);
+  rejectClaim = false;
+  await a.service.drain();
+  assert.equal(first.sync_state, "READY");
+  assert.equal(a.calls(), 1);
+  assert.equal(b.calls(), 1);
+  assert.deepEqual(logs, ["discovery", "tenant", "wake"].map((phase) => ({
+    timestamp: new Date().toISOString(), level: "error", event: "native_projection.failed", projection: "membership", phase,
+  })));
+});
 
 test("native projection authenticates exact source and commits only the matching revision",async(t)=>{
   const row=snapshot(),w=worker(row,{state:"READY",native_user_id:"12",revision:4});t.mock.method(globalThis,"fetch",w.fetch);

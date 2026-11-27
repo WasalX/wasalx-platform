@@ -60,3 +60,25 @@ tests:
               summary: Object-storage or its production filesystem has less than 15% usable
                 free capacity.
               runbook_url: __RUNBOOK_BASE_URL__#object-storage-saturation
+  - name: privacy failure persistence pages only for an unconfirmed write
+    interval: 1m
+    input_series:
+      - series: wasalx_privacy_job_total{job_type="delete",result="lease_lost"}
+        values: 0 1 1 1 1
+      - series: wasalx_privacy_job_total{job_type="delete",result="failed_terminal"}
+        values: 0 1 1 1 1
+      - series: wasalx_privacy_job_total{job_type="delete",result="persistence_failed"}
+        values: 0 0 0 1 1
+    alert_rule_test:
+      - alertname: WasalXPrivacyFailurePersistenceFailed
+        eval_time: 2m
+        exp_alerts: []
+      - alertname: WasalXPrivacyFailurePersistenceFailed
+        eval_time: 4m
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              owner: privacy
+            exp_annotations:
+              summary: A privacy or retention job failure could not be saved.
+              runbook_url: __RUNBOOK_BASE_URL__#privacy-failure-persistence
