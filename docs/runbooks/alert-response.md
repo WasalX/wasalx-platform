@@ -87,6 +87,8 @@ For `WasalXProvisioningTerminalFailure`, identify the failed operation and stage
 
 For `WasalXPrivacyTerminalFailure`, inspect the authorized job and audit history by ID for the failed scope, dependency, and any legal hold. Route to the privacy owner before further action. Preserve job evidence and verify the resulting state through the supported workflow.
 
+`wasalx_privacy_job_total` with `result=persistence_failed` means a failure-state write could not be confirmed. Check database availability and verify stuck work recovers through normal lease expiry and reacquisition. `result=lease_lost` records a checked lease mismatch.
+
 ## Media quarantine spike
 
 For `WasalXMediaQuarantineSpike`, compare quarantine reason codes with media traffic and scanner or object-storage readiness. Determine whether detection increased or a dependency is failing. Keep quarantined media isolated and confirm scanning and quarantine rates normalize after mitigation.
