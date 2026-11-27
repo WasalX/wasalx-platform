@@ -493,6 +493,23 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
             with self.subTest(key=key), self.assertRaises(ValueError):
                 images.assemble(bad)
 
+    def test_dockerfiles_do_not_fetch_github_generated_archives(self):
+        tracked = subprocess.check_output(
+            ["git", "ls-files", "-z", "--", ":(glob)**/Dockerfile*"],
+            cwd=ROOT, timeout=10,
+        ).decode().split("\0")
+        dockerfiles = {row["dockerfile"] for row in images.catalog()}
+        dockerfiles.update(path for path in tracked if path and not path.endswith(".dockerignore"))
+        generated_archive = re.compile(
+            r"https?://(?:github\.com/[^/\s]+/[^/\s]+/archive/|codeload\.github\.com/|"
+            r"api\.github\.com/repos/[^/\s]+/[^/\s]+/(?:tarball|zipball)\b)", re.IGNORECASE,
+        )
+        for path in sorted(dockerfiles):
+            with self.subTest(dockerfile=path):
+                source = (ROOT / path).read_text(encoding="utf-8")
+                self.assertIsNone(generated_archive.search(source),
+                                  "Use a commit-pinned Git source or a checksum-pinned release asset")
+
     def test_go_module_transport_is_scoped_to_the_build(self):
         for image in ("alertmanager", "cloudflared", "otel", "prometheus"):
             with self.subTest(image=image):
