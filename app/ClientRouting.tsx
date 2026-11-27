@@ -892,30 +892,32 @@ function SourceList({
                   {t("routing.sources.syncFailed")}
                 </p>
               ) : null}
-              {webhookPath ? (
-                <div className="routing-webhook">
-                  <button
-                    type="button"
-                    className="button secondary small"
-                    onClick={() => void copyWebhook(source.name, webhookPath)}
-                  >
-                    {t("routing.sources.copy")}
-                  </button>
+              {webhookPath || (canWrite && state) ? (
+                <div className="routing-source-actions">
+                  {webhookPath ? (
+                    <button
+                      type="button"
+                      className="button secondary small"
+                      onClick={() => void copyWebhook(source.name, webhookPath)}
+                    >
+                      {t("routing.sources.copy")}
+                    </button>
+                  ) : null}
+                  {canWrite && state ? (
+                    <button
+                      type="button"
+                      className="button secondary small"
+                      disabled={syncingSource !== null || ["QUEUED", "RUNNING"].includes(String(state.latest_job_state))}
+                      onClick={() => void syncSource(source.id, Number(state.snapshot_revision))}
+                    >
+                      {syncingSource === source.id
+                        ? t("routing.sources.requesting")
+                        : String(state.state) === "CONFLICT" || String(state.latest_job_state) === "FAILED_TERMINAL"
+                          ? t("routing.sources.retry")
+                          : t("routing.sources.syncNow")}
+                    </button>
+                  ) : null}
                 </div>
-              ) : null}
-              {canWrite && state ? (
-                <button
-                  type="button"
-                  className="button secondary small"
-                  disabled={syncingSource !== null || ["QUEUED", "RUNNING"].includes(String(state.latest_job_state))}
-                  onClick={() => void syncSource(source.id, Number(state.snapshot_revision))}
-                >
-                  {syncingSource === source.id
-                    ? t("routing.sources.requesting")
-                    : String(state.state) === "CONFLICT" || String(state.latest_job_state) === "FAILED_TERMINAL"
-                      ? t("routing.sources.retry")
-                      : t("routing.sources.syncNow")}
-                </button>
               ) : null}
             </li>
           );
