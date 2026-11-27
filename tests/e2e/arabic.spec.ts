@@ -20,6 +20,7 @@ import { ticketEventWorkflowJourney } from "./ticket-event-workflows.fixture";
 import { registerOperationsScreenshots } from "./operations-screenshots.fixture";
 import { expectAxeClean } from "../helpers/axe";
 import { captureTenantDesign, verifyRuleModalLabels } from "./design-evidence.fixture";
+import { registerConnectionListJourneys } from "./connection-list.fixture";
 import { expect, test, type Page } from "@playwright/test";
 import { arabicMessages } from "../../lib/i18n/messages/ar/index.ts";
 
@@ -151,6 +152,7 @@ async function open(page: Page, view: string) {
 }
 
 if (role === "tenant_owner") {
+  registerConnectionListJourneys("ar", open);
   test("owner captures tenant surfaces in light and dark", async ({ page }, testInfo) => {
     await captureTenantDesign(page, testInfo, "ar", open);
   });
