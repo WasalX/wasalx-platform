@@ -1,4 +1,4 @@
-exclude: '^(?:(?:next-env\.d\.ts|cloudflare-env\.d\.ts|scripts/hosted-ci-baseline\.mjs)$|services/control-api/migrations/.*(?i:[.]sql)$)'
+exclude: '^(?:(?:next-env\.d\.ts|cloudflare-env\.d\.ts)$|services/control-api/migrations/.*(?i:[.]sql)$)'
 repos:
   - repo: local
     hooks:

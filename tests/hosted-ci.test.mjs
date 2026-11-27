@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, posix } from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -784,7 +784,9 @@ test("workflow lint requires verified tools, both embedded diagnostics, and clea
     "restore-keys": "actionlint-${{ env.ACTIONLINT_SHA256 }}",
   });
   assert.deepEqual(seed.env, job.env);
-  assert.deepEqual(seed.steps.slice(-2), [cache, prepare]);
+  const seedCache = seed.steps.findIndex(step => step.with?.path === cache.with.path);
+  assert(seedCache >= 0);
+  assert.deepEqual(seed.steps.slice(seedCache, seedCache + 2), [cache, prepare]);
   assert(job.steps.indexOf(cache) < job.steps.indexOf(prepare));
   assert(job.steps.indexOf(prepare) < job.steps.indexOf(step));
   assert.equal(prepare.if, undefined);
@@ -1341,8 +1343,11 @@ test("main pushes only publish and seed caches", async () => {
   ]);
   const lint = "pnpm run lint --cache --cache-strategy content --cache-location .git/hosted-eslint-cache";
   const prepare = jobs["workflow-lint"].steps.find(step => step.name === "Prepare pinned actionlint");
-  assert.deepEqual(seed.steps.flatMap(step => step.run ?? []), [lint, prepare.run]);
-  const eslintSave = seed.steps.find(step => step.uses?.startsWith("actions/cache/save@"));
+  const sourceRuntime = seed.steps.find(step => step.id === "source-hook-runtime");
+  const sourceInstall = seed.steps.find(step => step.name === "Install source hook environments");
+  assert.deepEqual(seed.steps.flatMap(step => step.run ?? []), [lint, prepare.run, sourceRuntime.run, sourceInstall.run]);
+  const eslintSave = seed.steps.find(step => step.uses?.startsWith("actions/cache/save@")
+    && step.with.path === ".git/hosted-eslint-cache");
   assert.equal(eslintSave.if, "steps.eslint-cache.outputs.cache-hit != 'true'");
   assert.deepEqual(eslintSave.with, {
     path: ".git/hosted-eslint-cache", key: "${{ steps.eslint-cache.outputs.cache-primary-key }}",
@@ -2017,14 +2022,111 @@ test("PR unit selection catches a hidden transitive regression and falls back on
   assert(jobs["ci-gate"].needs.includes("full-unit"));
 });
 
-test("source style checks only files added by a pull request or merge group", async () => {
-  const { jobs } = parse(await read(".github/workflows/ci.yml"));
+test("source style checks added and renamed source files", async t => {
+  const { env, jobs } = parse(await read(".github/workflows/ci.yml"));
   const step = jobs.checks.steps.find(step => step.name === "Check added source style");
   assert.equal(step.if, "matrix.mode == 'lint'");
   assert.equal(step.env.STYLE_BASE, "${{ github.event_name == 'pull_request' && 'HEAD^1' || github.event.merge_group.base_sha }}");
-  assert.match(step.run, /git diff --name-only --diff-filter=A -z "\$STYLE_BASE" HEAD/u);
-  assert.match(step.run, /xargs -0 -r .*pre-commit run .*--files/u);
-  assert.equal(jobs["lint-on-push"], undefined);
+  assert.equal(jobs.checks.if, "github.event_name == 'pull_request' || github.event_name == 'merge_group'");
+
+  const directory = await mkdtemp(join(tmpdir(), "source-style-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const git = (...args) => execFileSync("git", args, { cwd: directory, encoding: "utf8", windowsHide: true });
+  const write = async (path, content) => {
+    await mkdir(join(directory, posix.dirname(path)), { recursive: true });
+    await writeFile(join(directory, path), content);
+  };
+  const commit = () => {
+    git("add", "--all");
+    git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.com", "commit", "--quiet", "-m", "Fixture");
+  };
+  git("init", "--quiet");
+  git("config", "diff.renames", "true");
+  await write(".pre-commit-config.yaml", await read(".pre-commit-config.yaml"));
+  await write("scripts/filter-source-files.rb", await read("scripts/filter-source-files.rb"));
+  await write("existing.ts", "export const version = 1;\n");
+  await write("original.txt", "#!/bin/sh\nprintf 'renamed file with identical contents\\n'\n");
+  commit();
+
+  const selected = [
+    "button component.tsx", "style.css", "worker.py", "test.rb", "view.sql", "deploy.sh",
+    "deploy.ash", "deploy.dash", "deploy.ksh", "deploy.mksh", "deploy.cbsd", "deploy.TCSH", "Gemfile",
+    "scripts/hosted-ci-baseline.mjs",
+  ];
+  for (const path of [...selected, "README.md", "next-env.d.ts", "cloudflare-env.d.ts",
+    "services/control-api/migrations/000_fixture.SQL"]) {
+    await write(path, "fixture\n");
+  }
+  if (process.platform !== "win32") {
+    await write("entrypoint", "#!/bin/dash\nexit 0\n");
+    await chmod(join(directory, "entrypoint"), 0o755);
+    await symlink("view.sql", join(directory, "linked.sql"));
+    selected.push("entrypoint");
+  }
+  await write("existing.ts", "export const version = 2;\n");
+  await rename(join(directory, "original.txt"), join(directory, "renamed.sh"));
+  commit();
+  assert.match(git("diff", "--name-status", "HEAD^1", "HEAD"), /^R100\toriginal\.txt\trenamed\.sh$/mu);
+
+  await write(".git/bin/pipx", "#!/usr/bin/env bash\n"
+    + 'while [[ "$1" != --files && $# -gt 0 ]]; do shift; done\n'
+    + 'shift || exit 1\nprintf "%s\\0" "$@"\n');
+  await chmod(join(directory, ".git/bin/pipx"), 0o755);
+  const run = 'export PATH="$PWD/.git/bin:$PATH"\n' + step.run;
+  const execute = STYLE_BASE => runWorkflowScript(run, { PRE_COMMIT_VERSION: env.PRE_COMMIT_VERSION, STYLE_BASE }, directory);
+  const result = execute("HEAD^1");
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(result.stdout.split("\0").filter(Boolean).sort(), [...selected, "renamed.sh"].sort());
+  const empty = execute("HEAD");
+  assert.equal(empty.status, 0, empty.stderr);
+  assert.equal(empty.stdout, "");
+  assert.equal(execute("invalid-base").status, 128);
+});
+
+test("source hook environments use the same runtime-specific key and save only on main", async t => {
+  const { env, jobs } = parse(await read(".github/workflows/ci.yml"));
+  const seed = jobs["seed-caches"].steps;
+  const checks = jobs.checks.steps;
+  const runtime = steps => steps.find(step => step.id === "source-hook-runtime");
+  const restore = steps => steps.find(step => step.id === "source-hooks-cache");
+  const lintRestore = restore(checks);
+  const seedRestore = restore(seed);
+  assert.match(env.PRE_COMMIT_VERSION, /^\d+\.\d+\.\d+$/u);
+  assert.equal(runtime(checks).run, runtime(seed).run);
+  assert.equal(runtime(checks).if, "matrix.mode == 'lint'");
+  assert.equal(lintRestore.if, "matrix.mode == 'lint'");
+  assert.match(lintRestore.uses, /^actions\/cache\/restore@/u);
+  assert.equal(lintRestore.uses, seedRestore.uses);
+  assert.deepEqual(lintRestore.with, seedRestore.with);
+  assert.equal(lintRestore.with.key, "pre-commit-${{ runner.os }}-${{ runner.arch }}-${{ steps.source-hook-runtime.outputs.versions }}-${{ env.PRE_COMMIT_VERSION }}-${{ hashFiles('.pre-commit-config.yaml', '.rubocop.yml') }}");
+  assert.equal(lintRestore.with["restore-keys"], undefined);
+  assert(!checks.some(step => step.uses?.startsWith("actions/cache/save@") && step.with?.path === lintRestore.with.path));
+
+  const install = seed.find(step => step.name === "Install source hook environments");
+  const save = seed.find(step => step.with?.path === lintRestore.with.path && step.uses?.startsWith("actions/cache/save@"));
+  assert.equal(install.if, "steps.source-hooks-cache.outputs.cache-hit != 'true'");
+  assert.match(install.run, /pipx run --python python3 .* pre-commit install-hooks/u);
+  assert.equal(save.if, install.if);
+  assert(seed.indexOf(seedRestore) < seed.indexOf(install) && seed.indexOf(install) < seed.indexOf(save));
+  assert.equal(save.with.key, "${{ steps.source-hooks-cache.outputs.cache-primary-key }}");
+
+  const directory = await mkdtemp(join(tmpdir(), "source-hook-key-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const output = join(directory, "output").replaceAll("\\", "/");
+  const mocks = "node() { echo v24.13.1; }\npython3() { echo 3.12.3; }\nruby() { echo 3.2.3; }\n";
+  const result = runWorkflowScript(mocks + runtime(checks).run, { GITHUB_OUTPUT: output });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal((await readFile(output, "utf8")).trim(), "versions=node-v24.13.1-python-3.12.3-ruby-3.2.3");
+});
+
+test("source gate settings are critical and pending RuboCop cops are enabled", async () => {
+  const critical = (await read("AGENTS.md")).split("\n").find(line => line.startsWith("- **Repo settings,"));
+  for (const name of [".pre-commit-config.yaml", ".rubocop.yml", "eslint.config.mjs", ".gitignore",
+    "package.json", "prettier", "stylelint", ".prettierignore", ".stylelintignore"]) {
+    assert(critical.includes("`" + name + "`"), name);
+  }
+  assert.match(critical, /any added formatter or linter configuration or ignore file/u);
+  assert.equal(parse(await read(".rubocop.yml")).AllCops.NewCops, "enable");
 });
 
 test("shards cover each file once regardless of inventory order or duplicates", () => {
