@@ -163,6 +163,9 @@ function ReviewForm({ view, busy, submit }: { view: MetaTransitionOperatorReview
   const [confirmationError, setConfirmationError] = useState<"acceptTerms" | "reviewed" | null>(null);
   const termsError = confirmationError === "acceptTerms", evidenceError = confirmationError === "reviewed";
   const managed = view.requestedMode === "WASALX_MANAGED", fixed = view.originalGrant !== null;
+  const selectedArrangement = managed && !fixed && action === "PREREQUISITES"
+    ? view.arrangements.find(item => item.id === arrangement)
+    : undefined;
 
   function showInvalid(event: FormEvent<HTMLFormElement>) {
     const field = event.target;
@@ -199,7 +202,10 @@ function ReviewForm({ view, busy, submit }: { view: MetaTransitionOperatorReview
           {fixed ? <p>{t(`${prefix}originalGrant`)}</p> : null}
           <label>{t(`${prefix}sourcePayment`)}<select required value={payment} disabled={busy || fixed} onChange={e => changeCommercial(() => setPayment(e.target.value as typeof payment))}><option value="">{t(`${prefix}choose`)}</option><option value="CARD">{t(`${prefix}payment.CARD`)}</option>{managed ? <option value="LINE">{t(`${prefix}payment.LINE`)}</option> : null}</select></label>
           {managed ? <>
-            <label>{t(`${prefix}arrangement`)}<select value={arrangement} required disabled={busy || fixed} onChange={e => changeCommercial(() => setArrangement(e.target.value))}><option value="">{t(`${prefix}choose`)}</option>{fixed ? <option value={arrangement}>{t(`${prefix}originalArrangement`)}</option> : view.arrangements.map(item => <option key={item.id} value={item.id}>{item.label} · {formatDateTime(item.expiresAt, locale)}</option>)}</select></label>
+            <div className={styles.transitionSelect}>
+              <label>{t(`${prefix}arrangement`)}<select value={arrangement} required disabled={busy || fixed} onChange={e => changeCommercial(() => setArrangement(e.target.value))}><option value="">{t(`${prefix}choose`)}</option>{fixed ? <option value={arrangement}>{t(`${prefix}originalArrangement`)}</option> : view.arrangements.map(item => <option key={item.id} value={item.id}>{item.label} · {formatDateTime(item.expiresAt, locale)}</option>)}</select></label>
+              {selectedArrangement ? <p aria-hidden="true">{t(`${prefix}arrangementExpiry`)} <time dateTime={selectedArrangement.expiresAt}><bdi>{formatDateTime(selectedArrangement.expiresAt, locale)}</bdi></time></p> : null}
+            </div>
             <label>{t(`${prefix}receiver`)}<input required value={receiver} onChange={e => changeCommercial(() => setReceiver(e.target.value))} pattern="[0-9]{1,32}" maxLength={32} dir="ltr" inputMode="numeric" readOnly={fixed} disabled={busy} /></label>
             <label>{t(`${prefix}termsVersion`)}<input required value={version} onChange={e => changeCommercial(() => setVersion(e.target.value))} pattern="[A-Za-z0-9._\-]{1,128}" maxLength={128} dir="ltr" readOnly={fixed} disabled={busy} /></label>
             <label>{t(`${prefix}terms`)}<textarea required value={terms} onChange={e => changeCommercial(() => setTerms(e.target.value))} maxLength={32768} dir="auto" readOnly={fixed} disabled={busy} /></label>

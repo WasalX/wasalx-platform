@@ -133,6 +133,12 @@ test('operator cost drafts, accepted activation and every bounded reassessment p
  const checks=()=>reassess.getByRole('checkbox');
  const last=reassess.getByRole('checkbox').last();
  const selectedButton=()=>reassess.getByRole('button',{name:new RegExp(t('cost.manage.reassessSelected',{count:'\\d+'}).replace('\\d+','.+'))});
+ const clearSelector=reassess.getByLabel(t('cost.manage.clearSelector'),{exact:true});
+ const checkedRows=reassess.getByRole('checkbox',{checked:true,name:new RegExp(t('cost.manage.message',{count:'.+'}))});
+ const waitForReassessment=async()=>{
+  await expect(checkedRows).toHaveCount(0);
+  await expect(clearSelector).toBeEnabled();
+ };
  // First page: 100 effects, plus the explicit withdraw checkbox outside selection.
  const effectChecks=reassess.getByRole('checkbox');
  await test.step("Select first-page cost effects",async()=>{
@@ -147,6 +153,7 @@ test('operator cost drafts, accepted activation and every bounded reassessment p
  await test.step("Submit first-page cost reassessment",async()=>{
   await selectedButton().click();await expect.poll(()=>h.writes.length).toBe(3);
   const firstItems=h.writes[2]!.body.items as Array<Record<string,unknown>>;expect(firstItems).toHaveLength(100);expect(firstItems.every(x=>!Object.hasOwn(x,'selectorEvidence'))).toBe(true);
+  await waitForReassessment();
  });
  const selectorInput=await test.step("Reassess final cost effect with selector",async()=>{
   await keyboardClick(page,reassess.getByRole('button',{name:t('cost.next'),exact:true}));
@@ -155,15 +162,17 @@ test('operator cost drafts, accepted activation and every bounded reassessment p
   const selectorInput=await chooseCostFile(page,reassess,t('cost.manage.selectorFile'),file(selector,'أدلة-2026.json'),'rtl');
   await selectedButton().click();await expect.poll(()=>h.writes.length).toBe(4);
   expect(h.writes[3]!.body.items).toEqual([{deliveryId:h.rows[100]!.deliveryId,expectedHeadId:h.rows[100]!.id,selectorEvidence:selector}]);
+  await waitForReassessment();
   return selectorInput;
  });
  await test.step("Withdraw cost selector evidence",async()=>{
   await expect(last).not.toBeChecked();
-  await last.check();await reassess.getByLabel(t('cost.manage.clearSelector'),{exact:true}).check();
+  await last.check();await clearSelector.check();
   await expect(selectorInput).toHaveValue('');
   await expect(selectorInput).toHaveAccessibleDescription(t('cost.manage.noFile'));
   await selectedButton().click();await expect.poll(()=>h.writes.length).toBe(5);
   expect(h.writes[4]!.body.items).toEqual([{deliveryId:h.rows[100]!.deliveryId,expectedHeadId:h.rows[100]!.id,selectorEvidence:null}]);
+  await waitForReassessment();
  });
  const unchanged=await test.step("Select cost effects before refresh",async()=>{
   await reassess.getByRole('button',{name:t('cost.previous'),exact:true}).click();await effectChecks.nth(1).check();await effectChecks.nth(2).check();
@@ -177,6 +186,7 @@ test('operator cost drafts, accepted activation and every bounded reassessment p
   await expect(effectChecks.nth(1)).not.toBeChecked();await expect(effectChecks.nth(2)).toBeChecked();
   let rejected=false;h.setWrite(async(route,write)=>{expect((write.body.items as Array<{expectedHeadId:string}>)[0]!.expectedHeadId).toBe(unchanged);rejected=true;h.expected.push({url:route.request().url(),status:409});await route.fulfill({status:409,json:{error:'PRIVATE_HEAD_CONFLICT'}});});
   await selectedButton().click();await expect(h.dialog.getByRole('alert')).toContainText(t('cost.manage.failed'));expect(rejected).toBe(true);await expect(page.getByText('PRIVATE_HEAD_CONFLICT')).toHaveCount(0);
+  await expect(clearSelector).toBeEnabled();
  });
  await test.step("Audit final cost reassessment",async()=>{
   expect(h.writes.filter(x=>x.path.endsWith('/reassess')).every(x=>(x.body.items as unknown[]).length<=100)).toBe(true);
