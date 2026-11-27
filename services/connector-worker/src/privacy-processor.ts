@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { observeDuration, recordMetric } from "@wasalx/observability";
+import { observeDuration, recordMetric, recordStructuredLog, safeErrorCode } from "@wasalx/observability";
 import { PrivacyLegalHoldError, PrivacyRepositoryError, type PrivacyJob, type PrivacyRepository, type PrivacyTarget } from "./privacy-repository.js";
 import { PrivacyZammadClient, PrivacyZammadError } from "./privacy-zammad.js";
 import { SecretResolutionError, type SecretResolver } from "./secrets.js";
@@ -64,9 +64,14 @@ export class PrivacyProcessor {
         let persisted: boolean;
         try {
           persisted = await this.repository.fail(job, leaseId, failure);
-        } catch {
+        } catch (persistenceError) {
           result.persistenceFailed += 1;
           recordPrivacyOutcome(job, "persistence_failed", startedAt);
+          recordStructuredLog("error", "privacy.failure_persistence_failed", {
+            tenant_id: job.tenantId,
+            privacy_job_id: job.id,
+            error_code: safeErrorCode(persistenceError),
+          });
           continue;
         }
         if (!persisted) {

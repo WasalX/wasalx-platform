@@ -89,7 +89,11 @@ For `NOTION_OAUTH_RECOVERY_PENDING`, refresh the tenant's Connections view and u
 
 For `WasalXPrivacyTerminalFailure`, inspect the authorized job and audit history by ID for the failed scope, dependency, and any legal hold. Route to the privacy owner before further action. Preserve job evidence and verify the resulting state through the supported workflow.
 
-`wasalx_privacy_job_total` with `result=persistence_failed` means a failure-state write could not be confirmed. Check database availability and verify stuck work recovers through normal lease expiry and reacquisition. `result=lease_lost` records a checked lease mismatch.
+`wasalx_privacy_job_total` with `result=lease_lost` records a checked lease mismatch and is metric-only.
+
+## Privacy failure persistence
+
+`WasalXPrivacyFailurePersistenceFailed` alerts on an increase in `wasalx_privacy_job_total` with `result=persistence_failed`. The worker could not confirm the failure-state write. Find the `privacy.failure_persistence_failed` entry and use the tenant ID, privacy job ID and error code to inspect the authorized job. Check database availability and verify stuck work recovers through normal lease expiry and reacquisition. Route the incident to the privacy owner.
 
 ## Media quarantine spike
 
