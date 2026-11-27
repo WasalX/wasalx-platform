@@ -70,6 +70,8 @@
   font-family: var(--wx-font-sans);
 }
 
+/* The root canvas takes the theme too, so overscroll and the area past the content never show the browser default. */
+html:has(.theme-dark),
 .theme-dark {
   --wx-color-page: #09090b;
   --wx-color-sidebar: #0d0d0f;
@@ -106,6 +108,7 @@
   color-scheme: dark;
 }
 
+html:has(.theme-light),
 .theme-light {
   --wx-color-page: #f7f7f8;
   --wx-color-sidebar: #ffffff;
