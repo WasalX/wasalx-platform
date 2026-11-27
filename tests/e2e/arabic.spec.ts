@@ -1,5 +1,6 @@
 import { installWorkspaceReadFixture } from "./workspace-read.fixture";
 import { auditWorkspaceJourney } from "./audit-workspace.fixture";
+import { consumeExpectedPrivacyResponse, registerPrivacySettingsJourneys } from "./privacy-settings.fixture";
 import { consumeExpectedLegacyDenial, metaLegacyMigrationJourney } from "./meta-legacy-migration.fixture";
 import { consumeExpectedRoutingDenial, installMetaRoutingReadFixture, metaRoutingJourney } from "./meta-routing.fixture";
 import { consumeExpectedCoexistenceDenial, metaCoexistenceJourney } from "./meta-coexistence.fixture";
@@ -22,6 +23,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { arabicMessages } from "../../lib/i18n/messages/ar/index.ts";
 
 const role = process.env.WASALX_E2E_ROLE ?? "tenant_owner";
+registerPrivacySettingsJourneys("ar", role);
 if (role === "tenant_owner") registerOperationsScreenshots("ar");
 test("Audit uses localized workspace actions and truthful actors with permitted CSV export", { tag: "@tablet" }, async ({ page }, testInfo) => {
   await auditWorkspaceJourney(page, "ar", role, testInfo);
@@ -123,7 +125,7 @@ test.beforeEach(async ({ page }) => {
   const observed: string[] = [];
   problems.set(page, observed);
   page.on("console", (message) => {
-    if (message.type() === "error" && !consumeExpectedNumberReleaseDenial(page, message) && !consumeExpectedActivationDenial(page, message) && !consumeExpectedDirectSetupDenial(page, message) && !consumeExpectedSignupDenial(page, message) && !consumeExpectedReconnectDenial(page, message) && !consumeExpectedCoexistenceDenial(page, message) && !consumeExpectedAddAccessDenial(page, message) && !consumeExpectedRoutingDenial(page, message) && !consumeExpectedTemplateDenial(page, message) && !consumeExpectedLegacyDenial(page, message) && !consumeExpectedObservationFailure(page, message)) observed.push(message.text());
+    if (message.type() === "error" && !consumeExpectedNumberReleaseDenial(page, message) && !consumeExpectedPrivacyResponse(page, message) && !consumeExpectedActivationDenial(page, message) && !consumeExpectedDirectSetupDenial(page, message) && !consumeExpectedSignupDenial(page, message) && !consumeExpectedReconnectDenial(page, message) && !consumeExpectedCoexistenceDenial(page, message) && !consumeExpectedAddAccessDenial(page, message) && !consumeExpectedRoutingDenial(page, message) && !consumeExpectedTemplateDenial(page, message) && !consumeExpectedLegacyDenial(page, message) && !consumeExpectedObservationFailure(page, message)) observed.push(message.text());
   });
   page.on("pageerror", (error) => observed.push(error.message));
 });

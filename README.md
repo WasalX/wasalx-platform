@@ -2,6 +2,14 @@
 
 See [Meta upstream message cost estimates](docs/runbooks/meta-cost-reference-tariff.md) for the provider rate catalog and tariff upload.
 
+## Platform console responses
+
+The shared [platform client](lib/platform-client.ts) expects a JSON body on
+success and rejects responses it cannot parse. Use `{ response: "empty" }` only
+for an endpoint that documents HTTP 204 No Content. That option resolves with
+`undefined`. HTTP errors keep their status, and a 401 sends the operator to
+sign-in with the current return location.
+
 ## Zammad ticket context
 
 `GET /internal/v1/zammad/tickets/:ticketId/context` returns
@@ -57,3 +65,11 @@ A synchronous `131050` records the Stop in the delivery failure transaction. An
 expired lease rolls back that observation, and a later rejection can record it.
 Preferences apply across all WhatsApp Business Accounts in a tenant. A newer
 Resume on one number clears the same contact's Stop on another.
+
+## Optional portal mutation bodies
+
+The Notion authorization start, delivery retry, and privacy request retry
+endpoints accept an omitted body or a JSON object. Their optional fields are
+`integrationId` (string), `confirmOutcomeUnknown` (boolean), and `confirmation`
+(string), respectively. Malformed JSON, a non-object body, or a field with
+the wrong type returns HTTP 400 before the operation is dispatched.
