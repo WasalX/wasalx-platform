@@ -6,7 +6,7 @@ import hashlib
 import hmac
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 from runpy import run_path
 import secrets
@@ -281,14 +281,30 @@ def verified_handback(evidence, record, record_sha, write=None):
             and done.get("run_id") == record["run_id"] and done.get("handback_sha256") == handback_sha)
 
 
+def dev_step_record_path(identity):
+    if "DEV_STEP_RECORD" in identity:
+        return identity["DEV_STEP_RECORD"]
+    return str(PurePosixPath(identity["DISK_STATE"]) / "dev-step.run")
+
+
 def dev_step(args):
+    handback = args.operation in ("handback", "local-handback")
     try:
-        lock = Path(os.environ["DEV_STEP_LOCK"])
+        configured_lock = os.environ.get("DEV_STEP_LOCK")
+        if not configured_lock:
+            return "HOLD_DEV_STEP_MARKER_DIR" if handback else "HOLD_DEV_STEP_RECORD"
+        lock = Path(configured_lock)
+        if handback and not lock.parent.is_dir():
+            return "HOLD_DEV_STEP_MARKER_DIR"
         directory = lock.parent.lstat()
         if (not lock.is_absolute() or not stat.S_ISDIR(directory.st_mode)
                 or directory.st_uid != os.geteuid() or directory.st_mode & 0o022):
             raise ValueError("invalid lock directory")
+        if handback and not lock.is_file():
+            return "HOLD_DEV_STEP_MARKER"
         lock_stat = lock.stat()
+        if handback:
+            return dev_step_handback(args, lock, lock_stat)
         try:
             held = (os.path.samestat(os.fstat(7), lock_stat)
                     and re.search(r"^lock:.* FLOCK\s+ADVISORY\s+WRITE\s", Path("/proc/self/fdinfo/7").read_text(), re.M))
@@ -296,71 +312,110 @@ def dev_step(args):
             held = False
         if not held:
             return "HOLD_DEV_STEP_DESCRIPTOR"
-        record_path = lock.with_name(lock.name + ".run")
-        try:
-            record, record_sha = step_receipt(record_path)
-        except FileNotFoundError:
-            record = None
-        else:
-            if not (STEP_RUN_ID.fullmatch(record["run_id"]) and STEP_NAME.fullmatch(record["step"])
-                    and UTC_STAMP.fullmatch(record["started_at"])
-                    and re.fullmatch(r"[0-9a-f]{32}", record["claim"])
-                    and type(record["lock_device"]) is int and record["lock_device"] == lock_stat.st_dev
-                    and type(record["lock_inode"]) is int and record["lock_inode"] == lock_stat.st_ino):
-                raise ValueError("invalid run record")
-        if args.operation == "check":
-            return f'HOLD_DEV_STEP_UNRESOLVED run_id={record["run_id"]}' if record else None
-        if not STEP_RUN_ID.fullmatch(args.run_id):
-            return "HOLD_DEV_STEP_RUN_ID"
-        if args.operation in ("acquire", "terminal") and not STEP_NAME.fullmatch(args.step):
-            return "HOLD_DEV_STEP_ARGUMENTS"
-        if args.operation == "acquire":
-            if record and args.inherited == record["claim"] and record["run_id"] == args.run_id:
-                print("inherited")
-                return None
-            # The matching lease takes its reservation once. The overlay checks its cgroup before VM work.
-            lease = os.environ.get("LEASE_UNIT", "")
-            reserved = (args.entry == "lease" and record and record["run_id"] == args.run_id and args.step in PHASES
-                        and record["step"] == f"register-{args.step}" and lease
-                        and lease == f'{os.environ.get("LEASE_PREFIX")}-{args.step}-{args.run_id}.service')
-            if record and not reserved:
-                return f'HOLD_DEV_STEP_UNRESOLVED run_id={record["run_id"]}'
-            if not UTC_STAMP.fullmatch(args.started_at):
-                return "HOLD_DEV_STEP_CLOCK"
-            disk = run_path(str(Path(__file__).with_name("frozen-disk.py")))
-            claim = secrets.token_hex(16)
-            disk["write_receipt"](record_path, {
-                "run_id": args.run_id, "step": args.step, "started_at": args.started_at,
-                "claim": claim, "lock_device": lock_stat.st_dev, "lock_inode": lock_stat.st_ino,
-            })
-            print(claim)
-            return None
-        if not record or record["run_id"] != args.run_id:
-            return "HOLD_DEV_STEP_HANDBACK"
-        disk = run_path(str(Path(__file__).with_name("frozen-disk.py")))
-        evidence = Path(args.evidence)
-        if args.operation == "terminal":
-            if (record["step"] != args.step or not private_directory(evidence)
-                    or (evidence / "run-id").read_text(encoding="ascii").strip() != args.run_id):
-                return "HOLD_DEV_STEP_HANDBACK"
-            evidence = evidence / f'dev-step-{record["claim"]}'
-            evidence.mkdir(mode=0o700)
-            disk["write_receipt"](evidence / "terminal.json", {"run_id": args.run_id, "status": "terminal"})
-            disk["write_receipt"](evidence / "stop.json", {"run_id": args.run_id, "status": args.stop})
-            print(evidence)
-            return None
-        write = disk["write_receipt"] if args.operation == "local-handback" else None
-        if write and evidence.name != f'dev-step-{record["claim"]}':
-            return "HOLD_DEV_STEP_HANDBACK"
-        if not verified_handback(evidence, record, record_sha, write):
-            return "HOLD_DEV_STEP_HANDBACK"
-        record_path.unlink()
-        disk["sync_dir"](record_path.parent)
-        if args.operation == "handback":
-            print("DEV_STEP_HANDBACK=PASS")
-        return None
+        return update_dev_step_record(args, lock, lock_stat)
     except (OSError, ValueError, KeyError, TypeError):
         return "HOLD_DEV_STEP_RECORD" if args.operation in ("acquire", "check") else "HOLD_DEV_STEP_HANDBACK"
+
+
+def dev_step_handback(args, lock, lock_stat):
+    import fcntl
+
+    try:
+        marker = lock.open("rb")
+    except OSError:
+        return "HOLD_DEV_STEP_MARKER"
+    # A fresh open description must contend with the original lock, including an inherited fd 7.
+    with marker:
+        try:
+            fcntl.flock(marker, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return "HOLD_DEV_STEP_BUSY"
+        except OSError:
+            return "HOLD_DEV_STEP_LOCK"
+        locked = os.fstat(marker.fileno())
+        if not os.path.samestat(locked, lock_stat) or not os.path.samestat(locked, lock.stat()):
+            return "HOLD_DEV_STEP_HANDBACK"
+        return update_dev_step_record(args, lock, locked)
+
+
+def update_dev_step_record(args, lock, lock_stat):
+    record_path = Path(dev_step_record_path(os.environ))
+    if (not record_path.is_absolute() or not private_directory(record_path.parent)
+            or (record_path.parent.resolve() / record_path.name).is_relative_to(lock.parent.resolve())):
+        raise ValueError("invalid run record path")
+    # Preserve a hold from an older packet until its original helper verifies handback.
+    try:
+        lock.with_name(lock.name + ".run").lstat()
+    except FileNotFoundError:
+        pass
+    else:
+        raise ValueError("legacy run record awaits handback")
+    try:
+        record, record_sha = step_receipt(record_path)
+    except FileNotFoundError:
+        record = None
+    else:
+        if not (STEP_RUN_ID.fullmatch(record["run_id"]) and STEP_NAME.fullmatch(record["step"])
+                and UTC_STAMP.fullmatch(record["started_at"])
+                and re.fullmatch(r"[0-9a-f]{32}", record["claim"])
+                and type(record["lock_device"]) is int and record["lock_device"] >= 0
+                and type(record["lock_inode"]) is int and record["lock_inode"] > 0):
+            raise ValueError("invalid run record")
+        if (record["lock_device"], record["lock_inode"]) != (lock_stat.st_dev, lock_stat.st_ino):
+            if args.operation in ("acquire", "check"):
+                return f'HOLD_DEV_STEP_UNRESOLVED run_id={record["run_id"]}'
+            return "HOLD_DEV_STEP_HANDBACK"
+    if args.operation == "check":
+        return f'HOLD_DEV_STEP_UNRESOLVED run_id={record["run_id"]}' if record else None
+    if not STEP_RUN_ID.fullmatch(args.run_id):
+        return "HOLD_DEV_STEP_RUN_ID"
+    if args.operation in ("acquire", "terminal") and not STEP_NAME.fullmatch(args.step):
+        return "HOLD_DEV_STEP_ARGUMENTS"
+    if args.operation == "acquire":
+        if record and args.inherited == record["claim"] and record["run_id"] == args.run_id:
+            print("inherited")
+            return None
+        # The matching lease takes its reservation once. The overlay checks its cgroup before VM work.
+        lease = os.environ.get("LEASE_UNIT", "")
+        reserved = (args.entry == "lease" and record and record["run_id"] == args.run_id and args.step in PHASES
+                    and record["step"] == f"register-{args.step}" and lease
+                    and lease == f'{os.environ.get("LEASE_PREFIX")}-{args.step}-{args.run_id}.service')
+        if record and not reserved:
+            return f'HOLD_DEV_STEP_UNRESOLVED run_id={record["run_id"]}'
+        if not UTC_STAMP.fullmatch(args.started_at):
+            return "HOLD_DEV_STEP_CLOCK"
+        disk = run_path(str(Path(__file__).with_name("frozen-disk.py")))
+        claim = secrets.token_hex(16)
+        disk["write_receipt"](record_path, {
+            "run_id": args.run_id, "step": args.step, "started_at": args.started_at,
+            "claim": claim, "lock_device": lock_stat.st_dev, "lock_inode": lock_stat.st_ino,
+        })
+        print(claim)
+        return None
+    if not record or record["run_id"] != args.run_id:
+        return "HOLD_DEV_STEP_HANDBACK"
+    disk = run_path(str(Path(__file__).with_name("frozen-disk.py")))
+    evidence = Path(args.evidence)
+    if args.operation == "terminal":
+        if (record["step"] != args.step or not private_directory(evidence)
+                or (evidence / "run-id").read_text(encoding="ascii").strip() != args.run_id):
+            return "HOLD_DEV_STEP_HANDBACK"
+        evidence = evidence / f'dev-step-{record["claim"]}'
+        evidence.mkdir(mode=0o700)
+        disk["write_receipt"](evidence / "terminal.json", {"run_id": args.run_id, "status": "terminal"})
+        disk["write_receipt"](evidence / "stop.json", {"run_id": args.run_id, "status": args.stop})
+        print(evidence)
+        return None
+    write = disk["write_receipt"] if args.operation == "local-handback" else None
+    if write and evidence.name != f'dev-step-{record["claim"]}':
+        return "HOLD_DEV_STEP_HANDBACK"
+    if not verified_handback(evidence, record, record_sha, write):
+        return "HOLD_DEV_STEP_HANDBACK"
+    record_path.unlink()
+    disk["sync_dir"](record_path.parent)
+    if args.operation == "handback":
+        print("DEV_STEP_HANDBACK=PASS")
+    return None
 
 
 def main():

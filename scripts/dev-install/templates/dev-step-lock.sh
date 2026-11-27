@@ -55,9 +55,7 @@ finish_dev_step() {
         evidence="$(dev_step_record terminal -- "$DEV_STEP_RUN" "$1" "$DEV_STEP_OWNER" "${2:-stopped}")" ||
             { printf '%s\n' "$evidence"; exit 75; }
         exec 7<&-
-        dev_step_flock
         dev_step_record local-handback -- "$DEV_STEP_RUN" "$evidence" || exit 75
-        exec 7<&-
     fi
 }
 
@@ -69,7 +67,6 @@ if [[ "${BASH_SOURCE[0]}" = "$0" ]]; then
             ;;
         handback:3)
             exec 7<&-
-            dev_step_flock
             dev_step_record handback -- "$2" "$3" || exit 75
             ;;
         *) echo HOLD_DEV_STEP_ARGUMENTS; exit 75 ;;

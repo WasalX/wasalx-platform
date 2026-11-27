@@ -33,7 +33,7 @@ jobs:
         run: |
           runs=$(gh api --method GET "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs" \
             -f event=merge_group -f head_sha="$GITHUB_SHA" -F per_page=100)
-          read -r run attempt < <(jq -er --arg sha "$GITHUB_SHA" --arg repo "$GITHUB_REPOSITORY" '
+          read -r run attempt < <(jq -ber --arg sha "$GITHUB_SHA" --arg repo "$GITHUB_REPOSITORY" '
             select(.total_count <= 100) | [.workflow_runs[] |
               select(.event == "merge_group" and .path == ".github/workflows/ci.yml" and
                 .head_sha == $sha and .head_repository.full_name == $repo and
@@ -113,7 +113,7 @@ jobs:
         with:
           version: v0.30.1
           driver-opts: image=moby/buildkit:v0.26.3
-          cache-binary: false
+          cache-binary: true
       - if: steps.image.outputs.pending == 'false'
         uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:

@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type Ref } from "react";
 import { parseMetaCostSelectorEvidence, parseMetaCostTariff, type MetaCostTariffInput, type MetaCostSelectorEvidence } from "../../packages/core/src/meta-cost";
 import { formatDateTime, formatNumber } from "../../lib/i18n/format";
 import { platformRequest } from "../../lib/platform-client";
@@ -13,6 +13,23 @@ import {MetaCostStatementManagement} from "./MetaCostStatementManagement";
 type OperatorScope={tenantId:string;csrfToken:string};
 type Tariff={id:string;state:"DRAFT"|"ACTIVE";definition:MetaCostTariffInput;definition_sha256:string;supersedes_id:string|null;created_at:string;accepted_policies:Array<{id:string;createdAt:string}>};
 type Mutation=(path:string,body:unknown)=>Promise<boolean>;
+
+function CostJsonPicker({label,inputRef,fileName,onSelect}:{
+  label:string;inputRef:Ref<HTMLInputElement>;fileName:string;onSelect:(file:File|undefined)=>void;
+}){
+  const {t}=useI18n();
+  const statusId=useId();
+  return <div className={styles.filePicker}>
+    <label>
+      <input ref={inputRef} type="file" accept=".json,application/json" className="wx-visually-hidden"
+        aria-describedby={statusId} onChange={event=>onSelect(event.currentTarget.files?.[0])}/>
+      <span className="wx-button">{label}</span>
+    </label>
+    <span id={statusId} role="status" className={styles.fileStatus}>
+      {fileName?<>{t("cost.manage.selectedFile")} <bdi>{fileName}</bdi></>:t("cost.manage.noFile")}
+    </span>
+  </div>;
+}
 
 export function PlatformMetaCosts({tenantId,csrfToken}:OperatorScope){
   // Scope is stable across local state refreshes; a workspace change remounts the drawer.
@@ -46,6 +63,8 @@ function Management({scope,snapshot,accountId,mutate,busy,uncertain}:{scope:Oper
   const[selection,setSelection]=useState<{scope:string;ids:string[]}>({scope:"",ids:[]}),[policy,setPolicy]=useState<Record<string,string>>({}),[feedback,setFeedback]=useState<string|null>(null);
   const[paging,setPaging]=useState({scope:"",index:0});
   const alive=useRef(true),fileGeneration=useRef({tariff:0,selector:0});
+  const tariffInput=useRef<HTMLInputElement>(null),selectorInput=useRef<HTMLInputElement>(null);
+  const[tariffFileName,setTariffFileName]=useState(""),[selectorFileName,setSelectorFileName]=useState("");
   const[selectorRead,setSelectorRead]=useState<"UNCHANGED"|"PENDING"|"INVALID"|"VALID">("UNCHANGED");
   useEffect(()=>{alive.current=true;return()=>{alive.current=false;};},[]);
   const tariffs=(snapshot.tariffs??[]) as unknown as Tariff[];
@@ -61,13 +80,19 @@ function Management({scope,snapshot,accountId,mutate,busy,uncertain}:{scope:Oper
   const currentSelection=pageRows.filter(row=>row.id!==null&&selected.includes(row.id));
   const root=`meta-costs/tenants/${scope.tenantId}`;
   const submit=async(path:string,body:unknown)=>{
-    if(await mutate(path,body)&&alive.current){setDefinition(null);setSelected([]);setFeedback(null);}
+    if(await mutate(path,body)&&alive.current){
+      setDefinition(null);
+      setTariffFileName("");
+      if(tariffInput.current)tariffInput.current.value="";
+      setSelected([]);
+      setFeedback(null);
+    }
   };
   const readFile=async(file:File|undefined,kind:"tariff"|"selector")=>{
     const generation=++fileGeneration.current[kind],ownedScope=fileScope;
     // Invalidate before any asynchronous read, including empty/invalid selection.
-    if(kind==="tariff"){setDefinition(null);setSupersedes("");}
-    else{setSelector(null);setClearSelector(false);setSelectorRead("INVALID");}
+    if(kind==="tariff"){setTariffFileName(file?.name??"");setDefinition(null);setSupersedes("");}
+    else{setSelectorFileName(file?.name??"");setSelector(null);setClearSelector(false);setSelectorRead("INVALID");}
     setFeedback(null);
     if(!file||busy||uncertain)return;
     const current=()=>alive.current&&generation===fileGeneration.current[kind]&&ownedScope===currentFileScope.current;
@@ -83,7 +108,8 @@ function Management({scope,snapshot,accountId,mutate,busy,uncertain}:{scope:Oper
     <h3>{t("cost.manage.title")}</h3><p className={styles.help}>{t("cost.manage.description")}</p>
     {feedback?<p role={feedback==="cost.manage.saved"?"status":"alert"}>{t(feedback)}</p>:null}
     <fieldset disabled={busy||uncertain} className={styles.fieldset}><legend>{t("cost.manage.tariff")}</legend>
-      <label>{t("cost.manage.rateFile")}<input type="file" accept=".json,application/json" onChange={event=>void readFile(event.target.files?.[0],"tariff")}/></label>
+      <CostJsonPicker label={t("cost.manage.rateFile")} inputRef={tariffInput} fileName={tariffFileName}
+        onSelect={file=>void readFile(file,"tariff")}/>
       {definition?<>
         <p>{t(`cost.purpose.${definition.purpose}`)} · {t(`cost.mode.${definition.evidenceMode}`)} · <bdi>{definition.currency}</bdi> · {t(`cost.rounding.${definition.rounding}`)}</p>
         <p>{formatDateTime(definition.effectiveFrom,locale,{dateStyle:"medium",timeStyle:"short"})} – {formatDateTime(definition.effectiveTo,locale,{dateStyle:"medium",timeStyle:"short"})} · <bdi>{definition.timezone}</bdi></p>
@@ -106,8 +132,17 @@ function Management({scope,snapshot,accountId,mutate,busy,uncertain}:{scope:Oper
       </div>})}</fieldset>:null}
     <fieldset disabled={busy||uncertain} className={styles.fieldset}><legend>{t("cost.manage.reassess")}</legend><p>{t("cost.manage.reassessHelp")}</p>
       <label>{t("cost.basis")}<select value={purpose} onChange={event=>{setPurpose(event.target.value as typeof purpose);setSelected([]);}}><option value="UPSTREAM_REFERENCE">{t("cost.purpose.UPSTREAM_REFERENCE")}</option><option value="CUSTOMER_TARIFF">{t("cost.purpose.CUSTOMER_TARIFF")}</option></select></label>
-      <label>{t("cost.manage.selectorFile")}<input type="file" accept=".json,application/json" onChange={event=>void readFile(event.target.files?.[0],"selector")}/></label>
-      <label><input type="checkbox" checked={clearSelector} onChange={event=>{fileGeneration.current.selector++;setClearSelector(event.target.checked);setSelector(null);setSelectorRead("UNCHANGED");setFeedback(null);}}/>{t("cost.manage.clearSelector")}</label>
+      <CostJsonPicker label={t("cost.manage.selectorFile")} inputRef={selectorInput} fileName={selectorFileName}
+        onSelect={file=>void readFile(file,"selector")}/>
+      <label><input type="checkbox" checked={clearSelector} onChange={event=>{
+        fileGeneration.current.selector++;
+        setClearSelector(event.currentTarget.checked);
+        setSelector(null);
+        setSelectorFileName("");
+        if(selectorInput.current)selectorInput.current.value="";
+        setSelectorRead("UNCHANGED");
+        setFeedback(null);
+      }}/>{t("cost.manage.clearSelector")}</label>
       {selector?<p>{t(`cost.mode.${selector.evidenceMode}`)} · <bdi>{selector.market} / {selector.tier}</bdi> · {t(`cost.schedule.${selector.schedule}`)}</p>:null}
       <div className={styles.selection}>{pageRows.map((row,index)=><label key={row.deliveryId}><input type="checkbox" checked={selected.includes(row.id!)} onChange={event=>setSelected(event.target.checked?[...selected,row.id!]:selected.filter(id=>id!==row.id))}/><span>{t("cost.manage.message",{count:formatNumber(page*100+index+1,locale)})} · {formatDateTime(row.deliveredAt??row.observedAt,locale,{dateStyle:"medium",timeStyle:"short"})}<small>{t(`cost.mode.${row.evidenceMode}`)} · {t(`cost.state.${row.state}`)}</small></span></label>)}</div>
       {pageCount>1?<nav aria-label={t("cost.manage.reassessPages")}><button type="button" disabled={page===0} onClick={()=>{setPaging({scope:rowScope,index:page-1});setSelected([]);}}>{t("cost.previous")}</button><span aria-live="polite">{t("cost.page",{page:formatNumber(page+1,locale),count:formatNumber(pageCount,locale)})}</span><button type="button" disabled={page+1===pageCount} onClick={()=>{setPaging({scope:rowScope,index:page+1});setSelected([]);}}>{t("cost.next")}</button></nav>:null}

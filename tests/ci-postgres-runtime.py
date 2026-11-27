@@ -1,14 +1,19 @@
 """Real Bash lifecycle with fixture-local CLI doubles; no Docker or host mutation."""
 import json
 import os
-os.environ["WASALX_RELEASE_EVIDENCE_SCRIPT"] = "fixture-release-evidence.mjs"
-from pathlib import Path
+import re
 import shutil
 import signal
-import time
+import socket
 import subprocess
 import tempfile
+import time
 import unittest
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import ExitStack
+from pathlib import Path
+
+os.environ["WASALX_RELEASE_EVIDENCE_SCRIPT"] = "fixture-release-evidence.mjs"
 
 ROOT = Path(__file__).resolve().parents[1]
 SHA = "a" * 40
@@ -91,6 +96,10 @@ elif args[0]=='exec':
         if mode==f'durability-{name}': settings[index]='on'
     print('|'.join(settings))
 elif args[0]=='rm':
+    if mode=='cancel-gated-cleanup':
+        gate=int(os.environ['CLEANUP_GATE_FD'])
+        os.write(gate, b'R')
+        if os.read(gate, 1)!=b'G': sys.exit(1)
     if mode=='cancel-slow-cleanup':
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
         time.sleep(30)
@@ -107,8 +116,18 @@ elif args[0]=='ps':
 
 @unittest.skipUnless(os.name == "posix", "Requires the real Linux Bash lifecycle")
 class PostgresLifecycle(unittest.TestCase):
+    def release_cleanup_after_old_watchdog(self, process, gate):
+        self.assertEqual(gate.recv(1), b"R", "owned cleanup must reach the gate")
+        # Keep the runtime blocked past the old three-second watchdog.
+        with self.assertRaises(subprocess.TimeoutExpired):
+            process.wait(timeout=3.25)
+        gate.sendall(b"G")
+
     def run_fixture(self, mode, environment=None, external_signal=None):
-        with tempfile.TemporaryDirectory(prefix="wasalx-postgres-test-") as directory:
+        with (
+            tempfile.TemporaryDirectory(prefix="wasalx-postgres-test-") as directory,
+            ExitStack() as resources,
+        ):
             root = Path(directory)
             (root / "bin").mkdir()
             for name in ("docker", "python3", "node", "timeout"):
@@ -124,8 +143,9 @@ class PostgresLifecycle(unittest.TestCase):
             # Exercise the actual exec Bash step PID, not a self-signalling child.
             test_bash = "C:/Program Files/Git/bin/bash.exe" if os.name == "nt" else "/usr/bin/bash"
             env["WASALX_TEST_BASH"] = test_bash
+            runtime = ROOT / "scripts/release/ci-postgres-runtime.sh"
             command = [test_bash, "--noprofile", "--norc", "-c", 'exec "$WASALX_TEST_BASH" "$@"', "wasalx-postgres-test",
-                       str(ROOT / "scripts/release/ci-postgres-runtime.sh"), "node", "fixture-release-evidence.mjs",
+                       str(runtime), "node", "fixture-release-evidence.mjs",
                        "run", "--gate", "postgres", "--candidate-sha", SHA]
             (root / "foreign-container").write_text("another-job")
             if external_signal is None:
@@ -133,11 +153,37 @@ class PostgresLifecycle(unittest.TestCase):
             else:
                 ready = root / "ready"
                 (root / "owned-pids").touch()
-                process = subprocess.Popen(command, env=env, text=True, stdout=subprocess.PIPE,
-                                           stderr=subprocess.PIPE, start_new_session=True)
-                timed_out = False
+                signal_name = signal.Signals(external_signal).name.removeprefix("SIG")
+                budget = re.search(
+                    rf"^trap 'cancel \d+ (\d+)' {signal_name}$",
+                    runtime.read_text(),
+                    re.MULTILINE,
+                )
+                self.assertIsNotNone(budget, f"{signal_name}: missing runtime cleanup budget")
+                # The Docker budget excludes signal delivery and final scratch removal.
+                watchdog_seconds = int(budget[1]) / 1_000 + 0.5
+
+                gate = None
+                pass_fds = ()
+                if mode == "cancel-gated-cleanup":
+                    gate, child_gate = socket.socketpair()
+                    resources.enter_context(gate)
+                    resources.enter_context(child_gate)
+                    gate.settimeout(watchdog_seconds)
+                    pass_fds = (child_gate.fileno(),)
+                    env["CLEANUP_GATE_FD"] = str(child_gate.fileno())
+                process = subprocess.Popen(
+                    command,
+                    env=env,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    start_new_session=True,
+                    pass_fds=pass_fds,
+                )
+                if gate is not None:
+                    child_gate.close()
                 child_pid = None
-                started = time.monotonic()
                 try:
                     deadline = time.monotonic() + 10
                     while not ready.exists() and process.poll() is None and time.monotonic() < deadline:
@@ -149,10 +195,20 @@ class PostgresLifecycle(unittest.TestCase):
                     os.kill(child_pid, 0)
                     started = time.monotonic()
                     os.kill(process.pid, external_signal)
+                    release = None
+                    if gate is not None:
+                        executor = resources.enter_context(ThreadPoolExecutor(max_workers=1))
+                        release = executor.submit(self.release_cleanup_after_old_watchdog, process, gate)
                     try:
-                        stdout, stderr = process.communicate(timeout=3)
+                        stdout, stderr = process.communicate(timeout=watchdog_seconds)
                     except subprocess.TimeoutExpired:
-                        timed_out = True
+                        self.fail(
+                            f"{mode}: SIG{signal_name} runtime exit watchdog expired "
+                            f"after {watchdog_seconds:g}s"
+                        )
+                    cancel_seconds = time.monotonic() - started
+                    if release is not None:
+                        release.result()
                 finally:
                     # Observe the implementation before the watchdog can repair it.
                     try:
@@ -171,10 +227,11 @@ class PostgresLifecycle(unittest.TestCase):
                             pass
                     if process.poll() is None:
                         process.kill()
-                    stdout, stderr = process.communicate(timeout=3)
+                        process.wait(timeout=3)
+                    process.stdout.close()
+                    process.stderr.close()
                 result = subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
-                result.cancel_timed_out = timed_out
-                result.cancel_seconds = time.monotonic() - started
+                result.cancel_seconds = cancel_seconds
                 result.child_remaining = child_remaining
             self.assertEqual((root / "foreign-container").read_text(), "another-job")
             self.assertEqual(list(root.glob("wasalx-ci-postgres.*")), [], "owned scratch must settle")
@@ -268,15 +325,22 @@ class PostgresLifecycle(unittest.TestCase):
             for mode in ("cancel-running", "cancel-resistant"):
                 with self.subTest(signal=signum, mode=mode):
                     result, calls = self.run_fixture(mode, external_signal=signum)
-                    self.assertFalse(result.cancel_timed_out, "external step-PID cancellation was deferred behind the live child")
                     self.assertEqual(result.returncode, status, result.stderr)
                     self.assertFalse(result.child_remaining, "owned payload must not remain alive")
                     self.assertFalse(result.container_remaining)
                     self.assertIn(["docker", "rm", "--force", ID], calls)
 
+    def test_sigint_waits_for_gated_cleanup_past_old_watchdog(self):
+        result, calls = self.run_fixture(
+            "cancel-gated-cleanup", external_signal=signal.SIGINT
+        )
+        self.assertEqual(result.returncode, 130, result.stderr)
+        self.assertFalse(result.child_remaining)
+        self.assertFalse(result.container_remaining)
+        self.assertIn(["docker", "rm", "--force", ID], calls)
+
     def test_external_cancel_cleanup_deadline_is_bounded_and_unknown_fails(self):
         result, calls = self.run_fixture("cancel-slow-cleanup", external_signal=signal.SIGTERM)
-        self.assertFalse(result.cancel_timed_out)
         self.assertLess(result.cancel_seconds, 2.5)
         self.assertEqual(result.returncode, 1)
         self.assertIn("cleanup unverified", result.stderr)
@@ -287,7 +351,6 @@ class PostgresLifecycle(unittest.TestCase):
         for field in ("id", "name", "image", "owner", "sha"):
             with self.subTest(field=field):
                 result, calls = self.run_fixture("cancel-wrong-" + field, external_signal=signal.SIGTERM)
-                self.assertFalse(result.cancel_timed_out)
                 self.assertEqual(result.returncode, 1)
                 self.assertTrue(result.container_remaining)
                 self.assertFalse(result.child_remaining)
@@ -296,7 +359,6 @@ class PostgresLifecycle(unittest.TestCase):
 
     def test_external_cancel_during_create_recovers_only_exact_owned_cid(self):
         result, calls = self.run_fixture("cancel-create", external_signal=signal.SIGTERM)
-        self.assertFalse(result.cancel_timed_out)
         self.assertEqual(result.returncode, 143, result.stderr)
         self.assertFalse(result.container_remaining)
         self.assertFalse(result.child_remaining)

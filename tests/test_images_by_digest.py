@@ -292,6 +292,7 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
                          ["portal", "control-api", "connector-worker", "foundation-postgres"])
         self.assertEqual(images.matrix(["docs/guide/intro.md", "unmapped/new-file"], pull_request=True),
                          {"include": []})
+        self.assertIn("A PR path that matches no image input selects no image.", (ROOT / "DELIVERY.md").read_text(encoding="utf-8"))
 
     def test_pull_request_matrix_selects_addon_staging_inputs(self):
         addon_images = {"zammad", "workspace-configurator"}
@@ -492,27 +493,34 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
             with self.subTest(key=key), self.assertRaises(ValueError):
                 images.assemble(bad)
 
-    def test_collector_module_transport_is_scoped_to_the_build(self):
-        dockerfile = (ROOT / "Dockerfile.production-otel").read_text(encoding="utf-8")
-        build, runtime = dockerfile.rsplit("\nFROM ", 1)
-        self.assertIn("ENV GODEBUG=http2client=0", build.splitlines())
-        self.assertNotIn("GOSUMDB=off", build)
-        self.assertNotIn("GODEBUG", runtime)
+    def test_go_module_transport_is_scoped_to_the_build(self):
+        for image in ("alertmanager", "cloudflared", "otel", "prometheus"):
+            with self.subTest(image=image):
+                dockerfile = (ROOT / f"Dockerfile.production-{image}").read_text(encoding="utf-8")
+                build, runtime = dockerfile.rsplit("\nFROM ", 1)
+                if image == "prometheus":
+                    self.assertNotIn("GODEBUG", build)
+                else:
+                    self.assertIn("ENV GODEBUG=http2client=0", build.splitlines())
+                self.assertNotIn("GOSUMDB=off", build)
+                self.assertNotIn("GODEBUG", runtime)
 
     def test_registry_cache_roles_are_disjoint(self):
-        self.assertEqual(len(images.CACHED_IMAGES), 11)
+        self.assertEqual(len(images.CACHED_IMAGES), 12)
         self.assertLessEqual(images.CACHED_IMAGES, {row["image"] for row in images.catalog()})
         main = {"GITHUB_EVENT_NAME": "push", "GITHUB_REF": "refs/heads/main", "GITHUB_REPOSITORY": images.REPOSITORY}
-        ref = "type=registry,ref=ghcr.io/wasalx/buildcache:production-prometheus"
+        ref = "type=registry,ref=ghcr.io/wasalx/buildcache:"
         with mock.patch.dict(os.environ, main, clear=True):
-            self.assertEqual(images.cache_options("production-prometheus", "write"), ["--cache-to", ref + ",mode=max,ignore-error=true"])
+            for image in ("production-prometheus", "production-alertmanager"):
+                self.assertEqual(images.cache_options(image, "write"), ["--cache-to", ref + image + ",mode=max,ignore-error=true"])
             self.assertEqual(images.cache_options("portal", "off"), [])
             self.assertEqual(images.cache_options("postgres", "write"), [])
             with self.assertRaises(ValueError):
                 images.cache_options("portal", "read")
         for event in ["pull_request", "merge_group"]:
             with mock.patch.dict(os.environ, {"GITHUB_EVENT_NAME": event}, clear=True):
-                self.assertEqual(images.cache_options("production-prometheus", "read"), ["--cache-from", ref])
+                for image in ("production-prometheus", "production-alertmanager"):
+                    self.assertEqual(images.cache_options(image, "read"), ["--cache-from", ref + image])
                 with self.assertRaises(ValueError):
                     images.cache_options("portal", "write")
 

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync, writeFileSync } from "node:fs";
 import AxeBuilder from "@axe-core/playwright";
-import { expect, test } from "@playwright/test";
+import { expect, test, type Locator } from "@playwright/test";
 import { languageTag, supportedLocales, textDirection } from "../../lib/i18n/locales.ts";
 import { englishTenantMessages as en } from "../../lib/i18n/messages/en/tenant.ts";
 import { arabicTenantMessages as ar } from "../../lib/i18n/messages/ar/tenant.ts";
@@ -14,6 +14,48 @@ const stories = Object.entries(entries).filter(([, entry]) => entry.type === "st
 assert(stories.length > 0, "Storybook's static index contains no stories");
 
 const wcagTags = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"];
+
+async function expectMetaSignupLayout(signup: Locator, viewport: "desktop" | "phone", readinessCount = 0) {
+  const layout = await signup.evaluate(async section => {
+    await document.fonts.ready;
+    const prose = [...section.querySelectorAll("p")].map(paragraph => {
+      // Measure one ch with the paragraph's actual font, including its fallback for the zero glyph.
+      const ruler = document.createElement("span");
+      ruler.style.cssText = "position:absolute;inline-size:1ch;visibility:hidden";
+      paragraph.appendChild(ruler);
+      const ch = ruler.getBoundingClientRect().width;
+      ruler.remove();
+      const { width, height } = paragraph.getBoundingClientRect();
+      return { measure: width / ch, wraps: height > Number.parseFloat(getComputedStyle(paragraph).lineHeight) + 1 };
+    });
+    const pairs = [...section.querySelectorAll("dl > div")].map(row => {
+      const label = row.querySelector("dt")!.getBoundingClientRect();
+      const value = row.querySelector("dd")!.getBoundingClientRect();
+      const { direction, columnGap } = getComputedStyle(row);
+      const gap = direction === "rtl" ? label.left - value.right : value.left - label.right;
+      return { gap, expectedGap: Number.parseFloat(columnGap), verticalOffset: Math.abs(label.top - value.top) };
+    });
+    return {
+      prose, pairs,
+      overflow: [document.documentElement, section, ...section.querySelectorAll("p, dl, dt, dd")]
+        .some(element => element.scrollWidth > element.clientWidth + 1),
+    };
+  });
+  expect(layout.overflow).toBe(false);
+  expect(layout.prose.length).toBeGreaterThan(0);
+  expect(layout.pairs).toHaveLength(readinessCount);
+  for (const { measure } of layout.prose) expect(measure).toBeLessThanOrEqual(65);
+
+  if (viewport === "phone") {
+    expect(layout.prose.some(({ wraps }) => wraps)).toBe(true);
+  } else {
+    for (const { measure } of layout.prose) expect(measure).toBeGreaterThanOrEqual(45);
+    for (const { gap, expectedGap, verticalOffset } of layout.pairs) {
+      expect(Math.abs(gap - expectedGap)).toBeLessThanOrEqual(1);
+      expect(verticalOffset).toBeLessThanOrEqual(1);
+    }
+  }
+}
 
 for (const theme of ["light", "dark"] as const) {
   for (const locale of supportedLocales) {
@@ -77,13 +119,23 @@ for (const theme of ["light", "dark"] as const) {
         await expect(content).toHaveAttribute("lang", locale);
         await expect(content).toHaveAttribute("dir", textDirection(locale));
         const signup = content.getByRole("region", { name: messages["tenant.metaSignup.title"], exact: true });
-        const screenshot = () => page.screenshot({ fullPage: true, animations: "disabled", caret: "hide", scale: "css" });
+        const screenshot = async (state: "ready" | "recovery") => {
+          const readinessCount = state === "recovery" ? 5 : 0;
+          const options = { fullPage: true, animations: "disabled", caret: "hide", scale: "css" } as const;
+          await expectMetaSignupLayout(signup, "desktop", readinessCount);
+          const desktop = await page.screenshot(options);
+          await page.setViewportSize({ width: 390, height: 844 });
+          await expectMetaSignupLayout(signup, "phone", readinessCount);
+          await page.screenshot({ ...options, path: testInfo.outputPath(`meta-signup-layout-${state}-phone-${theme}-${locale}.png`) });
+          await page.setViewportSize({ width: 1440, height: 1000 });
+          return desktop;
+        };
 
         await signup.getByRole("button", { name: messages["tenant.metaSignup.prepare"], exact: true }).click();
         const connect = signup.getByRole("button", { name: messages["tenant.metaSignup.connect"], exact: true });
         await expect(connect).toBeEnabled();
         await expect(connect).toBeInViewport();
-        const ready = await screenshot();
+        const ready = await screenshot("ready");
 
         await connect.click();
         await expect(signup.getByText(messages["tenant.metaSignup.status.OUTCOME_UNKNOWN"], { exact: true })).toBeVisible();
@@ -91,7 +143,7 @@ for (const theme of ["light", "dark"] as const) {
         const discover = signup.getByRole("button", { name: messages["tenant.metaSignup.discover"], exact: true });
         await expect(discover).toBeEnabled();
         await expect(discover).toBeInViewport();
-        const recoverable = await screenshot();
+        const recoverable = await screenshot("recovery");
 
         await discover.click();
         await expect(signup.getByText(messages["tenant.metaSignup.status.NUMBER_REQUIRED"], { exact: true })).toBeVisible();
@@ -146,9 +198,12 @@ for (const theme of ["light", "dark"] as const) {
 }
 
 // Synthetic browser fixtures only; never live Meta acceptance.
+const arabicBrowser = test.extend({ locale: languageTag("ar") });
 for (const theme of ["light", "dark"] as const) {
-  for (const viewport of ["desktop", "phone"] as const) {
-    test(`a locale change keeps the Meta signup authorization running (${viewport}, ${theme})`, async ({ page }, testInfo) => {
+  for (const [viewport, initialLocale] of [["desktop", "en"], ["phone", "en"], ["desktop", "ar"], ["phone", "ar"]] as const) {
+    const authorizationTest = initialLocale === "en" ? arabicBrowser : test;
+    const fromArabic = initialLocale === "ar" ? " from Arabic" : "";
+    authorizationTest(`a locale change keeps the Meta signup authorization running (${viewport}, ${theme})${fromArabic}`, async ({ page }, testInfo) => {
       const errors: string[] = [];
       page.on("pageerror", error => errors.push(error.message));
       if (viewport === "phone") await page.setViewportSize({ width: 390, height: 844 });
@@ -171,7 +226,7 @@ for (const theme of ["light", "dark"] as const) {
         if (path === "attempts") { started = true; return route.fulfill({ json: { ...view, challenge: "S".repeat(43), sdk } }); }
         return route.fulfill({ json: view });
       });
-      const globals = `a11y.manual:!true;auditTheme:${theme};auditLocale:en`;
+      const globals = `a11y.manual:!true;auditTheme:${theme};auditLocale:${initialLocale}`;
       await page.goto(`/iframe.html?${new URLSearchParams({ id: "product-meta-signup--english", viewMode: "story", globals })}`);
       const canvas = page.locator("#storybook-root > .wx-story-canvas");
       await expect(canvas).toHaveClass(new RegExp(`\\btheme-${theme}\\b`));
@@ -179,6 +234,13 @@ for (const theme of ["light", "dark"] as const) {
         const content = canvas.getByRole("main");
         await expect(content).toHaveAttribute("lang", locale);
         await expect(content).toHaveAttribute("dir", textDirection(locale));
+        const messages = locale === "ar" ? ar : en;
+        await expect(content.getByRole("status")).toHaveText(messages["tenant.metaSignup.waiting"]);
+        await expect(content.getByText(messages["tenant.metaSignup.status.AWAITING_AUTHORIZATION"], { exact: true })).toHaveCount(0);
+        const continueInMeta = content.getByRole("button", { name: messages["tenant.metaSignup.connect"], exact: true });
+        await expect(continueInMeta).toBeDisabled();
+        await expect(continueInMeta).toHaveClass(/\bsecondary\b/u);
+        await expect(content.getByRole("button", { name: messages["tenant.metaSignup.cancel"], exact: true })).toBeEnabled();
         await page.screenshot({
           path: testInfo.outputPath(`meta-signup-authorization-${viewport}-${theme}-${locale}.png`),
           fullPage: true,
@@ -186,19 +248,39 @@ for (const theme of ["light", "dark"] as const) {
           caret: "hide",
           scale: "css",
         });
+        await expectMetaSignupLayout(content.getByRole("region", { name: (locale === "ar" ? ar : en)["tenant.metaSignup.title"], exact: true }), viewport);
       };
 
-      await page.getByRole("button", { name: en["tenant.metaSignup.prepare"], exact: true }).click();
-      await page.getByRole("button", { name: en["tenant.metaSignup.connect"], exact: true }).click();
-      await expect(page.getByText(en["tenant.metaSignup.waiting"], { exact: true })).toBeVisible();
-      await capturePending("en");
+      const initial = initialLocale === "ar" ? ar : en;
+      const otherLocale = initialLocale === "ar" ? "en" : "ar";
+      expect(await page.evaluate(() => navigator.language.split("-")[0])).toBe(otherLocale);
+      const content = canvas.getByRole("main");
+      await expect(content).toHaveAttribute("lang", initialLocale);
+      await content.getByRole("button", { name: initial["tenant.metaSignup.prepare"], exact: true }).click();
+      const continueInMeta = content.getByRole("button", { name: initial["tenant.metaSignup.connect"], exact: true });
+      const cancel = content.getByRole("button", { name: initial["tenant.metaSignup.cancel"], exact: true });
+      await expect(content.getByRole("status")).toHaveText(initial["tenant.metaSignup.status.AWAITING_AUTHORIZATION"]);
+      await expect(continueInMeta).toBeEnabled();
+      await expect(continueInMeta).toHaveClass(/\bprimary\b/u);
+      await expect(cancel).toBeEnabled();
+      await page.screenshot({
+        path: testInfo.outputPath(`meta-signup-authorization-ready-${viewport}-${theme}-${initialLocale}.png`),
+        fullPage: true, animations: "disabled", caret: "hide", scale: "css",
+      });
+
+      await continueInMeta.focus();
+      await page.keyboard.press("Enter");
+      await capturePending(initialLocale);
+      await expect(continueInMeta).toBeFocused();
+      await page.keyboard.press("Enter");
+      await page.keyboard.press("Tab");
+      await expect(cancel).toBeFocused();
 
       await page.getByRole("button", { name: "Synthetic locale change", exact: true }).click();
-      await expect(page.getByText(ar["tenant.metaSignup.waiting"], { exact: true })).toBeVisible();
       // A restarted session would cancel the attempt, load again and fence the open popup callback.
       expect([...calls].sort()).toEqual(["GET attempts", "GET capabilities", "POST attempts"]);
       expect(await page.evaluate(() => (window as unknown as { metaSignupCallbacks: unknown[] }).metaSignupCallbacks.length)).toBe(1);
-      await capturePending("ar");
+      await capturePending(otherLocale);
 
       await page.evaluate(() => (window as unknown as { metaSignupCallbacks: ((value: unknown) => void)[] }).metaSignupCallbacks[0]!({ authResponse: { code: "synthetic-code-once" } }));
       await expect.poll(() => calls.filter(call => call.endsWith("/exchange"))).toEqual([`POST attempts/${view.attemptId}/exchange`]);

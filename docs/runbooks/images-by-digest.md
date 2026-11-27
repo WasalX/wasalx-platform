@@ -1,6 +1,6 @@
 # Published product images
 
-The CI workflow builds affected images as PR advisory checks and inspects
+The CI workflow requires affected PR image builds and inspects
 every catalog entry in the merge queue. Queue builds use the public source
 archive and pinned inputs. They upload the inspected image archives and receipts
 for seven days. Queue and PR jobs have no package writes or OIDC.
@@ -220,8 +220,8 @@ The full installer nightly stages the signed product images and pinned dependenc
 the registry read-only, blocks public registry access for Docker, and checks the
 loaded registry digests and container identity through the existing admission
 and smoke stages. It copies the Linux AMD64 manifests plus their original
-multi-platform indexes. In PR rehearsals, smoke checks the running Zammad
-package against the catalog at the signed image publication's source commit.
+multi-platform indexes. The smoke stage checks the running Zammad package
+against the catalog at the signed image publication's source commit.
 Failed smoke checks report a check name or verifier line and a redacted reason.
 
 ## Public build inputs and inspection
