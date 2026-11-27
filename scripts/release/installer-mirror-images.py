@@ -1,4 +1,4 @@
-"""Publish and verify the object-storage digests pinned in the full Compose inventory."""
+"""Publish and verify object-storage digests from the full Compose inventory."""
 
 import argparse
 import hashlib
@@ -14,6 +14,7 @@ COMPOSE = Path("compose.full.yaml")
 INVENTORY = "x-object-storage-mirrors"
 REPOSITORY = r"[a-z0-9.-]+(?:/[a-z0-9._-]+)+"
 IMAGE = re.compile(rf"({REPOSITORY})(?::[\w.-]+)?@(sha256:[0-9a-f]{{64}})")
+MIRROR = re.compile(r"ghcr\.io/wasalx/[a-z0-9._-]+")
 
 
 def load_compose(raw):
@@ -50,9 +51,7 @@ def inventory(compose):
         upstream, digest = parse_reference(active, service)
         mirror = row["mirror"]
         fallback = row["fallback"]
-        if not isinstance(mirror, str) or not re.fullmatch(
-            r"ghcr\.io/wasalx/[a-z0-9._-]+", mirror
-        ):
+        if not isinstance(mirror, str) or not MIRROR.fullmatch(mirror):
             raise ValueError(f"{service}: invalid mirror repository")
         if (
             not isinstance(fallback, str)
@@ -65,9 +64,11 @@ def inventory(compose):
             staged_upstream, staged_digest = parse_reference(staged, service)
             if staged_upstream != upstream or staged_digest == digest:
                 raise ValueError(
-                    f"{service}: stage a different digest from the same upstream repository"
+                    f"{service}: stage a different digest from the same repository"
                 )
-        yield service, active, f"{upstream}@{digest}", f"{mirror}@{digest}", fallback, staged
+        source = f"{upstream}@{digest}"
+        mirrored = f"{mirror}@{digest}"
+        yield service, active, source, mirrored, fallback, staged
 
 
 def verify_manifest(reference, *, published=False):
@@ -124,7 +125,7 @@ def publish(source, mirrored, fallback):
 def verify_active(rows, base):
     base_rows = base.get(INVENTORY, {})
     if base_rows.keys() - {row[0] for row in rows}:
-        raise ValueError("An object-storage mirror is missing from the candidate inventory")
+        raise ValueError("An object-storage mirror is missing from the inventory")
     for service, active, source, mirrored, _, _ in rows:
         previous = base_rows.get(service, {})
         mirror = mirrored.split("@", 1)[0]
@@ -159,11 +160,18 @@ def main():
             publish(source, mirrored, fallback)
             if staged is not None:
                 upstream, digest = parse_reference(staged, service)
-                publish(f"{upstream}@{digest}", f"{mirrored.split('@')[0]}@{digest}", fallback)
+                mirror = mirrored.split("@", 1)[0]
+                publish(f"{upstream}@{digest}", f"{mirror}@{digest}", fallback)
 
 
 if __name__ == "__main__":
     try:
         main()
-    except (KeyError, TypeError, ValueError, OSError, subprocess.SubprocessError) as error:
+    except (
+        KeyError,
+        TypeError,
+        ValueError,
+        OSError,
+        subprocess.SubprocessError,
+    ) as error:
         sys.exit(f"Object-storage mirrors: {error}")

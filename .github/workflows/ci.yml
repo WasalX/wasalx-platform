@@ -185,7 +185,8 @@ jobs:
             compose.full.yaml .github/workflows/ci.yml .github/workflows/mirror-images.yml \
             scripts/release/installer-mirror-images.py scripts/release/image_registry_retry.py \
             scripts/release/installer-nightly.sh scripts/release/installer-nightly.compose.yaml; then
-            python3 -B scripts/release/installer-mirror-images.py verify --base "$BASE"
+            base_sha=$(git rev-parse --verify "$BASE^{commit}")
+            python3 -B scripts/release/installer-mirror-images.py verify --base "$base_sha"
           fi
 
   workflow-lint:

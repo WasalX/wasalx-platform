@@ -710,20 +710,30 @@ test("object-storage mirrors publish only on main and qualify through read-only 
     DOCKER_CONFIG: "${{ runner.temp }}/public-mirror-docker",
   });
   for (const input of inputs) assert(step.run.includes(input));
+  const sha = "a".repeat(40);
   for (const [base, diff, verify, called, status] of [
-    ["base", 0, 0, false, 0],
-    ["base", 1, 0, true, 0],
-    ["base", 1, 1, true, 1],
-    ["", 0, 2, true, 2],
+    ["HEAD^1", 0, 0, false, 0],
+    ["HEAD^1", 1, 0, true, 0],
+    [sha, 1, 1, true, 1],
+    ["", 0, 0, false, 2],
   ]) {
     const result = runWorkflowScript(`
-git() { return "$DIFF"; }
+git() {
+  case "$1" in
+    diff) return "$DIFF" ;;
+    rev-parse)
+      [[ "$2" == --verify && "$3" == "$BASE^{commit}" && -n "$BASE" ]] || return 2
+      echo "$SHA"
+      ;;
+    *) return 99 ;;
+  esac
+}
 python3() {
-  [[ "$1 $2 $3 $4" == '-B scripts/release/installer-mirror-images.py verify --base' && "$5" == "$BASE" ]]
+  [[ "$1 $2 $3 $4" == '-B scripts/release/installer-mirror-images.py verify --base' && "$5" == "$SHA" ]]
   echo verified
   return "$VERIFY"
 }
-${step.run}`, { BASE: base, DIFF: diff, VERIFY: verify });
+${step.run}`, { BASE: base, DIFF: diff, VERIFY: verify, SHA: sha });
     assert.equal(result.status, status, result.error?.message ?? result.stderr);
     assert.equal(result.stdout.includes("verified"), called);
   }
