@@ -75,14 +75,20 @@ test("landing icons stay centered with touch and mouse input", async ({ browser 
   }
 });
 
-test("landing theme is accessible, remembered and rendered before hydration", async ({ page }) => {
+test("landing theme is accessible, remembered and rendered before hydration", async ({ page }, testInfo) => {
   await page.goto("/");
   const shell = page.locator(".marketing-shell");
   await expect(shell).toHaveClass(/theme-light/u);
+  await testInfo.attach(`public-site-${locale}-${testInfo.project.name}-light`, {
+    body: await page.screenshot({ animations: "disabled" }), contentType: "image/png",
+  });
   await page.getByRole("button", { name: arabic ? "التبديل إلى المظهر الداكن" : "Switch to dark theme" }).click();
   await expect(shell).toHaveClass(/theme-dark/u);
   expect(await page.evaluate(() => getComputedStyle(document.documentElement).colorScheme)).toBe("dark");
   expect(await page.evaluate(() => localStorage.getItem("wasalx.theme"))).toBe("dark");
+  await testInfo.attach(`public-site-${locale}-${testInfo.project.name}-dark`, {
+    body: await page.screenshot({ animations: "disabled" }), contentType: "image/png",
+  });
   await page.locator("#demo-reply").fill(arabic ? "رسالة تجريبية" : "Example message");
   await page.locator(".inbox-composer button[type=submit]").click();
   expect((await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze()).violations).toEqual([]);
