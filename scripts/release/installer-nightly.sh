@@ -161,12 +161,21 @@ stage_registry() {
   } | LC_ALL=C sort -u | node --input-type=module -e '
     import { readFileSync } from "node:fs";
     import { localRegistryReference } from "./scripts/release/installer-hosted-images.mjs";
-    const mirrors = JSON.parse(process.argv[2]);
+    const images = new Map();
+    for (const image of readFileSync(0, "utf8").split(/\s+/u)) {
+      if (!image.includes("@")) continue;
+      const source = image.replace(/:[^/:]+(?=@)/u, "");
+      images.set(source, source);
+    }
+    for (const { source, mirror } of JSON.parse(process.argv[2])) {
+      if (!mirror) throw new Error(`Missing mirror for ${source}`);
+      if (!images.has(source)) throw new Error(`Inventory source absent from resolved images: ${source}`);
+      images.set(source, mirror);
+    }
     const seen = new Set();
-    for (const source of readFileSync(0, "utf8").split(/\s+/u).filter(value => value.includes("@"))) {
+    for (const [source, pull] of images) {
       const destination = localRegistryReference(process.argv[1], source);
-      const reference = source.replace(/:[^/:]+(?=@)/u, "");
-      if (!seen.has(destination)) console.log(mirrors[reference] ?? reference, destination);
+      if (!seen.has(destination)) console.log(pull, destination);
       seen.add(destination);
     }
   ' "$registry" "$mirrors" > "$work/registry-images"

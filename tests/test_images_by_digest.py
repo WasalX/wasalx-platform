@@ -688,7 +688,7 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
         base[mirrors.INVENTORY]["minio"]["staged"] = staged
         with patch.object(mirrors, "verify_manifest") as verify:
             mirrors.verify_active(rows, base)
-            self.assertEqual(verify.call_args_list, [mock.call(row[3]) for row in rows])
+            self.assertEqual(verify.call_args_list, [mock.call(row[3], timeout=4, delays=(1, 2)) for row in rows])
 
         for response, error in [
             (subprocess.CalledProcessError(1, inspect, stderr=b"manifest unknown"), subprocess.CalledProcessError),
@@ -699,8 +699,30 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
                   return_value=response) as run, patch("time.sleep") as sleep,
                   redirect_stderr(io.StringIO()), self.assertRaises(error)):
                 mirrors.verify_active(rows, base)
-            run.assert_called_once_with(inspect, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
+            run.assert_called_once_with(inspect, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=4)
             sleep.assert_not_called()
+
+    def test_active_mirror_retries_transient_registry_errors_within_budget(self):
+        manifest = b'{"schemaVersion":2,"layers":[]}'
+        digest = images.sha256(manifest)
+        source = f"quay.io/minio/minio@{digest}"
+        repository = "ghcr.io/wasalx/minio"
+        compose = {
+            "services": {"minio": {"image": source}},
+            mirrors.INVENTORY: {"minio": {"mirror": repository, "fallback": "ghcr.io/netvark/minio", "staged": None}},
+        }
+        rows = list(mirrors.inventory(compose))
+        inspect = ("docker", "buildx", "imagetools", "inspect", "--raw", f"{repository}@{digest}")
+        for reason in [b"unexpected HTTP status: 502", b"unexpected HTTP status: 429", b"net/http: TLS handshake timeout"]:
+            failure = subprocess.CalledProcessError(1, inspect, stderr=reason)
+            success = subprocess.CompletedProcess(inspect, 0, stdout=manifest)
+            with (self.subTest(reason=reason),
+                  patch.object(subprocess, "run", side_effect=[failure, failure, success]) as run,
+                  patch("time.sleep") as sleep, redirect_stderr(io.StringIO())):
+                mirrors.verify_active(rows, compose)
+            expected = mock.call(inspect, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=4)
+            self.assertEqual(run.call_args_list, [expected] * 3)
+            self.assertEqual(sleep.call_args_list, [mock.call(1), mock.call(2)])
 
     def test_mirror_read_back_retries_the_published_digest_after_primary_or_fallback_copy(self):
         manifest = b'{"schemaVersion":2,"layers":[]}'

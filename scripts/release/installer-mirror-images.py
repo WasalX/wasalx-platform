@@ -71,7 +71,7 @@ def inventory(compose):
         yield service, active, source, mirrored, fallback, staged
 
 
-def verify_manifest(reference, *, published=False):
+def verify_manifest(reference, *, published=False, timeout=10, delays=()):
     raw = registry_output(
         "docker",
         "buildx",
@@ -79,8 +79,8 @@ def verify_manifest(reference, *, published=False):
         "inspect",
         "--raw",
         reference,
-        timeout=10,
-        delays=(10, 20) if published else (),
+        timeout=timeout,
+        delays=(10, 20) if published else delays,
         retry_missing_manifest=published,
     )
     actual = "sha256:" + hashlib.sha256(raw).hexdigest()
@@ -136,7 +136,7 @@ def verify_active(rows, base):
                     f"{service}: stage this exact reference on main before activation"
                 )
     for _, _, _, mirrored, _, _ in rows:
-        verify_manifest(mirrored)
+        verify_manifest(mirrored, timeout=4, delays=(1, 2))
         print(f"Verified {mirrored}")
 
 
@@ -149,7 +149,10 @@ def main():
         parser.error("verify requires the exact protected base SHA")
     rows = list(inventory(load_compose(COMPOSE.read_bytes())))
     if args.command == "references":
-        print(json.dumps({source: mirrored for _, _, source, mirrored, _, _ in rows}))
+        references = [
+            {"source": source, "mirror": mirror} for _, _, source, mirror, _, _ in rows
+        ]
+        print(json.dumps(references))
     elif args.command == "verify":
         base = subprocess.check_output(
             ["git", "show", f"{args.base}:{COMPOSE}"], timeout=5

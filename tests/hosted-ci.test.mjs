@@ -506,31 +506,47 @@ test("nightly installer uses the active full Compose mirror without a second dig
   const rehearsal = await read("scripts/release/installer-nightly.sh");
   assert.match(rehearsal, /mirrors=\$\(python3 -B scripts\/release\/installer-mirror-images\.py references\)/u);
 
+  const python = process.platform === "win32" ? "python" : "python3";
+  const references = execFileSync(python, ["-B", "scripts/release/installer-mirror-images.py", "references"], {
+    cwd: repository, encoding: "utf8", timeout: 10_000,
+  });
+  const rows = JSON.parse(references);
   const inventory = full["x-object-storage-mirrors"];
   assert.deepEqual(Object.keys(inventory).sort(), ["minio", "minio-bootstrap"]);
-  const sources = [];
-  const mirrors = {};
-  for (const [service, row] of Object.entries(inventory)) {
+  const sources = Object.entries(inventory).map(([service, row], index) => {
     assert.equal(nightly.services[service], undefined);
     const image = full.services[service].image;
-    const reference = image.replace(/:[^/:]+(?=@)/u, "");
-    const [, digest] = reference.split("@");
+    const source = image.replace(/:[^/:]+(?=@)/u, "");
+    const digest = source.split("@")[1];
     assert.match(digest, /^sha256:[0-9a-f]{64}$/u);
-    mirrors[reference] = `${row.mirror}@${digest}`;
-    sources.push(image);
-  }
+    assert.deepEqual(rows[index], { source, mirror: `${row.mirror}@${digest}` });
+    return image;
+  });
+  assert.equal(rows.length, sources.length);
 
   const registry = "127.0.0.1:5007";
   const ordinary = `docker.io/library/redis@sha256:${"d".repeat(64)}`;
   const staging = rehearsal.match(/node --input-type=module -e '([^']+)' "\$registry" "\$mirrors"/u);
   assert.ok(staging, "missing the nightly registry plan");
-  const plan = execFileSync(process.execPath, ["--input-type=module", "-e", staging[1], registry, JSON.stringify(mirrors)], {
-    cwd: repository, input: [...sources, ordinary].join("\n"), encoding: "utf8", timeout: 5_000,
-  }).trim().split(/\r?\n/u);
-  assert.deepEqual(plan, [...Object.values(mirrors), ordinary].map(reference => {
+  const plan = (catalog, input) => spawnSync(process.execPath, ["--input-type=module", "-e", staging[1], registry, catalog], {
+    cwd: repository, input: input.join("\n"), encoding: "utf8", timeout: 5_000,
+  });
+  const result = plan(references, [...sources, ordinary]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(result.stdout.trim().split(/\r?\n/u), [...rows.map(row => row.mirror), ordinary].map(reference => {
     const digest = reference.split("@")[1];
     return `${reference} ${registry}/staged/${digest.slice(7)}@${digest}`;
   }));
+
+  const missing = plan(JSON.stringify([{ source: rows[0].source }, ...rows.slice(1)]), [...sources, ordinary]);
+  assert.equal(missing.status, 1, missing.stderr);
+  assert.match(missing.stderr, /Missing mirror for /u);
+  assert.equal(missing.stdout, "");
+
+  const absent = plan(references, [...sources.slice(1), ordinary]);
+  assert.equal(absent.status, 1, absent.stderr);
+  assert.match(absent.stderr, /Inventory source absent from resolved images/u);
+  assert.equal(absent.stdout, "");
 });
 
 test("nightly binds qualification to a complete main publication", async t => {
@@ -710,6 +726,7 @@ test("object-storage mirrors publish only on main and qualify through read-only 
     DOCKER_CONFIG: "${{ runner.temp }}/public-mirror-docker",
   });
   for (const input of inputs) assert(step.run.includes(input));
+  assert.match(step.run, /timeout 40s python3/u);
   const sha = "a".repeat(40);
   for (const [base, diff, verify, called, status] of [
     ["HEAD^1", 0, 0, false, 0],
@@ -727,6 +744,11 @@ git() {
       ;;
     *) return 99 ;;
   esac
+}
+timeout() {
+  [[ "$1" == 40s ]] || return 98
+  shift
+  "$@"
 }
 python3() {
   [[ "$1 $2 $3 $4" == '-B scripts/release/installer-mirror-images.py verify --base' && "$5" == "$SHA" ]]

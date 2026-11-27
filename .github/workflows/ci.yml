@@ -186,7 +186,8 @@ jobs:
             scripts/release/installer-mirror-images.py scripts/release/image_registry_retry.py \
             scripts/release/installer-nightly.sh scripts/release/installer-nightly.compose.yaml; then
             base_sha=$(git rev-parse --verify "$BASE^{commit}")
-            python3 -B scripts/release/installer-mirror-images.py verify --base "$base_sha"
+            # Leave time in the one-minute changes job for checkout and selection.
+            timeout 40s python3 -B scripts/release/installer-mirror-images.py verify --base "$base_sha"
           fi
 
   workflow-lint:
