@@ -588,7 +588,7 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
             run.assert_called_once()
             sleep.assert_not_called()
 
-    def test_publication_retries_unknown_blob_and_fails_closed(self):
+    def test_publication_retries_only_push_blob_and_exact_digest_read_back_failures(self):
         commit, tree, digest = "a" * 40, "b" * 40, "sha256:" + "1" * 64
         inspection = {"configDigest": "sha256:" + "2" * 64, "addonLicenses": {}}
         manifest = json.dumps({"mediaType": "application/vnd.oci.image.manifest.v1+json",
@@ -602,12 +602,24 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
         command = ("docker", "push", reference)
         diagnostic = b"sha256:" + b"3" * 64 + b" HTTP/1.1 404 Not Found"
         failure = subprocess.CalledProcessError(1, command, output=diagnostic + b"\n", stderr=b"unknown blob\n")
-        successful_outputs = [f"digest: {digest}".encode(), manifest, b"", b"", b"", b""]
-        for failures, published in [(1, True), (3, False)]:
-            results = [failure] * failures
-            if published:
-                results.extend(subprocess.CompletedProcess((), 0, stdout=output) for output in successful_outputs)
-            with (self.subTest(published=published), tempfile.TemporaryDirectory() as directory,
+        inspect = ("docker", "buildx", "imagetools", "inspect", "--raw", f"ghcr.io/wasalx/zammad-nginx@{digest}")
+        missing_diagnostic = (f"ERROR: httpReadSeeker: failed open: content at "
+                              f"https://ghcr.io/v2/wasalx/zammad-nginx/manifests/{digest} not found: not found\n").encode()
+        missing = subprocess.CalledProcessError(1, inspect, stderr=missing_diagnostic)
+        wrong_digest = subprocess.CalledProcessError(
+            1, inspect, stderr=missing_diagnostic.replace(digest.encode(), b"sha256:" + b"9" * 64))
+        pushed = subprocess.CompletedProcess(command, 0, stdout=f"digest: {digest}".encode())
+        inspected = subprocess.CompletedProcess(inspect, 0, stdout=manifest)
+        signing = [subprocess.CompletedProcess((), 0, stdout=b"")] * 4
+        cases = [
+            ("push recovers", [failure, pushed, inspected, *signing], 2, 1, [10], True),
+            ("push exhausted", [failure] * 3, 3, 0, [10, 20], False),
+            ("digest becomes visible", [pushed, missing, inspected, *signing], 1, 2, [10], True),
+            ("digest remains missing", [pushed, missing, missing, missing], 1, 3, [10, 20], False),
+            ("different digest fails immediately", [pushed, wrong_digest], 1, 1, [], False),
+        ]
+        for name, results, push_count, inspect_count, delays, published in cases:
+            with (self.subTest(name=name), tempfile.TemporaryDirectory() as directory,
                   patch.dict(os.environ, env, clear=True), patch.object(images, "coordinates", return_value=(commit, tree)),
                   patch.object(images, "pull"), patch.object(images, "inspect_image", return_value=inspection),
                   patch.object(subprocess, "run", side_effect=results) as run,
@@ -625,14 +637,15 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
                     self.assertEqual(raised.exception.returncode, 1)
                     self.assertEqual(json.loads(path.read_text()), receipt)
                     self.assertFalse(path.with_suffix(".json.predicate.json").exists())
-                    self.assertEqual(run.call_count, 3)
-            pushes = [call.args[0] for call in run.call_args_list if call.args[0][:2] == ("docker", "push")]
-            self.assertEqual(pushes, [command] * (2 if published else 3))
-            self.assertEqual(sleep.call_args_list, [mock.call(10)] if published else [mock.call(10), mock.call(20)])
-            for attempt in range(1, failures + 1):
+                    self.assertEqual(run.call_count, push_count + inspect_count)
+            commands = [call.args[0] for call in run.call_args_list]
+            self.assertEqual(commands[:push_count + inspect_count], [command] * push_count + [inspect] * inspect_count)
+            self.assertEqual(sleep.call_args_list, [mock.call(delay) for delay in delays])
+            push_failures = results.count(failure)
+            for attempt in range(1, push_failures + 1):
                 self.assertIn(f"Image push attempt {attempt}/3 failed.", logs.getvalue())
-            self.assertEqual(logs.getvalue().count(diagnostic.decode()), failures)
-            self.assertEqual(logs.getvalue().count("unknown blob\n"), failures)
+            self.assertEqual(logs.getvalue().count(diagnostic.decode()), push_failures)
+            self.assertEqual(logs.getvalue().count("unknown blob\n"), push_failures)
 
     def test_publication_pushes_only_the_commit_tag_and_uses_the_signing_identity(self):
         commit, tree, digest = "a" * 40, "b" * 40, "sha256:" + "1" * 64

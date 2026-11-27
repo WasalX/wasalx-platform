@@ -577,7 +577,8 @@ def publish(receipt_path):
     require(len(set(matches)) == 1, "Missing unique published digest")
     digest = matches[0]
     reference = repository + "@" + digest
-    raw = registry_output("docker", "buildx", "imagetools", "inspect", "--raw", reference)
+    raw = registry_output("docker", "buildx", "imagetools", "inspect", "--raw", reference,
+                          retry_missing_manifest=True)
     # The digest is checked over registry bytes by the client; never hash whitespace-normalized JSON.
     verify_manifest(json.loads(raw), receipt["inspection"]["configDigest"])
     receipt.update({"digest": digest, "configDigest": receipt["inspection"]["configDigest"],
