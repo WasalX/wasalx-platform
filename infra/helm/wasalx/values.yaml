@@ -206,8 +206,8 @@ provisioner:
   reconcilerServiceAccountNamespace: ""
   workspaceBaseDomain: "support.example.com"
   oidcIssuer: "https://identity.example.com/realms/wasalx"
-  packageVersion: "0.5.89"
-  packageSha256: "2ad1e65111cb0de1e7ea0b775136b7a209ecc4365858b48a75fd40609922fe42"
+  packageVersion: "0.5.90"
+  packageSha256: "ada61793c1ff01354081e751edeb8a4015aea5c2bba3dec57a2b33cb909bdc32"
 
   reconcileTimeoutMs: "45000"
   driverTimeoutMs: "60000"
