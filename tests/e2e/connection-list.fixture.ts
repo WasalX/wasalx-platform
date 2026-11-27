@@ -79,7 +79,9 @@ export function registerConnectionListJourneys(
     };
   }
 
-  test("Messaging connections shows the empty state with zero connections", async ({ page }) => {
+  test("Messaging connections shows the empty state with zero connections", async ({
+    page,
+  }) => {
     const { rows, emptyTitle, emptyBody } = await openList(page, null);
     await expect(rows).toHaveCount(0);
     await expect(emptyTitle).toBeVisible();
@@ -90,7 +92,9 @@ export function registerConnectionListJourneys(
     ["number", "12025550101", returns],
     ["localized method", localizedMethod, operations],
   ]) {
-    test(`Messaging connections search by ${label} shows the matching number`, async ({ page }) => {
+    test(`Messaging connections search by ${label} shows the matching number`, async ({
+      page,
+    }) => {
       const { rows, search } = await openList(page);
       await expect(rows).toHaveCount(2);
       await search.fill(query);
@@ -99,7 +103,9 @@ export function registerConnectionListJourneys(
     });
   }
 
-  test("Messaging connections search with no match shows the empty state", async ({ page }) => {
+  test("Messaging connections search with no match shows the empty state", async ({
+    page,
+  }) => {
     const { rows, search, emptyTitle, emptyBody } = await openList(page);
     await expect(rows).toHaveCount(2);
     await search.fill("000000");
@@ -108,7 +114,9 @@ export function registerConnectionListJourneys(
     await expect(emptyBody).toBeVisible();
   });
 
-  test("Messaging connections method filter shows only official numbers", async ({ page }) => {
+  test("Messaging connections method filter shows only official numbers", async ({
+    page,
+  }) => {
     const { rows, method } = await openList(page);
     await expect(rows).toHaveCount(2);
     await method.selectOption({ label: official });
@@ -116,7 +124,9 @@ export function registerConnectionListJourneys(
     await expect(rows.getByText(operations, { exact: true })).toBeVisible();
   });
 
-  test("Messaging connections state filter shows only working numbers", async ({ page }) => {
+  test("Messaging connections state filter shows only working numbers", async ({
+    page,
+  }) => {
     const { rows, state } = await openList(page);
     await expect(rows).toHaveCount(2);
     await state.selectOption({ label: messages["tenant.status.working"] });
@@ -124,7 +134,9 @@ export function registerConnectionListJourneys(
     await expect(rows.getByText(operations, { exact: true })).toBeVisible();
   });
 
-  test("Messaging connections restores all rows when the selected state disappears", async ({ page }) => {
+  test("Messaging connections restores all rows when the selected state disappears", async ({
+    page,
+  }) => {
     const fixture: ConnectionFixture = { returnsState: "ACTION_REQUIRED" };
     const { rows, state } = await openList(page, fixture);
     await state.selectOption({
