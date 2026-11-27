@@ -92,6 +92,14 @@
       "last_run": 46025465196,
       "p95_minutes": 0.1167,
       "p95_basis": "highest pull request or merge-group job p95"
+    },
+    "typescript-comparison": {
+      "measured_at": "2026-11-27",
+      "runs": 3,
+      "first_run": 45857111511,
+      "last_run": 45923623338,
+      "p95_minutes": 4.7667,
+      "p95_basis": "nearest-rank p95 across first-attempt green pull request runs"
     }
   }
 }
