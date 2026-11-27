@@ -419,7 +419,7 @@ export function DeliveryTable({
   return (
     <>
     <WideTable>
-      <table>
+      <table className="delivery-table">
         <thead>
           <tr>
             <th>{t("tenant.deliveries.table.case")}</th>
