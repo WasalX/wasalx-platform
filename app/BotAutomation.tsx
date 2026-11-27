@@ -1343,6 +1343,7 @@ function FlowSimulator({
         {t("bot.simulator.values")}
         <textarea
           id="bot-simulator-variables"
+          dir="ltr"
           value={variablesText}
           onChange={(event) => {
             setVariablesText(event.target.value);
