@@ -1,3 +1,4 @@
+import { readMetaTemplateInventory } from '@wasalx/core/meta-template-inventory';
 import { Injectable } from "@nestjs/common";
 import { recordStructuredLog, safeRequestId } from "@wasalx/observability";
 import { metaThreadControlBody, type MetaRoutingRole } from "@wasalx/core/meta-routing";
@@ -93,6 +94,11 @@ export class HttpMetaGroupsClient implements MetaGroupsControlClient {
     validatedId(phoneNumberId, "phone-number ID");
   }
 
+
+  templateInventory(accountId: string) {
+    const signal = AbortSignal.timeout(10_000);
+    return readMetaTemplateInventory(accountId, (path, query) => this.request(path, "GET", "read", undefined, query, signal));
+  }
 
   async threadControl(action: "take" | "pass" | "release", targetRole: MetaRoutingRole | undefined, recipient: {kind:"PHONE"|"BSUID";value:string}, operationId: string) {
     this.assertTestScope({ recipient_type: "individual", ...(recipient.kind === "PHONE" ? { to: recipient.value } : { recipient: recipient.value }) });

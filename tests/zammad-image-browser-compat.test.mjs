@@ -51,6 +51,7 @@ const serviceToken = "wasalx-zammad-compat-service-token";
 const restrictedToken = "wasalx-zammad-compat-restricted-token";
 const modernEntryConfigPath = join(process.cwd(), "infra", "docker", "full", "zammad", "nginx-diagnostic-entry.conf");
 const compatibility = JSON.parse(await readFile(join(process.cwd(), "zammad-package", "compatibility-artifacts.json"), "utf8"));
+const packagePin = JSON.parse(await readFile(new URL("../zammad-addon.json", import.meta.url), "utf8"));
 const predecessorVersion = "0.5.36";
 const rollbackVersion = "0.5.13";
 const predecessorArtifact = compatibility.artifacts[predecessorVersion];
@@ -342,6 +343,25 @@ function observeNativeRequests(page, classify) {
   };
 }
 
+// Bounded browser errors for failure diagnostics. Console text is digested; a page error
+// keeps its name, message and top frame, which describe code rather than fixture data.
+const nativePageErrors = [];
+function capturePageErrors(page) {
+  const keep = (entry) => {
+    nativePageErrors.push(entry);
+    if (nativePageErrors.length > 20) nativePageErrors.shift();
+  };
+  page.on("console", (message) => {
+    if (message.type() !== "error") return;
+    let sourcePath = null;
+    try { sourcePath = new URL(message.location().url).pathname; } catch { /* Console location may be absent. */ }
+    keep({ kind: "console", sourcePath, messageSha256: createHash("sha256").update(message.text()).digest("hex") });
+  });
+  page.on("pageerror", (error) => keep({ kind: "pageerror", name: error?.name ?? null,
+    message: String(error?.message ?? error).slice(0, 200),
+    frame: String(error?.stack ?? "").split(/\r?\n/u).find((line) => line.trim().startsWith("at "))?.trim().slice(0, 200) ?? null }));
+}
+
 async function withNativeDiagnostic(t, label, collect, action, confirm = true) {
   let passed = false;
   try {
@@ -350,7 +370,8 @@ async function withNativeDiagnostic(t, label, collect, action, confirm = true) {
   } finally {
     try {
       const state = await collect();
-      if (!passed || confirm) t.diagnostic(`native ${label} ${JSON.stringify({ passed, ...state })}`);
+      const pageErrors = passed ? undefined : nativePageErrors.slice(-10);
+      if (!passed || confirm) t.diagnostic(`native ${label} ${JSON.stringify({ passed, ...state, pageErrors })}`);
     } catch { /* A diagnostic must never replace the journey result. */ }
   }
 }
@@ -376,6 +397,10 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
   const groupActorExpectations = new Map();
   const observedGroupActors = new Set();
   const state = { customerId: null, ticketId: null, ticketNumber: null, articleId: null, closedTicketId: null, closedTicketNumber: null, closedArticleId: null, links: [], requests: [], sentMessages: [], liveMessages: [] };
+  const template = { id: "341", name: "order_update", language: "ar", text: "طلب {{1}}",
+    parameterCount: 1, semanticSha256: "a".repeat(64) };
+  const templateDeliveryId = "14000000-0000-4000-8000-000000000098";
+  const earlierDeliveryId = "14000000-0000-4000-8000-000000000097";
   try {
     const replyPreviewPath = "/internal/v1/zammad/reply-preview";
     const handleFixtureRequest = async (request, response) => {
@@ -413,10 +438,36 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
         assert.equal(claims.scope, "zammad:outbound");
         assert.ok(Number(claims.zammad_user_id) > 0);
         assert.equal(url.searchParams.get("connection_id"), connectionId);
-        assert.equal(url.searchParams.get("group_id"), Number(url.searchParams.get("ticket_id")) === state.directReplyTicketId
-          ? "12125550104@c.us" : "120363118@g.us");
+        const ticketId = Number(url.searchParams.get("ticket_id"));
+        assert.equal(url.searchParams.get("group_id"), ticketId === state.templateTicketId ? "12125550104"
+          : ticketId === state.directReplyTicketId ? "12125550104@c.us" : "120363118@g.us");
         assert.match(url.searchParams.get("ticket_id") ?? "", /^[1-9]\d*$/u);
         value = { available: true };
+      }
+      else if (request.method === "POST" && ["/internal/v1/zammad/ticket-templates/catalog",
+        "/internal/v1/zammad/ticket-templates/send", "/internal/v1/zammad/ticket-templates/status"].includes(url.pathname)) {
+        const payload = JSON.parse(raw);
+        assert.equal(claims.scope, "zammad:outbound");
+        assert.equal(String(claims.zammad_user_id), state.templateAgentId);
+        assert.equal(payload.tenant_id, tenantId);
+        assert.equal(payload.connection_id, connectionId);
+        assert.equal(payload.ticket_id, state.templateTicketId);
+        assert.equal(payload.group_id, "12125550104");
+        if (url.pathname.endsWith("/catalog")) {
+          value = { window: "CLOSED", templates: [template] };
+        } else if (url.pathname.endsWith("/status")) {
+          assert.equal(payload.request_token, state.templateToken);
+          if (payload.delivery_id !== undefined) assert.equal(payload.delivery_id, templateDeliveryId);
+          value = { delivery: { id: templateDeliveryId, state: state.templateStatus } };
+        } else {
+          assert.match(payload.request_token, /^[a-f0-9-]{36}$/u);
+          assert.equal(payload.template_id, template.id);
+          assert.equal(payload.template_sha256, template.semanticSha256);
+          assert.deepEqual(payload.parameters, ["42"]);
+          state.templateToken = payload.request_token;
+          state.templateStatus = "QUEUED";
+          value = { id: templateDeliveryId, state: "QUEUED" };
+        }
       }
       else if (request.method === "POST" && url.pathname === replyPreviewPath) {
         const payload = JSON.parse(raw);
@@ -444,7 +495,7 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
         if (!direct) assert.equal(payload.attachments[0].content_type, "application/pdf");
         value = { id: "14000000-0000-4000-8000-000000000099", state: "QUEUED" };
       }
-      else if (request.method === "GET" && [state.ticketId, state.directReplyTicketId].some(id => id != null
+      else if (request.method === "GET" && [state.ticketId, state.directReplyTicketId, state.templateTicketId].some(id => id != null
         && url.pathname === `/internal/v1/zammad/tickets/${id}/context`)) value = {
         ticket_id: Number(url.pathname.split("/").at(-2)), connection_id: connectionId, provider: "WAHA", connection_state: "WORKING",
         binding_state: "ACTIVE", correlation_state: "OPEN", group_name: "Riyadh Operations", delivery_state: "SENT",
@@ -452,6 +503,13 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
         delivery_id: null, zammad_article_id: state.articleId, delivery_retry_allowed: false,
         delivery_retry_requires_confirmation: false, last_heartbeat_at: "2026-08-20T10:04:00.000Z",
         last_provider_event_at: "2026-08-20T10:03:00.000Z", delivery_updated_at: "2026-08-20T10:03:00.000Z",
+        ...(url.pathname === `/internal/v1/zammad/tickets/${state.templateTicketId}/context` ? {
+          provider: "META", bot_state: "HUMAN", service_window_expires_at: "2020-01-01T00:00:00.000Z",
+          // An unrelated older send updates the general panel while the
+          // selected template is still queued.
+          delivery_id: state.templateToken ? earlierDeliveryId : null,
+          delivery_state: state.templateToken ? "FAILED_TERMINAL" : null, zammad_article_id: null,
+        } : {}),
       };
       else if (request.method === "GET" && url.pathname === `/internal/v1/zammad/group-workspace/tickets/${state.ticketId}/message-context`) value = {
         group_id: groupId, message_id: existingMessageId,
@@ -637,7 +695,7 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
       puts JSON.generate(receipt: Package::Migration.exists?(name: 'wasalx', version: '202609020014'), package_version: package&.version, package_state: package&.state, attributes: attributes)
     `).split("\n").find((line) => line.startsWith("{")) ?? "");
     assert.equal(blockedState.receipt, false);
-    assert.equal(blockedState.package_version, "0.5.85");
+    assert.equal(blockedState.package_version, packagePin.packageVersion);
 
     assert.equal(blockedState.package_state, "installed");
     assert.deepEqual(blockedState.attributes, [
@@ -1370,6 +1428,7 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
 
     const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, timezoneId: "Asia/Riyadh" });
     const page = await context.newPage();
+    capturePageErrors(page);
     const desktopFormResets = new EventEmitter();
     page.on("websocket", (socket) => {
       if (new URL(socket.url()).pathname !== "/cable") return;
@@ -1561,6 +1620,9 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
     await articleBubble.getByRole("button", { name: "Reply on WhatsApp" }).waitFor({ state: "visible" });
     const wasalxSidebar = page.getByRole("button", { name: "WasalX operations" });
     await wasalxSidebar.waitFor({ state: "visible" });
+    // Native sidebar selection can survive navigation. Select the other tab
+    // first so this click cannot close an already-selected WasalX sidebar.
+    await page.getByRole("button", { name: "Ticket", exact: true }).click();
     await wasalxSidebar.click();
     await page.getByRole("region", { name: "Riyadh Operations" }).filter({ hasText: `#${state.ticketNumber}` }).waitFor({ state: "visible" });
     await page.getByRole("link", { name: "Show triggering message" }).waitFor({ state: "visible" });
@@ -1681,26 +1743,33 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
 
     // Mirror only native ownership fields; this is not a real WasalX bot/provider-engine cycle.
     const directMarker = 'WX-NATIVE-DIRECT-RESET'; const directBody = `تم استلام طلبكم. ${directMarker}`;
-    const directSeed = await dockerAsync(directory, project, 'exec', '-T', 'zammad-railsserver', 'bundle', 'exec', 'rails', 'runner', `
-      require 'json'; original = Ticket.find(${Number(state.ticketId)})
-      t = Ticket.create!(title: 'Direct mounted-form HUMAN', group_id: original.group_id,
-        customer_id: original.customer_id, state_id: Ticket::State.find_by!(name: 'open').id,
-        created_by_id: original.customer_id, updated_by_id: original.customer_id,
-        wasalx_connection_id: '${connectionId}', wasalx_group_id: '12125550104@c.us',
-        wasalx_group_name: 'Direct fixture customer', wasalx_provider: 'WAHA',
-        wasalx_correlation_status: 'OPEN', wasalx_bot_conversation: 'true', wasalx_bot_state: 'HUMAN')
-      direct_article = Ticket::Article.create!(ticket: t, sender: Ticket::Article::Sender.find_by!(name: 'Customer'),
-        type: Ticket::Article::Type.find_by!(name: 'wasalx group message'), internal: false,
-        content_type: 'text/plain', body: 'Direct fixture request', preferences: { 'wasalx_origin' => 'provider' },
-        created_by_id: original.customer_id, updated_by_id: original.customer_id)
-      # A persisted provider article can legitimately have no native Message-ID.
-      # Clear it after callbacks, then prove the actual GraphQL/browser fallback.
-      direct_article.update_columns(message_id: nil, message_id_md5: nil)
-      raise 'Empty native Message-ID fixture was not persisted' unless direct_article.reload.message_id.nil?
-      puts JSON.generate(id: t.id, article_id: direct_article.id, message_id: direct_article.message_id)
-    `);
-    const directFixture = JSON.parse(directSeed.split('\n').find(line => line.startsWith('{')));
-    assert.equal(directFixture.message_id, null);
+    const seedDirectTicket = async ({ title, participant, provider, article }) => {
+      const seeded = await dockerAsync(directory, project, 'exec', '-T', 'zammad-railsserver', 'bundle', 'exec', 'rails', 'runner', `
+        require 'json'; original = Ticket.find(${Number(state.ticketId)})
+        t = Ticket.create!(title: ${JSON.stringify(title)}, group_id: original.group_id,
+          customer_id: original.customer_id, state_id: Ticket::State.find_by!(name: 'open').id,
+          created_by_id: original.customer_id, updated_by_id: original.customer_id,
+          wasalx_connection_id: '${connectionId}', wasalx_group_id: ${JSON.stringify(participant)},
+          wasalx_group_name: 'Direct fixture customer', wasalx_provider: ${JSON.stringify(provider)},
+          wasalx_correlation_status: 'OPEN', wasalx_bot_conversation: 'true', wasalx_bot_state: 'HUMAN')
+        direct_article = Ticket::Article.create!(ticket: t, sender: Ticket::Article::Sender.find_by!(name: 'Customer'),
+          type: Ticket::Article::Type.find_by!(name: 'wasalx group message'), internal: false,
+          content_type: 'text/plain', body: ${JSON.stringify(article)}, preferences: { 'wasalx_origin' => 'provider' },
+          created_by_id: original.customer_id, updated_by_id: original.customer_id)
+        # A persisted provider article can legitimately have no native Message-ID.
+        # Clear it after callbacks, then prove the actual GraphQL/browser fallback.
+        direct_article.update_columns(message_id: nil, message_id_md5: nil)
+        raise 'Empty native Message-ID fixture was not persisted' unless direct_article.reload.message_id.nil?
+        puts JSON.generate(id: t.id, article_id: direct_article.id, message_id: direct_article.message_id)
+      `);
+      const fixture = JSON.parse(seeded.split('\n').find(line => line.startsWith('{')));
+      assert.equal(fixture.message_id, null);
+      return fixture;
+    };
+    const directFixture = await seedDirectTicket({
+      title: 'Direct mounted-form HUMAN', participant: '12125550104@c.us', provider: 'WAHA',
+      article: 'Direct fixture request',
+    });
     state.directReplyTicketId = directFixture.id;
     state.directBotState = 'HUMAN';
     await page.goto(`${zammadOrigin}/desktop/tickets/${state.directReplyTicketId}`, { waitUntil: 'domcontentloaded' });
@@ -1826,6 +1895,140 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
       await replyState.getByText(/^closed$/iu).waitFor({ timeout: 30_000 }); await assertReplyReset(directMarker);
       assert.deepEqual((await replySnapshot(state.directReplyTicketId, directBody)).rows, directClosed.rows);
     } finally { page.off('request', recordDirectMutation); }
+
+    // Use a fresh META ticket so the preceding closed ticket and its form state stay intact.
+    const templateTitle = 'Direct template ticket';
+    const templateArticle = 'Direct template request';
+    const templateFixture = await seedDirectTicket({
+      title: templateTitle, participant: '12125550104', provider: 'META', article: templateArticle,
+    });
+    assert.notEqual(templateFixture.id, directFixture.id);
+    state.templateTicketId = templateFixture.id;
+    state.templateAgentId = String(firstIdentityProof.agent_id);
+    const templateStart = state.requests.length;
+    const templateTicketUrl = `${zammadOrigin}/desktop/tickets/${state.templateTicketId}`;
+    await page.addInitScript(ticketId => {
+      if (location.pathname !== `/desktop/tickets/${ticketId}`) return;
+      const probe = { lookups: 0, lastId: null, mountTarget: null };
+      window.__wasalxTemplateTargetProbe = probe;
+      const getElementById = document.getElementById;
+      document.getElementById = function (id) {
+        const element = getElementById.call(this, id);
+        if (typeof id === 'string' && id.endsWith('-wasalxServiceWindowClosed')) {
+          probe.lookups += 1;
+          probe.lastId = id;
+          if (element?.parentElement) probe.mountTarget = element.parentElement;
+        }
+        return element;
+      };
+    }, state.templateTicketId);
+    const templateDialog = page.locator('#wasalx-template-dialog');
+    const templateEditor = page.locator('#ticketArticleReplyForm');
+    const templateButton = templateEditor.locator('[data-test-id="wasalx-send-template"]');
+    const templateBubble = page.getByText(templateArticle, { exact: true }).last()
+      .locator("xpath=ancestor::div[contains(@class, 'group/article')][1]");
+    const openTemplateComposer = async ({ reply, sidebar, operationsLabel, stateLabel, openState }) => {
+      const [panelResponse] = await Promise.all([
+        page.waitForResponse(response => new URL(response.url()).pathname === `/api/v1/wasalx/tickets/${state.templateTicketId}/panel`),
+        page.goto(templateTicketUrl, { waitUntil: 'domcontentloaded' }),
+      ]);
+      assert.equal(panelResponse.status(), 200, 'the native panel must load the direct template ticket');
+      const panel = await panelResponse.json();
+      assert.equal(panel.connection.provider, 'META');
+      assert.equal(panel.ticket.bot_state, 'HUMAN');
+      assert.equal(Date.parse(panel.service_window_expires_at), Date.parse('2020-01-01T00:00:00.000Z'));
+      await page.getByRole('heading', { name: templateTitle, exact: true }).first().waitFor({ state: 'visible' });
+      const stateField = page.getByRole('combobox', { name: stateLabel, exact: true });
+      if (!(await stateField.isVisible())) await page.getByRole('button', { name: sidebar, exact: true }).click();
+      await stateField.getByText(openState, { exact: true }).waitFor({ state: 'visible' });
+      await templateBubble.hover();
+      await templateBubble.getByRole('button', { name: reply, exact: true }).click();
+      await withNativeDiagnostic(t, 'template composer', async () => ({
+        sidebarMounted: (await page.getByRole('button', { name: operationsLabel, exact: true }).count()) > 0,
+        panelAllowsTemplates: panel.connection.provider === 'META' && panel.ticket.bot_state === 'HUMAN'
+          && Date.parse(panel.service_window_expires_at) < Date.now(),
+        ...(await page.evaluate(() => {
+          const editor = document.querySelector('#ticketArticleReplyForm');
+          const messageSelector = '[id$="-wasalxServiceWindowClosed"]';
+          const message = editor?.querySelector(messageSelector);
+          const probe = window.__wasalxTemplateTargetProbe;
+          const mountTarget = probe?.mountTarget;
+          const buttonSelector = '[data-test-id="wasalx-send-template"]';
+          return {
+            editorPresent: Boolean(editor?.querySelector('[contenteditable="true"]')),
+            publicWhatsAppReply: Boolean(message),
+            windowMessageCount: document.querySelectorAll(messageSelector).length,
+            templatesAllowedAtMount: (probe?.lookups ?? 0) > 0,
+            lookupMatchedRenderedMessage: Boolean(message && probe?.lastId === message.id),
+            mountTargetFound: Boolean(mountTarget),
+            mountTargetConnected: mountTarget?.isConnected ?? false,
+            mountTargetInsideReplyForm: Boolean(mountTarget && editor?.contains(mountTarget)),
+            buttonInsideReplyForm: Boolean(editor?.querySelector(buttonSelector)),
+            buttonCount: document.querySelectorAll(buttonSelector).length,
+          };
+        })),
+      }), async () => {
+        await templateEditor.waitFor({ state: 'visible' });
+        await templateButton.click();
+      }, false);
+    };
+    await openTemplateComposer({
+      reply: 'Reply on WhatsApp', sidebar: 'Ticket', operationsLabel: 'WasalX operations',
+      stateLabel: 'State', openState: /^open$/iu,
+    });
+    await templateDialog.getByRole('combobox').selectOption(template.id);
+    await templateDialog.getByText(template.text, { exact: true }).waitFor();
+    assert.equal(await templateDialog.getAttribute('dir'), 'ltr');
+    await templateDialog.getByRole('textbox', { name: 'Template parameter 1' }).fill('42');
+    let templateReceipt;
+    await page.route(`${zammadOrigin}/api/v1/wasalx/tickets/${state.templateTicketId}/templates`, async route => {
+      const response = await route.fetch();
+      templateReceipt = { status: response.status(), body: await response.json() };
+      await route.abort();
+    }, { times: 1 });
+    await withNativeDiagnostic(t, 'template lost response', async () => ({
+      templateReceipt,
+      dialogStatus: (await templateDialog.getByRole('status').textContent({ timeout: 1_000 }))?.slice(0, 300) ?? null,
+    }), async () => {
+      await templateDialog.getByRole('button', { name: 'Send template', exact: true }).click();
+      // The add-on lets the agent change the template after a lost response; a 409 replays the earlier receipt.
+      await templateDialog.getByText(
+        'Could not confirm the send. You can change the template or its values and try again.', { exact: true },
+      ).waitFor();
+    }, false);
+    assert.deepEqual(templateReceipt, { status: 202, body: { id: templateDeliveryId, state: 'QUEUED' } });
+    await templateDialog.getByRole('button', { name: 'Close', exact: true }).click();
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.getByRole("button", { name: "Ticket", exact: true }).click();
+    await wasalxSidebar.click();
+    await page.getByRole('button', { name: 'Track template delivery', exact: true }).click();
+    await templateDialog.getByText('Queued', { exact: true }).waitFor();
+    state.templateStatus = 'DELIVERED';
+    await templateDialog.getByRole('button', { name: 'Check template delivery status', exact: true }).click();
+    await templateDialog.getByText('Delivered', { exact: true }).waitFor();
+    const exactStatus = state.requests.filter(item => item.path.endsWith('/ticket-templates/status')).at(-1);
+    assert.equal(exactStatus.body.delivery_id, templateDeliveryId);
+    await templateDialog.getByRole('button', { name: 'Close', exact: true }).click();
+
+    await setNativeLocale(agentEmail, 'ar');
+    try {
+      await openTemplateComposer({
+        reply: 'الرد عبر واتساب', sidebar: 'تذكرة',
+        operationsLabel: 'عمليات WasalX', stateLabel: 'حالة', openState: 'افتح',
+      });
+      await templateDialog.getByRole('heading', { name: 'إرسال قالب واتساب', exact: true }).waitFor();
+      assert.equal(await templateDialog.evaluate(dialog => getComputedStyle(dialog).direction), 'rtl');
+      await templateDialog.getByRole('button', { name: 'إرسال قالب آخر', exact: true }).click();
+      await templateDialog.getByRole('combobox').selectOption(template.id);
+      assert.equal(await templateDialog.getByRole('textbox').getAttribute('dir'), 'auto');
+      await page.keyboard.press('Escape');
+      await templateDialog.waitFor({ state: 'hidden' });
+    } finally {
+      await setNativeLocale(agentEmail, 'en-us');
+    }
+    const templateRequests = state.requests.slice(templateStart).filter(request => request.path.includes('/ticket-templates/'));
+    assert.deepEqual(templateRequests.map(request => request.path.split('/').at(-1)), ['catalog', 'send', 'status', 'status', 'status', 'catalog']);
+
     await page.goto(`${zammadOrigin}/desktop/tickets/${state.ticketId}`, { waitUntil: 'domcontentloaded' });
     await page.getByRole('heading', { name: 'Existing shipment SHIP-41', exact: true }).first().waitFor();
 
@@ -1835,6 +2038,7 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
       isMobile: true, hasTouch: true, storageState: await context.storageState(),
     });
     const mobilePage = await mobileContext.newPage();
+    capturePageErrors(mobilePage);
     const mobileStart = state.requests.length;
     const mobileMutations = [];
     const mobileFailures = [];
@@ -2319,6 +2523,8 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
       requestPaths: state.requests.map((request) => `${request.method} ${request.path}${request.query}`),
       seriousAccessibilityViolations: 0,
       compiledPlugins: { workspaceRoute: true, ticketSidebar: true, ticketArticleAction: true },
+      ticketTemplate: { catalogAndSend: true, lostResponseRecovered: true, deliveryState: "DELIVERED", arabicDirection: "rtl", provider: "simulated",
+        addonSource: packagePin.commit, packageVersion: packagePin.packageVersion, packageSha256: packagePin.packageSha256 },
       legacyNativeUsersQueueGrant: legacyGrantUiProofs[0],
       nativeLocaleViewportAcceptance: { permissionSaves: legacyGrantUiProofs, groups: followLatestProofs },
           packageLifecycle: ["predecessor", "current-blocked-by-reference", "current", "rollback", "current"],

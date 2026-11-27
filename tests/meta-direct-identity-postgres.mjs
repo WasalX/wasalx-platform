@@ -2,6 +2,7 @@ import { withPostgresClock } from "./support/postgres-clock.mjs";
 import assert from 'node:assert/strict';
 import {withFixtureTenant,routingFixtureEnvironment,observeRoutingFixture} from './meta-routing-fixture.mjs';
 import {metaRoutingUnits} from '../packages/core/dist/meta-routing.js';
+import {readMetaTemplateInventory} from '../packages/core/dist/meta-template-inventory.js';
 import {bindMetaPrimaryRouting} from '../services/connector-worker/dist/services/connector-worker/src/meta-routing.js';
 import {verifyMetaRoutingEffects} from './meta-routing-postgres.mjs';
 import {OutboxRepository} from '../services/connector-worker/dist/services/connector-worker/src/repository.js';
@@ -83,9 +84,10 @@ export async function verifyMetaDirectIdentityPostgres(adminUrl,workerConfig,app
  const restoreRoutingEnvironment=routingFixtureEnvironment(appId);
  const asset={providerSessionId:sessionId,phoneNumberId,wabaId};
  const secretReference=`secret://${tenantId}/connections/${connectionId}/meta`;
+ const templateAccessToken='simulated-ticket-template-access-token';
  const metadata=verifyMetaCredentialMetadata({data:{is_valid:true,app_id:appId,scopes:['whatsapp_business_management','whatsapp_business_messaging'],expires_at:0}},{appId});
  const proof={schemaVersion:1,claim:'PHONE_ACCOUNT_RELATION_VERIFIED',tenantId,connectionId,...asset,secretReference,
-  graphVersion:'v24.0',verifiedAt:metadata.verifiedAt,responseSha256:'a'.repeat(64),credentialFingerprint:'b'.repeat(64),
+  graphVersion:'v24.0',verifiedAt:metadata.verifiedAt,responseSha256:'a'.repeat(64),credentialFingerprint:createHash('sha256').update(templateAccessToken).digest('hex'),
   operationId:randomUUID(),fencingToken:1,credentialMetadata:metadata};
  const conversationId=randomUUID();
  const prefix=`direct-identity-${tenantId}`,ticketId='98231';
@@ -165,6 +167,14 @@ export async function verifyMetaDirectIdentityPostgres(adminUrl,workerConfig,app
    create:async()=>{throw new Error('Existing HUMAN fixture must append')},
    append:async id=>{assert.equal(id,ticketId);callbacks++;await inbound.assertMetaDirectIdentityCurrent(callbackInput.event,callbackInput.leaseId,phone,appId);return '98232'}
   });
+  const windowAt=async now=>tx(async c=>(await c.query(
+    'SELECT app.meta_customer_window_open($1,$2,$3) AS open',[connectionId,phone,now])).rows[0].open);
+  const deadline=Date.parse(message.timestamp)+24*60*60*1000;
+  assert.equal(await windowAt(new Date(deadline-1)),true);
+  assert.equal(await windowAt(new Date(deadline)),false);
+  assert.equal(await windowAt(new Date(deadline+1)),false);
+  assert.equal(await tx(async c=>(await c.query(
+    "SELECT app.meta_customer_window_open($1,'15558880999',$2) AS open",[connectionId,new Date(deadline)])).rows[0].open),null);
   assert.equal(callbacks,1);assert.equal(processed.state,'HUMAN');assert.equal(processed.queued,false);
   assert.equal((await admin.query('SELECT meta_direct_native_anchor FROM event_inbox WHERE id=$1',[callbackInput.event.id])).rows[0].meta_direct_native_anchor,null,'Later unrelated ordinary turns cannot replace immutable original alias provenance');
   assert.equal((await admin.query('SELECT id FROM normalized_messages WHERE event_inbox_id=$1',[callbackInput.event.id])).rowCount,1,'Independent guard is compatible with actual outer normalized FK KEY SHARE');
@@ -683,6 +693,160 @@ export async function verifyMetaDirectIdentityPostgres(adminUrl,workerConfig,app
   const previousMetaAppId=process.env.META_APP_ID;process.env.META_APP_ID=appId;
   try{
    assert.deepEqual(await controller.outboundPreflight('Synthetic native claims',connectionId,phone,ticketId),{available:true,keep_open:false});
+   await queueScenario(async c=>{
+    // Keep the database's microsecond precision at the exact 24-hour boundary.
+    const clock=(await c.query(`SELECT (max(provider_timestamp)+interval '24 hours'-interval '1 microsecond')::text AS before_end,
+      (max(provider_timestamp)+interval '24 hours')::text AS ends_at
+      FROM normalized_messages WHERE tenant_id=$1 AND connection_id=$2 AND external_group_id=$3`,
+      [tenantId,connectionId,phone])).rows[0];
+    assert(clock.ends_at);
+    let now=clock.before_end,inventoryReads=0;
+    const query=(sql,values)=>sql==='SELECT app.meta_customer_window_open($1,$2) AS open'
+      ? c.query('SELECT app.meta_customer_window_open($1,$2,$3) AS open',[...values,now])
+      : c.query(sql,values);
+    const db={rows:async(scope,sql,values)=>{assert.equal(scope,tenantId);return (await query(sql,values)).rows},
+      withTenant:async(scope,fn)=>{assert.equal(scope,tenantId);return fn({query})}};
+    let agentId='3';
+    const signed={verify:async()=>({tenantId,instanceId,userId:agentId,groupIds:['2'],groupAdmin:false})};
+    const clients={create:(token,phoneId,beforeRequest)=>{
+      assert.equal(token,templateAccessToken);
+      assert.equal(phoneId,phoneNumberId);
+      return {templateInventory:account=>readMetaTemplateInventory(account,async path=>{
+        await beforeRequest();inventoryReads++;
+        assert.equal(path,'/'+wabaId+'/message_templates');
+        return {data:['APPROVED','PAUSED'].map((status,index)=>({id:String(341+index),name:'order_update_'+index,language:'ar',
+          category:'UTILITY',status,parameter_format:'POSITIONAL',components:[{type:'BODY',text:'Order {{1}}'}]}))};
+      })};
+    }};
+    const service=new ZammadInternalController(db,signed,{wake:async()=>{}},
+      {resolveAccessToken:async()=>templateAccessToken},clients);
+    const target={tenant_id:tenantId,connection_id:connectionId,group_id:phone,ticket_id:ticketId};
+    await assert.rejects(service.ticketTemplates('Synthetic native claims',{...target,tenant_id:randomUUID()}),{status:401});
+    assert.deepEqual(await service.ticketTemplates('Synthetic native claims',target),{window:'OPEN',templates:[]});
+    assert.equal(inventoryReads,0);
+    now=clock.ends_at;
+    const catalog=await service.ticketTemplates('Synthetic native claims',target);
+    assert.equal(catalog.window,'CLOSED');
+    assert.deepEqual(catalog.templates.map(item=>[item.id,item.parameterCount]),[['341',1]]);
+    const selection={...target,template_id:'341',request_token:randomUUID(),
+      template_sha256:catalog.templates[0].semanticSha256,parameters:['42']};
+    await assert.rejects(service.sendTicketTemplate('Synthetic native claims',{...selection,template_id:'342'}),{status:409});
+    await assert.rejects(service.outbound('Synthetic native claims',{...target,article_id:9988,body:'Free text',
+      agent:{id:'3'},idempotency_key:randomUUID()}),{status:409});
+    const earlier=await service.sendTicketTemplate('Synthetic native claims',{...selection,request_token:randomUUID()});
+    const queued=await service.sendTicketTemplate('Synthetic native claims',selection);
+    assert.equal(queued.state,'QUEUED');
+    const readsAfterSend=inventoryReads;
+    assert.deepEqual(await service.sendTicketTemplate('Synthetic native claims',selection),queued);
+    assert.equal(inventoryReads,readsAfterSend);
+    await assert.rejects(service.sendTicketTemplate('Synthetic native claims',{...selection,parameters:['43']}),{status:409});
+    const delivery=(await c.query('SELECT bot_content,zammad_ticket_id,zammad_article_id FROM delivery_outbox WHERE tenant_id=$1 AND id=$2',
+      [tenantId,queued.id])).rows[0];
+    assert.equal(delivery.zammad_ticket_id,ticketId);
+    assert.equal(delivery.zammad_article_id,null);
+    assert.equal(delivery.bot_content.type,'template');
+    assert.deepEqual(delivery.bot_content.bodyParameters,['42']);
+    assert.equal((await c.query("UPDATE delivery_outbox SET updated_at=updated_at+interval '1 hour' WHERE id=$1",[earlier.id])).rowCount,1);
+    const receipt={...target,request_token:selection.request_token};
+    assert.deepEqual(await service.ticketTemplateStatus('Synthetic native claims',receipt),{delivery:queued});
+    assert.deepEqual(await service.ticketTemplateStatus('Synthetic native claims',{...receipt,delivery_id:queued.id}),{delivery:queued});
+    assert.deepEqual(await service.ticketTemplateStatus('Synthetic native claims',{...receipt,delivery_id:earlier.id}),{delivery:null});
+    assert.deepEqual(await service.ticketTemplateStatus('Synthetic native claims',{...receipt,ticket_id:'98232'}),{delivery:null});
+    agentId='4';
+    assert.deepEqual(await service.ticketTemplateStatus('Synthetic native claims',receipt),{delivery:null});
+    agentId='3';
+    assert.equal((await c.query("SELECT count(*)::int AS count FROM audit_events WHERE tenant_id=$1 AND target_id=$2 AND action='delivery.template_queued'",
+      [tenantId,queued.id])).rows[0].count,1);
+   },apiPool);
+   // The real 0207 safety lock under the worker role, RLS and genuine row locks.
+   // Each refused case must return NULL; a held lock must block a revision bump.
+   const lockFunction='app.lock_meta_ticket_template_safety(uuid,uuid,text)';
+   assert.deepEqual((await admin.query(`SELECT has_function_privilege('wasalx_connector_worker',$1::text,'EXECUTE') AS worker,
+     has_function_privilege('wasalx_app',$1::text,'EXECUTE') AS app,has_function_privilege('public',$1::text,'EXECUTE') AS public,
+     prosecdef AS definer,proowner::regrole::text AS owner,'row_security=on'=ANY(proconfig) AS rls
+     FROM pg_proc WHERE oid=$1::text::regprocedure`,[lockFunction])).rows[0],
+    {worker:true,app:false,public:false,definer:true,owner:'wasalx_meta_transition_executor',rls:true});
+   const templateWaba=BigInt('0x'+randomUUID().replaceAll('-','').slice(0,12)).toString(),templateAccount=randomUUID();
+   await admin.query('INSERT INTO meta_messaging_accounts(id,tenant_id,provider_account_id) VALUES($1,$2,$3)',[templateAccount,tenantId,templateWaba]);
+   const asExecutor=async sql=>{
+    await admin.query('BEGIN');
+    try{
+     await admin.query("SET LOCAL lock_timeout='100ms'");await admin.query('SET LOCAL ROLE wasalx_meta_transition_executor');
+     await admin.query("SELECT set_config('app.tenant_id',$1,true)",[tenantId]);
+     const result=await admin.query(sql,[tenantId,templateAccount]);await admin.query('COMMIT');return result;
+    }catch(error){await admin.query('ROLLBACK');throw error}
+   };
+   await asExecutor('INSERT INTO meta_template_account_safety(tenant_id,account_id) VALUES($1,$2)');
+   const bumpRevision=()=>asExecutor('UPDATE meta_template_account_safety SET revision=revision+1 WHERE tenant_id=$1 AND account_id=$2');
+   const holder=new Client({connectionString:adminUrl,options:'-c statement_timeout=5000 -c lock_timeout=3000'});await holder.connect();
+   try{
+    await holder.query('BEGIN');await holder.query("SELECT set_config('app.tenant_id',$1,true)",[tenantId]);
+    await holder.query('SET LOCAL ROLE wasalx_app');
+    const closedAt=(await holder.query(`SELECT (max(provider_timestamp)+interval '24 hours')::text AS at FROM normalized_messages
+      WHERE tenant_id=$1 AND connection_id=$2 AND external_group_id=$3`,[tenantId,connectionId,phone])).rows[0].at;
+    assert(closedAt);
+    const query=(sql,values)=>sql==='SELECT app.meta_customer_window_open($1,$2) AS open'
+     ? holder.query('SELECT app.meta_customer_window_open($1,$2,$3) AS open',[...values,closedAt])
+     : holder.query(sql,values);
+    const db={rows:async(scope,sql,values)=>{assert.equal(scope,tenantId);return (await query(sql,values)).rows},
+     withTenant:async(scope,fn)=>{assert.equal(scope,tenantId);return fn({query})}};
+    const inventory={data:[{id:'341',name:'order_update_0',language:'ar',category:'UTILITY',status:'APPROVED',
+     parameter_format:'POSITIONAL',components:[{type:'BODY',text:'Order {{1}}'}]}]};
+    const service=new ZammadInternalController(db,{verify:async()=>({tenantId,instanceId,userId:'3',groupIds:['2'],groupAdmin:false})},
+     {wake:async()=>{}},{resolveAccessToken:async()=>templateAccessToken},
+     {create:(token,phoneId,beforeRequest)=>({templateInventory:account=>readMetaTemplateInventory(account,async()=>{await beforeRequest();return inventory})})});
+    const target={tenant_id:tenantId,connection_id:connectionId,group_id:phone,ticket_id:ticketId};
+    const [template]=(await service.ticketTemplates('Synthetic native claims',target)).templates;
+    const queued=await service.sendTicketTemplate('Synthetic native claims',{...target,template_id:template.id,request_token:randomUUID(),
+     template_sha256:template.semanticSha256,parameters:['42']});
+    assert.equal(queued.state,'QUEUED');
+    // Fixture lease and asset: the worker's SENDING lease, and this session on the synthetic account.
+    const leaseId=randomUUID();
+    await holder.query('RESET ROLE');
+    assert.equal((await holder.query(`UPDATE delivery_outbox SET state='SENDING',lease_id=$2,lease_expires_at=clock_timestamp()+interval '1 minute'
+      WHERE tenant_id=$3 AND id=$1 AND state='QUEUED'`,[queued.id,leaseId,tenantId])).rowCount,1);
+    assert.equal((await holder.query("UPDATE provider_sessions SET provider_state_data=jsonb_set(provider_state_data,'{wabaId}',to_jsonb($1::text)) WHERE tenant_id=$2 AND id=$3",
+      [templateWaba,tenantId,sessionId])).rowCount,1);
+    await holder.query('SET LOCAL ROLE wasalx_connector_worker');
+    const lock=async(lease=leaseId,account=templateWaba)=>{
+     const row=(await holder.query('SELECT current_user AS role,app.lock_meta_ticket_template_safety($1,$2,$3) AS revision',[queued.id,lease,account])).rows[0];
+     assert.equal(row.role,'wasalx_connector_worker');return row.revision;
+    };
+    const within=async work=>{await holder.query('SAVEPOINT template_lock_case');try{return await work()}finally{await holder.query('ROLLBACK TO SAVEPOINT template_lock_case')}};
+    const asAdmin=async work=>{await holder.query('RESET ROLE');await work();await holder.query('SET LOCAL ROLE wasalx_connector_worker')};
+    assert.equal(await lock(randomUUID()),null,'A wrong lease cannot lock the template generation');
+    assert.equal(await lock(leaseId,'2'),null,'Another provider account cannot lock the template generation');
+    await within(async()=>{
+     await holder.query("SELECT set_config('app.tenant_id',$1,true)",[randomUUID()]);
+     assert.equal(await lock(),null,'Another tenant scope cannot see the delivery or account');
+    });
+    await within(async()=>{
+     await holder.query('SET LOCAL ROLE wasalx_app');
+     await assert.rejects(holder.query('SELECT app.lock_meta_ticket_template_safety($1,$2,$3)',[queued.id,leaseId,templateWaba]),{code:'42501'});
+    });
+    await within(async()=>{
+     await asAdmin(async()=>assert.equal((await holder.query("UPDATE delivery_outbox SET state='CLAIMED' WHERE tenant_id=$1 AND id=$2",[tenantId,queued.id])).rowCount,1));
+     assert.equal(await lock(),null,'Only a SENDING delivery can lock the template generation');
+    });
+    await within(async()=>{
+     const job=randomUUID();
+     await asAdmin(async()=>{
+      await holder.query(`INSERT INTO public.privacy_jobs
+       (id,tenant_id,job_type,scope_type,scope_value,disposition,idempotency_key,state,stage,attempts,lease_id,lease_expires_at,fencing_token,unmatched_diagnostic_hours_snapshot)
+       VALUES($1,$2::uuid,'RETENTION_SWEEP','TENANT',$2::uuid::text,'RETENTION_DELETE',$3,'RUNNING','DISCOVER',1,$4,clock_timestamp()+interval '10 minutes',1,24)`,
+       [job,tenantId,`${prefix}-template-lock-privacy-${job}`,randomUUID()]);
+      await holder.query(`INSERT INTO public.privacy_job_targets(tenant_id,job_id,target_type,target_id,target_sha256,state)
+       VALUES($1,$2,'DELIVERY',$3,$4,'PENDING')`,[tenantId,job,queued.id,hash(queued.id)]);
+     });
+     assert.equal(await lock(),null,'An active privacy target cannot lock the template generation');
+    });
+    await within(async()=>{
+     assert.equal(await lock(),'0','A valid lease locks the current generation');
+     await assert.rejects(bumpRevision(),error=>error.code==='55P03','A held generation lock blocks a concurrent revision change');
+    });
+    await bumpRevision();
+    assert.equal(await lock(),'1','A committed revision change is visible to the next send check');
+   }finally{await holder.query('ROLLBACK').catch(()=>{});await holder.end()}
    await queueScenario(async c=>{
    await c.query("UPDATE meta_direct_identity_aliases SET state='HELD',revision=revision+1 WHERE id=$1",[bsuidAlias]);
    // Reuse this transaction for the API adapter so its held alias is visible.

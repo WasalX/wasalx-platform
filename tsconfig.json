@@ -31,6 +31,7 @@
     "output",
     "node_modules",
     "tests/zammad-sidebar-component",
+    "tests/fixtures/zammad-*/app/frontend/**/*",
     "services/control-api/src",
     "zammad-package/app/frontend/**/*"
   ]

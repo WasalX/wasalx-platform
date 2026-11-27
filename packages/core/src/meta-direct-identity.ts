@@ -287,6 +287,8 @@ export type MetaDirectEffectCurrentInput = {
   routingActionId?: string;
   /** Native precommit reservation whose original external epoch cannot be repinned. */
   routingNativeIntentId?: string;
+  /** Only for a ticket template selection. Routing ownership still applies. */
+  ticketTemplate?: true;
 };
 export class MetaDirectEffectNotAttempted extends Error {
   readonly code = "META_DIRECT_EFFECT_NOT_ATTEMPTED";
@@ -409,7 +411,8 @@ export async function assertMetaDirectEffectCurrent(client: TicketEventTransacti
         routingSources=[nativePrimarySource];
       }
     }
-    const routing=(await client.query<{allowed:boolean;claim:string}>("SELECT allowed,claim FROM app.meta_direct_routing_guard($1,$2,$3,$4,$5,$6,$7::jsonb,$10,$8::uuid[],$9::uuid)",
+    const templateMode=input.ticketTemplate===true?",true,true":"";
+    const routing=(await client.query<{allowed:boolean;claim:string}>(`SELECT allowed,claim FROM app.meta_direct_routing_guard($1,$2,$3,$4,$5,$6,$7::jsonb,$10,$8::uuid[],$9::uuid${templateMode})`,
       [connection.id,session.id,asset.phoneNumberId,asset.wabaId,participantId??null,input.appId,JSON.stringify(metaRoutingRuntime(process.env)),routingSources,input.routingActionId??null,expectedRoutingEpoch])).rows[0];
     if(routing?.allowed!==true||(routing.claim==='PRIMARY_DELIVERY'&&input.routingNativeIntentId!==undefined&&!nativePrimarySource))throw new MetaDirectEffectNotAttempted();
   }catch(error){

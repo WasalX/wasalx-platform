@@ -102,3 +102,14 @@ export function metaTemplateSafetyMarker(field: string, value: unknown): { templ
   return typeof id === 'number' && Number.isSafeInteger(id) && id > 0
     ? { templateId: String(id), scope: 'TEMPLATE' } : { templateId: null, scope: 'ACCOUNT' };
 }
+
+/** Ticket sends use the same positional BODY contract as existing bot sends. */
+export function approvedTicketTemplate(item: MetaTemplateInventoryItem) {
+  if (item.status !== 'APPROVED' || !/^[a-z]{2,3}(?:_[A-Z]{2})?$/u.test(item.language)) return null;
+  const shape = metaTemplateSendShape(item);
+  const body = Array.isArray(item.definition.components)
+    ? item.definition.components.find(component => own(component) && component.type === 'BODY')
+    : undefined;
+  if (!shape || !own(body) || typeof body.text !== 'string' || !body.text.trim() || [...body.text].length > 4_096) return null;
+  return { id: item.id, name: item.name, language: item.language, text: body.text, ...shape };
+}

@@ -1,6 +1,6 @@
 import {currentMetaRuntimeCandidate} from "./meta-request-provenance.js";
 import {currentMetaTransportBinding} from "./meta-transport-binding.js";
-import {isVerifiedNonMarketingTemplate,verifyMetaInheritedTemplateSend} from "./meta-template-send.js";
+import {isVerifiedNonMarketingTemplate,verifyApprovedTicketTemplateSend,verifyMetaInheritedTemplateSend} from "./meta-template-send.js";
 import {parseMetaBillingSnapshot} from "../../../packages/core/src/meta-account-policy.js";
 import {assertMetaLifecycleAccess} from "../../../packages/core/src/meta-account-relation.js";
 import {assertMetaCredentialProof} from "../../../packages/core/src/meta-account-relation.js";
@@ -125,14 +125,16 @@ export class DeliveryProcessor{
     const beforeMessageSend=async(hash:string,phoneNumberId:string)=>{
       try{
         assertProof();
+        const ticketTemplateProof=await verifyApprovedTicketTemplateSend(job,adapter,
+          ()=>this.repository.metaTicketTemplateSafetyRevision(job,leaseId));
         const templateProof=await verifyMetaInheritedTemplateSend(job,leaseId,
           {context:(currentJob,currentLease)=>this.repository.metaInheritedTemplateContext(currentJob,currentLease)},adapter);
         // A failed/missing local descriptor is UNKNOWN, never a caller-selected mode.
         let runtime;
         try{runtime=await currentMetaRuntimeCandidate({...await currentMetaTransportBinding(this.providerConfig.metaGraphVersion),graphVersion:this.providerConfig.metaGraphVersion});}catch{/* UNKNOWN */}
         const nonMarketing=Boolean(job.template&&await this.repository.whatsAppMarketingOptedOut(job)
-          &&await isVerifiedNonMarketingTemplate(job,adapter));
-        await this.repository.admitMetaMessageRequest(job,leaseId,hash,runtime,phoneNumberId,templateProof,nonMarketing);assertProof();
+          &&(ticketTemplateProof?.nonMarketing??await isVerifiedNonMarketingTemplate(job,adapter)));
+        await this.repository.admitMetaMessageRequest(job,leaseId,hash,runtime,phoneNumberId,templateProof,nonMarketing,ticketTemplateProof);assertProof();
         await checkTestRecipient?.();
       }
       catch(error){if(error instanceof ProviderError)throw error;throw new ProviderError("Message request admission is unavailable.",true,"META_MESSAGE_ADMISSION_UNAVAILABLE",undefined,true);}

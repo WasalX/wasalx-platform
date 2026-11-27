@@ -3,7 +3,7 @@ import {reconsiderMetaIdentityTransitions} from "./meta-direct-identity.js";
 import { metaTestRecipientAdmission, resolveMetaTestRecipientLink } from "../../../packages/core/src/meta-test-recipient-link.js";
 import { parseWahaTestRecipientAllowlist } from "../../../packages/core/src/waha-test-recipient-scope.js";
 import type {MetaRuntimeEvidenceCandidate} from "./meta-request-provenance.js";
-import type {MetaTemplateSendContext,MetaTemplateSendProof} from "./meta-template-send.js";
+import type {MetaTemplateSendContext,MetaTemplateSendProof,TicketTemplateSafetyProof} from "./meta-template-send.js";
 import {assertMetaDirectEffectCurrent,MetaDirectEffectNotAttempted,parseMetaDirectRecipientSnapshot} from "../../../packages/core/src/meta-direct-identity.js";
 import {metaLifecyclePayloadSha256,parseMetaLifecycleState} from "../../../packages/core/src/meta-account-relation.js";
 import {ProviderError} from "../../../packages/connectors/src/types.js";
@@ -519,7 +519,9 @@ export class OutboxRepository{
     if(identity?.clear!==true)return false;
     const routing=(await client.query<{allowed:boolean}>(`SELECT guard.allowed FROM delivery_outbox delivery
       CROSS JOIN LATERAL app.meta_direct_routing_guard($1,$2,$3,$4,$5,$6,$7::jsonb,delivery.meta_routing_epoch,
-        CASE WHEN delivery.meta_routing_source_event_id IS NULL THEN NULL ELSE ARRAY[delivery.meta_routing_source_event_id] END) guard
+        CASE WHEN delivery.meta_routing_source_event_id IS NULL THEN NULL ELSE ARRAY[delivery.meta_routing_source_event_id] END,
+        NULL,true,delivery.direct_origin IS NOT DISTINCT FROM 'HUMAN' AND delivery.delivery_origin='TICKET'
+          AND delivery.zammad_article_id IS NULL AND app.is_ticket_template(delivery.bot_content)) guard
       WHERE delivery.tenant_id=$8 AND delivery.id=$9 AND delivery.meta_routing_epoch IS NOT NULL
         AND(guard.claim<>'PRIMARY_DELIVERY' OR(delivery.meta_routing_source_event_id IS NOT NULL AND EXISTS(
           SELECT 1 FROM meta_primary_delivery_admissions admission WHERE admission.tenant_id=delivery.tenant_id
@@ -572,7 +574,15 @@ export class OutboxRepository{
   async whatsAppMarketingOptedOut(job:DeliveryJob){
     return this.tenant(job.tenantId,client=>whatsappMarketingOptedOut(client,job.tenantId,job.connectionId,job.metaDirectRecipientSnapshot));
   }
-  async admitMetaMessageRequest(job:DeliveryJob,leaseId:string,requestSha256:string,runtime?:MetaRuntimeEvidenceCandidate,requestPhoneNumberId=job.sessionId,templateProof:MetaTemplateSendProof|null=null,nonMarketing=false) {
+  private async lockMetaTicketTemplateSafety(client:PoolClient,job:DeliveryJob,leaseId:string) {
+    return (await client.query<{revision:string|null}>(
+      'SELECT app.lock_meta_ticket_template_safety($1,$2,$3) AS revision',
+      [job.id,leaseId,job.metaCredentialContext?.wabaId??null])).rows[0]?.revision??null;
+  }
+  async metaTicketTemplateSafetyRevision(job:DeliveryJob,leaseId:string) {
+    return this.tenant(job.tenantId,client=>this.lockMetaTicketTemplateSafety(client,job,leaseId));
+  }
+  async admitMetaMessageRequest(job:DeliveryJob,leaseId:string,requestSha256:string,runtime?:MetaRuntimeEvidenceCandidate,requestPhoneNumberId=job.sessionId,templateProof:MetaTemplateSendProof|null=null,nonMarketing=false,ticketTemplateProof?:TicketTemplateSafetyProof) {
     if(job.provider!=='meta')return;
     await this.tenant(job.tenantId,async client=>{
       if((await client.query<{acquired:boolean}>("SELECT pg_try_advisory_xact_lock_shared(hashtextextended('privacy:'||$1::text,0)) AS acquired",[job.tenantId])).rows[0]?.acquired!==true)
@@ -587,6 +597,10 @@ export class OutboxRepository{
         ON account.tenant_id=binding.tenant_id AND account.id=binding.account_id
         WHERE binding.tenant_id=$1 AND binding.connection_id=$2 AND binding.state='ACTIVE' FOR SHARE OF binding,account`,[job.tenantId,job.connectionId]);
       await this.metaBillingCurrent(client,job);
+      if(job.directOrigin==="HUMAN"&&!job.ticketTemplate&&job.recipientType==="DIRECT"){
+        const window=(await client.query<{open:boolean|null}>("SELECT app.meta_customer_window_open($1,$2) AS open",[job.connectionId,job.groupId])).rows[0];
+        if(window?.open!==true)throw new ProviderError("The customer-service window is closed; send an approved template instead.",false,"META_CUSTOMER_WINDOW_CLOSED",undefined,true);
+      }
       const row=(await client.query<{id:string;meta_billing_snapshot:unknown;funding_response_sha256:string|null;funding_observed_at:Date|null;funding_expires_at:Date|null;birth_sha256:string|null}>(`SELECT attempt.id,delivery.meta_billing_snapshot,CASE WHEN delivery.meta_billing_snapshot IS NULL THEN NULL ELSE encode(digest(delivery.meta_billing_snapshot::text,'sha256'),'hex') END AS birth_sha256,account.funding_response_sha256,account.funding_observed_at,account.funding_expires_at
         FROM delivery_outbox delivery JOIN delivery_attempts attempt ON attempt.tenant_id=delivery.tenant_id AND attempt.delivery_id=delivery.id AND attempt.attempt_number=delivery.attempts
         LEFT JOIN meta_connection_account_bindings binding ON binding.tenant_id=delivery.tenant_id AND binding.connection_id=delivery.connection_id AND binding.state='ACTIVE'
@@ -596,9 +610,13 @@ export class OutboxRepository{
           AND delivery.content_redacted_at IS NULL AND NOT app.delivery_has_active_privacy_target(delivery.id)
           AND attempt.state='SENDING' AND attempt.finished_at IS NULL AND attempt.meta_billing_admission IS NULL FOR UPDATE OF delivery,attempt`,[job.tenantId,job.id,leaseId])).rows[0];
       if(!row||!/^[a-f0-9]{64}$/u.test(requestSha256))throw new ProviderError('Message request admission is unavailable.',false,'META_MESSAGE_NOT_ATTEMPTED',undefined,true);
+      if(job.ticketTemplate&&(!ticketTemplateProof||ticketTemplateProof.providerAccountId!==job.metaCredentialContext?.wabaId
+        ||await this.lockMetaTicketTemplateSafety(client,job,leaseId)!==ticketTemplateProof.revision))
+        throw new ProviderError('Template approval changed before dispatch.',false,'META_TEMPLATE_SEND_HELD',undefined,true);
       if(job.template){
         await client.query("SELECT pg_advisory_xact_lock_shared(hashtextextended('whatsapp-marketing:'||$1::uuid::text,0))",[job.tenantId]);
-        if(await whatsappMarketingOptedOut(client,job.tenantId,job.connectionId,job.metaDirectRecipientSnapshot)&&!nonMarketing)
+        if(await whatsappMarketingOptedOut(client,job.tenantId,job.connectionId,job.metaDirectRecipientSnapshot)
+          &&!(job.ticketTemplate?ticketTemplateProof?.nonMarketing===true:nonMarketing))
           throw new ProviderError("The contact has stopped WhatsApp marketing messages. Only verified non-marketing templates can be sent.",
             false,"WHATSAPP_MARKETING_OPTED_OUT",undefined,true);
       }
@@ -793,7 +811,7 @@ export function wahaDeferralExpired(job:Pick<DeliveryJob,"createdAt"|"wahaRespon
   return Number.isFinite(createdAt)&&typeof windowSeconds==="number"&&Number.isSafeInteger(windowSeconds)&&windowSeconds>=300&&now>=createdAt+windowSeconds*1_000
 }
 
-function directContent(value:unknown):Pick<DeliveryJob,"choices"|"location"|"template"|"flow">{
+function directContent(value:unknown):Pick<DeliveryJob,"choices"|"location"|"template"|"ticketTemplate"|"flow">{
   if(!value||typeof value!=="object"||Array.isArray(value))return{};
   const content=value as Record<string,unknown>;
   if(content.type==="media"&&Object.keys(content).length===2&&typeof content.assetId==="string"&&/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(content.assetId))return{};
@@ -802,7 +820,16 @@ function directContent(value:unknown):Pick<DeliveryJob,"choices"|"location"|"tem
     const buttonLabel=typeof content.buttonLabel==="string"&&content.buttonLabel===content.buttonLabel.trim()&&[...content.buttonLabel].length>=1&&[...content.buttonLabel].length<=20?content.buttonLabel:undefined;
     if(options.length===content.options.length&&options.length>=1&&options.length<=10&&(content.buttonLabel===undefined||buttonLabel))return{choices:{...(buttonLabel?{buttonLabel}:{}),options}};
   }
-  if(content.type==="template"&&typeof content.name==="string"&&/^[a-z0-9_]{1,512}$/u.test(content.name)&&typeof content.languageCode==="string"&&/^[a-z]{2,3}(?:_[A-Z]{2})?$/u.test(content.languageCode)&&Array.isArray(content.bodyParameters)&&content.bodyParameters.length<=20&&content.bodyParameters.every(value=>typeof value==="string"&&value===value.trim()&&[...value].length>=1&&[...value].length<=1024))return{template:{name:content.name,languageCode:content.languageCode,bodyParameters:content.bodyParameters as string[]}};
+  if(content.type==="template"&&typeof content.name==="string"&&/^[a-z0-9_]{1,512}$/u.test(content.name)&&typeof content.languageCode==="string"&&/^[a-z]{2,3}(?:_[A-Z]{2})?$/u.test(content.languageCode)&&Array.isArray(content.bodyParameters)&&content.bodyParameters.length<=20&&content.bodyParameters.every(value=>typeof value==="string"&&value===value.trim()&&[...value].length>=1&&[...value].length<=1024)){
+    const {ticketTemplateId:id,ticketTemplateSha256:semanticSha256}=content;
+    if(id!==undefined||semanticSha256!==undefined){
+      if(typeof id!=="string"||!/^[0-9]{1,32}$/u.test(id)||typeof semanticSha256!=="string"||!/^[a-f0-9]{64}$/u.test(semanticSha256))
+        throw new Error("Ticket template approval is invalid");
+      return{template:{name:content.name,languageCode:content.languageCode,bodyParameters:content.bodyParameters as string[]},
+        ticketTemplate:{id,semanticSha256}};
+    }
+    return{template:{name:content.name,languageCode:content.languageCode,bodyParameters:content.bodyParameters as string[]}};
+  }
   if(content.type==="flow"&&typeof content.id==="string"&&/^[1-9][0-9]{0,31}$/u.test(content.id)&&typeof content.token==="string"&&/^[A-Za-z0-9_-]{1,510}={0,2}$/u.test(content.token)&&typeof content.buttonLabel==="string"&&content.buttonLabel===content.buttonLabel.trim()&&[...content.buttonLabel].length>=1&&[...content.buttonLabel].length<=30&&(!content.screen||typeof content.screen==="string"&&/^[A-Za-z][A-Za-z0-9_]{0,63}$/u.test(content.screen))&&content.data&&typeof content.data==="object"&&!Array.isArray(content.data)){
     const entries=Object.entries(content.data as Record<string,unknown>);if(entries.length<=25&&entries.every(([key,value])=>/^[a-z][a-z0-9_.-]{0,127}$/u.test(key)&&typeof value==="string"&&value===value.trim()&&[...value].length>=1&&[...value].length<=2000))return{flow:{id:content.id,token:content.token,buttonLabel:content.buttonLabel,...(typeof content.screen==="string"?{screen:content.screen}:{}),data:content.data as Record<string,string>}};
   }

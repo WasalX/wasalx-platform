@@ -4,6 +4,8 @@ import https from "node:https";
 import timers from "node:timers/promises";
 import {syncBuiltinESMExports} from "node:module";
 import {MetaDirectEffectNotAttempted} from "../services/connector-worker/dist/packages/core/src/meta-direct-identity.js";
+import {approvedTicketTemplate} from "../services/connector-worker/dist/packages/core/src/meta-template-continuity.js";
+import {parseMetaTemplateInventoryItem} from "../services/connector-worker/dist/packages/core/src/meta-template-inventory.js";
 import {executeBotAction,safeHttpsRequest} from "../services/connector-worker/dist/services/connector-worker/src/bot-action.js";
 import { createHash } from "node:crypto";
 import test from "node:test";
@@ -1280,16 +1282,25 @@ test("marketing opt-outs block unverified templates before POST and preserve ser
   t.after(routingFixtureEnvironment("123450987"));
   withUnrestrictedMarketingFixture(t);
   const token="synthetic-meta-token-for-proof";
-  for(const [category,optedOut,expectedPosts] of [["MARKETING",true,0],["UTILITY",true,1],["UNKNOWN",true,0],
-    ["UTILITY",false,1],[null,true,1]]){
+  for(const [category,optedOut,expectedPosts,ticketTemplate] of [["MARKETING",true,0],["UTILITY",true,1],["UNKNOWN",true,0],
+    ["UTILITY",false,1],[null,true,1],["MARKETING",true,0,true],["UTILITY",true,1,true],["MARKETING",false,1,true]]){
     const delivery=metaDelivery(metadataProof(token));
     if(category)delivery.template={name:"synthetic_notice",languageCode:"en_US",bodyParameters:[]};
+    const item={id:"23456",name:"synthetic_notice",language:"en_US",category,status:"APPROVED",parameter_format:"POSITIONAL",
+      components:[{type:"BODY",text:"Synthetic notice"}]};
+    if(ticketTemplate){
+      const approved=approvedTicketTemplate(parseMetaTemplateInventoryItem(item));
+      delivery.directOrigin="HUMAN";
+      delivery.ticketTemplate={id:approved.id,semanticSha256:approved.semanticSha256};
+    }
     let posts=0,reads=0,failures=[];
     const repository={
       claimBotActions:async()=>[],claimDeliveries:async()=>[delivery],beginSend:async()=>true,
       assertMetaDeliveryContextCurrent:async()=>{},metaInheritedTemplateContext:async()=>null,
-      whatsAppMarketingOptedOut:async()=>optedOut,admitMetaMessageRequest:async(_job,_lease,_hash,_runtime,_phone,_proof,nonMarketing)=>{
+      metaTicketTemplateSafetyRevision:async()=>"0",
+      whatsAppMarketingOptedOut:async()=>optedOut,admitMetaMessageRequest:async(_job,_lease,_hash,_runtime,_phone,_proof,nonMarketing,ticketProof)=>{
         assert.equal(nonMarketing,Boolean(optedOut&&category==="UTILITY"));
+        assert.equal(ticketProof?.revision,ticketTemplate?"0":undefined);
         if(delivery.template&&optedOut&&!nonMarketing)throw new ProviderError("Marketing is stopped",false,"WHATSAPP_MARKETING_OPTED_OUT");
       },
       fail:async(...args)=>failures.push(args[6]),complete:async()=>{},claimStatuses:async()=>[],
@@ -1298,7 +1309,7 @@ test("marketing opt-outs block unverified templates before POST and preserve ser
     const fetch=t.mock.method(globalThis,"fetch",async(input)=>{
       if(String(input).includes("/message_templates")){
         reads++;
-        return Response.json({data:[{id:"23456",name:"synthetic_notice",language:"en_US",category,status:"APPROVED",components:[]}]});
+        return Response.json({data:[item]});
       }
       posts++;
       return Response.json({messages:[{id:"wamid.synthetic"}]});
@@ -1306,7 +1317,7 @@ test("marketing opt-outs block unverified templates before POST and preserve ser
     try{
       await new DeliveryProcessor(repository,{resolve:async()=>({accessToken:token})},{metaGraphVersion:"v24.0",metaAppId:"123450987"}).drainTenant(delivery.tenantId);
     }finally{fetch.mock.restore()}
-    assert.equal(reads,category&&optedOut?1:0);
+    assert.equal(reads,ticketTemplate||category&&optedOut?1:0);
     assert.equal(posts,expectedPosts);
     assert.deepEqual(failures,expectedPosts?[]:["WHATSAPP_MARKETING_OPTED_OUT"]);
   }
