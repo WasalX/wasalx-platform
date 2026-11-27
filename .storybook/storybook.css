@@ -210,3 +210,4 @@ textarea {
   .wx-story-inline-theme { padding: var(--wx-space-4); }
   .wx-state-showcase { grid-template-columns: 1fr; }
 }
+.wx-story-canvas.theme-light[dir="rtl"] .wx-story-section > header:has(+ .wx-story-grid > .wx-story-inline-theme) { padding-inline-start: var(--wx-space-4); }
