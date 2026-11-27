@@ -34,8 +34,8 @@ export function useVisibleRefresh(
           }
         });
     };
-    const schedule = () => {
-      if (document.visibilityState !== "visible") {
+    const schedule = (event?: Event) => {
+      if(document.visibilityState!=="visible"){
         if (frame !== null) window.cancelAnimationFrame(frame);
         frame = null;
         active?.abort();
@@ -43,29 +43,26 @@ export function useVisibleRefresh(
         refreshAfterCurrent = false;
         return;
       }
-      if (frame === null) frame = window.requestAnimationFrame(run);
-    };
-    const resume = () => {
       // A request started before returning to the page may already have read stale data.
-      if (active && document.visibilityState === "visible") {
+      if (active && event) {
         refreshAfterCurrent = true;
         return;
       }
-      schedule();
+      if (frame === null) frame = window.requestAnimationFrame(run);
     };
-    const restore = (event: PageTransitionEvent) => { if (event.persisted) resume(); };
+    const restore = (event: PageTransitionEvent) => { if (event.persisted) schedule(event); };
     const timer = window.setInterval(schedule, intervalMs);
-    document.addEventListener("visibilitychange", resume);
-    window.addEventListener("focus", resume);
-    window.addEventListener("pageshow", restore);
+    document.addEventListener("visibilitychange", schedule);
+    window.addEventListener("focus",schedule);
+    window.addEventListener("pageshow",restore);
     return () => {
       active?.abort();
       active = null;
       if (frame !== null) window.cancelAnimationFrame(frame);
       window.clearInterval(timer);
-      document.removeEventListener("visibilitychange", resume);
-      window.removeEventListener("focus", resume);
-      window.removeEventListener("pageshow", restore);
+      document.removeEventListener("visibilitychange", schedule);
+      window.removeEventListener("focus",schedule);
+      window.removeEventListener("pageshow",restore);
     };
   }, [enabled, intervalMs]);
 }
