@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { isIP } from "node:net";
 import { wasalxTimeZone } from "@wasalx/core/display-time-zone";
+import timeZoneData from "tzdata/timezone-data.json" with { type: "json" };
 import { privateKubernetesUrl } from "../config.js";
 
 export type ResourceProfile = {
@@ -282,7 +283,8 @@ function displayTimeZone(value: string) {
   }
   try {
     const canonical = new Intl.DateTimeFormat("en", { timeZone: value }).resolvedOptions().timeZone;
-    if (canonical === value) return value;
+    // Intl accepts case-insensitive input and may return a legacy spelling.
+    if (canonical === value || Object.hasOwn(timeZoneData.zones, value)) return value;
   } catch (error) {
     if (!(error instanceof RangeError)) throw error;
   }

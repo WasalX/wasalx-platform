@@ -335,6 +335,9 @@ importers:
       jose:
         specifier: ^6.2.18
         version: 6.2.18
+      tzdata:
+        specifier: 1.0.54
+        version: 1.0.54
     devDependencies:
       '@types/node':
         specifier: 22.20.5
@@ -5290,6 +5293,9 @@ packages:
     resolution: {integrity: sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw==}
     engines: {node: '>=14.17'}
     hasBin: true
+
+  tzdata@1.0.54:
+    resolution: {integrity: sha512-bRBC7nzI5YTVH8yJBherqXrsGOLiLsnbb5wITUEUq6wnhDKiK2+BfNKI/z9YkHnO8Ms3+CZfLOOAp/u/7pGxQA==}
 
   uid@2.0.2:
     resolution: {integrity: sha512-u3xV3X7uzvi5b1MncmZo3i2Aw222Zk1keqLA1YkHldREkAhAqi65wuPfe7lHx8H/Wzy+8CE7S7uS3jekIM5s8g==}
@@ -10708,6 +10714,8 @@ snapshots:
       - supports-color
 
   typescript@5.9.3: {}
+
+  tzdata@1.0.54: {}
 
   uid@2.0.2:
     dependencies:
