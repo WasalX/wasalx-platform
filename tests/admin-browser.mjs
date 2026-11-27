@@ -203,8 +203,9 @@ async function teamsJourney(locale) {
     fixture.control.loseCommit = "TEAM_CREATE";
     await button("teamsAdmin.save").click(); await expect(button("teamsAdmin.check")).toBeVisible();
     await assertPrivateStorage(test, storageKey, ["kind", "operation_id"]);
-    assert.equal(fixture.writes.filter(row => row.operation === "TEAM_CREATE").length, 1);
+    // Check is visible while the write is pending and enabled after the fixture aborts the response.
     await expect(button("teamsAdmin.check")).toBeEnabled();
+    assert.equal(fixture.writes.filter(row => row.operation === "TEAM_CREATE").length, 1);
     await page.reload({ waitUntil: "networkidle" }); await button("teamsAdmin.check").click();
     await expect(name).toHaveValue("Synthetic delivery team"); await expect(note).toHaveValue("Synthetic private team description");
     assert.equal(fixture.writes.filter(row => row.operation === "TEAM_CREATE").length, 1);
@@ -293,8 +294,8 @@ async function mailboxJourney(surface, locale) {
     await button("mailboxes.saveDraft").click(); await expect(button("mailboxes.check")).toBeVisible();
     await assertPrivateStorage(test, storageKey, ["kind", "operation_id"]);
     for (const password of await page.locator('input[type="password"]').all()) await expect(password).toHaveValue("");
-    assert.equal(fixture.writes.filter(row => row.operation === "MAILBOX_CREATE").length, 1);
     await expect(button("mailboxes.check")).toBeEnabled();
+    assert.equal(fixture.writes.filter(row => row.operation === "MAILBOX_CREATE").length, 1);
     await page.reload({ waitUntil: "networkidle" }); await button("mailboxes.check").click();
     await expect(label("mailboxes.address")).toHaveValue("qualification.delivery.mailbox.with.a.long.supported.name@example.invalid");
     await expect(button("mailboxes.activate")).toBeDisabled();
