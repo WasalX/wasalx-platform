@@ -383,6 +383,17 @@ try {
   await trace.retainFailure();
   throw error;
 } finally {
+  await writeFile(
+    `${output}/synthetic-ui-results.json`,
+    JSON.stringify(
+      {
+        mode: "simulated_bridge",
+        evidence_scope: "exploratory_ui",
+        cases: results,
+      },
+      null,
+      2,
+    ),
+  );
   await browser.close();
-  await writeFile(`${output}/synthetic-ui-results.json`, JSON.stringify({ mode: "simulated_bridge", evidence_scope: "exploratory_ui", cases: results }, null, 2));
 }
