@@ -54,7 +54,7 @@ def lease_receipt(phase, duration, steps="", lease_start=LEASE_START_NS):
         "commit": "COMMIT_PASS 2023-11-14T22:13:21Z overlay_retained=fixture.qcow2",
     }
     start, end = timing(phase, "lease", duration, start=lease_start).splitlines(keepends=True)
-    return start + steps + end + terminal[phase] + "\n"
+    return start + steps + end + terminal[phase]
 
 
 class HostPacketTest(unittest.TestCase):
@@ -143,7 +143,7 @@ class HostPacketTest(unittest.TestCase):
             install.write_text(receipt_origin() + install_text, encoding="utf-8")
             rollback = parent / "rollback.raw"
             rollback.write_text(
-                receipt_origin(captured_ns=CAPTURED_NS + 1) + lease_receipt("rollback", 7 * SECOND)
+                receipt_origin(captured_ns=CAPTURED_NS + 1) + lease_receipt("rollback", 7 * SECOND) + "\n"
                 + receipt_origin(captured_ns=CAPTURED_NS + 11 * SECOND)
                 + lease_receipt("rollback", 7 * SECOND, lease_start=CAPTURED_NS + 10 * SECOND),
                 encoding="utf-8",
@@ -191,7 +191,7 @@ class HostPacketTest(unittest.TestCase):
             parent = Path(directory)
             receipt = parent / "legacy.raw"
             receipt.write_text(lease_receipt("install", 24 * SECOND,
-                               timing("install", "full-top-hash", SECOND, SECOND))
+                               timing("install", "full-top-hash", SECOND, SECOND)) + "\n"
                                + lease_receipt("rollback", 7 * SECOND), encoding="utf-8")
             identity = parent / "identity.json"
             identity.write_text(json.dumps({**json.loads(self.example.read_bytes()),
@@ -226,8 +226,8 @@ class HostPacketTest(unittest.TestCase):
                 ("older-timings", {"captured_ns": CAPTURED_NS + 8 * SECOND}, fresh),
                 ("stale-lease-start", {}, stale),
                 ("future-tick", {}, future_tick),
-                ("missing-resumed-origin", {}, fresh + resumed),
-                ("nonadjacent-origin", {}, fresh + receipt_origin() + "diagnostic output\n" + resumed),
+                ("missing-resumed-origin", {}, fresh + "\n" + resumed),
+                ("nonadjacent-origin", {}, fresh + "\n" + receipt_origin() + "diagnostic output\n" + resumed),
             ):
                 with self.subTest(name=name):
                     rollback.write_text(receipt_origin(**override) + text, encoding="utf-8")
