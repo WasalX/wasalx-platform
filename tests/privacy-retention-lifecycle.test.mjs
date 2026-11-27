@@ -849,7 +849,7 @@ function privacySelectionHarness() {
   const statements = [], requests = new Map(), operations=new Map();
   let depth=0, resolveHook, targetReturnHook, lockHook, downloadHook;
   const authority={active:true,tenantActive:true,role:"tenant_owner",subject:"privacy-fixture-owner",email:"privacy-owner@example.test"};
-  let calls = 0, deny = false, mismatch = false, wakes = 0, failWake = false;
+  let calls = 0, deny = false, mismatch = false, wakes = 0, failWake = false, held = false;
   const request = { id: "privacy-selection", principal: { tenantId, userId: "11000000-0000-4000-8000-000000000001", role: "tenant_owner",
     subject:authority.subject,email:authority.email,
     authenticatedAt: Math.floor(Date.now() / 1000), authenticationMethods: ["mfa"] } };
@@ -866,7 +866,7 @@ function privacySelectionHarness() {
     if(sql.includes("FROM bot_flow_operations")) return {rows:operations.has(values[1])?[operations.get(values[1])]:[]};
     if(sql.includes("INSERT INTO bot_flow_operations")){operations.set(values[2],{action:values[1],request_sha256:values[3],result:values[4],requested_by:values[5]});return{rows:[]};}
     if (sql.includes("SELECT id,request_sha256,state")) return { rows: requests.has(values[1]) ? [requests.get(values[1])] : [] };
-    if (sql.includes("app.has_applicable_privacy_hold")) return { rows: [{ held: false }] };
+    if (sql.includes("app.has_applicable_privacy_hold")) return { rows: [{ held }] };
     if (sql.includes("INSERT INTO privacy_requests")) {
       const row = { id: requestId, state: "QUEUED", request_sha256: values[7] }; requests.set(values[6], row); return { rows: [row] };
     }
@@ -885,7 +885,7 @@ function privacySelectionHarness() {
   const controller = new PrivacyController(database, { wakePrivacy: async () => { wakes++; if (failWake) throw new Error("Synthetic wake response loss"); } }, {signedDownloadUrl:async()=>{if(downloadHook){const hook=downloadHook;downloadHook=undefined;await hook();}return"https://downloads.example.test/owned";}}, workspace);
   return { controller, request, statements, authority,
     onTargetReturn:hook=>{targetReturnHook=hook;},onLock:hook=>{lockHook=hook;},onDownload:hook=>{downloadHook=hook;}, input: { scopeType: "ZAMMAD_TICKET", scopeValue: "20261018123", selection_sha256: "a".repeat(64) },
-    onResolve: hook => {resolveHook=hook;}, calls: () => calls, wakes: () => wakes, failWake: value => { failWake = value; }, deny: () => { deny = true; }, mismatch: () => { mismatch = true; } };
+    onResolve: hook => {resolveHook=hook;}, calls: () => calls, wakes: () => wakes, failWake: value => { failWake = value; }, deny: () => { deny = true; }, hold: () => { held = true; }, mismatch: () => { mismatch = true; } };
 }
 
 test("privacy target lookup denies auditors before native identity access and hides native IDs", async () => {
@@ -932,6 +932,14 @@ test("privacy request jobs and holds persist only server-resolved native IDs and
     const auditor = { ...h.request, principal: { ...h.request.principal, role: "auditor" } };
     await h.controller.listRequests(auditor); assert.equal(h.statements.at(-1).values[1], false);
   }
+});
+
+test("privacy deletion under an active legal hold is refused with a stable code", async () => {
+  const h = privacySelectionHarness();
+  h.hold();
+  await assert.rejects(() => h.controller.createRequest(h.request, "privacy-held-deletion", { requestType: "DELETE", confirmation: "DELETE", ...h.input }),
+    error => error.getStatus() === 409 && error.getResponse().code === "LEGAL_HOLD_ACTIVE");
+  assert.equal(h.statements.filter(row => row.sql.includes("INSERT INTO privacy_requests")).length, 0);
 });
 
 test("privacy unknown-response replay recovers receipt after target deletion without another native lookup", async () => {

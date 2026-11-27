@@ -1271,7 +1271,11 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
             else if (chooser?.contains(target)) {
               clickTarget = target.closest(seededOption) ? 'seeded-option' : target.closest('[role="option"]') ? 'other-option' : 'chooser-other';
             }
-            clicks.push({ target: clickTarget, ...state });
+            clicks.push({
+              target: clickTarget,
+              ...state,
+              modalReady: Boolean(chooser?.closest(".modal.in.modal--ready")),
+            });
           }
           return state;
         };
@@ -1295,13 +1299,28 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
           return { clicks, opened, closedAfterOpen, replaced, optionExposed, final };
         };
       }, machineUiSeed.group_id);
-      await withNativeDiagnostic(t, 'queue chooser', async () => ({ scenario: scenario.name, chooser: await collectChooser() }), async () => {
-        await newGrant.locator('.js-groupListItemAddNew .js-input').click();
-        await newGrant.getByRole('option', { name: 'Operations', exact: true }).click();
-        await newGrant.locator('input[value="full"]').locator('..').click();
-        await newGrant.locator('.js-add').click();
-        assert.equal(await fullGrant.isChecked(), true);
-      }, scenario === scenarios[0]);
+      await withNativeDiagnostic(
+        t,
+        "queue chooser",
+        async () => ({
+          scenario: scenario.name,
+          chooser: await collectChooser(),
+        }),
+        async () => {
+          // Zammad marks the modal ready after the opening transition and autofocus.
+          await newGrant
+            .locator(".js-groupListItemAddNew .js-input")
+            .and(adminPage.locator(".modal.in.modal--ready .js-input"))
+            .click();
+          await newGrant
+            .getByRole("option", { name: "Operations", exact: true })
+            .click();
+          await newGrant.locator('input[value="full"]').locator("..").click();
+          await newGrant.locator(".js-add").click();
+          assert.equal(await fullGrant.isChecked(), true);
+        },
+        scenario === scenarios[0],
+      );
       await new Promise((resolve, reject) => {
         if (coreWorkflowResponses.size) return resolve();
         const timeout = setTimeout(() => reject(new Error('No matching Users Full-grant CoreWorkflow websocket response')), 30_000);
@@ -1981,7 +2000,12 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
       await mobilePage.getByRole("button", { name: "Add reply", exact: true }).click();
       const reply = mobilePage.getByRole("dialog", { name: "Add reply", exact: true });
       await reply.getByRole("combobox", { name: "Channel", exact: true }).click();
-      await mobilePage.getByRole("dialog", { name: "Dialog window with selections", exact: true }).getByRole("option", { name: "WhatsApp", exact: true }).click();
+      const channelChooser = mobilePage.getByRole("dialog", {
+        name: "Dialog window with selections",
+        exact: true,
+      });
+      await channelChooser.getByRole("option", { name: "WhatsApp", exact: true }).click();
+      await channelChooser.waitFor({ state: "hidden" });
       assert.ok((await reply.getByRole("combobox", { name: "Channel", exact: true }).innerText()).includes("WhatsApp"));
       const mobileDraft = "Mobile draft \u2014 do not send.";
       const collectEditor = await observeNativeDom(mobilePage, draft => {
@@ -2012,11 +2036,26 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
           obsoletePreview: pathMatched && methodMatched && typeof body === 'string' && !fullDraft && mobileDraft.startsWith(body.trim()) };
       });
       await withNativeDiagnostic(t, 'mobile preview', async () => ({ ...collectPreview(), editor: await collectEditor() }), async () => {
+        const draftEditor = reply.locator('[contenteditable="true"]');
+        // Move focus after the first input to exercise the partial-draft regression.
+        await draftEditor.evaluate((editor) => {
+          editor.addEventListener("input", () => editor.blur(), { once: true });
+        });
         const [preview] = await Promise.all([
-          mobilePage.waitForResponse(response => response.request().method() === "POST"
-            && new URL(response.url()).pathname === previewPath
-            && response.request().postDataJSON()?.body?.trim() === mobileDraft),
-          reply.locator('[contenteditable="true"]').pressSequentially(mobileDraft, { delay: 20 }),
+          mobilePage.waitForResponse(
+            (response) =>
+              response.request().method() === "POST" &&
+              new URL(response.url()).pathname === previewPath &&
+              response.request().postDataJSON()?.body?.trim() === mobileDraft,
+          ),
+          (async () => {
+            await draftEditor.fill(mobileDraft);
+            assert.equal(
+              (await draftEditor.textContent())?.trim(),
+              mobileDraft,
+              "The editor must hold the full draft",
+            );
+          })(),
         ]);
         assert.equal(preview.status(), 200, "The pinned add-on must preview the unsent draft");
         assert.equal((await preview.json()).text.trim(), mobileDraft);

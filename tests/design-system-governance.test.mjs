@@ -343,3 +343,14 @@ test("mobile header keeps one sidebar grid and a top bar that grows with its tex
   for (const body of rules(".topbar")) assert.doesNotMatch(body, /(?:^|[;\s])height\s*:/u, "a fixed top bar height lets wrapped text overflow onto the menu toggle at 200% text");
   assert.match(rules(".topbar")[0], /min-height:57px/u);
 });
+
+test("tenant screens keep the URL, icon, name and mailbox fixes from issue 565", async () => {
+  const [app, settings, mailbox] = await Promise.all(["app/WasalXApp.tsx", "app/TenantSettings.tsx", "app/MailboxSettings.tsx"].map(read));
+  assert.doesNotMatch(app, /\uff0b/u, "the fullwidth plus has no glyph in the app fonts");
+  assert.match(app, /<svg className="connect-number-action-mark" aria-hidden="true"/u);
+  assert.match(app, /<b dir="auto">\{user\.displayName\}<\/b>/u, "the truncating name element takes its own direction");
+  assert.match(settings, /<div className="input-prefix" dir="ltr">/u, "the slug URL reads left to right in Arabic too");
+  for (const key of ["setupRequired", "templateReview", "loading", "empty"]) {
+    assert.match(mailbox, new RegExp(String.raw`<p className="workspace-access-state"[^>]*>\{t\("mailboxes\.${key}"\)\}`, "u"), `mailboxes.${key} sits in the padded muted body`);
+  }
+});

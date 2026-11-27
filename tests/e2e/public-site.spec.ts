@@ -4,6 +4,7 @@ import { createDemoWorkspace } from "../../app/marketing-workspace.ts";
 import { englishMarketingMessages } from "../../lib/i18n/messages/en/marketing.ts";
 import { arabicMarketingMessages } from "../../lib/i18n/messages/ar/marketing.ts";
 import { createTranslator } from "../../lib/i18n/translate.ts";
+import { journeyCapturePath } from "./journey-captures.mjs";
 
 const locale = process.env.WASALX_E2E_LOCALE ?? "en";
 const arabic = locale === "ar";
@@ -74,14 +75,20 @@ test("landing icons stay centered with touch and mouse input", async ({ browser 
   }
 });
 
-test("landing theme is accessible, remembered and rendered before hydration", async ({ page }) => {
+test("landing theme is accessible, remembered and rendered before hydration", async ({ page }, testInfo) => {
   await page.goto("/");
   const shell = page.locator(".marketing-shell");
   await expect(shell).toHaveClass(/theme-light/u);
+  await testInfo.attach(`public-site-${locale}-${testInfo.project.name}-light`, {
+    body: await page.screenshot({ animations: "disabled" }), contentType: "image/png",
+  });
   await page.getByRole("button", { name: arabic ? "التبديل إلى المظهر الداكن" : "Switch to dark theme" }).click();
   await expect(shell).toHaveClass(/theme-dark/u);
   expect(await page.evaluate(() => getComputedStyle(document.documentElement).colorScheme)).toBe("dark");
   expect(await page.evaluate(() => localStorage.getItem("wasalx.theme"))).toBe("dark");
+  await testInfo.attach(`public-site-${locale}-${testInfo.project.name}-dark`, {
+    body: await page.screenshot({ animations: "disabled" }), contentType: "image/png",
+  });
   await page.locator("#demo-reply").fill(arabic ? "رسالة تجريبية" : "Example message");
   await page.locator(".inbox-composer button[type=submit]").click();
   expect((await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze()).violations).toEqual([]);
@@ -862,6 +869,21 @@ test("public access pages keep safe invitation fallbacks and keyboard navigation
   await page.goto("/invitations/accept#token=invalid");
   await expect(page).toHaveURL(/\/invitations\/accept$/u);
   await expect(page.locator("main h1")).toHaveText(arabic ? "رابط الدعوة مو كامل" : "This invitation link is incomplete");
+  const invitation = page.locator(".public-access-shell");
+  const capture = (theme: "light" | "dark-preview") => page.screenshot({
+    path: journeyCapturePath("invitation-incomplete", testInfo.project.name, theme, locale),
+    fullPage: true,
+    animations: "disabled",
+    caret: "hide",
+    scale: "css",
+  });
+  await expect(invitation).toHaveCSS("color-scheme", "light");
+  await capture("light");
+  // The public route ships in light mode. Preview its existing dark tokens in this test only.
+  await invitation.evaluate(shell => shell.classList.replace("theme-light", "theme-dark"));
+  await expect(invitation).toHaveCSS("color-scheme", "dark");
+  await capture("dark-preview");
+  await invitation.evaluate(shell => shell.classList.replace("theme-dark", "theme-light"));
   await page.route("**/api/invitations/accept/start", route => route.fulfill({ status: 503, json: {} }));
   await page.goto(`/invitations/accept#token=${"a".repeat(43)}`);
   await expect(page.locator("main h1")).toHaveText(arabic ? "ما قدرنا نفتح الدعوة الحين" : "We can’t open the invitation right now");

@@ -373,6 +373,7 @@ export const arabicPlatformMessages = {
   "platform.metaTransition.payment.CARD": "بطاقة",
   "platform.metaTransition.payment.LINE": "خط ائتمان",
   "platform.metaTransition.arrangement": "ترتيب الدفع المُدار المعتمد",
+  "platform.metaTransition.arrangementExpiry": "تنتهي الصلاحية في",
   "platform.metaTransition.originalArrangement": "الترتيب المعتمد الأصلي",
   "platform.metaTransition.receiver": "مرجع النشاط التجاري المستلم المعتمد",
   "platform.metaTransition.termsVersion": "إصدار الشروط المستهدفة",

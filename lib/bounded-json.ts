@@ -1,4 +1,7 @@
-export async function readBoundedJson<T>(response: Response, maximumBytes = 262_144, timeoutMs = 15_000): Promise<T> {
+const jsonMaximumBytes = 262_144;
+const jsonTimeoutMs = 15_000;
+
+export async function readBoundedJson<T>(response: Response, maximumBytes = jsonMaximumBytes, timeoutMs = jsonTimeoutMs): Promise<T> {
   try {
     const contentType = (response.headers.get("content-type") ?? "").split(";", 1)[0]!.trim().toLowerCase();
     if (contentType !== "application/json") throw new Error("Expected a JSON response");
@@ -8,13 +11,34 @@ export async function readBoundedJson<T>(response: Response, maximumBytes = 262_
       if (!Number.isSafeInteger(size) || size < 0 || size > maximumBytes) throw new Error("JSON response is too large");
     }
     const bytes = await readBoundedBody(response, maximumBytes, timeoutMs);
-    return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as T;
+    return decodeJson(bytes) as T;
   } catch (error) {
     // Rejecting headers must also release the upstream connection. Cancellation
     // is best effort: a broken stream must not outlive the admission deadline.
     if (!response.body?.locked) void response.body?.cancel().catch(() => undefined);
     throw error;
   }
+}
+
+function decodeJson(bytes: Uint8Array): unknown {
+  return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+}
+
+export async function readOptionalJsonObject(request: Request): Promise<Record<string, unknown>> {
+  if (request.body === null) return {};
+  const bytes = await readBoundedBody(request, jsonMaximumBytes, jsonTimeoutMs);
+  if (bytes.length === 0) return {};
+
+  let value: unknown;
+  try {
+    value = decodeJson(bytes);
+  } catch {
+    throw new BoundedBodyError(400, "Invalid JSON request body");
+  }
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new BoundedBodyError(400, "Expected a JSON object");
+  }
+  return value as Record<string, unknown>;
 }
 
 export class BoundedBodyError extends Error {

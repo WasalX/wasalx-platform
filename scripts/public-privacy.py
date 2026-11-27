@@ -1,11 +1,11 @@
 """Scan event text and newly introduced Git lines using public patterns."""
-from itertools import islice
 import json
 import os
 from pathlib import Path
 import re
 import subprocess
 import sys
+import zlib
 
 
 OCTET = r"(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[0-9]{1,2})"
@@ -29,6 +29,13 @@ PLACEHOLDER_HOSTS = {"example.internal", "identity.local", "host.docker.internal
 SHA = re.compile(r"[0-9a-f]{40}")
 HUNK = re.compile(rb"@@ -[0-9]+(?:,[0-9]+)? \+([0-9]+)(?:,[0-9]+)? @@")
 
+BASELINE_DIR = b"tests/visual/__screenshots__/linux"
+PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+PNG_CHUNKS = {
+    b"IHDR", b"PLTE", b"tRNS", b"gAMA", b"cHRM", b"sRGB", b"sBIT",
+    b"pHYs", b"bKGD", b"tIME", b"IDAT", b"IEND",
+}
+
 
 def git(*args):
     return subprocess.check_output(["git", *args], stderr=subprocess.DEVNULL)
@@ -48,37 +55,74 @@ def findings(text, location):
             yield location, number, rule
 
 
+def valid_baseline_png(blob):
+    if not blob.startswith(PNG_SIGNATURE):
+        return False
+    view = memoryview(blob)
+    offset = len(PNG_SIGNATURE)
+    previous = None
+    seen_idat = False
+    while offset + 12 <= len(blob):
+        length = int.from_bytes(view[offset:offset + 4], "big")
+        kind = blob[offset + 4:offset + 8]
+        data_end = offset + 8 + length
+        end = data_end + 4
+        if length > 0x7fffffff or end > len(blob) or kind not in PNG_CHUNKS:
+            return False
+        if zlib.crc32(view[offset + 4:data_end]) != int.from_bytes(view[data_end:end], "big"):
+            return False
+        if (previous is None) != (kind == b"IHDR") or (kind == b"IHDR" and length != 13):
+            return False
+        if kind == b"IEND":
+            return length == 0 and seen_idat and end == len(blob)
+        if kind == b"IDAT":
+            if seen_idat and previous != b"IDAT":
+                return False
+            seen_idat = True
+        offset = end
+        previous = kind
+    return False
+
+
 def changes(parent, commit):
     diff = git("diff-tree", "-r", "--root", "--no-commit-id", "--no-ext-diff", "--no-textconv",
                "--no-renames", "--no-color", "--text", "--unified=0", "--patch-with-raw",
-               "-z", "--diff-filter=AMT", *parent[:1], commit)
+               "--no-abbrev", "-z", "--diff-filter=AMT", *parent[:1], commit)
     if not diff:
         return
     # Raw NUL-delimited paths are in patch order and preserve unusual filenames.
     raw, separator, patch = diff.partition(b"\0\0")
     if not separator:
         raise ValueError
-    paths = islice(raw.split(b"\0"), 1, None, 2)
+    entries = iter(raw.split(b"\0"))
     previous_header = None
+    skip_lines = False
     number = None
     for line in patch.split(b"\n"):
         if line.startswith(b"diff --git "):
             # Git can emit separate deletion and addition patches for a type change.
             if line != previous_header:
-                path = next(paths).decode("utf-8", errors="replace")
+                metadata, raw_path = next(entries), next(entries)
+                path = raw_path.decode("utf-8", errors="replace")
                 path_rules = matches(path)
                 location = "<redacted path>" if path_rules else path
                 for rule in path_rules:
                     yield location, 1, rule
+                skip_lines = False
+                if raw_path.rpartition(b"/")[0] == BASELINE_DIR and raw_path.endswith(b".png"):
+                    _, _, _, blob_id, _ = metadata.split()
+                    skip_lines = valid_baseline_png(git("cat-file", "blob", blob_id.decode("ascii")))
+                    if not skip_lines:
+                        yield location, 1, "binary-png"
                 previous_header = line
             number = None
-        elif line.startswith(b"@@ "):
+        elif not skip_lines and line.startswith(b"@@ "):
             number = int(HUNK.match(line)[1])
         elif number is not None and line.startswith(b"+"):
             for rule in matches(line[1:].decode("utf-8", errors="replace")):
                 yield location, number, rule
             number += 1
-    if next(paths, None) is not None:
+    if next(entries, None) is not None:
         raise ValueError
 
 

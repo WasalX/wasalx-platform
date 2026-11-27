@@ -220,9 +220,39 @@ try {
     await expect(group().getByRole("heading", { name: "Customers A" })).toBeFocused();
     await page.locator("#wx-group-message").fill("Draft A");
     await row(M).getByRole("button", { name: t("groups.quoteReply"), exact: true }).click();
+    const historyFixture = state.messages.get(B);
+    state.messages.set(B, [...historyFixture, ...Array.from({ length: 12 }, (_, index) =>
+      message(`history-${index}`, `Earlier operations update ${index + 1}`, {
+        provider_timestamp: new Date(Date.parse(stamp) - (index + 1) * 60_000).toISOString(),
+      }))]);
     await choose("Operations B");
+    const history = group().getByRole("region", { name: t("groups.history"), exact: true });
+    await expect(history.locator("li")).toHaveCount(13);
+    state.messages.set(B, historyFixture);
+    await expect(group().getByRole("heading", { name: "Operations B" })).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(history).toBeFocused();
+    const { top, max } = await history.evaluate(element => ({ top: element.scrollTop, max: element.scrollHeight - element.clientHeight }));
+    expect(max).toBeGreaterThan(1);
+    await page.keyboard.press(top > 1 ? "ArrowUp" : "ArrowDown");
+    await expect.poll(() => history.evaluate(element => element.scrollTop)).not.toBe(top);
+    await page.screenshot({ path: `${output}/group-history-keyboard-${locale}.png` });
     await page.locator("#wx-group-message").fill("Draft B");
-    await choose("Customers A");
+    const lateLoad = state.hold("GROUP_SHOW", (input) => input.group_id === A);
+    const showsBefore = state.count("GROUP_SHOW");
+    await group().getByRole("button", { name: /Customers A/u }).click();
+    await expect.poll(() => state.count("GROUP_SHOW")).toBe(showsBefore + 1);
+    // The button mounts after the load. Hold its queued focus frame until the operator moves focus.
+    await page.clock.pauseAt(new Date((await page.evaluate(() => Date.now())) + 1000));
+    lateLoad.resolve();
+    const attachmentButton = button("attachments.choose");
+    await expect(attachmentButton).toBeEnabled();
+    await attachmentButton.focus();
+    await page.clock.resume();
+    await page.evaluate(
+      () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
+    );
+    await expect(attachmentButton).toBeFocused();
     await expect(page.locator("#wx-group-message")).toHaveValue("Draft A");
     await expect(button("groups.cancelQuote")).toBeVisible();
 
@@ -230,7 +260,7 @@ try {
     state.failUploadAt = state.uploadAttempts + 3;
     await expect(page.locator("#wx-group-files")).toBeHidden();
     await expect(button("attachments.choose")).toHaveAccessibleDescription(t("attachments.none"));
-    const [chooser] = await Promise.all([page.waitForEvent("filechooser"), button("attachments.choose").press("Space")]);
+    const [chooser] = await Promise.all([page.waitForEvent("filechooser"), page.keyboard.press("Space")]);
     assert.equal(chooser.isMultiple(), true);
     await chooser.setFiles([
       { name: "kept.txt", mimeType: "text/plain", buffer: Buffer.from("keep") },
@@ -551,7 +581,23 @@ try {
 
     // Both themes/locale layouts, mobile chooser focus and keyboard controls.
     for (const theme of ["light", "dark"]) {
-      if (theme === "dark") { await page.goto(`${story}&globals=theme:dark`, { waitUntil: "networkidle" }); await choose("Operations B"); }
+      if (theme === "dark") {
+        await page.goto(`${story}&globals=theme:dark`, { waitUntil: "networkidle" });
+        // A group that finishes loading after the operator moved focus must not take focus back.
+        const lateShow = state.hold("GROUP_SHOW", input => input.group_id === B), showsBefore = state.count("GROUP_SHOW");
+        if (await group().locator(".wx-group-back").isVisible()) await button("groups.back").click();
+        await group().getByRole("button", { name: /Operations B/u }).click();
+        await expect.poll(() => state.count("GROUP_SHOW")).toBe(showsBefore + 1);
+        await groupsMode.focus();
+        lateShow.resolve();
+        await expect(group().getByRole("heading", { name: "Operations B" })).toBeVisible();
+        await expect(page.locator("#wx-group-message")).toBeEnabled();
+        await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+        await expect(groupsMode).toBeFocused();
+
+        await choose("Operations B");
+        await expect(group().getByRole("heading", { name: "Operations B" })).toBeFocused();
+      }
       await page.evaluate(() => document.fonts.ready);
       for (const [name, width, height] of [["desktop", 1440, 1000], ["mobile", 390, 844], ["zoom-equivalent", 720, 500]]) {
         await page.setViewportSize({ width, height });

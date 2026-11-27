@@ -4,7 +4,9 @@ Run the same dry-run as CI with `python3 -I -B scripts/dev-install/test_dryrun.p
 It uses the example identity, a disposable Git bundle, and network-disabled dispatcher and guest containers.
 The fixture runs the native bind-mount, hostname, and review-origin checks and exercises a hung capture
 holding the native stage lock. SSH and Compose calls use recording fakes.
-For each container, the image check or pull, creation, and attached run share one 120-second deadline.
+The runner checks for the pinned image before either container starts and fetches it if missing.
+The fetch makes at most three time-limited attempts with backoff and reports registry failures separately.
+For each container, creation and the attached run share one 120-second deadline.
 The log reports Docker phase durations, a bounded list of fixture checkpoints, and the cleanup result.
 If creation or the attached run fails, a separate cleanup budget targets the named fixture container.
 After a create timeout, cleanup checks for late registration and reports an unconfirmed result
@@ -25,8 +27,8 @@ before invoking its scripts with `python3 -I -B`.
 - `receive.py` checks out the exact commit and tree from the transferred `signed-<tag>-dev-incoming-source.bundle` in the guest's home.
 - `probe.py` takes the native read-only preimage capture using the installed environment.
 
-The signed runbook owns approval, transport, and engine actions. These scripts provide the
-checkout and preflight steps for that runbook.
+The signed runbook owns approval and staging. The DEV host runs the install phases in a
+transient system service. See [Start the install on DEV](#start-the-install-on-dev).
 
 The read-only running-stack scan is `node scripts/dev-install/probe.mjs --project-name "$PROJECT" --env-file "$FULL_ENV"`.
 Run it as root from the candidate checkout, with the deployed Compose inputs in a separate tree.
@@ -100,11 +102,11 @@ python3 -I -B scripts/dev-install/render.py --host-identity "$HOST_IDENTITY" \
   --run-id "$RUN_ID" --commit "$COMMIT" --output "$HOST_PACKET"
 ```
 
-The host identity fields are in `fixtures/host-identity.example.json`. The signed
-launcher verifies the seal and stages the rendered host files with the approved
-guest payload and `DEV-SHA256SUMS`. Keep the host packet private and separate
-from the guest packet. Use a root-owned mode-0700 `DISK_STATE` directory that
-persists across runs, outside the support directories.
+The host identity fields are in `fixtures/host-identity.example.json`. Stage the
+rendered host files with the approved guest payload and `DEV-SHA256SUMS`. Keep
+the host packet private and separate from the guest packet. Use a root-owned
+mode-0700 `DISK_STATE` directory that persists across runs, outside the support
+directories.
 
 - The post-create, pre-boot gate requires the immutable flag, exact identity for TOP
   and every backing layer, `qemu-img check` and the pinned backing chain.
@@ -130,6 +132,49 @@ persists across runs, outside the support directories.
 The real-QEMU nightly uses a scratch ext4 filesystem and a boot-sector guard stub.
 Use the signed host qualification to measure the live phase budgets.
 
+## Start the install on DEV
+
+Transfer the sealed install bundle to the approved private staging location and
+request the unit start through the Servers maintenance entry point. The
+workstation performs only those two operations. Servers verifies the approved
+seal before starting any packet script and stages the host packet in a
+root-owned mode-0700 directory with the guest payload at the packet's `STAGING`
+path.
+
+Pass exactly three required arguments to `run-install.sh`.
+
+| Argument | Value |
+| --- | --- |
+| `DEV_UNIT_USER` | The configured unit user. Set it to root. |
+| `DEV_INSTALL_BUNDLE` | The absolute path to the verified host packet directory on DEV. |
+| `DEV_STEP_LOCK` | The canonical absolute lock marker path from the host identity. It must match the packet. |
+
+Use the existing install lease unit name and limits. Servers derives
+`LEASE_PREFIX`, `RUN_ID` and `INSTALL_RUNTIME` from the verified packet using its
+`host.env`, `run-id` and `host-maintenance.py lease-runtime install`. Start the
+unit on DEV with the configured identity and install lease properties:
+
+```sh
+# Root is required to access the sealed packet, freeze the base disk and switch the system VM to its overlay.
+systemd-run --unit="${LEASE_PREFIX}-install-$RUN_ID.service" --uid="$DEV_UNIT_USER" --wait \
+  -p RuntimeMaxSec="$INSTALL_RUNTIME" -p TimeoutStopSec=30 -p KillMode=control-group \
+  -p CPUQuota=800% -p MemoryMax=8G -p MemorySwapMax=0 -p CPUWeight=10 -p IOWeight=10 \
+  -p Nice=19 -p IOSchedulingClass=idle -p UMask=0077 \
+  /bin/bash "$DEV_INSTALL_BUNDLE/run-install.sh" "$DEV_UNIT_USER" "$DEV_INSTALL_BUNDLE" "$DEV_STEP_LOCK"
+```
+
+The service keeps running if the workstation disconnects. It holds descriptor
+7 across the existing guest preflight, overlay cutover and smoke. It then
+closes descriptor 7 and uses the lock helper to record and verify handback. A
+phase failure stops the service and preserves the run record. A smoke failure
+leaves the overlay for the authorized recovery path and runs no build or
+deployment again. Before recovery or another attempt, retain the unit journal
+and the private run evidence. For timing and archival, retain the service's
+message output as the raw install receipt after a successful unit exit and
+verified handback. If a phase fails after the overlay is armed, have Servers
+resolve the run record through the [DEV step handback](#dev-step-lock) before
+registering the authorized rollback with `register.sh rollback "$STATE"`.
+
 ## DEV step lock
 
 Set `DEV_STEP_LOCK` in the private host identity to the absolute path of the
@@ -138,10 +183,17 @@ path from before the first action until the step exits, including if it is kille
 Lease units, install/discard, overlay actions and host-side guest phases share
 this lock. A competing step reports `HOLD_DEV_STEP_BUSY` and exits 75.
 After acquiring the lock, a writer records its run ID, step, UTC start time
-and lock device and inode in the adjacent `$DEV_STEP_LOCK.run` file. An
+and lock device and inode in the configured `DEV_STEP_RECORD` file. An
 interrupted writer leaves this record in place. A new acquisition reports
 `HOLD_DEV_STEP_UNRESOLVED run_id=<run-id>` and exits 75 while the record
 remains. Nested phases share the original locked descriptor.
+
+Set `DEV_STEP_RECORD` in the private host identity to an absolute file path
+on persistent storage. The default is `$DISK_STATE/dev-step.run`. Use the
+same location for all callers and keep it outside the lock marker directory.
+Provision the record's parent directory as root-owned mode 0700. The
+helper writes the record mode 0600. Recreating the marker directory leaves
+the record in place and writer admission held.
 
 The controller run ID is the lowercase SHA-256 of the compact UTF-8 JSON
 array `[carrier_sha256, cutover_authority_json_sha256]`. Platform leases use
@@ -182,8 +234,47 @@ old start time leaves the record in place.
 D1 uses the same path and treats a failed `flock -n "$DEV_STEP_LOCK" true` probe as busy.
 The host provisions the dedicated root-owned mode-0755 directory and empty
 root-owned marker via `tmpfiles.d`. Steps open the marker read-only. Leave it
-in place between steps so every probe uses the same inode. A missing directory
-or marker holds the step with `HOLD_DEV_STEP_MARKER_DIR` or `HOLD_DEV_STEP_MARKER`.
+in place between steps so every probe uses the same inode. Install
+`dev-step-lock.sh`, `host-maintenance.py` and `frozen-disk.py` together
+from the same sealed host packet. The evidence directory must be a real
+directory owned by the helper's effective user, normally root, with mode
+0700. The run record and evidence files must be regular files owned by that
+user, with a single hard link, no group or other write permission, and at
+most 4 KiB each.
+
+| Hold token | Meaning |
+| --- | --- |
+| `HOLD_DEV_STEP_BUSY` | Another descriptor holds the flock. Handback also reports this while the caller still holds the original descriptor. |
+| `HOLD_DEV_STEP_MARKER_DIR` | The marker directory is missing or unset. |
+| `HOLD_DEV_STEP_MARKER` | The marker is missing, is unusable, or could not be opened. |
+| `HOLD_DEV_STEP_LOCK` | The flock failed for a reason other than contention. |
+| `HOLD_DEV_STEP_DESCRIPTOR` | Descriptor 7 is missing or lacks the exclusive flock on the configured marker. |
+| `HOLD_DEV_STEP_RECORD` | Admission could not validate the record or its directory, could not persist the record, or found a legacy record next to the lock. |
+| `HOLD_DEV_STEP_RUN_ID` | The run ID format is invalid. |
+| `HOLD_DEV_STEP_ARGUMENTS` | The command, argument count or step name is invalid. |
+| `HOLD_DEV_STEP_CLOCK` | The helper could not read a UTC start time in the required format. |
+| `HOLD_DEV_STEP_UNRESOLVED run_id=<run-id>` | An earlier run still owns the durable record. |
+| `HOLD_DEV_STEP_HANDBACK` | Handback could not verify the record, evidence or lock identity. |
+
+For a corrupt run record, preserve its bytes and keep writer admission held.
+Have the host operator establish the original run ID and marker device and
+inode. Restore an independently verified copy of the same claim under the
+configured flock, then use the handback command with evidence bound to that
+record. When the copy or original lock identity cannot be verified, keep the
+hold for coordinated host recovery.
+
+Before switching record locations, complete handback for any outstanding
+run with the helper and configuration that created its record. A record
+left at the former `$DEV_STEP_LOCK.run` location holds admission in the
+new helper. Preserve that record and the original lock for recovery.
+
+When registration fails after writing its reservation, retain the registration
+artifacts and inspect the exact transient unit and its logs. Verify terminal
+service state and either stop evidence or proof that the unit performed no
+work. After observing release on the original lock identity, bind those
+receipts to the reservation and use handback. If launching the lease again,
+use a new approved run ID so the prior registration artifacts stay available.
+
 The pull report agent and standing services such as the VM and forwards never
 take this lock.
 

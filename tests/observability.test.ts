@@ -103,6 +103,35 @@ test("structured logs preserve long numeric IDs and timestamps in fields", () =>
   assert.deepEqual(redactLogValue(fields), fields);
 });
 
+test("phone redaction covers grouped and wide digits without hiding dates or mobile metadata", () => {
+  const phones = [
+    "202 5550102",
+    "0770 0900123",
+    "07700 900123",
+    "1-202-555-0102",
+    "00 1 202 555 0102",
+    "001 2025550102",
+    "00 12025550102",
+    "０７７００９００１２３",
+  ];
+  const phoneFields = Object.fromEntries(
+    ["number", "telephone", "cellphone", "whatsapp", "from_number", "whatsappNumber", "customer_mobile"].map(
+      key => [key, "12025550102"],
+    ),
+  );
+  const preserved = { request_id: "120255501020", is_mobile: true, mobile_platform: "android", isMobile: false };
+  const dates = ["Date 24-11-2026.", "Date 24.11.2026.", "Date 2026-11-24."];
+  assert.deepEqual(redactLogValue({
+    detail: [...phones.map(value => "Called " + value + "."), ...dates],
+    ...phoneFields,
+    ...preserved,
+  }), {
+    detail: [...phones.map(() => "Called [PHONE]."), ...dates],
+    ...Object.fromEntries(Object.keys(phoneFields).map(key => [key, "[REDACTED]"])),
+    ...preserved,
+  });
+});
+
 test("structured logs redact phone numbers embedded in text with common separators", () => {
   const cases = [
     "12025550102", "+999 50 555 0102", "050-000-0000", "202.555.0102", "(202) 555-0102",
@@ -124,7 +153,7 @@ test("structured logs redact phones after a hyphen and preserve UUIDs and dates 
 test("structured logs keep label-hyphen-digit IDs", () => {
   const fields = { request_id: "req-1764000000000", job_id: "wa-1764000000000", trace: "req-0123456789" };
   assert.deepEqual(redactLogValue(fields), fields);
-  const text = "TKT-20261124000123 and import-1764000000000 done";
+  const text = "TKT-20261124000123 and import-1764000000000 and req-0012025550102 done";
   assert.deepEqual(redactLogValue({ detail: text }), { detail: text });
 });
 

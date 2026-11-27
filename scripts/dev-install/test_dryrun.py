@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Exercise the rendered packet in a network-isolated Linux container."""
 
-from contextlib import redirect_stdout
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
 import hashlib
+from importlib.util import module_from_spec, spec_from_file_location
 import io
 import json
 import os
@@ -26,7 +27,28 @@ IDENTITY = FIXTURES / "identity.example.json"
 IMAGE = "node:24.22.1-bookworm@sha256:d862bb5d082c5ae0210ac07e8c0344cb8cf7bef6d78e9b8c50c179da923108ea"
 SANDBOX_HOSTNAME = "sandbox.example.test"
 SANDBOX_TIMEOUT = 120
+IMAGE_CHECK_TIMEOUT = 10
+REGISTRY_PULL_TIMEOUT = 75
 CLEANUP_TIMEOUT = 20
+INSTALL_PHASE_STEPS = {
+    "preflight": ("step running-top-guard-and-preflight guest_phase preflight",),
+    "cutover": (
+        'step top-shutdown poweroff_clean "$TOP_DRIVE"',
+        'step overlay-boot boot "$OVERLAY_DRIVE"',
+        "step overlay-guard-and-install guest_phase install",
+    ),
+    "smoke": ("step held-smoke guest_phase smoke",),
+}
+INSTALL_PHASES = tuple(INSTALL_PHASE_STEPS)
+INSTALL_ADMISSION_HOLDS = {
+    "late-start": "HOLD_INSTALL_WINDOW_TOO_SHORT",
+    "late-after-claim": "HOLD_INSTALL_WINDOW_TOO_SHORT",
+    "finished-bundle": "HOLD_DEV_INSTALL_ALREADY_STARTED",
+}
+INSTALL_FAILURE_CHECKPOINTS = {
+    case: f"test_server_install_stops_at_first_failed_phase:{case or 'success'}"
+    for case in (None, "acquire", *INSTALL_PHASES, "handback", *INSTALL_ADMISSION_HOLDS)
+}
 CHILD_CHECKPOINTS = {
     f"DEV_DRYRUN_CHECKPOINT {phase}".encode("ascii"): phase
     for phase in (
@@ -35,8 +57,11 @@ CHILD_CHECKPOINTS = {
         "step-missing-stop", "step-completion-digest", "step-held-lock", "step-replaced-lock",
         "step-handback", "step-overlay-admitted", "step-wrapper-descriptor", "step-wrapper-lock",
         "step-wrapper-reopen",
+        "step-direct-handback", "step-evidence-symlink", "step-evidence-mode", "step-wrapper-run-id",
+        "step-recreated-lock-directory", "step-legacy-record",
         "guest-prepare", "guest-render", "guest-receive", "guest-readability", "guest-receive-repeat",
         "guest-probe", "guest-probe-timeout", "guest-lock", "suite-passed", "suite-failed",
+        *INSTALL_FAILURE_CHECKPOINTS.values(),
     )
 }
 NATIVE_READABILITY = """
@@ -58,6 +83,15 @@ def check(condition, message):
 
 def checkpoint(phase):
     print(f"DEV_DRYRUN_CHECKPOINT {phase}", flush=True)
+
+
+@contextmanager
+def checkpoint_on_failure(phase):
+    try:
+        yield
+    except Exception:
+        checkpoint(phase)
+        raise
 
 
 def run(*args, **options):
@@ -262,10 +296,24 @@ def assert_mutations(test, stage, mutations):
             print(f"Mutation rejected: {label}", flush=True)
 
 
-def host_step(work, shell, *args, clock="2000-01-01T00:00:00Z"):
+def host_step(work, shell, *args, clock="2000-01-01T00:00:00Z", after_claim=""):
+    env = {**os.environ, "DEV_STEP_LOCK": str(work / "locks" / "active"), "DISK_STATE": str(work / "custody"),
+           "DEV_STEP_FIXTURE_UTC": clock, "DEV_STEP_FIXTURE_AFTER_CLAIM": after_claim}
+    env.pop("DEV_STEP_RECORD", None)
     return subprocess.run(
         ["bash", "-c", r"""
 date() {
+    case "$*" in
+        '-u +%s')
+            local instant="$DEV_STEP_FIXTURE_UTC"
+            if [[ -n "$DEV_STEP_FIXTURE_AFTER_CLAIM" && -f "$DISK_STATE/dev-step.run" ]]; then
+                instant="$DEV_STEP_FIXTURE_AFTER_CLAIM"
+            fi
+            /bin/date -u -d "$instant" +%s
+            return ;;
+        '-u -d 2000-01-01T00:00:00Z +%s') printf '946684800\n'; return ;;
+        '-u -d 2000-01-01T01:00:00Z +%s') printf '946688400\n'; return ;;
+    esac
     case "$2" in
         +%FT%TZ) printf '%s\n' "$DEV_STEP_FIXTURE_UTC" ;;
         '+%s%N %FT%TZ') printf '946684800000000000 %s\n' "$DEV_STEP_FIXTURE_UTC" ;;
@@ -279,15 +327,17 @@ df() {
 }
 export -f date stat df
 """ + shell, "host-step-fixture", *args],
-        env={**os.environ, "DEV_STEP_LOCK": str(work / "active"), "DEV_STEP_FIXTURE_UTC": clock},
+        env=env,
         capture_output=True, text=True, timeout=10,
     )
 
 
-def assert_step_result(test, case, actual, expected):
+def assert_step_result(test, case, result, returncode, stdout="", stderr=""):
+    actual = (result.returncode, result.stdout, result.stderr)
+    expected = (returncode, stdout, stderr)
     if actual != expected:
         checkpoint(case)
-    test.assertEqual(actual, expected)
+    test.assertEqual(actual, expected, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}")
 
 
 class DispatchTest(unittest.TestCase):
@@ -299,7 +349,11 @@ class DispatchTest(unittest.TestCase):
             helper = work / "dev-step-lock.sh"
             for name in (helper.name, "host-maintenance.py", "frozen-disk.py"):
                 shutil.copyfile(templates / name, work / name)
-            (work / "active").touch()
+            lock_directory = work / "locks"
+            lock_directory.mkdir()
+            (lock_directory / "active").touch()
+            custody = work / "custody"
+            custody.mkdir(mode=0o700)
             (work / "run-id").write_text("20000101T000000Z\n", encoding="ascii")
             (work / "host.env").write_text("export DIR=. ROOT_FLOOR_BYTES=1\n", encoding="ascii")
             controller = host_step(work, r"""
@@ -308,27 +362,26 @@ flock -n -E 75 7 || exit $?
 bash "$1" acquire "$2" install || exit $?
 kill -KILL "$BASHPID"
 """, helper, run_id)
-            assert_step_result(self, "step-controller-exit", controller.returncode, -signal.SIGKILL)
+            assert_step_result(self, "step-controller-exit", controller, -signal.SIGKILL)
             overlay = 'exec bash "$1" rollback "$2"'
-            record_path = work / "active.run"
+            record_path = custody / "dev-step.run"
             record_bytes = record_path.read_bytes()
             record = json.loads(record_bytes)
             self.assertEqual((record["run_id"], record["step"], record["started_at"]),
                              (run_id, "install", "2000-01-01T00:00:00Z"))
             held = host_step(work, overlay, templates / "overlay-action.sh", work)
-            assert_step_result(self, "step-overlay-hold", (held.returncode, held.stdout, held.stderr),
-                               (75, f"HOLD_DEV_STEP_UNRESOLVED run_id={run_id}\n", ""))
+            assert_step_result(self, "step-overlay-hold", held, 75, f"HOLD_DEV_STEP_UNRESOLVED run_id={run_id}\n")
             os.utime(record_path, ns=(1, 1))
             aged = host_step(work, overlay, templates / "overlay-action.sh", work, clock="2001-01-01T00:00:00Z")
-            assert_step_result(self, "step-aged-hold", (aged.returncode, aged.stdout, aged.stderr), (75, held.stdout, ""))
+            assert_step_result(self, "step-aged-hold", aged, 75, held.stdout)
 
-            evidence = work / "evidence"
+            evidence = work / f"dev-step-{record['claim']}"
             evidence.mkdir(mode=0o700)
             clear = 'exec bash "$1" handback "$2" "$3"'
 
-            def handback_refused(case):
-                result = host_step(work, clear, helper, run_id, evidence)
-                assert_step_result(self, case, (result.returncode, result.stdout), (75, "HOLD_DEV_STEP_HANDBACK\n"))
+            def handback_refused(case, evidence_dir=evidence):
+                result = host_step(work, clear, helper, run_id, evidence_dir)
+                assert_step_result(self, case, result, 75, "HOLD_DEV_STEP_HANDBACK\n")
                 self.assertEqual(record_path.read_bytes(), record_bytes)
 
             terminal = json.dumps({"run_id": run_id, "status": "terminal"}).encode()
@@ -356,35 +409,67 @@ bash "$1" handback "$2" "$3"
 # Keep the independent owner alive through the child call.
 exit $?
 """, helper, run_id, evidence)
-            assert_step_result(self, "step-held-lock", (same_lock_held.returncode, same_lock_held.stdout),
-                               (75, "HOLD_DEV_STEP_BUSY\n"))
-            marker = work / "active"
-            original = marker.with_suffix(".original")
-            marker.rename(original)
-            marker.touch()
+            assert_step_result(self, "step-held-lock", same_lock_held, 75, "HOLD_DEV_STEP_BUSY\n")
+            for operation in ("handback", "local-handback"):
+                with self.subTest(operation=operation):
+                    direct = host_step(work, r"""
+exec 7<"$DEV_STEP_LOCK"
+flock -n -E 75 7 || exit $?
+exec /usr/bin/python3 -I -B "$1" dev-step "$2" "$3" "$4"
+""", work / "host-maintenance.py", operation, run_id, evidence)
+                    assert_step_result(self, "step-direct-handback", direct, 75, "HOLD_DEV_STEP_BUSY\n")
+                    self.assertEqual(record_path.read_bytes(), record_bytes)
+
+            linked_evidence = work / "linked-evidence"
+            linked_evidence.symlink_to(evidence, target_is_directory=True)
+            handback_refused("step-evidence-symlink", linked_evidence)
+            evidence.chmod(0o755)
+            handback_refused("step-evidence-mode")
+            evidence.chmod(0o700)
+            original = work / "original-locks"
+            lock_directory.rename(original)
+            lock_directory.mkdir()
+            (lock_directory / "active").touch()
+            recreated = host_step(work, overlay, templates / "overlay-action.sh", work)
+            assert_step_result(self, "step-recreated-lock-directory", recreated, 75, held.stdout)
+            self.assertEqual(record_path.read_bytes(), record_bytes)
             handback_refused("step-replaced-lock")
-            original.replace(marker)
+            (lock_directory / "active").unlink()
+            lock_directory.rmdir()
+            original.rename(lock_directory)
             cleared = host_step(work, clear, helper, run_id, evidence)
-            assert_step_result(self, "step-handback", (cleared.returncode, cleared.stdout),
-                               (0, "DEV_STEP_HANDBACK=PASS\n"))
+            assert_step_result(self, "step-handback", cleared, 0, "DEV_STEP_HANDBACK=PASS\n")
             self.assertFalse(record_path.exists())
             admitted = host_step(work, overlay, templates / "overlay-action.sh", work)
-            assert_step_result(self, "step-overlay-admitted", (admitted.returncode, admitted.stderr),
-                               (1, "VM_PREFLIGHT_REACHED\n"))
+            assert_step_result(self, "step-overlay-admitted", admitted, 1, stderr="VM_PREFLIGHT_REACHED\n")
 
     def test_maintenance_wrapper_keeps_lock_after_acquire_returns(self):
         with tempfile.TemporaryDirectory() as directory:
             work = Path(directory)
-            (work / "active").touch()
+            (work / "locks").mkdir()
+            (work / "locks" / "active").touch()
+            (work / "custody").mkdir(mode=0o700)
             (work / "other").touch()
             helper = HERE / "templates" / "dev-step-lock.sh"
             run_id = "20000101T000000Z"
             for setup in ("", 'exec 7<"$DEV_STEP_LOCK"; ', 'exec 7<"$3"; flock -n -E 75 7; '):
                 result = host_step(work, setup + 'exec bash "$1" acquire "$2" maintenance',
                                    helper, run_id, work / "other")
-                assert_step_result(self, "step-wrapper-descriptor", (result.returncode, result.stdout),
-                                   (75, "HOLD_DEV_STEP_DESCRIPTOR\n"))
-            self.assertFalse((work / "active.run").exists())
+                assert_step_result(self, "step-wrapper-descriptor", result, 75, "HOLD_DEV_STEP_DESCRIPTOR\n")
+            acquire = r"""
+exec 7<"$DEV_STEP_LOCK"
+flock -n -E 75 7 || exit $?
+exec bash "$1" acquire "$2" maintenance
+"""
+            invalid_run = host_step(work, acquire, helper, "invalid-run")
+            assert_step_result(self, "step-wrapper-run-id", invalid_run, 75, "HOLD_DEV_STEP_RUN_ID\n")
+            legacy = work / "locks" / "active.run"
+            legacy.touch()
+            old_hold = host_step(work, acquire, helper, run_id)
+            assert_step_result(self, "step-legacy-record", old_hold, 75, "HOLD_DEV_STEP_RECORD\n")
+            self.assertTrue(legacy.is_file())
+            legacy.unlink()
+            self.assertFalse((work / "custody" / "dev-step.run").exists())
             wrapper = host_step(work, r"""
 exec 7<"$DEV_STEP_LOCK"
 flock -n -E 75 7 || exit $?
@@ -393,14 +478,159 @@ if flock -n "$DEV_STEP_LOCK" true; then exit 1; fi
 if bash -c 'flock -n "$DEV_STEP_LOCK" true'; then exit 1; fi
 exit 42
 """, helper, run_id)
-            assert_step_result(self, "step-wrapper-lock", (wrapper.returncode, wrapper.stdout), (42, ""))
-            reopened = host_step(work, r"""
+            assert_step_result(self, "step-wrapper-lock", wrapper, 42)
+            reopened = host_step(work, acquire, helper, run_id)
+            assert_step_result(self, "step-wrapper-reopen", reopened, 75, f"HOLD_DEV_STEP_UNRESOLVED run_id={run_id}\n")
+
+    def test_real_install_order_matches_phase_list(self):
+        overlay = (HERE / "templates" / "overlay-action.sh").read_text(encoding="utf-8")
+        install = overlay.split("\ninstall)\n", 1)[1].split("\nrollback)\n", 1)[0]
+        expected = [step for steps in INSTALL_PHASE_STEPS.values() for step in steps]
+        completion = "DEV_OVERLAY_DONE"
+        actual = []
+        for line in install.splitlines():
+            line = line.strip()
+            if line in expected:
+                actual.append(line)
+            elif line.startswith(f"printf '{completion} "):
+                actual.append(completion)
+        self.assertEqual(actual, [*expected, completion])
+
+    def test_server_install_stops_at_first_failed_phase(self):
+        for failure, failure_checkpoint in INSTALL_FAILURE_CHECKPOINTS.items():
+            with (
+                self.subTest(failure=failure),
+                checkpoint_on_failure(failure_checkpoint),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                work = Path(directory)
+                state = work / "packet"
+                state.mkdir(mode=0o700)
+                staging = work / "staging"
+                staging.mkdir()
+                lock_directory = work / "locks"
+                lock_directory.mkdir()
+                marker = lock_directory / "active"
+                marker.touch()
+                custody = work / "custody"
+                custody.mkdir(mode=0o700)
+                run_id = "20000101T000000Z"
+                for name in ("run-install.sh", "dev-step-lock.sh", "host-maintenance.py",
+                             "frozen-disk.py", "install-or-discard.sh", "dev-guest-phase.sh"):
+                    shutil.copyfile(HERE / "templates" / name, state / name)
+                (state / "run-id").write_text(run_id + "\n", encoding="ascii")
+                (state / "host.env").write_text(
+                    f'export DEV_STEP_LOCK="{marker}" STAGING="{staging}" LEASE_PREFIX=fixture\n'
+                    "export INSTALL_NOT_BEFORE=2000-01-01T00:00:00Z INSTALL_CUTOFF=2000-01-01T01:00:00Z\n"
+                    "export COMMIT_FALLBACK_SECONDS=0 INSTALL_DISCARD_BUDGET_SOURCE=reviewed-reservations\n"
+                    "export INSTALL_SECONDS=60 DISCARD_SECONDS=60\n"
+                    "export GUEST_KNOWN_HOSTS=/fixture/known-hosts GUEST_KEY=/fixture/key\n"
+                    "export GUEST_USER=fixture GUEST_ADDRESS=127.0.0.1 GUEST_PORT=22\n",
+                    encoding="ascii",
+                )
+                (staging / "old-held-readback.py").touch()
+                (state / "probe-up.py").write_text(
+                    "import os\n"
+                    "if os.environ['FIXTURE_FAILURE'] == 'smoke':\n"
+                    "    raise SystemExit(42)\n"
+                    "print('PORTAL_HTTPS_READY=PASS')\n",
+                    encoding="ascii",
+                )
+                action = state / "overlay-action.sh"
+                action.write_text(r"""
+set -euo pipefail
+state="$2"
+printf '%s\n' "$1" >> "$state/actions"
+test "$1" = install
+source "$state/dev-step-lock.sh"
+hold_dev_step_lock "$(cat "$state/run-id")" install
+test -z "$DEV_STEP_OWNER"
+if flock -n "$DEV_STEP_LOCK" true; then exit 91; fi
+test ! -e "$state/overlay-verification-armed"
+# A cutover failure after arming would otherwise invoke automatic discard.
+touch -- "$state/overlay-verification-armed"
+for phase in preflight cutover; do
+    printf '%s\n' "$phase" >> "$state/actions"
+    if [[ "$phase" = "$FIXTURE_FAILURE" ]]; then exit 42; fi
+done
+printf 'smoke\n' >> "$state/actions"
+bash "$state/dev-guest-phase.sh" smoke "$state"
+printf 'DEV_OVERLAY_DONE fixture held_smoke=PASS fence=PASS release=HELD\n' > "$state/install.done"
+if [[ "$FIXTURE_FAILURE" = handback ]]; then chmod 0755 "$state"; fi
+""", encoding="ascii")
+                shutil.copyfile(action, staging / action.name)
+                (staging / "DEV-SHA256SUMS").write_text(
+                    f"{digest(action.read_bytes())}  {action.name}\n", encoding="ascii",
+                )
+                (state / "SHA256SUMS").write_text("".join(
+                    f"{digest(path.read_bytes())}  {path.name}\n" for path in sorted(state.iterdir())
+                ), encoding="ascii")
+
+                record_path = custody / "dev-step.run"
+                if failure == "acquire":
+                    prior = host_step(work, r"""
 exec 7<"$DEV_STEP_LOCK"
 flock -n -E 75 7 || exit $?
-bash "$1" acquire "$2" maintenance
-""", helper, run_id)
-            assert_step_result(self, "step-wrapper-reopen", (reopened.returncode, reopened.stdout),
-                               (75, f"HOLD_DEV_STEP_UNRESOLVED run_id={run_id}\n"))
+bash "$1" acquire "$2" fixture
+""", state / "dev-step-lock.sh", run_id)
+                    self.assertEqual(prior.returncode, 0, (prior.stdout, prior.stderr))
+                invocation = r"""
+export FIXTURE_FAILURE="$3"
+ssh() { [[ "${*: -1}" == *EXPECT_NEVER_STARTED=1* ]]; }
+export -f ssh
+exec bash "$1/run-install.sh" "$(id -un)" "$1" "$2"
+"""
+                if failure == "finished-bundle":
+                    (state / "overlay-verification-armed").touch()
+                    (state / "install.done").write_text(
+                        "DEV_OVERLAY_DONE fixture held_smoke=PASS fence=PASS release=HELD\n", encoding="ascii",
+                    )
+                result = host_step(
+                    work, invocation, state, marker, failure or "",
+                    clock="2000-01-01T00:59:00Z" if failure == "late-start" else "2000-01-01T00:00:00Z",
+                    after_claim="2000-01-01T00:59:00Z" if failure == "late-after-claim" else "",
+                )
+                expected_status = 42 if failure in INSTALL_PHASES else 75 if failure else 0
+                self.assertEqual(result.returncode, expected_status, (result.stdout, result.stderr))
+                self.assertEqual(host_step(work, 'exec flock -n "$DEV_STEP_LOCK" true').returncode, 0)
+                trace = state / "actions"
+                if failure in INSTALL_ADMISSION_HOLDS:
+                    self.assertFalse(record_path.exists())
+                    self.assertFalse(trace.exists())
+                    self.assertIn(INSTALL_ADMISSION_HOLDS[failure], result.stdout)
+                    if failure == "late-after-claim":
+                        stop, = state.glob("dev-step-*/stop.json")
+                        self.assertEqual(json.loads(stop.read_bytes())["status"], "no-work")
+                    else:
+                        self.assertFalse(any(path.is_dir() for path in state.glob("dev-step-*")))
+                    continue
+                if failure == "acquire":
+                    self.assertFalse(trace.exists())
+                    self.assertIn("HOLD_DEV_STEP_UNRESOLVED", result.stdout)
+                else:
+                    phases = INSTALL_PHASES
+                    count = phases.index(failure) + 1 if failure in phases else len(phases)
+                    self.assertCountEqual(trace.read_text().splitlines(), ["install", *phases[:count]])
+                    self.assertEqual((state / "portal-readiness.log").exists(), count == len(phases))
+                    self.assertFalse((state / "transfer.log").exists())
+                if failure:
+                    self.assertFalse(list(state.glob("dev-step-*/completion.json")))
+                    record = json.loads(record_path.read_bytes())
+                    self.assertEqual(record["run_id"], run_id)
+                    self.assertEqual(record["step"], "fixture" if failure == "acquire" else "controller-install")
+                else:
+                    self.assertIn("DEV_SIGNED_INSTALL=PASS", result.stdout)
+                    self.assertFalse(record_path.exists())
+                    evidence, = state.glob("dev-step-*/completion.json")
+                    self.assertEqual(json.loads(evidence.read_bytes())["run_id"], run_id)
+
+    def test_server_install_requires_three_inputs(self):
+        runner = HERE / "templates" / "run-install.sh"
+        for args in ((), ("", "/bundle", "/lock"), ("fixture", "", "/lock"), ("fixture", "/bundle", "")):
+            with self.subTest(args=args):
+                result = subprocess.run(["bash", runner, *args], capture_output=True, text=True, timeout=10)
+                self.assertEqual(result.returncode, 75)
+                self.assertIn("HOLD_DEV_INSTALL_INPUTS", result.stderr)
 
     def test_golden_and_fixed_identity(self):
         checkpoint("golden-render")
@@ -528,13 +758,32 @@ def cleanup_sandbox(suite, name, create_timed_out):
     sandbox_log(suite, "cleanup unconfirmed")
 
 
+def prepare_sandbox_image():
+    started = time.monotonic()
+    image = docker_phase("image", "image-check", started + IMAGE_CHECK_TIMEOUT, "image", "inspect", IMAGE)
+    if image.returncode == 0:
+        return
+
+    spec = spec_from_file_location("image_registry_retry", HERE.parent / "release/image_registry_retry.py")
+    retry = module_from_spec(spec)
+    spec.loader.exec_module(retry)
+
+    def report_failure(attempt, error):
+        outcome = "timed out" if isinstance(error, subprocess.TimeoutExpired) else f"exit={error.returncode}"
+        sandbox_log("image", f"registry fetch attempt {attempt} failed ({outcome})")
+
+    started = time.monotonic()
+    sandbox_log("image", "registry fetch started")
+    try:
+        retry.registry_output("docker", "pull", IMAGE, timeout=REGISTRY_PULL_TIMEOUT, delays=(1, 2),
+                              report_failure=report_failure)
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        raise RuntimeError("DEV dry-run: registry fetch failed for the sandbox image") from None
+    sandbox_log("image", f"registry fetch ready elapsed_ms={int((time.monotonic() - started) * 1000)}")
+
+
 def sandbox(hostname, suite):
     deadline = time.monotonic() + SANDBOX_TIMEOUT
-    image = docker_phase(suite, "image-check", deadline, "image", "inspect", IMAGE)
-    if image.returncode:
-        pull = docker_phase(suite, "pull", deadline, "pull", IMAGE)
-        check(pull.returncode == 0, f"{suite}: pull failed")
-
     name = f"wasalx-dev-dryrun-{uuid4().hex}"
     create = None
     create_timed_out = False
@@ -564,27 +813,38 @@ def sandbox(hostname, suite):
 
 
 class SandboxTest(unittest.TestCase):
-    def test_cold_image_and_attached_start_share_the_deadline(self):
+    def test_registry_fetch_leaves_full_deadline_for_each_suite(self):
         elapsed = 0
         output = io.StringIO()
-        phases = iter(((1, 1), (82, 0), (5, 0), (4, 0)))
+        phases = iter(((1, 1), (0, None), (55, 0), (5, 0), (4, 0), (6, 0), (3, 0)))
+
+        def advance(seconds):
+            nonlocal elapsed
+            elapsed += seconds
 
         def run_docker(args, **options):
-            nonlocal elapsed
             duration, status = next(phases)
-            elapsed += duration
-            return subprocess.CompletedProcess(args, status, stdout=b"DEV_DRYRUN_CHECKPOINT suite-passed\n")
+            if status is None:
+                advance(options["timeout"])
+                raise subprocess.TimeoutExpired(args, options["timeout"])
+            advance(duration)
+            return subprocess.CompletedProcess(args, status, stdout=b"DEV_DRYRUN_CHECKPOINT suite-passed\n", stderr=b"")
 
         with (
             redirect_stdout(output),
             mock.patch.object(time, "monotonic", side_effect=lambda: elapsed),
+            mock.patch.object(time, "sleep", side_effect=advance) as backoff,
             mock.patch.object(subprocess, "run", side_effect=run_docker) as docker,
         ):
-            sandbox(SANDBOX_HOSTNAME, "DispatchTest")
-        inspect, pull, create, start = docker.call_args_list
-        self.assertEqual([call.kwargs["timeout"] for call in docker.call_args_list], [120, 119, 37, 32])
+            container()
+        backoff.assert_called_once_with(1)
+        inspect, failed_pull, pull, create, start, guest_create, guest_start = docker.call_args_list
+        self.assertEqual([call.kwargs["timeout"] for call in docker.call_args_list], [10, 75, 75, 120, 115, 120, 114])
         self.assertEqual(inspect.args[0], ["docker", "image", "inspect", IMAGE])
-        self.assertEqual(pull.args[0], ["docker", "pull", IMAGE])
+        self.assertEqual(pull.args[0], failed_pull.args[0])
+        self.assertEqual(list(pull.args[0]), ["docker", "pull", IMAGE])
+        self.assertEqual(guest_create.args[0][:3], ["docker", "create", "--name"])
+        self.assertEqual(guest_start.args[0], ["docker", "start", "--attach", guest_create.args[0][3]])
         create_args = create.args[0]
         name = create_args[3]
         self.assertEqual(create_args[:3], ["docker", "create", "--name"])
@@ -597,8 +857,44 @@ class SandboxTest(unittest.TestCase):
             IMAGE, "python3", "-I", "-B", "/fixture/scripts/dev-install/test_dryrun.py", "DispatchTest",
         ])
         self.assertEqual(start.args[0], ["docker", "start", "--attach", name])
+        self.assertIn("registry fetch attempt 1 failed (timed out)", output.getvalue())
         self.assertIn("child suite-passed", output.getvalue())
         self.assertIn("cleanup auto-removed", output.getvalue())
+
+    def test_registry_fetch_exhaustion_fails_before_creating_a_container(self):
+        output = io.StringIO()
+        command = ("docker", "pull", IMAGE)
+        failure = subprocess.CalledProcessError(
+            1, command, stderr=b"raw-diagnostic-marker: unexpected status code 503\n",
+        )
+        with (
+            redirect_stdout(output),
+            redirect_stderr(output),
+            mock.patch.object(time, "monotonic", return_value=0),
+            mock.patch.object(time, "sleep") as backoff,
+            mock.patch.object(subprocess, "run", side_effect=[mock.Mock(returncode=1), failure, failure, failure]) as docker,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "registry fetch failed for the sandbox image"):
+                container()
+        self.assertEqual([call.args[0] for call in docker.call_args_list[1:]], [command] * 3)
+        self.assertEqual(backoff.call_args_list, [mock.call(1), mock.call(2)])
+        self.assertEqual(
+            [line for line in output.getvalue().splitlines() if "registry fetch attempt" in line],
+            [f"DEV dry-run image: registry fetch attempt {attempt} failed (exit=1)" for attempt in (1, 2, 3)],
+        )
+        self.assertNotIn("raw-diagnostic-marker", output.getvalue())
+
+    def test_cached_image_needs_no_registry_fetch(self):
+        with (
+            redirect_stdout(io.StringIO()),
+            mock.patch.object(time, "monotonic", return_value=0),
+            mock.patch.object(subprocess, "run", return_value=mock.Mock(returncode=0)) as docker,
+            mock.patch(f"{__name__}.sandbox") as run_sandbox,
+        ):
+            container()
+        self.assertEqual(docker.call_count, 1)
+        self.assertEqual(docker.call_args.args[0], ["docker", "image", "inspect", IMAGE])
+        self.assertEqual(run_sandbox.call_count, 2)
 
     def test_create_or_attach_timeout_attempts_owned_cleanup_with_safe_output(self):
         for phase in ("create", "start-attach"):
@@ -607,7 +903,7 @@ class SandboxTest(unittest.TestCase):
                     ["docker", "raw-command-marker"], SANDBOX_TIMEOUT,
                     output=b"DEV_DRYRUN_CHECKPOINT dispatch-invoke\nDEV_DRYRUN_CHECKPOINT raw-output-marker\n",
                 )
-                results = [mock.Mock(returncode=0)]  # Local image hit.
+                results = []
                 if phase == "start-attach":
                     results.append(mock.Mock(returncode=0))
                 results.extend((timeout, mock.Mock(returncode=0, stderr=b"")))
@@ -619,7 +915,7 @@ class SandboxTest(unittest.TestCase):
                 ):
                     with self.assertRaisesRegex(RuntimeError, f"DispatchTest: {phase} deadline exceeded"):
                         sandbox(SANDBOX_HOSTNAME, "DispatchTest")
-                name = docker.call_args_list[1].args[0][3]
+                name = docker.call_args_list[0].args[0][3]
                 self.assertEqual(docker.call_args.args[0], ["docker", "rm", "--force", "--volumes", name])
                 self.assertEqual(docker.call_args.kwargs["timeout"], CLEANUP_TIMEOUT)
                 self.assertIn("cleanup removed", output.getvalue())
@@ -629,15 +925,22 @@ class SandboxTest(unittest.TestCase):
 
     def test_failed_suite_remains_failed_if_cleanup_times_out(self):
         output = io.StringIO()
+        failure_checkpoint = INSTALL_FAILURE_CHECKPOINTS["late-start"]
+        child_output = (
+            f"DEV_DRYRUN_CHECKPOINT {failure_checkpoint}\n"
+            f"DEV_DRYRUN_CHECKPOINT {failure_checkpoint} raw-output-marker\n"
+            "DEV_DRYRUN_CHECKPOINT suite-failed\n"
+        ).encode("ascii")
         results = [
-            mock.Mock(returncode=0), mock.Mock(returncode=0),
-            mock.Mock(returncode=1, stdout=b"DEV_DRYRUN_CHECKPOINT suite-failed\n"),
+            mock.Mock(returncode=0),
+            mock.Mock(returncode=1, stdout=child_output),
             subprocess.TimeoutExpired(["docker", "rm"], CLEANUP_TIMEOUT),
         ]
         with redirect_stdout(output), mock.patch.object(subprocess, "run", side_effect=results):
             with self.assertRaisesRegex(RuntimeError, "DispatchTest: start-attach failed"):
                 sandbox(SANDBOX_HOSTNAME, "DispatchTest")
-        self.assertIn("child suite-failed", output.getvalue())
+        self.assertIn(f"child {failure_checkpoint} suite-failed", output.getvalue())
+        self.assertNotIn("raw-output-marker", output.getvalue())
         self.assertIn("cleanup deadline exceeded", output.getvalue())
 
     def test_timed_out_create_checks_for_late_registration(self):
@@ -653,8 +956,6 @@ class SandboxTest(unittest.TestCase):
 
                 def run_docker(args, **options):
                     nonlocal removals
-                    if args[1] == "image":
-                        return subprocess.CompletedProcess(args, 0)
                     if args[1] == "create":
                         sleep(options["timeout"])
                         raise subprocess.TimeoutExpired(args, options["timeout"])
@@ -672,7 +973,7 @@ class SandboxTest(unittest.TestCase):
                 ):
                     with self.assertRaisesRegex(RuntimeError, "DispatchTest: create deadline exceeded"):
                         sandbox(SANDBOX_HOSTNAME, "DispatchTest")
-                _, create, *cleanup = docker.call_args_list
+                create, *cleanup = docker.call_args_list
                 name = create.args[0][3]
                 self.assertTrue(all(call.args[0] == ["docker", "rm", "--force", "--volumes", name] for call in cleanup))
                 expected_attempts = 2 if appears else CLEANUP_TIMEOUT
@@ -686,6 +987,7 @@ class SandboxTest(unittest.TestCase):
 
 def container():
     identity = json.loads(IDENTITY.read_bytes())
+    prepare_sandbox_image()
     sandbox(SANDBOX_HOSTNAME, "DispatchTest")
     sandbox(identity["expected_hostname"], "GuestTest")
 

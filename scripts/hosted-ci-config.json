@@ -43,10 +43,6 @@
     "scripts/test-docker-stack.sh": {
       "runner": "docker:smoke",
       "reason": "not run in CI: requires a full Docker Compose stack and local image builds."
-    },
-    "tests/visual/design-system.spec.ts": {
-      "runner": "test:visual",
-      "reason": "not run in CI: requires a separate Storybook build, Chromium, and visual or synthetic browser fixtures."
     }
   }
 }

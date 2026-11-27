@@ -244,7 +244,7 @@ export function Settings({
         {section === "general" ? (
           <div className="settings-fields">
             <label htmlFor="workspace-name">{t("tenant.settings.general.name")}<input id="workspace-name" dir="auto" value={form.name} maxLength={100} readOnly={!editable} onChange={(event) => update("name", event.target.value)} /></label>
-            <label htmlFor="workspace-slug">{t("tenant.settings.general.slug")}<div className="input-prefix"><span dir="ltr"><bdi>{t("tenant.settings.general.slugPrefix")}</bdi></span><input id="workspace-slug" dir="ltr" value={form.slug} maxLength={48} readOnly={!editable} onChange={(event) => update("slug", event.target.value.toLowerCase())} /></div></label>
+            <label htmlFor="workspace-slug">{t("tenant.settings.general.slug")}<div className="input-prefix" dir="ltr"><span><bdi>{t("tenant.settings.general.slugPrefix")}</bdi></span><input id="workspace-slug" dir="ltr" value={form.slug} maxLength={48} readOnly={!editable} onChange={(event) => update("slug", event.target.value.toLowerCase())} /></div></label>
             <label htmlFor="workspace-accent">{t("tenant.settings.general.accent")}<div className="color-input"><i style={{ backgroundColor: /^#[0-9a-f]{6}$/iu.test(form.accentColor) ? form.accentColor : "transparent" }} /><input id="workspace-accent" dir="ltr" value={form.accentColor} maxLength={7} readOnly={!editable} spellCheck={false} onChange={(event) => update("accentColor", event.target.value)} /></div></label>
             <label htmlFor="workspace-theme">{t("tenant.settings.general.theme")}<select id="workspace-theme" value={form.defaultTheme} disabled={!editable} onChange={(event) => update("defaultTheme", event.target.value as WorkspaceForm["defaultTheme"])}><option value="SYSTEM">{t("tenant.settings.general.themeSystem")}</option><option value="DARK">{t("tenant.settings.general.themeDark")}</option><option value="LIGHT">{t("tenant.settings.general.themeLight")}</option></select></label>
             <div className="setting-row settings-toggle-row"><span><b>{t("tenant.settings.general.disclosureTitle")}</b><small>{t("tenant.settings.general.disclosureBody")}</small></span><button type="button" className={`switch ${form.groupDisclosureEnabled ? "on" : ""}`} aria-pressed={form.groupDisclosureEnabled} aria-label={t("tenant.settings.general.disclosureToggle")} disabled={!editable} onClick={() => update("groupDisclosureEnabled", !form.groupDisclosureEnabled)}><span /></button></div>
@@ -607,8 +607,10 @@ export function PrivacyRequestDialog({requestType,mutationHeaders,close,complete
         body:JSON.stringify({requestType,scopeType,scopeValue:needsValue?privacyFriendlyScopeValue(scopeType,scopeValue):undefined,selection_sha256:target.selection?.selection_sha256,confirmation:requestType==="DELETE"?confirmation:undefined})});
       if(!execution.isCurrent())return;
       if(!response.ok){
-        const message=response.status===409?t("tenant.privacy.target.stale"):await apiError(response);
-        if(execution.isCurrent()){if([401,403,409].includes(response.status))target.clear();setError(message);}
+        // A hold refusal keeps the chosen target: picking it again cannot help.
+        const held=response.status===409&&((await response.clone().json().catch(()=>null)) as {code?:unknown}|null)?.code==="LEGAL_HOLD_ACTIVE";
+        const message=held?t("tenant.privacy.error.holdBlocksDeletion"):response.status===409?t("tenant.privacy.target.stale"):await apiError(response);
+        if(execution.isCurrent()){if(!held&&[401,403,409].includes(response.status))target.clear();setError(message);}
         return;
       }
       const returned=parsePrivacyMutationAcknowledgement(await response.json(),requestType,scopeType);

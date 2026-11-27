@@ -956,7 +956,7 @@ function TenantWasalXApp({
             <div className="profile" role="group" aria-label={t("tenant.profile.signedIn")}>
               <span className="avatar">{userInitials}</span>
               <span>
-                <b><bdi dir="auto">{user.displayName}</bdi></b>
+                <b dir="auto">{user.displayName}</b>
                 <small>{t(`tenant.role.${role}`)}</small>
               </span>
               <button className="profile-logout text-button" type="button" aria-label={t("tenant.profile.signOut")} title={t("tenant.profile.signOut")} disabled={signingOut} onClick={() => void signOut()}><svg className="profile-logout-mark" aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M10 5H5v14h5M14 8l4 4-4 4M18 12H9" /></svg><span className="profile-logout-label">{t("tenant.profile.signOut")}</span></button>
@@ -992,7 +992,7 @@ function TenantWasalXApp({
                   title={t("tenant.connections.connect")}
                   onClick={() => setConnectionModal(true)}
                 >
-                  <span className="connect-number-action-mark" aria-hidden="true">＋</span>
+                  <svg className="connect-number-action-mark" aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg>
                   <span className="connect-number-action-label">{t("tenant.connections.connect")}</span>
                 </button>
               ) : null}
@@ -1192,9 +1192,9 @@ function TenantWasalXApp({
                 mutationHeaders={mutationHeaders}
               />
               </Suspense>
-              {canWriteSettings ? <Suspense fallback={<SectionLoading />}>
+              {canWriteSettings ? <div className="settings-grid"><div className="settings-mailbox"><Suspense fallback={<SectionLoading />}>
                 <MailboxAdministration key={inboxScope} execute={executeWorkspace} scope={inboxRecoveryScope} />
-              </Suspense> : null}
+              </Suspense></div></div> : null}
               </>
             )}
           </section>
