@@ -33,37 +33,6 @@ export async function verifyCoexistenceNativePrivacy(fixture){
  try{
   assert.equal((await db.rows(tenantId,"SELECT pg_has_role(current_user,'wasalx_app','MEMBER') app_role"))[0].app_role,true);
   assert.equal((await tx(c=>c.query('SELECT current_user role'))).rows[0].role,'wasalx_connector_worker');
-  const interrupted = await createJob('DELETE', 'ZAMMAD_TICKET', '98459');
-  const recoveryState = async () => (await admin.query(
-    'SELECT state,stage,lease_id,fencing_token,attempts FROM privacy_jobs WHERE id=$1', [interrupted.id],
-  )).rows[0];
-  const original = await recoveryState();
-  const writeFailure = new Error('Synthetic failure after executing the fenced update');
-  const rejectingWrites = new PrivacyRepository({ connect: async () => {
-    const client = await pool.connect();
-    return {
-      query: async (sql, values) => {
-        const result = await client.query(sql, values);
-        if (sql.includes('app.fail_privacy_job')) {
-          assert.equal(result.rows[0].failed, true);
-          throw writeFailure;
-        }
-        return result;
-      },
-      release: () => client.release(),
-    };
-  } });
-  const failure = { retryable: false, code: 'SYNTHETIC_FAILURE', safeError: 'Synthetic failure' };
-  await assert.rejects(rejectingWrites.fail(interrupted, interrupted.leaseId, failure), (error) => error === writeFailure);
-  assert.deepEqual(await recoveryState(), original);
-  await admin.query("UPDATE privacy_jobs SET lease_expires_at=clock_timestamp()-interval '1 second' WHERE id=$1", [interrupted.id]);
-  const newLease = randomUUID();
-  const recovered = (await privacy.claim(tenantId, newLease, 25)).find((job) => job.id === interrupted.id);
-  assert.ok(recovered);
-  assert.equal(recovered.fencingToken, interrupted.fencingToken + 1);
-  assert.equal((await recoveryState()).lease_id, newLease);
-  assert.equal(await privacy.fail(interrupted, interrupted.leaseId, failure), false);
-  await admin.query('DELETE FROM privacy_jobs WHERE id=$1', [interrupted.id]);
   const otherContext=await anotherContext(fixture);
   // Complete signup with its original origin before entering the routing fixture scope.
   restoreRoutingEnvironment=routingFixtureEnvironment(appId);

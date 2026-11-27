@@ -1011,6 +1011,39 @@ async function verifySignupMetadataPrivacy(admin,appUrl,workerConfig,actor) {
       await admin.query("INSERT INTO public.zammad_instances(tenant_id,base_url,version,state,database_reference,search_namespace,storage_prefix,service_secret_reference,privacy_secret_reference) VALUES($1::uuid,'https://zammad.example.invalid','6.5.0','WORKING','fixture://db',$1::uuid::text,$1::uuid::text,$2,$3)",
         [scope,`secret://tenants/${scope}/zammad/service`,`secret://tenants/${scope}/zammad/privacy`]);
     }
+    const { job: interrupted, lease: interruptedLease } = await makeJob(tenant, 'DELETE');
+    const recoveryState = async () => (await admin.query(
+      'SELECT state,stage,lease_id,fencing_token,attempts FROM privacy_jobs WHERE id=$1', [interrupted.id],
+    )).rows[0];
+    const original = await recoveryState();
+    const writeFailure = new Error('Synthetic failure after executing the fenced update');
+    const rejectingWrites = new PrivacyRepository({ connect: async () => {
+      const client = await pool.connect();
+      return {
+        query: async (sql, values) => {
+          const result = await client.query(sql, values);
+          if (sql.includes('app.fail_privacy_job')) {
+            assert.equal(result.rows[0].failed, true);
+            throw writeFailure;
+          }
+          return result;
+        },
+        release: () => client.release(),
+      };
+    } });
+    const failure = { retryable: false, code: 'SYNTHETIC_FAILURE', safeError: 'Synthetic failure' };
+    await assert.rejects(rejectingWrites.fail(interrupted, interruptedLease, failure), (error) => error === writeFailure);
+    assert.deepEqual(await recoveryState(), original);
+    await admin.query("UPDATE privacy_jobs SET lease_expires_at=clock_timestamp()-interval '1 second' WHERE id=$1", [interrupted.id]);
+    const newLease = randomUUID();
+    const [recovered] = await repository.claim(tenant, newLease, 1);
+    assert.equal(recovered?.id, interrupted.id);
+    assert.equal(recovered.fencingToken, interrupted.fencingToken + 1);
+    assert.equal((await recoveryState()).lease_id, newLease);
+    assert.equal(await repository.fail(interrupted, interruptedLease, failure), false);
+    await admin.query('DELETE FROM privacy_jobs WHERE id=$1', [interrupted.id]);
+    await admin.query('DELETE FROM privacy_requests WHERE id=$1', [interrupted.requestId]);
+
     await seedAttempt(known,tenant,'EXPIRED');await seedAttempt(unknown,tenant,'OUTCOME_UNKNOWN');
     await seedAttempt(foreignAttempt,foreign,'EXPIRED');await seedAttempt(cleanAttempt,clean,'EXPIRED');
     await workerTx(tenant,c=>assertSignupPrivacyLogin(c,'wasalx_connector_worker'));
