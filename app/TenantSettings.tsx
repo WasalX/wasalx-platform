@@ -608,7 +608,7 @@ export function PrivacyRequestDialog({requestType,mutationHeaders,close,complete
       if(!execution.isCurrent())return;
       if(!response.ok){
         // A hold refusal keeps the chosen target: picking it again cannot help.
-        const held=response.status===409&&(await response.clone().json().catch(()=>null))?.code==="LEGAL_HOLD_ACTIVE";
+        const held=response.status===409&&((await response.clone().json().catch(()=>null)) as {code?:unknown}|null)?.code==="LEGAL_HOLD_ACTIVE";
         const message=held?t("tenant.privacy.error.holdBlocksDeletion"):response.status===409?t("tenant.privacy.target.stale"):await apiError(response);
         if(execution.isCurrent()){if(!held&&[401,403,409].includes(response.status))target.clear();setError(message);}
         return;
