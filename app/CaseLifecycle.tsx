@@ -2,10 +2,10 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { formatNumber, formatPastRelativeTime } from "../lib/i18n/format";
-import { operatorFailureMessage, createLatestRequestFence, operatorResponseFailure } from "../lib/operator-ui";
-import type { UiErrorCode } from "../lib/ui-error";
+import { operatorFailure, operatorFailureMessage, createLatestRequestFence, operatorResponseFailure, type OperatorFailure } from "../lib/operator-ui";
 import { useI18n, useRelativeClock } from "./I18nProvider";
 import { ModalDialog } from "./ModalDialog";
+import { WideTable } from "./tenant-ui";
 import { useVisibleRefresh } from "./use-visible-refresh";
 import styles from "./CaseLifecycle.module.css";
 
@@ -26,7 +26,6 @@ type CaseRow = {
   detached_at?: string | null;
   zammad_agent_available?: boolean;
 };
-type MutationError = { message: string; code: UiErrorCode | null };
 
 export function CaseLifecycle({
   canDetach,
@@ -52,7 +51,7 @@ export function CaseLifecycle({
   const [state, setState] = useState<"ALL" | CaseRow["state"]>("ALL");
   const [selected, setSelected] = useState<CaseRow | null>(null);
   const [operationKey, setOperationKey] = useState<string | null>(null);
-  const [mutationError, setMutationError] = useState<MutationError | null>(null);
+  const [mutationError, setMutationError] = useState<OperatorFailure | null>(null);
   const [pending, setPending] = useState(false);
   const pendingRef = useRef(false);
   const previousTargetTicket = useRef(normalizedTargetTicket);
@@ -153,7 +152,7 @@ export function CaseLifecycle({
       closeDetachAfterSuccess();
       await load(true);
     } catch (detachError) {
-      setMutationError(operatorMutationError(detachError, t("cases.errors.detach")));
+      setMutationError(operatorFailure(detachError, t("cases.errors.detach"), locale));
     } finally {
       pendingRef.current = false;
       setPending(false);
@@ -193,16 +192,8 @@ export function CaseLifecycle({
       </div>
 
       {error ? <div className={styles.loadError} role="alert"><span>!</span><div><b>{t("cases.unavailable")}</b><p>{error}</p></div><button className="button small" onClick={() => void load()}>{t("cases.tryAgain")}</button></div> : null}
-      {loading ? <div className={styles.skeleton} role="status" aria-live="polite" aria-busy="true"><p className="sr-only">{t("cases.loading")}</p><span aria-hidden="true" /><span aria-hidden="true" /><span aria-hidden="true" /></div> : null}
-      {!loading && !error && visible.length ? <div
-        className="table-scroll"
-        role="region"
-        // Keyboard users need to focus an otherwise non-interactive overflow area.
-        // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex
-        tabIndex={0}
-        aria-label={t("tenant.accessibility.scrollTable")}
-      >
-        <span className="table-scroll-cue" aria-hidden="true">{t("tenant.accessibility.scrollTableCue")}</span>
+      {loading ? <div className={styles.skeleton} aria-busy="true"><p className="sr-only" role="status" aria-label={t("cases.loading")}>{t("cases.loading")}</p><span aria-hidden="true" /><span aria-hidden="true" /><span aria-hidden="true" /></div> : null}
+      {!loading && !error && visible.length ? <WideTable>
         <table className={styles.table}>
         <thead><tr><th>{t("cases.table.reference")}</th><th>{t("cases.table.ticket")}</th><th>{t("cases.table.group")}</th><th>{t("cases.table.generation")}</th><th>{t("cases.table.state")}</th><th>{t("cases.table.updated")}</th><th><span className="sr-only">{t("cases.table.actions")}</span></th></tr></thead>
         <tbody>{visible.map((row) => <tr key={row.id} aria-current={targetFilterActive && row.id === targetedCase?.id ? "true" : undefined}>
@@ -214,7 +205,7 @@ export function CaseLifecycle({
           <td><b>{relativeTime(row.updated_at, locale, renderedAt, t)}</b><small>{row.detached_at ? t("cases.updated.detached", { time: relativeTime(row.detached_at, locale, renderedAt, t) }) : t("cases.updated.synced")}</small></td>
           <td className={styles.action}>{row.state !== "DETACHED" && canDetach ? <button className="button small secondary" aria-label={t("cases.action.startFor", { reference: isolate(row.normalized_reference), ticket: isolate(`#${row.zammad_ticket_number}`) })} onClick={() => openDetach(row)}>{t("cases.action.start")}</button> : <span>{t(row.state === "DETACHED" ? "cases.action.history" : "cases.action.readOnly")}</span>}</td>
         </tr>)}</tbody>
-      </table></div> : null}
+      </table></WideTable> : null}
       {!loading && !error && !visible.length ? <div className={styles.empty}><span>◎</span><b>{t(rows.length ? "cases.empty.filteredTitle" : "cases.empty.title")}</b><p>{t(rows.length ? "cases.empty.filteredBody" : "cases.empty.body")}</p></div> : null}
       {!loading && !error && canLoadOlder ? <div className="audit-pagination"><button className="button secondary" disabled={loadingOlder} onClick={() => void loadOlder()}>{t(loadingOlder ? "cases.loadingOlder" : "cases.loadOlder")}</button></div> : null}
       {olderError ? <p className="audit-load-error" role="alert">{olderError}</p> : null}
@@ -249,13 +240,3 @@ function relativeTime(value: string, locale: "en" | "ar", renderedAt: number, t:
 }
 
 function isolate(value: string) { return `\u2068${value}\u2069`; }
-
-function operatorMutationError(error: unknown, fallback: string): MutationError {
-  if (error instanceof Error && "code" in error) {
-    return {
-      message: error.message,
-      code: (error as Error & { code?: UiErrorCode }).code ?? null,
-    };
-  }
-  return { message: fallback, code: null };
-}

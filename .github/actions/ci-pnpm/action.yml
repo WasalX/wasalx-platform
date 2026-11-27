@@ -66,6 +66,8 @@ runs:
         if [[ "$MODULES_HIT" == true ]]; then
           time pnpm install --frozen-lockfile --offline
         else
+          # A failed restore can leave an incomplete workspace install behind.
+          rm -rf -- node_modules services/*/node_modules packages/*/node_modules
           pnpm install --frozen-lockfile --fetch-retries=2
         fi
 
@@ -164,7 +166,7 @@ runs:
         key: ${{ steps.build-key.outputs.key }}
 
     - name: Report service build cache hit
-      if: always() && inputs.task != 'install'
+      if: always() && inputs.task == 'build'
       shell: bash
       env:
         SERVICES_HIT: ${{ steps.services.outputs.cache-matched-key != '' }}

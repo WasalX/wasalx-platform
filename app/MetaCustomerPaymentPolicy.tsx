@@ -1,8 +1,11 @@
 "use client";
 import {useCallback,useEffect,useRef,useState} from 'react';
 import {useI18n} from './I18nProvider';
+import { ScrollRegion } from "./tenant-ui";
 import {MetaAccountTransitionPreview} from './MetaAccountTransitionPreview';
 import {createLatestRequestFence} from '../lib/operator-ui';
+import {formatDateTime} from '../lib/i18n/format';
+import type {Locale} from '../lib/i18n/locales';
 import {localizedUiError,type UiErrorCode} from '../lib/ui-error';
 import {metaTariffQueryString,parseMetaPolicySelection,isMetaPolicyAcceptanceResult,type MetaTariffQuery} from '../packages/core/src/meta-billing-policy-contract';
 import {billingIntentKey,parseBillingIntent,type BillingIntent} from '../lib/meta-billing-policy-intent';
@@ -70,7 +73,7 @@ function CustomerPaymentPolicySession({tenantId,actorId,connectionId,canConfigur
    {choice||view?.managedAvailable&&view.managedChoices?.length?<div className="field"><label htmlFor={`managed-choice-${connectionId}`}>{t('tenant.connection.paymentPolicy.managedChoice')}</label>
     <select id={`managed-choice-${connectionId}`} value={choiceId} disabled={loading||reading||locked} onChange={event=>choose(false,event.target.value)}>
      <option value="">{t('tenant.connection.paymentPolicy.chooseManaged')}</option>
-     {(choice&&!view?.managedChoices?.some(item=>item.choiceId===choice.choiceId)?[choice,...(view?.managedChoices??[])]:view?.managedChoices??[]).map(item=><option key={item.choiceId} value={item.choiceId}>{t(item.kind==='MULTI_PARTNER_SOLUTION'?'tenant.connection.paymentPolicy.partnerChoice':'tenant.connection.paymentPolicy.ownChoice')} · {new Intl.DateTimeFormat(locale,{dateStyle:'medium'}).format(new Date(item.expiresAt))}</option>)}
+     {(choice&&!view?.managedChoices?.some(item=>item.choiceId===choice.choiceId)?[choice,...(view?.managedChoices??[])]:view?.managedChoices??[]).map(item=><option key={item.choiceId} value={item.choiceId}>{t(item.kind==='MULTI_PARTNER_SOLUTION'?'tenant.connection.paymentPolicy.partnerChoice':'tenant.connection.paymentPolicy.ownChoice')} · {formatDateTime(item.expiresAt,locale,{dateStyle:'medium'})}</option>)}
     </select></div>:null}
    {selected||choice?<div className="field"><label htmlFor={`tariff-choice-${connectionId}`}>{t('tenant.connection.paymentPolicy.rates')}</label>
     <select id={`tariff-choice-${connectionId}`} value={tariffId} disabled={reading||locked} onChange={event=>{setTariffId(event.target.value);setAcceptedTerms(false);}}>
@@ -87,11 +90,10 @@ function CustomerPaymentPolicySession({tenantId,actorId,connectionId,canConfigur
     <p>{tariff.currency} · {t('tenant.connection.paymentPolicy.precision')}: {tariff.minorUnits} · {t(tariff.rounding==='PERIOD'?'tenant.connection.paymentPolicy.periodRounding':'tenant.connection.paymentPolicy.lineRounding')}</p>
     <p>{t('tenant.connection.paymentPolicy.deliveredUnit')}</p>
     {tariff.evidenceMode==='SIMULATED'?<p>{t('tenant.connection.paymentPolicy.developmentRates')}</p>:null}
-    {/* eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- The named rates scroll region needs keyboard focus to read all columns. */}
-    <div style={{maxWidth:'100%',overflowX:'auto'}} tabIndex={0} role="region" aria-label={t('tenant.connection.paymentPolicy.rateTable')}>
+    <ScrollRegion style={{maxWidth:'100%',overflowX:'auto'}} aria-label={t('tenant.connection.paymentPolicy.rateTable')}>
      <table><caption>{t('tenant.connection.paymentPolicy.rateTable')}</caption><thead><tr>{['category','pricingType','billable','schedule','market','tier','unitPrice'].map(key=><th scope="col" key={key}>{t(`tenant.connection.paymentPolicy.rate.${key}`)}</th>)}</tr></thead>
       <tbody>{tariff.rates.map((rate,index)=><tr key={index}><td>{t(`tenant.connection.paymentPolicy.value.${rate.category}`)}</td><td>{t(`tenant.connection.paymentPolicy.value.${rate.pricingType}`)}</td><td>{t(rate.billable?'tenant.connection.paymentPolicy.yes':'tenant.connection.paymentPolicy.no')}</td><td>{t(`tenant.connection.paymentPolicy.value.${rate.schedule}`)}</td><td>{rate.market}</td><td>{rate.tier}</td><td><bdi>{rate.unitPrice} {tariff.currency}</bdi></td></tr>)}</tbody>
-     </table></div>
+     </table></ScrollRegion>
    </div>:null}
    {choice||tariff?<><details><summary>{t('tenant.connection.paymentPolicy.reviewTerms')}</summary><p className="connection-detail-note" style={{whiteSpace:'pre-wrap',overflowWrap:'anywhere'}}>{tariff?.documentText??choice?.documentText}</p></details>
     <label className="connection-detail-note"><input type="checkbox" checked={acceptedTerms} disabled={reading||locked} onChange={event=>setAcceptedTerms(event.target.checked)}/>{' '}{t(tariff?'tenant.connection.paymentPolicy.acceptRates':'tenant.connection.paymentPolicy.acceptTerms')}</label>
@@ -104,7 +106,7 @@ function CustomerPaymentPolicySession({tenantId,actorId,connectionId,canConfigur
 }
 async function failure(response:Response){const value=await response.json().catch(()=>null) as {code?:unknown}|null;return Object.assign(new Error('Request unavailable'),{status:response.status,code:typeof value?.code==='string'?value.code:undefined});}
 
-function formatTariffDate(value:string,timezone:string,locale:string){
- try{return new Intl.DateTimeFormat(locale,{year:'numeric',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit',fractionalSecondDigits:3,timeZone:timezone}).format(new Date(value));}
+function formatTariffDate(value:string,timezone:string,locale:Locale){
+ try{return formatDateTime(value,locale,{year:'numeric',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit',fractionalSecondDigits:3,timeZone:timezone});}
  catch{return value;} // The exact ISO instant is still readable for a PG-only timezone alias.
 }

@@ -1,8 +1,10 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 import type { MetaCoexistenceContactView, MetaCoexistenceMessageView, MetaCoexistencePage, MetaCoexistenceSummary } from "../lib/meta-coexistence-contract";
+import { formatDateTime, formatNumber } from "../lib/i18n/format";
 import { localizedUiError } from "../lib/ui-error";
+import { createLatestRequestFence } from "../lib/operator-ui";
 import { useI18n } from "./I18nProvider";
 import { useVisibleRefresh } from "./use-visible-refresh";
 import styles from "./MetaCoexistence.module.css";
@@ -27,7 +29,7 @@ function CoexistenceSession({ connectionId, mutationHeaders }: Props) {
   const [contentLoading, setContentLoading] = useState(false);
   const [contentError, setContentError] = useState<string | null>(null);
   const alive = useRef(false), reading = useRef(false), writing = useRef(false), authorityLost = useRef(false);
-  const summaryRequest = useRef(0), contentRequest = useRef(0);
+  const summaryFence = useRef(createLatestRequestFence()), contentFence = useRef(createLatestRequestFence());
   const focusThread = useRef<HTMLHeadingElement>(null);
   const focusContacts = useRef<HTMLHeadingElement>(null);
 
@@ -45,13 +47,13 @@ function CoexistenceSession({ connectionId, mutationHeaders }: Props) {
   }
 
   function clearContent() {
-    contentRequest.current++; reading.current = false;
+    contentFence.current.invalidate(); reading.current = false;
     setContentLoading(false); setContentError(null); setContacts(null); setMessages(null); setThread(null);
   }
 
   function denied(failure: unknown) {
     if (!failure || typeof failure !== "object" || !("status" in failure) || ![401, 403].includes(Number(failure.status))) return false;
-    authorityLost.current = true; summaryRequest.current++;
+    authorityLost.current = true; summaryFence.current.invalidate();
     clearContent(); setSummary(null); setConfirmStop(false); setLoading(false);
     setError(localizedUiError(locale, failure).message);
     return true;
@@ -59,36 +61,35 @@ function CoexistenceSession({ connectionId, mutationHeaders }: Props) {
 
   async function readSummary(signal?: AbortSignal) {
     if (writing.current) return;
-    const version = ++summaryRequest.current;
+    const version = summaryFence.current.begin();
+    const isCurrent = () => !signal?.aborted && summaryFence.current.isCurrent(version);
     try {
       const result = await request<MetaCoexistenceSummary | null>("", undefined, signal);
-      if (!alive.current || signal?.aborted || version !== summaryRequest.current) return;
+      if (!isCurrent()) return;
       authorityLost.current = false;
       setSummary(previous => result && previous && previous.revision > result.revision ? previous : result);
       if (!result) clearContent();
       if (result && !result.consent.history && !result.consent.contacts && !result.consent.echoes) setUncertain(false);
       setError(null);
     } catch (failure) {
-      if (!alive.current || signal?.aborted || version !== summaryRequest.current) return;
+      if (!isCurrent()) return;
       if (denied(failure)) return;
       if (failure && typeof failure === "object" && "status" in failure && failure.status === 404) { clearContent(); setSummary(null); setError(null); }
       else setError(localizedUiError(locale, failure).message);
     } finally {
-      if (alive.current && !signal?.aborted && version === summaryRequest.current) setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
   }
 
+  // The keyed session owns the exact connection and authenticated context, so the first read runs once per lifetime.
+  const readOnMount = useEffectEvent(readSummary);
   useEffect(() => {
     alive.current = true;
-    const controller = new AbortController();
-    // Retain these counter objects; cleanup invalidates their latest values.
-    const summaryCounter = summaryRequest, contentCounter = contentRequest;
+    const controller = new AbortController(), summaryLoads = summaryFence.current, contentLoads = contentFence.current;
     void Promise.resolve().then(() => {
-      if (!controller.signal.aborted) return readSummary(controller.signal);
+      if (!controller.signal.aborted) return readOnMount(controller.signal);
     });
-    return () => { alive.current = false; summaryCounter.current++; contentCounter.current++; controller.abort(); };
-    // The keyed session owns the exact connection and authenticated context.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    return () => { alive.current = false; summaryLoads.invalidate(); contentLoads.invalidate(); controller.abort(); };
   }, []);
 
   // Summary-only refresh preserves the open reader and never repeats a consent write.
@@ -97,34 +98,34 @@ function CoexistenceSession({ connectionId, mutationHeaders }: Props) {
   async function loadContacts(cursor?: string) {
     if (reading.current || writing.current || authorityLost.current || !summary) return;
     reading.current = true;
-    const version = ++contentRequest.current;
+    const version = contentFence.current.begin(), isCurrent = () => contentFence.current.isCurrent(version);
     setContentLoading(true); setContentError(null); setThread(null); setMessages(null);
     try {
       const result = await request<MetaCoexistencePage<MetaCoexistenceContactView>>(`/contacts?limit=50${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`);
-      if (!alive.current || version !== contentRequest.current) return;
+      if (!isCurrent()) return;
       setContacts(previous => ({ ...result, items: cursor && previous ? [...previous.items, ...result.items] : result.items }));
     } catch (failure) {
-      if (alive.current && version === contentRequest.current && !denied(failure)) setContentError(localizedUiError(locale, failure).message);
+      if (isCurrent() && !denied(failure)) setContentError(localizedUiError(locale, failure).message);
     } finally {
-      if (alive.current && version === contentRequest.current) { reading.current = false; setContentLoading(false); }
+      if (isCurrent()) { reading.current = false; setContentLoading(false); }
     }
   }
 
   async function loadMessages(contact: MetaCoexistenceContactView, cursor?: string) {
     if (reading.current || writing.current || authorityLost.current || !summary) return;
     reading.current = true;
-    const version = ++contentRequest.current;
+    const version = contentFence.current.begin(), isCurrent = () => contentFence.current.isCurrent(version);
     setThread(contact); if (!cursor) setMessages(null);
     setContentLoading(true); setContentError(null);
     try {
       const result = await request<MetaCoexistencePage<MetaCoexistenceMessageView>>(`/threads/${encodeURIComponent(contact.threadId)}/messages?limit=50${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`);
-      if (!alive.current || version !== contentRequest.current) return;
+      if (!isCurrent()) return;
       setMessages(previous => ({ ...result, items: cursor && previous ? [...previous.items, ...result.items] : result.items }));
-      if (!cursor) requestAnimationFrame(() => { if (alive.current && version === contentRequest.current) focusThread.current?.focus(); });
+      if (!cursor) requestAnimationFrame(() => { if (isCurrent()) focusThread.current?.focus(); });
     } catch (failure) {
-      if (alive.current && version === contentRequest.current && !denied(failure)) setContentError(localizedUiError(locale, failure).message);
+      if (isCurrent() && !denied(failure)) setContentError(localizedUiError(locale, failure).message);
     } finally {
-      if (alive.current && version === contentRequest.current) { reading.current = false; setContentLoading(false); }
+      if (isCurrent()) { reading.current = false; setContentLoading(false); }
     }
   }
 
@@ -136,7 +137,7 @@ function CoexistenceSession({ connectionId, mutationHeaders }: Props) {
 
   async function stop() {
     if (!summary || !confirmStop || writing.current || authorityLost.current || uncertain || loading) return;
-    writing.current = true; summaryRequest.current++; contentRequest.current++; reading.current = false;
+    writing.current = true; summaryFence.current.invalidate(); contentFence.current.invalidate(); reading.current = false;
     setContentLoading(false); setContacts(null); setMessages(null); setThread(null);
     setStopping(true); setError(null);
     try {
@@ -156,8 +157,8 @@ function CoexistenceSession({ connectionId, mutationHeaders }: Props) {
   }
 
   if (!summary && !error) return null; // Ordinary Meta connections have no import context.
-  const stamp = (value: string) => Number.isFinite(Date.parse(value)) ? new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value)) : t("tenant.metaCoexistence.unknown");
-  const number = (value: number) => new Intl.NumberFormat(locale).format(value);
+  const stamp = (value: string) => Number.isFinite(Date.parse(value)) ? formatDateTime(value, locale) : t("tenant.metaCoexistence.unknown");
+  const number = (value: number) => formatNumber(value, locale);
   const captureActive = summary && (summary.consent.history || summary.consent.contacts || summary.consent.echoes);
   return <section className={`connection-detail-section ${styles.section}`} aria-labelledby="meta-coexistence-title" aria-busy={loading || stopping}>
     <div className="connection-detail-section-head"><div><h3 id="meta-coexistence-title">{t("tenant.metaCoexistence.title")}</h3><p>{t("tenant.metaCoexistence.intro")}</p></div></div>
@@ -201,7 +202,7 @@ function CoexistenceSession({ connectionId, mutationHeaders }: Props) {
     {thread ? <div>
       <h4 ref={focusThread} tabIndex={-1}><bdi>{thread.name ?? thread.phone}</bdi></h4>
       <p>{t("tenant.metaCoexistence.readOnly")}</p>
-      <button type="button" className="button secondary" disabled={stopping} onClick={() => { contentRequest.current++; reading.current = false; setContentLoading(false); setThread(null); setMessages(null); setContentError(null);
+      <button type="button" className="button secondary" disabled={stopping} onClick={() => { contentFence.current.invalidate(); reading.current = false; setContentLoading(false); setThread(null); setMessages(null); setContentError(null);
         requestAnimationFrame(() => { if (alive.current) focusContacts.current?.focus(); }); }}>
         {t("tenant.metaCoexistence.back")}
       </button>

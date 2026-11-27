@@ -1,0 +1,105 @@
+{
+  "measured_at": "2026-11-24",
+  "workflow": ".github/workflows/ci.yml",
+  "runs": 58,
+  "first_run": 45424559667,
+  "last_run": 45469519734,
+  "jobs": {
+    "changes": {
+      "p95_minutes": 0.1833
+    },
+    "workflow-lint": {
+      "p95_minutes": 0.2
+    },
+    "storybook": {
+      "measured_at": "2026-11-27",
+      "runs": 45,
+      "first_run": 45930690469,
+      "last_run": 45958996400,
+      "p95_minutes": 6.1
+    },
+    "dependency-review": {
+      "p95_minutes": 0.25
+    },
+    "dev-install-dryrun": {
+      "p95_minutes": 0.6333
+    },
+    "checks": {
+      "measured_at": "2026-11-27",
+      "runs": 49,
+      "first_run": 45942901736,
+      "last_run": 46025465196,
+      "p95_minutes": 2.2833,
+      "p95_basis": "highest pull request or merge-group p95 of the longest successful matrix leg per run"
+    },
+    "full-unit": {
+      "p95_minutes": 2.2167
+    },
+    "integration": {
+      "p95_minutes": 3.05
+    },
+    "application-e2e": {
+      "measured_at": "2026-11-27",
+      "runs": 1,
+      "first_run": 45985555757,
+      "last_run": 45985555757,
+      "p95_minutes": 7.2667,
+      "owner_parts": {
+        "desktop": {
+          "p95_minutes": 7.2667
+        },
+        "mobile-tablet": {
+          "p95_minutes": 6.8667
+        }
+      }
+    },
+    "portal-integration": {
+      "p95_minutes": 2.75
+    },
+    "integration-coverage": {
+      "p95_minutes": 0.9833
+    },
+    "infra-validate": {
+      "p95_minutes": 0.6667
+    },
+    "images": {
+      "p95_minutes": 3.4667
+    },
+    "pr-images": {
+      "p95_minutes": 3.15
+    },
+    "pr-image-results": {
+      "p95_minutes": 0.1333
+    },
+    "publish": {
+      "measured_at": "2026-11-27",
+      "workflow": ".github/workflows/branch-image.yml",
+      "runs": 24,
+      "first_run": 45937633406,
+      "last_run": 46003340146,
+      "p95_minutes": 8.4833,
+      "p95_basis": "longest successful matrix leg per run",
+      "image_legs": {
+        "connector-worker": {
+          "p95_minutes": 4.6167
+        }
+      }
+    },
+    "ci-gate": {
+      "measured_at": "2026-11-27",
+      "runs": 49,
+      "first_run": 45942901736,
+      "last_run": 46025465196,
+      "p95_minutes": 0.1167,
+      "p95_basis": "highest pull request or merge-group job p95"
+    },
+    "typescript-comparison": {
+      "measured_at": "2026-11-27",
+      "runs": 3,
+      "first_run": 45857111511,
+      "last_run": 45923623338,
+      "p95_minutes": 4.7667,
+      "p95_basis": "nearest-rank p95 across first-attempt green pull request runs"
+    }
+  }
+}

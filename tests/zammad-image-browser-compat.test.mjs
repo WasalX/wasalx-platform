@@ -2,6 +2,7 @@ import {requiredOperatorInput} from "../scripts/release/operator-input.mjs";
 import assert from "node:assert/strict";
 import { execFile, execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
+import { EventEmitter, once } from "node:events";
 import { createServer } from "node:http";
 import { isIP } from "node:net";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -258,7 +259,104 @@ volumes: { zammad-storage: {}, zammad-backup: {} }
 `;
 }
 
-test("package upgrade, route, and group workspace operate in the immutable Zammad image", { timeout: 1_800_000 }, async () => {
+async function readNativeDiagnostic(pending) {
+  let timer;
+  try {
+    const deadline = new Promise(resolve => {
+      timer = setTimeout(() => resolve(null), 2_000);
+      timer.unref();
+    });
+    return await Promise.race([pending, deadline]);
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function observeNativeDom(page, install, input) {
+  const pending = page.evaluateHandle(install, input);
+  const handle = await readNativeDiagnostic(pending);
+  const stop = async trace => {
+    try {
+      return await trace.evaluate(collect => collect());
+    } finally {
+      await trace.dispose().catch(() => {});
+    }
+  };
+  if (!handle) {
+    // The page can finish installing after the diagnostic deadline.
+    void pending.then(stop).catch(() => {});
+    return () => null;
+  }
+  return () => readNativeDiagnostic(stop(handle));
+}
+
+function observeNativeRequests(page, classify) {
+  let matched;
+  let nonmatching;
+  let count = 0;
+  let nonmatchingCount = 0;
+  let obsoletePreviewAborts = 0;
+  const classifySafely = request => {
+    try { return classify(request); } catch { return null; }
+  };
+  const stateFor = request => {
+    if (request === matched?.request) return matched.state;
+    if (request === nonmatching?.request) return nonmatching.state;
+    return null;
+  };
+  const listeners = [
+    ['request', request => {
+      const state = classifySafely(request);
+      if (!state) return;
+      count = Math.min(count + 1, 99);
+      const entry = { request, state: { ...state, httpStatus: null, outcome: 'pending' } };
+      if (state.matched) matched = entry;
+      else {
+        nonmatching = entry;
+        nonmatchingCount = Math.min(nonmatchingCount + 1, 99);
+      }
+    }],
+    ['response', response => {
+      const state = stateFor(response.request());
+      if (state) state.httpStatus = response.status();
+    }],
+    ['requestfinished', request => {
+      const state = stateFor(request);
+      if (state) state.outcome = 'finished';
+    }],
+    ['requestfailed', request => {
+      const aborted = request.failure()?.errorText === 'net::ERR_ABORTED';
+      const state = stateFor(request);
+      if (state) state.outcome = aborted ? 'aborted' : 'failed';
+      if (aborted && (state ?? classifySafely(request))?.obsoletePreview) {
+        obsoletePreviewAborts = Math.min(obsoletePreviewAborts + 1, 99);
+      }
+    }],
+  ];
+  for (const [event, listener] of listeners) page.on(event, listener);
+  return () => {
+    for (const [event, listener] of listeners) page.off(event, listener);
+    return { count, request: matched?.state ?? null, nonmatchingCount,
+      nonmatchingRequest: nonmatching?.state ?? null, obsoletePreviewAborts };
+  };
+}
+
+async function withNativeDiagnostic(t, label, collect, action, confirm = true) {
+  let passed = false;
+  try {
+    await action();
+    passed = true;
+  } finally {
+    try {
+      const state = await collect();
+      if (!passed || confirm) t.diagnostic(`native ${label} ${JSON.stringify({ passed, ...state })}`);
+    } catch { /* A diagnostic must never replace the journey result. */ }
+  }
+}
+
+test("package upgrade, route, and group workspace operate in the immutable Zammad image", { timeout: 1_800_000 }, async (t) => {
   const nativeCloseScenario = await readFile(join(process.cwd(), "tests", "native-close-rails-scenario.rb"), "utf8");
   const project = `wasalx-zammad-${randomUUID()}`;
   const admission = assertNativeCompatibilityProjectEmpty({ project,
@@ -274,11 +372,14 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
   let fixture;
   let runnerConnected = false;
   let primaryError;
+  const fixtureRequests = [];
+  const fixtureErrors = [];
   const groupActorExpectations = new Map();
   const observedGroupActors = new Set();
   const state = { customerId: null, ticketId: null, ticketNumber: null, articleId: null, closedTicketId: null, closedTicketNumber: null, closedArticleId: null, links: [], requests: [], sentMessages: [], liveMessages: [] };
   try {
-    fixture = createServer(async (request, response) => {
+    const replyPreviewPath = "/internal/v1/zammad/reply-preview";
+    const handleFixtureRequest = async (request, response) => {
       const body = [];
       for await (const chunk of request) body.push(chunk);
       const raw = Buffer.concat(body).toString("utf8");
@@ -318,6 +419,21 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
         assert.match(url.searchParams.get("ticket_id") ?? "", /^[1-9]\d*$/u);
         value = { available: true };
       }
+      else if (request.method === "POST" && url.pathname === replyPreviewPath) {
+        const payload = JSON.parse(raw);
+        const direct = Number(payload.ticket_id) === state.directReplyTicketId;
+        assert.equal(claims.scope, "zammad:outbound");
+        assert.equal(payload.agent?.id, String(claims.zammad_user_id));
+        assert.equal(payload.tenant_id, tenantId);
+        assert.equal(payload.connection_id, connectionId);
+        assert.ok(direct || Number(payload.ticket_id) === Number(state.ticketId));
+        assert.equal(payload.group_id, direct ? "12125550104@c.us" : "120363118@g.us");
+        assert.equal(payload.internal, false);
+        assert.equal(typeof payload.has_attachments, "boolean");
+        assert.equal(typeof payload.body, "string");
+        assert.ok(payload.has_attachments || payload.body.trim(), "Preview requires a draft or attachment");
+        value = { text: payload.body, replyToMessageId: null };
+      }
       else if (request.method === "POST" && url.pathname === "/internal/v1/zammad/outbound") {
         const payload = JSON.parse(raw); assert.equal(claims.scope, "zammad:outbound");
         const direct = Number(payload.ticket_id) === state.directReplyTicketId;
@@ -342,8 +458,16 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
         group_id: groupId, message_id: existingMessageId,
       };
       else if (request.method === "GET" && url.pathname.endsWith("/group-workspace/groups")) {
-        assert.equal(url.searchParams.get("limit"), "50");
-        assert.ok(["MY", "TEAM", "UNASSIGNED", "ALL"].includes(url.searchParams.get("scope") ?? ""));
+        const limit = url.searchParams.get("limit");
+        const scope = url.searchParams.get("scope");
+        if (limit === "1") {
+          assert.equal(url.searchParams.get("selected"), groupId, "Group operation must authorize its exact group");
+          assert.equal(scope, "ALL");
+          assert.equal(url.searchParams.has("after"), false);
+        } else {
+          assert.equal(limit, "50", "Browser group pagination must request 50 groups");
+          assert.ok(["MY", "TEAM", "UNASSIGNED", "ALL"].includes(scope));
+        }
         value = { items: [{ id: groupId, name: "Riyadh Operations", access_scope: "MY", unread_count: 2, send_available: true,
           media_capabilities: { accepted: [{ mime_type: "image/png", maximum_bytes: 15_000_000 }, { mime_type: "audio/webm", maximum_bytes: 25_000_000 }], voice_recording: true, maximum_files: 10, maximum_total_bytes: 250_000_000 } }], next_cursor: null };
       }
@@ -392,6 +516,13 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
       } else if (request.method === "POST" && url.pathname.endsWith("/read")) value = { state: "QUEUED" };
       else { response.writeHead(404).end(); return; }
       response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(value));
+    };
+    fixture = createServer((request, response) => {
+      fixtureRequests.push(handleFixtureRequest(request, response).catch(error => {
+        fixtureErrors.push(error);
+        if (response.headersSent) response.destroy();
+        else response.writeHead(500).end();
+      }));
     });
     await new Promise((resolve, reject) => fixture.once("error", reject).listen(fixturePort, fixtureEndpointAddress.listenHost, resolve));
     const fixtureAddress = fixture.address();
@@ -507,7 +638,7 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
       puts JSON.generate(receipt: Package::Migration.exists?(name: 'wasalx', version: '202609020014'), package_version: package&.version, package_state: package&.state, attributes: attributes)
     `).split("\n").find((line) => line.startsWith("{")) ?? "");
     assert.equal(blockedState.receipt, false);
-    assert.equal(blockedState.package_version, "0.5.84");
+    assert.equal(blockedState.package_version, "0.5.85");
 
     assert.equal(blockedState.package_state, "installed");
     assert.deepEqual(blockedState.attributes, [
@@ -913,10 +1044,17 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
       service = Token.find_by!(action: 'api', token: '${serviceToken}')
       service_permissions = Array(service.preferences[:permission] || service.preferences['permission'])
       scheduler = Scheduler.find_by(method: 'WasalxGroupWorkspaceUploadCleanupJob.perform_now')
-      ${nativeCloseScenario}
+      seeded_ids = [ticket.id, article.id]
+      # Define the proof lambdas outside the seed's local scope.
+      def native_compatibility_proofs
+        ${nativeCloseScenario}
+        [native_close_proof, native_direct_keep_open_proof, native_denied_command_proof]
+      end
+      native_close_proof, native_direct_keep_open_proof, native_denied_command_proof = native_compatibility_proofs
       native_close = native_close_proof.call(owner: owner, customer: customer, group: group, service_token: '${serviceToken}', namespace: 'wasalx-native-close-compat')
       native_direct = native_direct_keep_open_proof.call(owner: owner, customer: customer, group: group, namespace: 'wasalx-native-direct-compat')
       native_denied = native_denied_command_proof.call(owner: owner, customer: customer, group: group, service_token: '${serviceToken}', namespace: 'wasalx-native-denied-compat')
+      raise 'Native proof changed the browser seed identity' unless [ticket.id, article.id] == seeded_ids
       # The dispatcher Agent article correctly moved this fixture to OPEN.
       # Prepare NEW through the fixture model, not the edit API (which rejects NEW).
       fixture_article_ids = Ticket::Article.where(ticket_id: ticket.id).order(:id).pluck(:id)
@@ -941,9 +1079,8 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
     for (const key of ["stateOwnershipPreserved", "duplicateReceipt", "unknownReadOnly", "noCommunicationOrStateCallbacks", "historicalJobsPreserved"]) assert.equal(seeded.native_denied[key], true);
     assert.equal(seeded.native_denied.providerActions, 0);
     Object.assign(state, { customerId: seeded.customer_id, ticketId: seeded.ticket_id, ticketNumber: seeded.ticket_number, articleId: seeded.article_id, closedTicketId: seeded.closed_ticket_id, closedTicketNumber: seeded.closed_ticket_number, closedArticleId: seeded.closed_article_id });
-    const outboundPreflight = state.requests.find((request) => request.path === "/internal/v1/zammad/outbound/preflight");
-    assert.ok(outboundPreflight);
-    assert.equal(new URLSearchParams(outboundPreflight.query).get("ticket_id"), seeded.ticket_id);
+    assert.ok(state.requests.some((request) => request.method === "GET" && request.path === "/internal/v1/zammad/outbound/preflight"
+      && new URLSearchParams(request.query).get("ticket_id") === seeded.ticket_id), "Missing outbound preflight for the seeded ticket");
     assert.equal(seeded.staged_present, true);
     assert.equal(seeded.stale_present, false);
     assert.equal(seeded.cleanup_scheduler_active, true);
@@ -1106,11 +1243,86 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
       const fullGrant = machineDialog.locator(`input[name="group_ids::${machineUiSeed.group_id}"][value="full"]`);
       assert.equal(await fullGrant.count(), 0);
       const newGrant = machineDialog.locator('.js-groupListNewItemRow');
-      await newGrant.locator('.js-groupListItemAddNew .js-input').click();
-      await newGrant.getByRole('option', { name: 'Operations', exact: true }).click();
-      await newGrant.locator('input[value="full"]').locator('..').click();
-      await newGrant.locator('.js-add').click();
-      assert.equal(await fullGrant.isChecked(), true);
+      const collectChooser = await observeNativeDom(adminPage, groupId => {
+        const selector = '.js-groupListNewItemRow .js-groupListItemAddNew';
+        const seededOption = `li[data-value="${groupId}"] [role="option"]`;
+        const listener = new AbortController();
+        const clicks = [];
+        let initialInput;
+        let replaced = false;
+        let opened = false;
+        let closedAfterOpen = false;
+        let optionExposed = false;
+        const sample = target => {
+          const chooser = document.querySelector(`.modal ${selector}`);
+          const input = chooser?.querySelector('.js-input');
+          initialInput ??= input;
+          replaced ||= Boolean(input && input !== initialInput);
+          const menuOpen = Boolean(chooser?.querySelector('.searchableSelect.open'));
+          closedAfterOpen ||= opened && !menuOpen;
+          opened ||= menuOpen;
+          const option = chooser?.querySelector(seededOption);
+          const exposed = Boolean(menuOpen && option?.checkVisibility({ visibilityProperty: true })
+            && !option.closest('[aria-hidden="true"]'));
+          optionExposed ||= exposed;
+          const state = { inputPresent: Boolean(input), menuOpen, option: !option ? 'absent' : exposed ? 'exposed' : 'hidden' };
+          if (target && clicks.length < 2) {
+            let clickTarget = 'outside';
+            if (input?.contains(target)) clickTarget = 'input';
+            else if (target.closest('.dropdown-backdrop')) clickTarget = 'backdrop';
+            else if (chooser?.contains(target)) {
+              clickTarget = target.closest(seededOption) ? 'seeded-option' : target.closest('[role="option"]') ? 'other-option' : 'chooser-other';
+            }
+            clicks.push({
+              target: clickTarget,
+              ...state,
+              modalReady: Boolean(chooser?.closest(".modal.in.modal--ready")),
+            });
+          }
+          return state;
+        };
+        const sampleTransition = () => sample();
+        const observer = new MutationObserver(sampleTransition);
+        observer.observe(document.body, { subtree: true, childList: true, attributes: true,
+          attributeFilter: ['class', 'style', 'hidden', 'aria-hidden'] });
+        const dropdowns = window.jQuery?.(document);
+        const dropdownEvents = 'shown.bs.dropdown hidden.bs.dropdown';
+        const dropdownSelector = `${selector} .searchableSelect`;
+        dropdowns?.on(dropdownEvents, dropdownSelector, sampleTransition);
+        document.addEventListener('click', event => {
+          if (event.isTrusted && event.target instanceof Element) sample(event.target);
+        }, { capture: true, passive: true, signal: listener.signal });
+        sample();
+        return () => {
+          listener.abort();
+          observer.disconnect();
+          dropdowns?.off(dropdownEvents, dropdownSelector, sampleTransition);
+          const final = sample();
+          return { clicks, opened, closedAfterOpen, replaced, optionExposed, final };
+        };
+      }, machineUiSeed.group_id);
+      await withNativeDiagnostic(
+        t,
+        "queue chooser",
+        async () => ({
+          scenario: scenario.name,
+          chooser: await collectChooser(),
+        }),
+        async () => {
+          // Zammad marks the modal ready after the opening transition and autofocus.
+          await newGrant
+            .locator(".js-groupListItemAddNew .js-input")
+            .and(adminPage.locator(".modal.in.modal--ready .js-input"))
+            .click();
+          await newGrant
+            .getByRole("option", { name: "Operations", exact: true })
+            .click();
+          await newGrant.locator('input[value="full"]').locator("..").click();
+          await newGrant.locator(".js-add").click();
+          assert.equal(await fullGrant.isChecked(), true);
+        },
+        scenario === scenarios[0],
+      );
       await new Promise((resolve, reject) => {
         if (coreWorkflowResponses.size) return resolve();
         const timeout = setTimeout(() => reject(new Error('No matching Users Full-grant CoreWorkflow websocket response')), 30_000);
@@ -1119,12 +1331,14 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
       await adminPage.waitForFunction(() => window.App?.WebSocket?.channel()
         && !window.App.Config.get('core_workflow_ajax_mode')
         && Object.keys(window.App.FormHandlerCoreWorkflow.getRequests()).length === 0);
-      const machineSave = adminPage.waitForResponse(response => new URL(response.url()).pathname === `/api/v1/users/${machineUiSeed.id}`
-        && ['PUT', 'PATCH'].includes(response.request().method()), { timeout: 30_000 });
       await adminPage.screenshot({ path: join(evidenceDirectory, `native-permission-${scenario.name}-before.png`), fullPage: false });
       saveAttempted = true;
-      await machineDialog.getByRole('button', { name: language.submit, exact: true }).click();
-      assert.equal((await machineSave).status(), 200);
+      const [machineSave] = await Promise.all([
+        adminPage.waitForResponse(response => new URL(response.url()).pathname === `/api/v1/users/${machineUiSeed.id}`
+          && ['PUT', 'PATCH'].includes(response.request().method()), { timeout: 30_000 }),
+        machineDialog.getByRole('button', { name: language.submit, exact: true }).click(),
+      ]);
+      assert.equal(machineSave.status(), 200);
       await machineDialog.waitFor({ state: 'hidden' });
       await adminPage.reload({ waitUntil: "domcontentloaded" });
       await adminPage.waitForFunction(locale => window.App?.i18n?.get() === locale
@@ -1157,6 +1371,32 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
 
     const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, timezoneId: "Asia/Riyadh" });
     const page = await context.newPage();
+    const desktopFormResets = new EventEmitter();
+    page.on("websocket", (socket) => {
+      if (new URL(socket.url()).pathname !== "/cable") return;
+      const resetRequests = new Map();
+      socket.on("framesent", ({ payload }) => {
+        const frame = JSON.parse(String(payload));
+        if (frame.command === "unsubscribe") resetRequests.delete(frame.identifier);
+        if (frame.command !== "message") return;
+        const { operationName, variables } = JSON.parse(frame.data);
+        const formId = variables?.meta?.formId;
+        const article = variables?.data?.article;
+        // The form updater can coalesce the reset with a ticket refresh in the same tick.
+        if (operationName === "formUpdater" && formId && !article?.articleType && !article?.body) {
+          resetRequests.set(frame.identifier, formId);
+        }
+      });
+      socket.on("framereceived", ({ payload }) => {
+        const { identifier, message } = JSON.parse(String(payload));
+        const formId = resetRequests.get(identifier);
+        if (!formId || !message?.result) return;
+        resetRequests.delete(identifier);
+        if (message.result.data?.formUpdater?.flags?.newArticlePresent === false) {
+          desktopFormResets.emit(`reset:${formId}`);
+        }
+      });
+    });
     const entryResponse = await fetch(`${zammadOrigin}/?from=wasalx`, { redirect: "manual" });
     assert.equal(entryResponse.status, 302);
     const entryLocation = new URL(entryResponse.headers.get("location") ?? "", entryResponse.url);
@@ -1222,28 +1462,32 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
 
     const fileInput = page.locator('input[type="file"][multiple]');
     await page.getByRole("button", { name: "Attach files" }).waitFor();
-    const uploadResponsePromise = page.waitForResponse((response) => response.url().includes("/api/v1/upload_caches/") && response.request().method() === "POST");
-    await fileInput.setInputFiles({ name: "proof.png", mimeType: "image/png", buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WlU4XcAAAAASUVORK5CYII=", "base64") });
-    const uploadResponse = await uploadResponsePromise;
+    const [uploadResponse] = await Promise.all([
+      page.waitForResponse(response => response.url().includes("/api/v1/upload_caches/") && response.request().method() === "POST"),
+      fileInput.setInputFiles({ name: "proof.png", mimeType: "image/png", buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WlU4XcAAAAASUVORK5CYII=", "base64") }),
+    ]);
     const uploadPayload = await uploadResponse.json();
     assert.equal(uploadResponse.status(), 200, JSON.stringify(uploadPayload));
-    await page.waitForTimeout(250);
+    await page.getByText("proof.png").first().waitFor();
     const uploadUi = await page.evaluate(() => ({
       error: document.querySelector("#wasalx-group-message-error")?.textContent?.trim() || null,
       visible: document.body.innerText.includes("proof.png"),
     }));
     assert.equal(uploadUi.error, null, JSON.stringify({ uploadPayload, uploadUi }));
     assert.equal(uploadUi.visible, true, JSON.stringify({ uploadPayload, uploadUi }));
-    const attachmentSendResponsePromise = page.waitForResponse((response) => response.url().includes("/api/v1/wasalx/group_workspace/groups/") && response.url().endsWith("/send") && response.request().method() === "POST");
-    await page.getByRole("button", { name: "Send", exact: true }).click();
-    const attachmentSendResponse = await attachmentSendResponsePromise;
+    const [attachmentSendResponse] = await Promise.all([
+      page.waitForResponse(response => response.url().includes("/api/v1/wasalx/group_workspace/groups/")
+        && response.url().endsWith("/send") && response.request().method() === "POST"),
+      page.getByRole("button", { name: "Send", exact: true }).click(),
+    ]);
     const attachmentSendPayload = await attachmentSendResponse.json();
-    await page.waitForTimeout(250);
+    assert.equal(attachmentSendResponse.status(), 202, JSON.stringify(attachmentSendPayload));
+    await page.locator(`[data-message-id="${state.sentMessages[0].id}"]`)
+      .filter({ hasText: "proof.png" }).waitFor();
     const attachmentSendUi = await page.evaluate(() => ({
       error: document.querySelector("#wasalx-group-message-error")?.textContent?.trim() || null,
       visible: document.body.innerText.includes("proof.png"),
     }));
-    assert.equal(attachmentSendResponse.status(), 202, JSON.stringify({ attachmentSendPayload, attachmentSendUi }));
     assert.equal(attachmentSendUi.error, null, JSON.stringify({ attachmentSendPayload, attachmentSendUi }));
     assert.equal(attachmentSendUi.visible, true, JSON.stringify({ attachmentSendPayload, attachmentSendUi }));
     const attachment = state.requests.filter((request) => request.path.endsWith("/send")).at(-1)?.body?.attachments?.[0];
@@ -1260,18 +1504,24 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
     await page.getByRole("link", { name: `Ticket #${state.ticketNumber}` }).waitFor();
 
     const createMessage = page.locator(`[data-message-id="${createMessageId}"]`);
+    const selectedGroupAuthorizedSince = start => state.requests.slice(start).some(request => request.method === "GET"
+      && request.path === "/internal/v1/zammad/group-workspace/groups" && new URLSearchParams(request.query).get("limit") === "1");
     await createMessage.getByRole("button", { name: "Create ticket" }).click();
     const createForm = createMessage.locator("form");
     assert.equal(await createForm.getByLabel("Ticket title").inputValue(), "Riyadh Operations — Create shipment SHIP-42");
+    const ticketCreateStart = state.requests.length;
     await createForm.getByRole("button", { name: "Create ticket" }).click();
     await page.getByRole("link", { name: /Open ticket #/u }).waitFor();
+    assert.ok(selectedGroupAuthorizedSince(ticketCreateStart), "Create must authorize the selected group");
 
     const linkMessage = page.locator(`[data-message-id="${linkMessageId}"]`);
     await linkMessage.getByRole("button", { name: "Link to ticket" }).click();
     const linkForm = linkMessage.locator("form");
     await linkForm.getByLabel("Ticket number").fill(String(state.ticketNumber));
+    const ticketLinkStart = state.requests.length;
     await linkForm.getByRole("button", { name: "Link message" }).click();
     await page.getByRole("link", { name: `Open ticket #${state.ticketNumber}` }).waitFor();
+    assert.ok(selectedGroupAuthorizedSince(ticketLinkStart), "Link must authorize the selected group");
 
     const heading = page.getByRole("heading", { name: "WhatsApp Groups" });
     await heading.evaluate((element) => element.closest(".flex.h-full")?.setAttribute("data-wasalx-test-root", ""));
@@ -1337,21 +1587,45 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
       `);
       return JSON.parse(raw.split('\n').find(line => line.startsWith('{')) ?? '');
     };
+    const ticketUpdateOperation = /^ticketUpdate$/iu;
+    const isTicketUpdate = (request, url = request.url()) => new URL(url).pathname.endsWith('/graphql')
+      && request.method() === 'POST' && ticketUpdateOperation.test(request.postDataJSON()?.operationName ?? '');
     const submitReplyTicket = async (articleExpected) => {
-      const pending = page.waitForResponse(response => new URL(response.url()).pathname.endsWith('/graphql')
-        && response.request().method() === 'POST'
-        && /^ticketUpdate$/iu.test(response.request().postDataJSON()?.operationName ?? ''), { timeout: 60_000 });
-      await page.getByRole('button', { name: 'Update', exact: true }).click();
-      const response = await pending; const data = await response.json();
-      assert.equal(response.status(), 200); assert.ok(!data.errors?.length);
-      assert.ok(!data.data?.ticketUpdate?.errors?.length); assert.ok(data.data?.ticketUpdate?.ticket);
-      assert.equal(response.request().postDataJSON()?.variables?.input?.article != null, articleExpected);
+      let reset;
+      if (articleExpected) {
+        const formId = await page.locator('#ticketArticleReplyForm [name="body"][data-form-id]').getAttribute("data-form-id");
+        assert.ok(formId, "The native desktop reply must belong to a FormKit form");
+        // A pending draft refresh can outlive ticketUpdate. Wait for Zammad's reset query for this form.
+        reset = once(desktopFormResets, `reset:${formId}`, { signal: AbortSignal.timeout(30_000) }).catch((cause) => {
+          throw new Error("The native desktop reply form did not acknowledge its reset", { cause });
+        });
+      }
+      await Promise.all([
+        page.waitForResponse(response => isTicketUpdate(response.request(), response.url()), { timeout: 60_000 }).then(async (response) => {
+          const data = await response.json();
+          assert.equal(response.status(), 200); assert.ok(!data.errors?.length);
+          assert.ok(!data.data?.ticketUpdate?.errors?.length); assert.ok(data.data?.ticketUpdate?.ticket);
+          assert.equal(response.request().postDataJSON()?.variables?.input?.article != null, articleExpected);
+        }),
+        page.getByRole('button', { name: 'Update', exact: true }).click(),
+        reset,
+      ]);
     };
     const assertReplyReset = async (marker = replyMarker) => {
-      await page.waitForFunction(marker => ![...document.querySelectorAll('[contenteditable="true"]')]
-        .some(node => node.textContent.includes(marker)), marker, { timeout: 30_000 });
-      await page.getByRole('button', { name: 'Discard unsaved reply', exact: true }).waitFor({ state: 'hidden', timeout: 30_000 });
-      await page.getByText('Discard your unsaved changes', { exact: true }).waitFor({ state: 'hidden', timeout: 30_000 });
+      await withNativeDiagnostic(t, "desktop reply reset", () => readNativeDiagnostic(page.evaluate((text) => ({
+        panelOpen: Boolean(document.getElementById("ticketArticleReplyForm")),
+        remainingDrafts: [...document.querySelectorAll("[contenteditable]")]
+          .filter(node => node.textContent.includes(text))
+          .map(node => ({
+            inReplyPanel: Boolean(node.closest("#ticketArticleReplyForm")),
+            inHiddenForm: Boolean(node.closest("#wrapper-form-ticket-edit")),
+          })),
+      }), marker)), async () => {
+        await page.waitForFunction(marker => ![...document.querySelectorAll('[contenteditable="true"]')]
+          .some(node => node.textContent.includes(marker)), marker, { timeout: 30_000 });
+        await page.getByRole('button', { name: 'Discard unsaved reply', exact: true }).waitFor({ state: 'hidden', timeout: 30_000 });
+        await page.getByText('Discard your unsaved changes', { exact: true }).waitFor({ state: 'hidden', timeout: 30_000 });
+      }, false);
     };
     // The plugin screenshot selected WasalX operations; native fields are rendered
     // only while the Ticket sidebar is selected. This changes no persisted state.
@@ -1439,17 +1713,79 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
     const directAction = directBubble.getByRole('button', { name: 'Reply on WhatsApp', exact: true });
     const directBefore = await replySnapshot(state.directReplyTicketId, directBody);
     assert.equal(directBefore.state, 'open'); assert.equal(directBefore.rows.length, 0);
+    const directOrigin = new URL(zammadOrigin).origin;
+    const submitDirectReply = async articleExpected => {
+      const collectForm = await observeNativeDom(page, formId => {
+        const listener = new AbortController();
+        const options = { capture: true, passive: true, signal: listener.signal };
+        const form = () => document.getElementById(formId);
+        const sections = '#ticketEditAttributeForm, #ticketArticleReplyForm';
+        const invalid = '[aria-invalid="true"], [data-invalid="true"], [data-message-type="validation"]';
+        let updateClicked = false;
+        let formPresentAtClick = false;
+        let validationMarked = false;
+        let nativeInvalid = false;
+        let expectedSubmit;
+        const sampleValidation = () => {
+          if (updateClicked) validationMarked ||= Boolean(form()?.querySelector(invalid)
+            || [...document.querySelectorAll(sections)].some(section => section.querySelector(invalid)));
+        };
+        document.addEventListener('click', event => {
+          const button = event.target instanceof Element && event.target.closest('button');
+          if (button && button.textContent.trim() === 'Update') {
+            updateClicked = true;
+            formPresentAtClick = Boolean(form());
+            sampleValidation();
+          }
+        }, options);
+        document.addEventListener('submit', event => {
+          if (updateClicked && event.target === form()) expectedSubmit = event;
+        }, options);
+        document.addEventListener('invalid', event => {
+          if (updateClicked && event.target instanceof Element
+            && (event.target.form?.id === formId || event.target.closest(sections))) nativeInvalid = true;
+        }, options);
+        const validation = new MutationObserver(sampleValidation);
+        for (const element of [form(), ...document.querySelectorAll(sections)].filter(Boolean)) {
+          validation.observe(element, { subtree: true, childList: true, attributes: true,
+            attributeFilter: ['aria-invalid', 'data-invalid', 'data-message-type'] });
+        }
+        return () => {
+          listener.abort();
+          validation.disconnect();
+          sampleValidation();
+          // FormKit normally prevents default navigation for an AJAX submit.
+          return { updateClicked, formPresentAtClick, expectedSubmit: Boolean(expectedSubmit),
+            defaultPrevented: expectedSubmit?.defaultPrevented ?? null, nativeInvalid, validationMarked };
+        };
+      }, `form-ticket-edit-${directFixture.id}`);
+      const collectRequest = observeNativeRequests(page, request => {
+        const url = new URL(request.url());
+        if (!url.pathname.endsWith('/graphql')) return null;
+        const methodMatched = request.method() === 'POST';
+        let payload;
+        let bodyReadable = true;
+        try { payload = request.postDataJSON(); } catch { bodyReadable = false; }
+        const operationMatched = ticketUpdateOperation.test(payload?.operationName ?? '');
+        const matched = methodMatched && operationMatched;
+        if (!matched && url.origin !== directOrigin) return null;
+        const updateInBatch = Array.isArray(payload) && payload.some(entry => ticketUpdateOperation.test(entry?.operationName ?? ''));
+        return { matched, methodMatched, operationMatched, bodyReadable, updateInBatch,
+          articlePresent: operationMatched ? payload?.variables?.input?.article != null : null };
+      });
+      await withNativeDiagnostic(t, 'direct reply', async () => ({ articleExpected, ...collectRequest(), form: await collectForm() }),
+        () => submitReplyTicket(articleExpected), articleExpected);
+    };
     const directMutations = [];
     const recordDirectMutation = request => {
-      if (new URL(request.url()).pathname.endsWith('/graphql') && request.method() === 'POST'
-        && /^ticketUpdate$/iu.test(request.postDataJSON()?.operationName ?? '')) {
+      if (isTicketUpdate(request)) {
         directMutations.push({ article: request.postDataJSON()?.variables?.input?.article != null });
       }
     };
     page.on('request', recordDirectMutation);
     try {
       await directBubble.hover(); await directAction.click(); await page.locator('[contenteditable="true"]').fill(directBody);
-      await replyState.click(); await page.getByRole('option', { name: /^closed$/iu }).click(); await submitReplyTicket(true);
+      await replyState.click(); await page.getByRole('option', { name: /^closed$/iu }).click(); await submitDirectReply(true);
       const directSaved = await replySnapshot(state.directReplyTicketId, directBody);
       assert.equal(directSaved.state, 'closed'); assert.equal(directSaved.rows.length, 1);
       assert.equal(directSaved.rows[0].matches, true);
@@ -1481,7 +1817,7 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
         await assertReplyReset(directMarker);
       }
       // Do not reload or open a second composer before this previously blocked state-only save.
-      await replyState.click(); await page.getByRole('option', { name: /^closed$/iu }).click(); await submitReplyTicket(false);
+      await replyState.click(); await page.getByRole('option', { name: /^closed$/iu }).click(); await submitDirectReply(false);
       const directClosed = await replySnapshot(state.directReplyTicketId, directBody);
       assert.equal(directClosed.state, 'closed'); assert.deepEqual(directClosed.rows, directDelivered.rows);
       assert.deepEqual(directMutations, [{ article: true }, { article: false }]); assert.equal(directOutputs().length, 1);
@@ -1521,6 +1857,11 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
     };
     let nativeMobileStorageState;
     let mobilePhase = "navigation";
+    const channelChooser = mobilePage.getByRole("dialog", {
+      name: "Dialog window with selections",
+      exact: true,
+    });
+    const whatsAppChannel = channelChooser.getByRole("option", { name: "WhatsApp", exact: true });
     mobilePage.on("request", (request) => {
       if (request.method() !== "POST" || !new URL(request.url()).pathname.endsWith("/graphql")) return;
       const payload = request.postDataJSON();
@@ -1709,13 +2050,67 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
       await mobilePage.waitForURL((url) => url.pathname === "/mobile/wasalx/groups" && url.searchParams.get("message") === existingMessageId);
       await mobilePage.locator(`[data-message-id="${existingMessageId}"]`).waitFor();
       await mobilePage.goto(`${zammadOrigin}/mobile/tickets/${state.ticketId}`, { waitUntil: "domcontentloaded" });
-      mobilePhase = "reply-draft-attachment-discard";
+      mobilePhase = "reply-channel-chooser";
       await mobilePage.getByRole("button", { name: "Add reply", exact: true }).click();
       const reply = mobilePage.getByRole("dialog", { name: "Add reply", exact: true });
       await reply.getByRole("combobox", { name: "Channel", exact: true }).click();
-      await mobilePage.getByRole("dialog", { name: "Dialog window with selections", exact: true }).getByRole("option", { name: "WhatsApp", exact: true }).click();
+      await whatsAppChannel.click();
+      await channelChooser.waitFor({ state: "hidden" });
       assert.ok((await reply.getByRole("combobox", { name: "Channel", exact: true }).innerText()).includes("WhatsApp"));
-      await reply.locator('[contenteditable="true"]').pressSequentially("Mobile draft \u2014 do not send.", { delay: 20 });
+      mobilePhase = "reply-draft-attachment-discard";
+      const mobileDraft = "Mobile draft \u2014 do not send.";
+      const collectEditor = await observeNativeDom(mobilePage, draft => {
+        const listener = new AbortController();
+        let inputEvents = 0;
+        let fullDraftSeen = false;
+        document.addEventListener('input', event => {
+          if (!(event.target instanceof Element)) return;
+          const editor = event.target.closest('[contenteditable="true"]');
+          if (!editor?.closest('dialog, [role="dialog"]')) return;
+          inputEvents = Math.min(inputEvents + 1, 99);
+          fullDraftSeen ||= editor.textContent.trim() === draft;
+        }, { capture: true, passive: true, signal: listener.signal });
+        return () => { listener.abort(); return { inputEvents, fullDraftSeen }; };
+      }, mobileDraft);
+      const previewPath = `/api/v1/wasalx/tickets/${state.ticketId}/reply-preview`;
+      const previewOrigin = new URL(zammadOrigin).origin;
+      const collectPreview = observeNativeRequests(mobilePage, request => {
+        const url = new URL(request.url());
+        const pathMatched = url.pathname === previewPath;
+        if (!pathMatched && (url.origin !== previewOrigin || !['fetch', 'xhr'].includes(request.resourceType()))) return null;
+        const methodMatched = request.method() === 'POST';
+        let body;
+        try { body = request.postDataJSON()?.body; } catch { /* A malformed body cannot match the draft. */ }
+        const fullDraft = typeof body === 'string' && body.trim() === mobileDraft;
+        if (!pathMatched && !fullDraft) return null;
+        return { pathMatched, methodMatched, fullDraft, matched: pathMatched && methodMatched && fullDraft,
+          obsoletePreview: pathMatched && methodMatched && typeof body === 'string' && !fullDraft && mobileDraft.startsWith(body.trim()) };
+      });
+      await withNativeDiagnostic(t, 'mobile preview', async () => ({ ...collectPreview(), editor: await collectEditor() }), async () => {
+        const draftEditor = reply.locator('[contenteditable="true"]');
+        // Move focus after the first input to exercise the partial-draft regression.
+        await draftEditor.evaluate((editor) => {
+          editor.addEventListener("input", () => editor.blur(), { once: true });
+        });
+        const [preview] = await Promise.all([
+          mobilePage.waitForResponse(
+            (response) =>
+              response.request().method() === "POST" &&
+              new URL(response.url()).pathname === previewPath &&
+              response.request().postDataJSON()?.body?.trim() === mobileDraft,
+          ),
+          (async () => {
+            await draftEditor.fill(mobileDraft);
+            assert.equal(
+              (await draftEditor.textContent())?.trim(),
+              mobileDraft,
+              "The editor must hold the full draft",
+            );
+          })(),
+        ]);
+        assert.equal(preview.status(), 200, "The pinned add-on must preview the unsent draft");
+        assert.equal((await preview.json()).text.trim(), mobileDraft);
+      });
       // Native cancellation prompts only after FormKit recognizes an article change.
       await reply.getByRole("button", { name: "Done", exact: true }).click({ trial: true });
       const chooserPromise = mobilePage.waitForEvent("filechooser");
@@ -1743,10 +2138,16 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
       assert.equal(await stateField.innerText(), originalStateLabel);
       mobilePhase = "read-only-mutation-guards";
       assert.equal(mobileMutations.some((name) => /ticketUpdate|formUploadCacheAdd/iu.test(name)), false);
-      const mobileControlMutations = state.requests.slice(mobileStart).filter((request) => request.method !== "GET");
-      assert.ok(mobileControlMutations.every((request) => request.method === "POST"
-        && request.path === `/internal/v1/zammad/group-workspace/groups/${groupId}/read`),
-      "mobile navigation may only advance the exact owned group's read cursor");
+      const mobileControlMutations = state.requests.slice(mobileStart).filter(({ method, path, body }) => {
+        if (method === "GET") return false;
+        // The preview sends draft text in a POST but never admits a delivery.
+        return !(method === "POST" && path === replyPreviewPath && Number(body.ticket_id) === Number(state.ticketId)
+          && body.has_attachments === false && typeof body.body === "string" && mobileDraft.startsWith(body.body.trim()));
+      });
+      const unexpectedMobileMutations = mobileControlMutations.filter(({ method, path }) =>
+        method !== "POST" || path !== `/internal/v1/zammad/group-workspace/groups/${groupId}/read`);
+      assert.deepEqual(unexpectedMobileMutations.map(({ method, path }) => ({ method, path })), [],
+        "mobile navigation may only advance the exact owned group's read cursor");
       await writeFile(join(evidenceDirectory, "native-mobile-evidence.json"), JSON.stringify({
         candidate: process.env.GITHUB_SHA ?? "local", image, evidenceMode: "simulated", nativeUi: true,
         viewport: { width: 390, height: 844 }, coarsePointer: true, locale: "en",
@@ -1763,6 +2164,16 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
       mobilePhase = "collected-failure-union";
       assert.deepEqual(mobileFailures, [], "native mobile collected failure union");
     } catch (error) {
+      const chooser = mobilePhase === "reply-channel-chooser"
+        ? await readNativeDiagnostic(Promise.all([channelChooser.count(), whatsAppChannel.count(), whatsAppChannel.first().isVisible()])
+          .then(([dialogs, options, optionVisible]) => ({ dialogs, options, optionVisible })))
+        : null;
+      await writeFile(join(evidenceDirectory, "native-mobile-public-failure.json"), JSON.stringify({
+        phase: mobilePhase,
+        kind: error?.name === "TimeoutError" ? "timeout" : error instanceof assert.AssertionError ? "assertion" : "error",
+        chooser,
+        checks: mobileFailures.map(({ surface, check }) => ({ surface, check })),
+      }, null, 2)).catch(() => t.diagnostic("Unable to retain the public native mobile failure diagnostics."));
       const failureStateBeforeCapture = await mobileState().catch((stateError) => ({ error: String(stateError) }));
       const screenshotError = await mobilePage.screenshot({ path: join(evidenceDirectory, "native-mobile-failure.png"), fullPage: false })
         .then(() => null, (captureError) => String(captureError));
@@ -1935,21 +2346,37 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
     const nativeRaceSource = await readFile(join(process.cwd(), "tests/team-admin-race-native.rb"));
     const nativeMailboxSource = await readFile(join(process.cwd(), "tests/mailbox-admin-native.rb"));
     const nativeTlsSource = await readFile(join(process.cwd(), "tests/mailbox-driver-tls-native.rb"));
-    const nativeOutput = await privateNative("run", "--rm", "--no-deps",
-      "--env", "WASALX_TEST_ISOLATED=1", "--env", `WASALX_NATIVE_MAILBOX_TEST_B64=${nativeMailboxSource.toString("base64")}`, "zammad-package", "bundle", "exec", "rails", "runner",
+    const nativeScripts = join(directory, "native-scripts");
+    const nativeMount = "/run/wasalx-native-scripts";
+    const driverName = "native-diagnostics.rb";
+    const mailboxName = "mailbox-admin-native.rb";
+    const driverPath = `${nativeMount}/${driverName}`;
+    const mailboxPath = `${nativeMount}/${mailboxName}`;
+    await mkdir(nativeScripts, { mode: 0o700 });
+    await writeFile(join(nativeScripts, mailboxName), nativeMailboxSource, { mode: 0o600 });
+    // Linux bounds each argument and environment entry, including encoded Ruby sources.
+    await writeFile(join(nativeScripts, driverName),
       `require 'base64'; ENV['WASALX_NATIVE_DIAGNOSTIC'] = 'true'
-       Module.new.module_eval(Base64.decode64('${nativeInitializeSource.toString("base64")}'), 'portal-service-initialize-native.rb')
-       Module.new.module_eval(Base64.decode64('${nativeIdentitySource.toString("base64")}'), 'portal-service-identity-native.rb')
-       eval(Base64.decode64('${nativeSource.toString("base64")}'), TOPLEVEL_BINDING, 'portal-workspace-native.rb')
+       Module.new.module_eval(Base64.decode64('${nativeInitializeSource.toString("base64")}').force_encoding(Encoding::UTF_8), 'portal-service-initialize-native.rb')
+       Module.new.module_eval(Base64.decode64('${nativeIdentitySource.toString("base64")}').force_encoding(Encoding::UTF_8), 'portal-service-identity-native.rb')
+       eval(Base64.decode64('${nativeSource.toString("base64")}').force_encoding(Encoding::UTF_8), TOPLEVEL_BINDING, 'portal-workspace-native.rb')
        saved = JSON.parse(File.read('/var/tmp/portal-workspace-fixture.json'))
        ENV['WASALX_ADMIN_TEST_MODE'] = 'simulated'
        ENV['WASALX_ADMIN_TEST_OWNER'] = WasalxMembership.find(saved.fetch('owner')).portal_user_id
        ENV['WASALX_ADMIN_TEST_MEMBER'] = WasalxMembership.find(saved.fetch('agent')).portal_user_id
-       Module.new.module_eval(Base64.decode64('${nativeIdentityRaceSource.toString("base64")}'), 'portal-service-identity-race-native.rb')
-       Module.new.module_eval(Base64.decode64('${nativeTeamSource.toString("base64")}'), 'team-admin-native.rb')
-       Module.new.module_eval(Base64.decode64('${nativeRaceSource.toString("base64")}'), 'team-admin-race-native.rb')
+       Module.new.module_eval(Base64.decode64('${nativeIdentityRaceSource.toString("base64")}').force_encoding(Encoding::UTF_8), 'portal-service-identity-race-native.rb')
+       Module.new.module_eval(Base64.decode64('${nativeTeamSource.toString("base64")}').force_encoding(Encoding::UTF_8), 'team-admin-native.rb')
+       Module.new.module_eval(Base64.decode64('${nativeRaceSource.toString("base64")}').force_encoding(Encoding::UTF_8), 'team-admin-race-native.rb')
        ENV['WASALX_ADMIN_TLS_TRUST_MODE'] = 'trusted'
-       Module.new.module_eval(Base64.decode64('${nativeTlsSource.toString("base64")}'), 'mailbox-driver-tls-native.rb')`);
+       Module.new.module_eval(Base64.decode64('${nativeTlsSource.toString("base64")}').force_encoding(Encoding::UTF_8), 'mailbox-driver-tls-native.rb')`, { mode: 0o600 });
+    // The host runner UID can differ from the Zammad image's UID.
+    await privateNative("run", "--rm", "--no-deps", "--user", "0:0", "--entrypoint", "chown",
+      "--volume", `${nativeScripts}:${nativeMount}:rw`, "zammad-package", "1000:1000", driverPath, mailboxPath);
+    const nativeOutput = await privateNative("run", "--rm", "--no-deps",
+      "--volume", `${join(nativeScripts, driverName)}:${driverPath}:ro`,
+      "--volume", `${join(nativeScripts, mailboxName)}:${mailboxPath}:ro`,
+      "--env", "WASALX_TEST_ISOLATED=1", "--env", `WASALX_NATIVE_MAILBOX_TEST_PATH=${mailboxPath}`,
+      "zammad-package", "bundle", "exec", "rails", "runner", driverPath);
     assert.match(nativeOutput, /"fixture":"owner-service-initialize"/);
     assert.match(nativeOutput, /"fixture":"fresh-service-identity"/);
     const nativeInitializeProof = JSON.parse(nativeOutput.split("\n").find(line => line.startsWith('{"fixture":"owner-service-initialize"')) ?? "");
@@ -1967,9 +2394,9 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
     assert.ok(trustedTls.proof.every(row => row.result === "PASS"));
     const untrustedOutput = await privateNative("run", "--rm", "--no-deps", "--env", "WASALX_ADMIN_TLS_TRUST_MODE=untrusted",
       "--env", "SSL_CERT_FILE=/run/wasalx-mailbox-fixture/untrusted-ca.crt", "zammad-package", "bundle", "exec", "rails", "runner",
-      `require 'base64'; saved = JSON.parse(File.read('/var/tmp/portal-workspace-fixture.json'))
-       ENV['WASALX_ADMIN_TEST_OWNER'] = WasalxMembership.find(saved.fetch('owner')).portal_user_id
-       Module.new.module_eval(Base64.decode64('${nativeTlsSource.toString("base64")}'), 'mailbox-driver-tls-native.rb')`);
+      `require 'base64'
+       ENV['WASALX_ADMIN_TEST_OWNER'] = Wasalx::ServiceIdentity.receipt.fetch('human_portal_user_id')
+       Module.new.module_eval(Base64.decode64('${nativeTlsSource.toString("base64")}').force_encoding(Encoding::UTF_8), 'mailbox-driver-tls-native.rb')`);
     const untrustedTls = JSON.parse(untrustedOutput.split("\n").find(line => line.startsWith('{"mode":"SIMULATED","boundary":"NATIVE_MAILBOX_TLS"')) ?? "");
     assert.equal(untrustedTls.trust_mode, "untrusted");
     assert.equal(untrustedTls.check_count, 4);
@@ -2003,6 +2430,7 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
       "native-ticket-transfer-create-workflow-and-email-driver",
       "native-full-article-text-bounds-version-and-policy",
       "native-ticket-upload-ownership-target-and-selected-set",
+      "native-attachment-only-group-reply-keeps-empty-caption",
       "native-group-receipt-fences-races-and-savepoints",
       "native-binary-staging-target-ownership-and-idempotent-retry",
       "native-portal-preview-reuses-route-and-does-not-admit-effects",
@@ -2035,7 +2463,12 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
   } finally {
     await settleNativeCompatibility({ project, directory, runnerContainer, runnerConnected, primaryError,
       closeBrowser: async () => { if (browser) await browser.close(); },
-      closeFixture: async () => { if (fixture) await new Promise((resolve, reject) => fixture.close((error) => error ? reject(error) : resolve())); },
+      closeFixture: async () => {
+        const closeError = fixture && await new Promise(resolve => fixture.close(resolve));
+        await Promise.all(fixtureRequests);
+        if (closeError) fixtureErrors.push(closeError);
+        if (fixtureErrors.length) throw new AggregateError(fixtureErrors, "Control fixture request failed");
+      },
       command: (args) => execFileSync("docker", args, { encoding: "utf8", timeout: 120_000, maxBuffer: 64 * 1024,
         env: { ...process.env, WASALX_ZAMMAD_TEST_IMAGE: image }, stdio: ["ignore", "pipe", "pipe"] }),
       removeWorkspace: () => rm(directory, { recursive: true, force: true }),

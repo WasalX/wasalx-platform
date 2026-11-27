@@ -1,0 +1,53 @@
+name: privacy
+
+on:
+  workflow_call:
+  pull_request:
+    types: [edited]
+  issues:
+    types: [opened, edited, reopened]
+  push:
+    branches-ignore:
+      - main
+      - 'gh-readonly-queue/**'
+
+concurrency:
+  # Never cancel or supersede: each run screens only its own event's text and commits.
+  group: privacy-${{ github.run_id }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  privacy-scan:
+    if: github.event_name != 'push' || !github.event.deleted
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Mask the pull request opener
+        if: github.event_name == 'pull_request'
+        run: |
+          # The runner logs step environment values before executing the shell.
+          opener=$(jq -r '.pull_request.user.login // empty' "$GITHUB_EVENT_PATH")
+          if [[ -n "$opener" ]]; then
+            printf '::add-mask::%s\n' "$opener"
+          fi
+      - name: Require an allowed pull request opener
+        if: github.event_name == 'pull_request'
+        env:
+          PR_OPENER: ${{ github.event.pull_request.user.login }}
+          PR_OPENER_ALLOWLIST: ${{ vars.PR_OPENER_ALLOWLIST || 'tree-publisher[bot],dependabot[bot]' }}
+        run: |
+          if [[ -z "$PR_OPENER" ]] || ! tr ',[:space:]' '\n' <<< "$PR_OPENER_ALLOWLIST" | grep -Fx -- "$PR_OPENER" >/dev/null; then
+            echo '::error::PR opener allowlist rule failed.'
+            exit 1
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: ${{ (github.event_name == 'issues' || (github.event_name == 'pull_request' && github.event.action == 'edited')) && '1' || '0' }}
+          persist-credentials: false
+      - name: Screen the event and introduced commits
+        run: python3 -I -B scripts/public-privacy.py
+      - name: Verify privacy detection and redacted output
+        run: python3 -I -B tests/test_public_privacy.py

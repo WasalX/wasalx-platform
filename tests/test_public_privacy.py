@@ -1,0 +1,237 @@
+import json
+import os
+from pathlib import Path
+import struct
+import subprocess
+import sys
+import tempfile
+import unittest
+import zlib
+
+
+SCANNER = Path(__file__).resolve().parents[1] / "scripts/public-privacy.py"
+TOKEN = "ghp_" + "A" * 36
+IP = ".".join(("172", "19", "7", "42"))
+HOST = ".".join(("sample", "internal"))
+PATH = "Q:" + "\\Users\\sample\\config"
+KEY = "-----BEGIN " + "OPENSSH PRIVATE KEY-----"
+
+BASELINE = "tests/visual/__screenshots__/linux/sample.png"
+
+
+def png_chunk(kind, payload):
+    chunk = kind + payload
+    return struct.pack(">I", len(payload)) + chunk + struct.pack(">I", zlib.crc32(chunk))
+
+
+def sample_png(pixels=b"\0", ancillary=b""):
+    return b"".join((
+        b"\x89PNG\r\n\x1a\n",
+        png_chunk(b"IHDR", struct.pack(">IIBBBBB", len(pixels), 1, 8, 0, 0, 0, 0)),
+        ancillary,
+        png_chunk(b"IDAT", zlib.compress(b"\0" + pixels, level=0)),
+        png_chunk(b"IEND", b""),
+    ))
+
+
+class PublicPrivacyTest(unittest.TestCase):
+    def setUp(self):
+        work = tempfile.TemporaryDirectory()
+        self.addCleanup(work.cleanup)
+        self.root = Path(work.name)
+        self.repo = self.root / "repo"
+        self.repo.mkdir()
+        self.git("init", "--initial-branch=main")
+        self.base = self.commit("baseline")
+
+    def git(self, *args):
+        return subprocess.check_output(
+            ["git", "-c", "user.name=Test Bot", "-c", "user.email=test@users.noreply.github.com",
+             "-c", "core.autocrlf=false", *args],
+            cwd=self.repo, stderr=subprocess.PIPE, text=True,
+        ).strip()
+
+    def commit(self, message):
+        self.git("add", ".")
+        self.git("commit", "--allow-empty", "-m", message)
+        return self.git("rev-parse", "HEAD")
+
+    def scan(self, event, payload, expected, head=None):
+        event_path = self.root / "event.json"
+        event_path.write_text(json.dumps(payload), encoding="utf-8")
+        run = subprocess.run(
+            [sys.executable, "-I", "-B", SCANNER], cwd=self.repo, capture_output=True, text=True,
+            env={**os.environ, "GITHUB_EVENT_NAME": event, "GITHUB_EVENT_PATH": str(event_path),
+                 "GITHUB_SHA": head or self.base},
+        )
+        self.assertEqual(run.returncode, expected, "Unexpected privacy check exit status")
+        for value in (TOKEN, IP, HOST, PATH, KEY):
+            self.assertFalse(value in run.stdout + run.stderr, "Privacy finding leaked its value")
+        self.assertEqual(run.stderr, "", "Unexpected scanner stderr")
+        return run.stdout.splitlines()
+
+    def pr(self, title="Clean PR", body=None):
+        return {"pull_request": {"title": title, "body": body, "head": {"ref": "fixture"},
+                                 "base": {"sha": self.base}}}
+
+    def test_pr_rejects_a_leak_even_when_a_later_commit_removes_it(self):
+        file = self.repo / "fixture text.txt"
+        file.write_text(f"header\n{TOKEN}\n{IP}\n", encoding="utf-8")
+        self.commit("temporary fixture")
+        file.unlink()
+        head = self.commit("remove fixture")
+        self.assertCountEqual(self.scan("pull_request", self.pr(), 1, head), [
+            'privacy "fixture text.txt":2 github-token',
+            'privacy "fixture text.txt":3 private-ipv4',
+        ])
+
+    def test_pr_and_issue_screen_title_and_body_without_executing_text(self):
+        for event, field in (("pull_request", "pull_request"), ("issues", "issue")):
+            with self.subTest(event=event):
+                title = '$(echo untrusted) ' + KEY
+                body = f"Details\r\nhttps://{HOST}\r\n{PATH}"
+                payload = self.pr(title, body) if event == "pull_request" else {field: {"title": title, "body": body}}
+                self.assertCountEqual(self.scan(event, payload, 1), [
+                    f'privacy "{field}.title":1 private-key',
+                    f'privacy "{field}.body":2 private-host',
+                    f'privacy "{field}.body":3 private-path',
+                ])
+
+    def test_queue_and_branch_pushes_scan_the_introduced_commits(self):
+        (self.repo / f"operator@{HOST}").write_text(TOKEN, encoding="utf-8")
+        head = self.commit("seed " + IP)
+        self.git("update-ref", "refs/remotes/origin/main", self.base)
+        for event, payload in (
+            ("merge_group", {"merge_group": {"base_sha": self.base, "head_sha": head}}),
+            ("push", {"before": "0" * 40, "after": head, "ref": "refs/heads/fixture",
+                      "repository": {"default_branch": "main"}}),
+            ("push", {"before": "f" * 40, "after": head, "ref": "refs/heads/fixture", "forced": True,
+                      "repository": {"default_branch": "main"}}),
+        ):
+            with self.subTest(event=event):
+                self.assertCountEqual(self.scan(event, payload, 1, head), [
+                    'privacy "commit.message":1 private-ipv4',
+                    'privacy "<redacted path>":1 private-host',
+                    'privacy "<redacted path>":1 github-token',
+                ])
+
+    def test_clean_pr_allows_public_urls_and_preexisting_lines(self):
+        file = self.repo / "fixture.txt"
+        file.write_text(IP + "\n", encoding="utf-8")
+        self.base = self.commit("baseline fixture")
+        file.write_text(IP + "\nhttps://example.org/ 192.0.2.8\n", encoding="utf-8")
+        head = self.commit("public documentation")
+        self.assertEqual(self.scan("pull_request", self.pr(), 0, head), [])
+        self.assertEqual(self.scan("issues", {"issue": {"title": "Clean issue", "body": None}}, 0), [])
+
+    def test_member_access_and_public_placeholders_pass(self):
+        env_example = SCANNER.parents[1] / ".env.example"
+        provider = next(line for line in env_example.read_text(encoding="utf-8").splitlines()
+                        if line.startswith("WAHA_BASE_URL="))
+        (self.repo / ".env.example").write_text(provider + "\n", encoding="utf-8")
+        (self.repo / "fixture.js").write_text("return article.internal ?? body.internal;\n", encoding="utf-8")
+        head = self.commit("public local configuration and member access")
+        body = "\n".join(("https://example.internal/", "http://identity.local",
+                          "http://host.docker.internal:3000", "https://release.home.arpa"))
+        self.assertEqual(self.scan("pull_request", self.pr(body=body), 0, head), [])
+
+    def test_edited_pr_checks_host_in_payload_without_commit_history(self):
+        payload = self.pr(body=f"https://operator@{HOST}:8443/path")
+        payload["action"] = "edited"
+        self.assertEqual(self.scan("pull_request", payload, 1, "f" * 40), [
+            'privacy "pull_request.body":1 private-host',
+        ])
+
+    def test_merge_from_main_scans_resolution_without_rescanning_main(self):
+        self.git("switch", "-c", "fixture")
+        before = self.commit("feature branch")
+        self.git("switch", "main")
+        (self.repo / "existing.txt").write_text(f"https://{HOST}\n", encoding="utf-8")
+        self.base = self.commit("publish an upstream fixture")
+        self.git("update-ref", "refs/remotes/origin/main", self.base)
+        self.git("switch", "fixture")
+        self.git("merge", "--no-commit", "main")
+        (self.repo / "resolution.txt").write_text(TOKEN + "\n", encoding="utf-8")
+        head = self.commit("complete the merge")
+
+        expected = ['privacy "resolution.txt":1 github-token']
+        self.assertEqual(self.scan("pull_request", self.pr(), 1, head), expected)
+        payload = {"before": before, "after": head, "ref": "refs/heads/fixture",
+                   "repository": {"default_branch": "main"}}
+        self.assertEqual(self.scan("push", payload, 1, head), expected)
+
+    def test_type_change_scans_the_new_file(self):
+        file = self.repo / "mode-fixture"
+        file.write_text("target", encoding="utf-8")
+        blob = self.git("hash-object", "-w", file.name)
+        self.git("update-index", "--add", "--cacheinfo", f"120000,{blob},{file.name}")
+        self.git("commit", "-m", "Introduce symlink")
+        self.base = self.git("rev-parse", "HEAD")
+        self.git("update-index", "--force-remove", file.name)
+        file.write_text(TOKEN, encoding="utf-8")
+        head = self.commit("Replace symlink with a file")
+        self.assertEqual(self.scan("pull_request", self.pr(), 1, head), [
+            'privacy "mode-fixture":1 github-token',
+        ])
+
+    def write_png(self, data, path=BASELINE):
+        file = self.repo / path
+        file.parent.mkdir(parents=True, exist_ok=True)
+        file.write_bytes(data)
+
+    def test_pr_accepts_valid_baseline_from_earlier_commit(self):
+        self.write_png(sample_png(PATH.encode("ascii")))
+        self.commit("Add screenshot")
+        (self.repo / BASELINE).unlink()
+        head = self.commit("Remove screenshot")
+        self.assertEqual(self.scan("pull_request", self.pr(), 0, head), [])
+
+    def test_pr_scans_png_bytes_outside_the_direct_baseline_directory(self):
+        path_bytes = PATH.encode("ascii")
+        data = sample_png(path_bytes)
+        nested = BASELINE.replace("/sample.png", "/nested/sample.png")
+        for path in (BASELINE, "outside.png", nested):
+            self.write_png(data, path)
+        head = self.commit("Add screenshots")
+        line = data[:data.index(path_bytes)].count(b"\n") + 1
+        self.assertCountEqual(self.scan("pull_request", self.pr(), 1, head), [
+            f'privacy "outside.png":{line} private-path',
+            f'privacy "{nested}":{line} private-path',
+        ])
+
+    def test_pr_scans_valid_baseline_path(self):
+        path = BASELINE.replace("sample.png", f"sample@{HOST} .png")
+        self.write_png(sample_png(PATH.encode("ascii")), path)
+        head = self.commit("Add screenshot")
+        self.assertEqual(self.scan("pull_request", self.pr(), 1, head), [
+            'privacy "<redacted path>":1 private-host',
+        ])
+
+    def test_pr_rejects_baseline_with_text_chunk(self):
+        self.write_png(sample_png(ancillary=png_chunk(b"tEXt", b"label\0sample")))
+        head = self.commit("Add screenshot with text")
+        self.assertEqual(self.scan("pull_request", self.pr(), 1, head), [
+            f'privacy "{BASELINE}":1 binary-png',
+        ])
+
+    def test_pr_rejects_baseline_with_bad_crc(self):
+        data = sample_png()
+        self.write_png(data[:-1] + bytes([data[-1] ^ 1]))
+        head = self.commit("Add screenshot with invalid checksum")
+        self.assertEqual(self.scan("pull_request", self.pr(), 1, head), [
+            f'privacy "{BASELINE}":1 binary-png',
+        ])
+
+    def test_pr_rejects_baseline_with_trailing_bytes(self):
+        self.write_png(sample_png() + b"trailing")
+        head = self.commit("Add screenshot with trailing bytes")
+        self.assertEqual(self.scan("pull_request", self.pr(), 1, head), [
+            f'privacy "{BASELINE}":1 binary-png',
+        ])
+
+    def test_missing_payload_fails_closed(self):
+        self.assertEqual(self.scan("pull_request", {}, 2), ["Privacy scan could not read its input."])
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -1,10 +1,8 @@
 "use client";
 
-/* eslint-disable jsx-a11y/no-noninteractive-tabindex -- horizontal tables must be keyboard-scrollable */
-
 import { draftSupportQueues, type SupportQueueOrigin } from "../lib/client-routing-draft";
 import { clientRoutingQueueWarnings } from "../lib/client-routing-availability";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { formatDateTime as formatLocalizedDateTime, formatNumber } from "../lib/i18n/format";
 import { createLatestRequestFence, operatorResponseFailure } from "../lib/operator-ui";
 import { localizedUiError, normalizeUiErrorCode, type UiErrorCode } from "../lib/ui-error";
@@ -14,6 +12,7 @@ import {
 } from "../packages/core/src/client-routing";
 import { ModalDialog } from "./ModalDialog";
 import { useI18n } from "./I18nProvider";
+import { WideTable } from "./tenant-ui";
 import { useVisibleRefresh } from "./use-visible-refresh";
 import { NativeRoutingSync } from "./NativeRoutingSync";
 
@@ -214,7 +213,7 @@ export function ConnectedDataServices({
         <div className="bot-form-actions"><button type="button" className="button secondary" disabled={savingCredential} onClick={()=>setCredentialForm(null)}>{t("automation.common.cancel")}</button><button type="submit" className="button primary" disabled={savingCredential}>{t(savingCredential?"routing.integrations.savingCredential":"routing.integrations.saveCredential")}</button></div>
       </form>:null}
       {loading && !integrations.length ? (
-        <div className="data-connections-loading" role="status" aria-live="polite" aria-busy="true">{t("routing.integrations.loading")}</div>
+        <div className="data-connections-loading" role="status">{t("routing.integrations.loading")}</div>
       ) : integrations.length ? (
         <ul className="data-connection-list">
           {integrations.map((integration) => {
@@ -593,10 +592,8 @@ export function ClientRouting({
   };
   if (loading && !versions.length)
     return (
-      <section
-        className="panel bot-loading"
-        aria-label={t("routing.loading")} role="status" aria-live="polite" aria-busy="true"
-      >
+      <section className="panel bot-loading" aria-busy="true">
+        <p className="sr-only" role="status" aria-label={t("routing.loading")}>{t("routing.loading")}</p>
         <span aria-hidden="true" />
         <span aria-hidden="true" />
         <span aria-hidden="true" />
@@ -667,7 +664,6 @@ export function ClientRouting({
                 >
                   <span>
                     <b>{t("routing.versions.version", { version: formatNumber(Number(row.version), locale) })}</b>
-                    <span aria-hidden="true"> · </span>
                     <small>
                       <span className="sr-only">{t("routing.versions.createdAt")} </span>
                       <bdi>{formatTime(row.created_at, locale, t)}</bdi>
@@ -686,7 +682,7 @@ export function ClientRouting({
           {versionPaginationError ? <p className="bot-inline-error" role="alert">{versionPaginationError}</p> : null}
           {versionCursor ? <button type="button" className="routing-version-toggle" disabled={loadingMoreVersions} onClick={() => void loadMoreVersions()}>{t(loadingMoreVersions ? "routing.versions.loadingMore" : "routing.versions.loadMore")}</button> : null}
         </aside>
-        {selected && selected.definition === undefined && !selectedDetailErrorMessage ? <section className="panel bot-loading" role="status" aria-live="polite" aria-busy="true" aria-label={t("routing.detail.loading")}><span aria-hidden="true"/><span aria-hidden="true"/><span aria-hidden="true"/></section> : selectedDetailErrorMessage ? <section className="panel settings-load-error" role="alert"><span>!</span><div><b>{t("routing.detail.unavailable")}</b><p>{selectedDetailErrorMessage}</p><button className="button small" onClick={() => { setSelectedDetailError(null); setDetailRetry((value) => value + 1); }}>{t("automation.common.reload")}</button></div></section> : selected && definition ? (
+        {selected && selected.definition === undefined && !selectedDetailErrorMessage ? <section className="panel bot-loading" aria-busy="true"><p className="sr-only" role="status" aria-label={t("routing.detail.loading")}>{t("routing.detail.loading")}</p><span aria-hidden="true"/><span aria-hidden="true"/><span aria-hidden="true"/></section> : selectedDetailErrorMessage ? <section className="panel settings-load-error" role="alert"><span>!</span><div><b>{t("routing.detail.unavailable")}</b><p>{selectedDetailErrorMessage}</p><button className="button small" onClick={() => { setSelectedDetailError(null); setDetailRetry((value) => value + 1); }}>{t("automation.common.reload")}</button></div></section> : selected && definition ? (
           <section className="panel routing-detail">
             <div className="panel-heading">
               <div>
@@ -725,10 +721,12 @@ export function ClientRouting({
               catalog={catalog}
               mutationHeaders={mutationHeaders}
             />
-            <details className="routing-raw">
-              <summary>{t("routing.detail.raw")}</summary>
-              <pre>{JSON.stringify(definition, null, 2)}</pre>
-            </details>
+            {canWrite ? (
+              <details className="routing-raw">
+                <summary>{t("routing.detail.raw")}</summary>
+                <pre>{JSON.stringify(definition, null, 2)}</pre>
+              </details>
+            ) : null}
           </section>
         ) : error ? null : (
           <section className="panel">
@@ -894,30 +892,32 @@ function SourceList({
                   {t("routing.sources.syncFailed")}
                 </p>
               ) : null}
-              {webhookPath ? (
-                <div className="routing-webhook">
-                  <button
-                    type="button"
-                    className="button secondary small"
-                    onClick={() => void copyWebhook(source.name, webhookPath)}
-                  >
-                    {t("routing.sources.copy")}
-                  </button>
+              {webhookPath || (canWrite && state) ? (
+                <div className="routing-source-actions wx-card-actions">
+                  {webhookPath ? (
+                    <button
+                      type="button"
+                      className="button secondary small"
+                      onClick={() => void copyWebhook(source.name, webhookPath)}
+                    >
+                      {t("routing.sources.copy")}
+                    </button>
+                  ) : null}
+                  {canWrite && state ? (
+                    <button
+                      type="button"
+                      className="button secondary small"
+                      disabled={syncingSource !== null || ["QUEUED", "RUNNING"].includes(String(state.latest_job_state))}
+                      onClick={() => void syncSource(source.id, Number(state.snapshot_revision))}
+                    >
+                      {syncingSource === source.id
+                        ? t("routing.sources.requesting")
+                        : String(state.state) === "CONFLICT" || String(state.latest_job_state) === "FAILED_TERMINAL"
+                          ? t("routing.sources.retry")
+                          : t("routing.sources.syncNow")}
+                    </button>
+                  ) : null}
                 </div>
-              ) : null}
-              {canWrite && state ? (
-                <button
-                  type="button"
-                  className="button secondary small"
-                  disabled={syncingSource !== null || ["QUEUED", "RUNNING"].includes(String(state.latest_job_state))}
-                  onClick={() => void syncSource(source.id, Number(state.snapshot_revision))}
-                >
-                  {syncingSource === source.id
-                    ? t("routing.sources.requesting")
-                    : String(state.state) === "CONFLICT" || String(state.latest_job_state) === "FAILED_TERMINAL"
-                      ? t("routing.sources.retry")
-                      : t("routing.sources.syncNow")}
-                </button>
               ) : null}
             </li>
           );
@@ -1001,12 +1001,7 @@ function ClientTable({
               placeholder={t("routing.clients.searchPlaceholder")}
             />
           </label>
-          <div
-            className="table-wrap routing-table-wrap"
-            tabIndex={0}
-            role="region"
-            aria-label={t("routing.clients.tableLabel")}
-          >
+          <WideTable label={t("routing.clients.tableLabel")}>
             <table className="routing-table">
               <thead>
                 <tr>
@@ -1031,7 +1026,7 @@ function ClientTable({
                             {matcher.kind === "WHATSAPP_GROUP" ? (
                               <small>{t("routing.clients.whatsappConnection", { connection: connectionNames.get(matcher.connectionId ?? "") ?? t("routing.clients.unknownConnection") })}</small>
                             ) : (
-                              <code dir="ltr">{matcher.namespace ? `${matcher.namespace}:` : ""}{matcher.value}</code>
+                              <code dir="ltr">{breakAtSeparators(`${matcher.namespace ? `${matcher.namespace}:` : ""}${matcher.value}`)}</code>
                             )}
                           </li>
                         ))}
@@ -1063,7 +1058,7 @@ function ClientTable({
                 ))}
               </tbody>
             </table>
-          </div>
+          </WideTable>
           {!visible.length ? (
             <Empty
               title={t("routing.clients.noMatchTitle")}
@@ -2098,7 +2093,7 @@ function RoutingSimulator({
             name="email"
             type="email"
             autoComplete="off"
-            placeholder="agent@client.example"
+            placeholder={t("routing.simulator.emailExample")}
           />
         </label>
         <label>
@@ -2110,7 +2105,7 @@ function RoutingSimulator({
           <input
             name="identifierNamespace"
             autoComplete="off"
-            placeholder="crm"
+            placeholder={t("routing.simulator.namespaceExample")}
           />
         </label>
         <label>
@@ -2118,7 +2113,7 @@ function RoutingSimulator({
           <input
             name="whatsappGroupId"
             autoComplete="off"
-            placeholder="120363…@g.us"
+            placeholder={t("routing.simulator.groupExample")}
             dir="ltr"
           />
         </label>
@@ -2178,6 +2173,10 @@ function sourceKindLabel(kind: ClientRoutingDefinition["sources"][number]["kind"
 function matcherKindLabel(value: string, t: ReturnType<typeof useI18n>["t"]) {
   const key = ({ DOMAIN: "routing.editor.domain", EMAIL: "routing.editor.email", CLIENT_IDENTIFIER: "routing.editor.identifier", WHATSAPP_GROUP: "routing.editor.whatsappGroup" } as Record<string, string>)[value.toUpperCase()];
   return key ? t(key) : t("routing.clients.unknownMatcher");
+}
+// Long identifiers wrap after @ . : / _ - rather than mid-word.
+function breakAtSeparators(value: string) {
+  return value.split(/(?<=[@.:/_-])/u).map((part, index) => <Fragment key={index}>{index ? <wbr /> : null}{part}</Fragment>);
 }
 function groupLabel(catalog:RoutingCatalog,id:string,t:ReturnType<typeof useI18n>["t"]){return catalog.groups.find(group=>group.id===id)?.name??t("routing.clients.unavailableTeam")}
 function ownerLabel(catalog:RoutingCatalog,id:string,t:ReturnType<typeof useI18n>["t"]){return catalog.owners.find(owner=>owner.id===id)?.name??t("routing.clients.unavailableOwner")}

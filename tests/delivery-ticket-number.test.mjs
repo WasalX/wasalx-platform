@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { QuarantineController } from "../services/control-api/dist/quarantine.controller.js";
 import { DeliveriesController } from "../services/control-api/dist/deliveries.controller.js";
+import { readTenantPortalSource } from "./helpers/tenant-portal-source.mjs";
 
 test("delivery inbox lookup binds the conversation, tenant and native ticket without exposing its ID", async () => {
   let capturedSql;
@@ -42,7 +43,7 @@ test("delivery API resolves friendly Zammad numbers without confusing internal I
 test("portal strips internal ticket IDs and makes ticketless deliveries non-navigable", async () => {
   const [bridge, portal, english, arabic] = await Promise.all([
     readFile(new URL("../lib/control-plane-data.ts", import.meta.url), "utf8"),
-    readFile(new URL("../app/WasalXApp.tsx", import.meta.url), "utf8"),
+    readTenantPortalSource(),
     readFile(new URL("../lib/i18n/messages/en/tenant.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/i18n/messages/ar/tenant.ts", import.meta.url), "utf8"),
   ]);

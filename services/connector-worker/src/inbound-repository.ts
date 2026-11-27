@@ -1,3 +1,4 @@
+import { recordWhatsAppMarketingRejection } from "./whatsapp-marketing-preferences.js";
 import { createHash, randomUUID } from "node:crypto";
 import { applyMetaLifecycleObservation, assertMetaLifecycleAccess, classifyMetaLifecycleValue, metaLifecycleAccountId, metaLifecycleBlockingReasons, metaLifecyclePayloadSha256, MetaLifecycleError, normalizeMetaDisplayPhoneNumber, parseMetaLifecycleObservation, parseMetaLifecycleState } from "../../../packages/core/src/meta-account-relation.js";
 import {assertDirectNativeBarrier,assertDirectEffectsClear} from '../../../packages/core/src/direct-keep-open.js';
@@ -20,7 +21,7 @@ import type { MetaIdentityChange } from '../../../packages/core/src/meta-direct-
 import { projectCoexistence } from "./meta-coexistence-repository.js";
 import { applyMetaPassiveRouting } from './meta-routing.js';
 
-type InboundRow={id:string;tenant_id:string;connection_id:string;provider:"WAHA"|"META";engine:"GOWS"|"NOWEB"|"CLOUD_API";provider_event_id:string;event_type:string;payload:Record<string,unknown>;attempts:number;received_at:string|Date};
+type InboundRow={id:string;tenant_id:string;connection_id:string;provider:"WAHA"|"META";engine:"GOWS"|"NOWEB"|"CLOUD_API";provider_event_id:string;event_type:string;payload:Record<string,unknown>;attempts:number;received_at:string|Date;meta_webhook_app_id:string|null};
 type MetaCredentialRow={provider_session_id:string;opaque_session_id:string;meta_waba_id:string|null;meta_account_proof:unknown;meta_lifecycle:unknown;meta_lifecycle_present:boolean};
 type ContextRow=MetaCredentialRow&{participant_phone:string|null;binding_id:string;external_group_id:string;group_name:string;connection_name:string;connection_phone:string|null;zammad_group_id:string;default_priority:InboundContext["defaultPriority"];assignment_mode:InboundContext["assignmentMode"];fixed_owner_id:string|null;sla_policy_id:string|null;business_hours_mode:InboundContext["businessHoursMode"];business_hours_calendar_id:string|null;acknowledgement_template:string;group_disclosure_enabled:boolean;group_disclosure_message:string|null;max_identifiers:number;agent_prefix:string;media_enabled:boolean;retention_days:number;rule_set_id:string;rule_version:number;zammad_base_url:string;zammad_secret_reference:string;connection_secret_reference:string;provider_base_url:string|null;waha_worker_id:string|null;assignment_fencing_token:string|number|null;assignment_lease_expires_at:string|Date|null;rule_id:string|null;rule_name:string|null;matcher_type:InboundRule["matcherType"]|null;pattern:string|null;matcher_options:Record<string,unknown>|null;priority:number|null;enabled:boolean|null;client_routing_version_id:string|null;client_routing_definition:unknown|null};
 type DirectContextRow=MetaCredentialRow&{assignment_id:string;zammad_group_id:string;connection_name:string;connection_phone:string|null;participant_name:string|null;participant_phone:string|null;zammad_base_url:string;zammad_secret_reference:string;connection_secret_reference:string;provider_base_url:string|null;waha_worker_id:string|null;assignment_fencing_token:string|number|null;assignment_lease_expires_at:string|Date|null;media_days:number;client_routing_version_id:string|null;client_routing_definition:unknown|null};
@@ -32,7 +33,7 @@ type TicketIdentity={id:string;number:string;articleId?:string;feedbackQueued?:b
 type ProviderStatusRow={connection_state:string;provider_session_id:string;opaque_session_id:string;provider_state:string|null;provider_state_data:Record<string,unknown>|null;last_provider_status_at:string|Date|null;waha_worker_id:string|null};
 type WahaIdentityContextRow={provider_session_id:string;opaque_session_id:string;waha_worker_id:string;base_url:string;secret_reference:string};
 function metaCredentialContext(row:MetaCredentialRow){return{providerSessionId:row.provider_session_id,phoneNumberId:row.opaque_session_id,wabaId:row.meta_waba_id,proof:row.meta_account_proof,...(row.meta_lifecycle_present?{lifecycle:row.meta_lifecycle}:{})}}
-type DeliveryReceiptRow={id:string;state:string;zammad_ticket_id:string;content_redacted_at?:string|Date|null};
+type DeliveryReceiptRow={id:string;state:string;zammad_ticket_id:string;content_redacted_at?:string|Date|null;meta_direct_recipient?:unknown};
 type MutationTargetRow={id:string;external_message_id:string;provider_metadata:Record<string,unknown>};
 type GroupActionDefinitionRow={id:string;action_revision_id:string;action_key:string;revision:number|string;kind:"HTTP_JSON"|"NOTION_CREATE_PAGE";endpoint_url:string;http_method:"GET"|"POST";auth_scheme:"NONE"|"BEARER";secret_reference:string|null;headers:Record<string,string>;response_mapping:Record<string,string>;timeout_ms:number;max_response_bytes:number};
 type GroupActionExecutionRow={id:string;state:GroupActionExecution["state"];attempts:number;action_snapshot:unknown;request_input:Record<string,string>;response_variables:Record<string,string>|null;safe_error:string|null;request_sha256:string};
@@ -98,7 +99,16 @@ export class InboundRepository{
       ticketId:candidate.ticketId,provider:input.provider,reactions:input.provider==='WAHA',variables:{},quotes:{},preparedPlan:feedback});return result.queued;
   });}
 
-  async claim(tenantId:string,leaseId:string,limit=25):Promise<InboundEvent[]>{return this.tenant(tenantId,async client=>(await client.query<InboundRow>("SELECT inbox.id,inbox.tenant_id,inbox.connection_id,inbox.provider,connection.engine,inbox.provider_event_id,inbox.event_type,inbox.payload,inbox.attempts,inbox.received_at FROM app.claim_inbound_events($1,$2) AS inbox JOIN connections AS connection ON connection.tenant_id=inbox.tenant_id AND connection.id=inbox.connection_id",[leaseId,limit])).rows.map(row=>({id:row.id,tenantId:row.tenant_id,connectionId:row.connection_id,provider:row.provider.toLowerCase() as "waha"|"meta",providerEngine:row.engine,providerEventId:row.provider_event_id,eventType:row.event_type,payload:row.payload,attempts:row.attempts,receivedAt:new Date(row.received_at).toISOString()})))}
+  async claim(tenantId:string,leaseId:string,limit=25):Promise<InboundEvent[]>{
+    return this.tenant(tenantId,async client=>(await client.query<InboundRow>(`SELECT inbox.id,inbox.tenant_id,inbox.connection_id,inbox.provider,
+      connection.engine,inbox.provider_event_id,inbox.event_type,inbox.payload,inbox.attempts,inbox.received_at,inbox.meta_webhook_app_id
+      FROM app.claim_inbound_events($1,$2) AS inbox
+      JOIN connections AS connection ON connection.tenant_id=inbox.tenant_id AND connection.id=inbox.connection_id`,[leaseId,limit])).rows.map(row=>({
+      id:row.id,tenantId:row.tenant_id,connectionId:row.connection_id,provider:row.provider.toLowerCase() as "waha"|"meta",providerEngine:row.engine,
+      providerEventId:row.provider_event_id,eventType:row.event_type,payload:row.payload,attempts:row.attempts,
+      receivedAt:new Date(row.received_at).toISOString(),...(row.meta_webhook_app_id?{metaWebhookAppId:row.meta_webhook_app_id}:{}),
+    })));
+  }
 
   async wahaIdentityContext(event:InboundEvent,opaqueSessionId:string):Promise<WahaIdentityContext|null>{return this.tenant(event.tenantId,async client=>{
     const row=(await client.query<WahaIdentityContextRow>(`SELECT session.id AS provider_session_id,session.opaque_session_id,
@@ -485,7 +495,7 @@ export class InboundRepository{
          AND COALESCE(session.provider_state_data->'metaAccountProof','null'::jsonb)=$7::jsonb
          AND EXISTS (SELECT 1 FROM app.meta_lifecycle_guard(connection.id,session.id,session.opaque_session_id,session.provider_state_data->>'wabaId',$8::text,$9::bigint) guard
                        WHERE guard.revision_matches AND NOT guard.blocked AND NOT guard.unresolved_hold)`,
-      [event.tenantId,event.connectionId,secretReference,expected.providerSessionId,expected.phoneNumberId,expected.wabaId,JSON.stringify(expected.proof??null),process.env.META_APP_ID??"",lifecycle?.revision??0])).rows[0];
+      [event.tenantId,event.connectionId,secretReference,expected.providerSessionId,expected.phoneNumberId,expected.wabaId,JSON.stringify(expected.proof??null),event.metaWebhookAppId??process.env.META_APP_ID??"",lifecycle?.revision??0])).rows[0];
     if(!row)throw new Error("Meta credential context changed before media retrieval");
     return row.meta_account_proof;
   })}
@@ -1422,7 +1432,7 @@ export class InboundRepository{
         FOR UPDATE`,[event.tenantId,candidate.id])).rowCount);
       if(!outcomeReviewLocked)throw new Error("Provider-outcome review is missing");
     }
-    const delivery=(await client.query<DeliveryReceiptRow>(`SELECT id,state,zammad_ticket_id
+    const delivery=(await client.query<DeliveryReceiptRow>(`SELECT id,state,zammad_ticket_id,meta_direct_recipient
       FROM delivery_outbox
       WHERE tenant_id=$1 AND id=$2 AND connection_id=$3 AND external_message_id=$4
         AND content_redacted_at IS NULL
@@ -1446,6 +1456,9 @@ export class InboundRepository{
       pricing?.observedEnvelopeAccountId??null,pricing?.observedPhoneNumberId??null,
     ])).rows[0];
     if(!inserted)return"DUPLICATE";
+    if(event.provider==="meta"&&receipt.status==="FAILED"&&errorCodes.includes("131050")&&delivery.meta_direct_recipient){
+      await recordWhatsAppMarketingRejection(client,event.tenantId,event.connectionId,delivery.meta_direct_recipient,providerTimestamp,event.id);
+    }
     // WAHA group receipts are explicitly per-participant. Retain the evidence
     // but never present one participant's acknowledgement as an aggregate group
     // delivery/read/failure state.

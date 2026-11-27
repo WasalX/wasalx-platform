@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { readFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { after, before, test } from "node:test";
+import { brotliCompressSync, constants, gzipSync } from "node:zlib";
+import appFirstLoadJsBudget from "./app-first-load-js-budget.json" with { type: "json" };
 
 let port;
 let server;
@@ -74,6 +77,11 @@ test("rules sample keeps an explicit accessible label with prefilled text", asyn
   assert.match(html, /<textarea[^>]*id="rule-test-sample"[^>]*aria-labelledby="rule-test-sample-label"[^>]*>[^<]+<\/textarea>/);
 });
 
+test("audit scope cannot change before hydration", async () => {
+  const html = await (await render("/app?view=audit")).text();
+  assert.match(html, /<select\b[^>]*\sdisabled=""[^>]*><option value="exclude"/u);
+});
+
 test("public and app pages serve the WX browser icon with a purple X", async () => {
   for (const path of ["/", "/app"]) {
     const html = await (await render(path)).text();
@@ -121,4 +129,45 @@ test("legacy tenant deep links redirect to the route-backed console", async () =
   const response = await fetch(`${origin()}/?view=connections&connection=connection-1`, { redirect: "manual" });
   assert.equal(response.status, 307);
   assert.equal(response.headers.get("location"), "/app?view=connections&connection=connection-1");
+});
+
+function assertAppFirstLoadJsBudget({ gzip, brotli }) {
+  for (const [encoding, size] of Object.entries({ gzip, brotli })) {
+    const budget = appFirstLoadJsBudget[encoding];
+    assert.ok(Number.isSafeInteger(budget) && budget > 0, `Invalid ${encoding} byte limit in app-first-load-js-budget.json`);
+    assert.ok(size <= budget, `/app first-load JS ${encoding} is ${size} B, over the ${budget} B budget`);
+  }
+}
+
+test("allows /app first-load JS at the budget and rejects either encoding one byte over", () => {
+  assertAppFirstLoadJsBudget(appFirstLoadJsBudget);
+  for (const encoding of ["gzip", "brotli"]) {
+    const budget = appFirstLoadJsBudget[encoding];
+    const size = budget + 1;
+    assert.throws(() => assertAppFirstLoadJsBudget({ ...appFirstLoadJsBudget, [encoding]: size }), {
+      code: "ERR_ASSERTION",
+      message: `/app first-load JS ${encoding} is ${size} B, over the ${budget} B budget`,
+    });
+  }
+});
+
+test("keeps the built /app first-load JavaScript within budget (#183)", async (t) => {
+  const html = await (await render()).text();
+  const dist = new URL("../dist/", import.meta.url);
+  const manifest = (await import(new URL("server/__vite_rsc_assets_manifest.js", dist).href)).default;
+  // Client references /app renders are the manifest ids present in its server-rendered payload.
+  const refs = Object.entries(manifest.clientReferenceDeps).filter(([id]) => html.includes(id));
+  assert.ok(refs.some(([, deps]) => /\/WasalXApp-[^/]*\.js$/u.test(deps.js[0])), "the /app shell reference is rendered");
+  const files = new Set([...manifest.clientEntryDeps.js, ...refs.flatMap(([, deps]) => deps.js)]);
+  let raw = 0, gzip = 0, brotli = 0;
+  for (const file of files) {
+    const body = await readFile(new URL(`client${file}`, dist));
+    raw += body.length;
+    gzip += gzipSync(body, { level: 9 }).length;
+    brotli += brotliCompressSync(body, { params: { [constants.BROTLI_PARAM_QUALITY]: 11 } }).length;
+  }
+  t.diagnostic(`/app first-load JS: ${JSON.stringify({
+    references: refs.length, files: files.size, raw, gzip, brotli, budgetBytes: appFirstLoadJsBudget,
+  })}`);
+  assertAppFirstLoadJsBudget({ gzip, brotli });
 });

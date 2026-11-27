@@ -6,17 +6,19 @@ import { chromium, expect } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 import { getMessages } from "../lib/i18n/messages/index.ts";
 import { adminFixture, syntheticCredentials } from "./helpers/admin-bridge-fixture.mjs";
+import { syntheticBrowserTrace } from "./helpers/synthetic-browser-trace.mjs";
 
 const base = process.env.WASALX_STORYBOOK_URL ?? "http://127.0.0.1:6227";
 const output = process.env.WASALX_SYNTHETIC_UI_OUTPUT ?? "output/playwright/admin";
 await mkdir(output, { recursive: true });
 const browser = await chromium.launch({ ...(process.env.WASALX_VISUAL_BROWSER_PATH ? { executablePath: process.env.WASALX_VISUAL_BROWSER_PATH } : {}), headless: true });
+const trace = syntheticBrowserTrace(browser, base, output);
 const results = [];
 const escaped = text => text.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 const story = (surface, locale) => `${base}/iframe.html?id=product-administration--${surface === "teams" ? "support-teams" : surface === "settings" ? "mailbox-settings" : "mailbox-administration"}-${locale === "ar" ? "arabic" : "english"}`;
 
-async function setup(surface, locale, configure) {
-  const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+async function setup(surface, locale, configure, viewport = { width: 1440, height: 1000 }) {
+  const context = await trace.newContext({ viewport });
   const page = await context.newPage(), fixture = adminFixture();
   configure?.(fixture);
   await fixture.install(page);
@@ -145,6 +147,46 @@ async function quotaFailure(page, prefix, action) {
   try { await action(); } finally { await page.evaluate(() => window.restoreAdminStorage()); }
 }
 
+async function teamsListRecovery(locale) {
+  for (const [size, width, height] of [["desktop", 1440, 1000], ["mobile", 390, 844]]) {
+    const test = await setup("teams", locale, fixture => { fixture.control.failRead = "TEAM_LIST"; }, { width, height });
+    const { page, fixture, t, button } = test;
+    const empty = page.getByText(t("teamsAdmin.empty"), { exact: true });
+    const choose = page.getByText(t("teamsAdmin.choose"), { exact: true });
+    const team = page.getByRole("button", { name: /Synthetic customer support/u });
+    const capture = async state => {
+      await page.evaluate(() => document.fonts.ready);
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false);
+      await page.screenshot({ path: `${output}/teams-${locale}-list-${state}-${size}.png`, fullPage: true });
+    };
+    await expect(page.getByRole("alert")).toHaveText(t("teamsAdmin.listFailed"));
+    await expect(button("common.actions.retry")).toBeEnabled();
+    await expect(button("teamsAdmin.createTeam")).toHaveCount(0);
+    await expect(empty).toHaveCount(0);
+    await expect(choose).toHaveCount(0);
+    assert.ok(await page.evaluate(() => { const alert = document.querySelector(".settings-feedback.error"); return alert.parentElement.getBoundingClientRect().bottom - alert.getBoundingClientRect().bottom >= 12; }), "the load-failure alert touches the bottom of its card");
+    await capture("failed");
+
+    await button("common.actions.retry").click();
+    await expect(team).toBeVisible();
+    await expect(choose).toBeVisible();
+    await expect(button("teamsAdmin.createTeam")).toBeEnabled();
+    await expect(page.getByRole("alert")).toHaveCount(0);
+    await expect(empty).toHaveCount(0);
+    await capture("retried-populated");
+
+    fixture.teams.length = 0;
+    await test.open();
+    await expect(empty).toBeVisible();
+    await expect(choose).toHaveCount(0);
+    await expect(button("teamsAdmin.createTeam")).toBeEnabled();
+    await expect(team).toHaveCount(0);
+    await expect(button("common.actions.retry")).toHaveCount(0);
+    await capture("empty");
+    await trace.closeContext(test.context);
+  }
+}
+
 async function teamsJourney(locale) {
   const test = await setup("teams", locale), { page, fixture, t, button } = test;
   const storageKey = "wasalx:team-operation:storybook:synthetic-admin-teams";
@@ -161,6 +203,8 @@ async function teamsJourney(locale) {
     fixture.control.loseCommit = "TEAM_CREATE";
     await button("teamsAdmin.save").click(); await expect(button("teamsAdmin.check")).toBeVisible();
     await assertPrivateStorage(test, storageKey, ["kind", "operation_id"]);
+    // Check is visible while the write is pending and enabled after the fixture aborts the response.
+    await expect(button("teamsAdmin.check")).toBeEnabled();
     assert.equal(fixture.writes.filter(row => row.operation === "TEAM_CREATE").length, 1);
     await page.reload({ waitUntil: "networkidle" }); await button("teamsAdmin.check").click();
     await expect(name).toHaveValue("Synthetic delivery team"); await expect(note).toHaveValue("Synthetic private team description");
@@ -181,6 +225,7 @@ async function teamsJourney(locale) {
     await button("teamsAdmin.cancelMissing").click(); await expect(button("teamsAdmin.check")).toHaveCount(0);
     await expect(note).toHaveValue("Preserve private unsaved team description during grant save");
     await button("teamsAdmin.save").click(); await expect(page.getByRole("status")).toContainText(t("teamsAdmin.saved"));
+    await expect(button("teamsAdmin.createTeam")).toBeEnabled();
     await page.reload({ waitUntil: "networkidle" }); await button("teamsAdmin.more").click();
     await page.getByRole("button", { name: /Synthetic delivery team/u }).click();
     await expect(note).toHaveValue("Preserve private unsaved team description during grant save");
@@ -203,6 +248,8 @@ async function teamsJourney(locale) {
     const grantStyle = await member.evaluate(fieldset => { const probe=document.createElement("span");probe.style.borderRadius="var(--wx-radius-control)";fieldset.append(probe);const radius=getComputedStyle(probe).borderTopLeftRadius;probe.remove();return {border:getComputedStyle(fieldset).borderTopStyle,radius:getComputedStyle(fieldset).borderTopLeftRadius,expectedRadius:radius}; });
     assert.equal(grantStyle.border, "solid"); assert.equal(grantStyle.radius,grantStyle.expectedRadius);
     await button("teamsAdmin.cancelMissing").click();
+    await expect(page.getByRole("status").filter({ hasText: t("teamsAdmin.cancelled") })).toBeVisible();
+    await expect(button("teamsAdmin.createTeam")).toBeEnabled();
     // Pending read after confirmed denial must never repopulate the old team's data.
     await page.reload({ waitUntil: "networkidle" });
     const held = fixture.hold("TEAM_SHOW", input => input.team_id === "2");
@@ -220,7 +267,7 @@ async function teamsJourney(locale) {
     await expect(button("teamsAdmin.createTeam")).toBeDisabled(); assert.equal(await page.evaluate(key => sessionStorage.getItem(key), storageKey), "{");
     results.push({ surface: "teams", locale, mode: "simulated_bridge", evidence_scope: "exploratory_ui", status: "passed", writes: fixture.writes });
   } catch (failure) { results.push({ surface: "teams", locale, mode: "simulated_bridge", evidence_scope: "exploratory_ui", status: "failed", error_class: failure.name }); throw failure; }
-  finally { await test.context.close(); }
+  await trace.closeContext(test.context);
 }
 
 async function mailboxJourney(surface, locale) {
@@ -247,6 +294,7 @@ async function mailboxJourney(surface, locale) {
     await button("mailboxes.saveDraft").click(); await expect(button("mailboxes.check")).toBeVisible();
     await assertPrivateStorage(test, storageKey, ["kind", "operation_id"]);
     for (const password of await page.locator('input[type="password"]').all()) await expect(password).toHaveValue("");
+    await expect(button("mailboxes.check")).toBeEnabled();
     assert.equal(fixture.writes.filter(row => row.operation === "MAILBOX_CREATE").length, 1);
     await page.reload({ waitUntil: "networkidle" }); await button("mailboxes.check").click();
     await expect(label("mailboxes.address")).toHaveValue("qualification.delivery.mailbox.with.a.long.supported.name@example.invalid");
@@ -261,6 +309,10 @@ async function mailboxJourney(surface, locale) {
     await expect(label("mailboxes.address")).toBeEnabled();
     await label("mailboxes.name").fill("Synthetic updated delivery mailbox with a long supported display name");
     await button("mailboxes.saveDraft").click(); await expect(button("mailboxes.activate")).toBeDisabled();
+    await expect(page.getByRole("status").filter({ hasText: t("mailboxes.saved") })).toBeVisible();
+    // Pause also shows Saved. Save draft is enabled again after the new operation settles.
+    await expect(button("mailboxes.saveDraft")).toBeEnabled();
+    assert.equal(await page.evaluate(key => sessionStorage.getItem(key), storageKey), null, "Mailbox operation must settle before reload");
     await page.reload({ waitUntil: "networkidle" }); await button("mailboxes.more").click(); await mailboxButton("qualification.delivery.mailbox.with.a.long.supported.name@example.invalid").click();
     await expect(label("mailboxes.name")).toHaveValue("Synthetic updated delivery mailbox with a long supported display name");
     // Verification's unknown result is distinct from a lost operation response.
@@ -278,6 +330,7 @@ async function mailboxJourney(surface, locale) {
     fixture.control.loseCommit = "MAILBOX_SIGNATURE_SAVE";
     await button("mailboxes.saveSignature").click(); await expect(button("mailboxes.check")).toBeVisible();
     await assertPrivateStorage(test, storageKey, ["kind", "operation_id", "team_id"]);
+    await expect(button("mailboxes.check")).toBeEnabled();
     await page.reload({ waitUntil: "networkidle" }); await button("mailboxes.check").click();
     await expect(signature).toHaveValue("Synthetic plain team signature"); await expect(label("mailboxes.address")).toHaveCount(0);
     await button("mailboxes.more").click(); await mailboxButton("qualification.delivery.mailbox.with.a.long.supported.name@example.invalid").click(); await button("mailboxes.signature").click();
@@ -290,6 +343,7 @@ async function mailboxJourney(surface, locale) {
     await button("mailboxes.cancelMissing").click(); await expect(button("mailboxes.check")).toHaveCount(0);
     await expect(label("mailboxes.name")).toHaveValue("Private mailbox draft survives check outage");
     await button("mailboxes.saveDraft").click(); await expect(page.getByRole("status").filter({ hasText: t("mailboxes.saved") })).toBeVisible();
+    await expect(button("mailboxes.saveDraft")).toBeEnabled();
     await captureAndAudit(test, "paused");
     fixture.control.reauth = "MAILBOX_LIST"; await focusCheck(test, "MAILBOX_LIST");
     await assertReauthBox(page.getByRole("link", { name: t("tenant.privacy.action.reauthenticate"), exact: true }));
@@ -315,16 +369,31 @@ async function mailboxJourney(surface, locale) {
     await expect(button("mailboxes.create")).toBeDisabled(); assert.equal(await page.evaluate(key => sessionStorage.getItem(key), storageKey), "{");
     results.push({ surface, locale, mode: "simulated_bridge", evidence_scope: "exploratory_ui", status: "passed", writes: fixture.writes });
   } catch (failure) { results.push({ surface, locale, mode: "simulated_bridge", evidence_scope: "exploratory_ui", status: "failed", error_class: failure.name }); throw failure; }
-  finally { await test.context.close(); }
+  await trace.closeContext(test.context);
 }
 
 try {
   for (const locale of ["en", "ar"]) {
+    await teamsListRecovery(locale);
     await teamsJourney(locale);
     for (const surface of ["settings", "administration"]) await mailboxJourney(surface, locale);
   }
   console.log("Synthetic administration component journeys passed for both locales; provider/native qualification remains separate.");
+} catch (error) {
+  await trace.retainFailure();
+  throw error;
 } finally {
-  await writeFile(`${output}/synthetic-ui-results.json`, JSON.stringify({ mode: "simulated_bridge", evidence_scope: "exploratory_ui", cases: results }, null, 2));
+  await writeFile(
+    `${output}/synthetic-ui-results.json`,
+    JSON.stringify(
+      {
+        mode: "simulated_bridge",
+        evidence_scope: "exploratory_ui",
+        cases: results,
+      },
+      null,
+      2,
+    ),
+  );
   await browser.close();
 }

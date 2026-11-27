@@ -7,35 +7,35 @@ groups:
         labels: { severity: critical, owner: platform }
         annotations:
           summary: Inbound WhatsApp events have waited more than 60 seconds.
-          runbook_url: https://github.com/WasalX/wasalx-platform/tree/main/docs/runbooks
+          runbook_url: https://github.com/WasalX/wasalx-platform/blob/main/docs/runbooks/alert-response.md#inbound-queue-stalled
       - alert: WasalXOutboundQueueStalled
         expr: max(wasalx_outbox_queue_age_seconds) > 60
         for: 2m
         labels: { severity: critical, owner: platform }
         annotations:
           summary: Outbound WhatsApp deliveries have waited more than 60 seconds.
-          runbook_url: https://github.com/WasalX/wasalx-platform/tree/main/docs/runbooks
+          runbook_url: https://github.com/WasalX/wasalx-platform/blob/main/docs/runbooks/alert-response.md#outbound-queue-stalled
       - alert: WasalXDurableWorkQueueStalled
         expr: max(wasalx_work_queue_age_seconds) > 60
         for: 5m
         labels: { severity: warning, owner: platform }
         annotations:
           summary: A durable work queue is not draining within the pilot target.
-          runbook_url: https://github.com/WasalX/wasalx-platform/tree/main/docs/runbooks
+          runbook_url: https://github.com/WasalX/wasalx-platform/blob/main/docs/runbooks/alert-response.md#durable-work-queue-stalled
       - alert: WasalXInboundLatencySLOBreach
         expr: wasalx:inbound_to_zammad:p95_seconds10m > 5
         for: 10m
         labels: { severity: critical, owner: connector }
         annotations:
           summary: Inbound acceptance-to-Zammad p95 is over five seconds.
-          runbook_url: https://github.com/WasalX/wasalx-platform/tree/main/docs/runbooks
+          runbook_url: https://github.com/WasalX/wasalx-platform/blob/main/docs/runbooks/alert-response.md#inbound-latency
       - alert: WasalXOutboundLatencySLOBreach
         expr: wasalx:outbound_to_provider:p95_seconds10m > 5
         for: 10m
         labels: { severity: critical, owner: connector }
         annotations:
           summary: Zammad delivery request-to-provider p95 is over five seconds.
-          runbook_url: https://github.com/WasalX/wasalx-platform/tree/main/docs/runbooks
+          runbook_url: https://github.com/WasalX/wasalx-platform/blob/main/docs/runbooks/alert-response.md#outbound-latency
 
   - name: wasalx-connector-health
     rules:
@@ -48,7 +48,7 @@ groups:
         labels: { severity: critical, owner: connector }
         annotations:
           summary: More than 5% of Zammad operations are failing.
-          runbook_url: https://github.com/WasalX/wasalx-platform/tree/main/docs/runbooks
+          runbook_url: https://github.com/WasalX/wasalx-platform/blob/main/docs/runbooks/alert-response.md#zammad-errors
       - alert: WasalXProviderSendErrorRateHigh
         expr: >-
           sum(rate(wasalx_provider_send_seconds_count{result!="succeeded"}[5m]))
@@ -58,7 +58,7 @@ groups:
         labels: { severity: critical, owner: connector }
         annotations:
           summary: More than 5% of provider send attempts are failing or unknown.
-          runbook_url: https://github.com/WasalX/wasalx-platform/tree/main/docs/runbooks
+          runbook_url: https://github.com/WasalX/wasalx-platform/blob/main/docs/runbooks/alert-response.md#provider-send-errors
       - alert: WasalXConnectorWorkerMissing
         expr: >-
           absent(wasalx_worker_heartbeat{component="connector_worker"}) == 1
@@ -67,42 +67,42 @@ groups:
         labels: { severity: critical, owner: platform }
         annotations:
           summary: No ready connector worker has emitted a heartbeat.
-          runbook_url: https://github.com/WasalX/wasalx-platform/tree/main/docs/runbooks
+          runbook_url: https://github.com/WasalX/wasalx-platform/blob/main/docs/runbooks/alert-response.md#worker-or-session-loss
       - alert: WasalXConnectionActionRequired
         expr: sum(wasalx_connection_state{state="action_required"}) > 0
         for: 1m
         labels: { severity: warning, owner: operations }
         annotations:
           summary: One or more WhatsApp connections require administrator action.
-          runbook_url: https://github.com/WasalX/wasalx-platform/tree/main/docs/runbooks
+          runbook_url: https://github.com/WasalX/wasalx-platform/blob/main/docs/runbooks/alert-response.md#connection-action-required
       - alert: WasalXDuplicateSuppressionSpike
         expr: sum(rate(wasalx_webhook_duplicates_total[10m])) > 0.1
         for: 10m
         labels: { severity: warning, owner: connector }
         annotations:
           summary: Duplicate provider events are arriving at an unusual sustained rate.
-          runbook_url: https://github.com/WasalX/wasalx-platform/tree/main/docs/runbooks
+          runbook_url: https://github.com/WasalX/wasalx-platform/blob/main/docs/runbooks/alert-response.md#duplicate-spike
       - alert: WasalXTerminalDeliveryFailure
         expr: sum(increase(wasalx_delivery_terminal_failure_total[5m])) > 0
         for: 1m
         labels: { severity: warning, owner: operations }
         annotations:
           summary: At least one delivery became terminally failed.
-          runbook_url: https://github.com/WasalX/wasalx-platform/tree/main/docs/runbooks
+          runbook_url: https://github.com/WasalX/wasalx-platform/blob/main/docs/runbooks/alert-response.md#terminal-delivery-failure
       - alert: WasalXUnknownProviderOutcome
         expr: sum(increase(wasalx_delivery_outcome_unknown_total[5m])) > 0
         for: 1m
         labels: { severity: critical, owner: operations }
         annotations:
           summary: A provider send outcome is unknown and must be reconciled before retry.
-          runbook_url: https://github.com/WasalX/wasalx-platform/tree/main/docs/runbooks
+          runbook_url: https://github.com/WasalX/wasalx-platform/blob/main/docs/runbooks/alert-response.md#unknown-provider-outcome
       - alert: WasalXReauthenticationSpike
         expr: sum(increase(wasalx_connection_reauthentication_total[15m])) > 3
         for: 1m
         labels: { severity: warning, owner: connector }
         annotations:
           summary: Multiple connections required reauthentication in fifteen minutes.
-          runbook_url: https://github.com/WasalX/wasalx-platform/tree/main/docs/runbooks
+          runbook_url: https://github.com/WasalX/wasalx-platform/blob/main/docs/runbooks/alert-response.md#reauthentication-spike
 
   - name: wasalx-security-and-lifecycle
     rules:
@@ -112,28 +112,35 @@ groups:
         labels: { severity: critical, owner: security }
         annotations:
           summary: Tenant or service authorization anomalies are sustained.
-          runbook_url: https://github.com/WasalX/wasalx-platform/tree/main/docs/runbooks
+          runbook_url: https://github.com/WasalX/wasalx-platform/blob/main/docs/runbooks/alert-response.md#authorization-anomaly
       - alert: WasalXProvisioningTerminalFailure
         expr: sum(increase(wasalx_provisioning_operations_total{result="terminal_failure"}[15m])) > 0
         for: 1m
         labels: { severity: critical, owner: platform }
         annotations:
           summary: A tenant provisioning operation failed terminally.
-          runbook_url: https://github.com/WasalX/wasalx-platform/tree/main/docs/runbooks
+          runbook_url: https://github.com/WasalX/wasalx-platform/blob/main/docs/runbooks/alert-response.md#provisioning-failure
       - alert: WasalXPrivacyTerminalFailure
         expr: sum(increase(wasalx_privacy_job_total{result="failed_terminal"}[15m])) > 0
         for: 1m
         labels: { severity: critical, owner: privacy }
         annotations:
           summary: A privacy or retention job failed terminally.
-          runbook_url: https://github.com/WasalX/wasalx-platform/tree/main/docs/runbooks
+          runbook_url: https://github.com/WasalX/wasalx-platform/blob/main/docs/runbooks/alert-response.md#privacy-failure
+      - alert: WasalXPrivacyFailurePersistenceFailed
+        expr: sum(increase(wasalx_privacy_job_total{result="persistence_failed"}[15m])) > 0
+        for: 1m
+        labels: { severity: critical, owner: privacy }
+        annotations:
+          summary: A privacy or retention job failure could not be saved.
+          runbook_url: https://github.com/WasalX/wasalx-platform/blob/main/docs/runbooks/alert-response.md#privacy-failure-persistence
       - alert: WasalXMediaQuarantineSpike
         expr: sum(increase(wasalx_media_quarantine_total{result="created"}[10m])) > 10
         for: 1m
         labels: { severity: warning, owner: operations }
         annotations:
           summary: Quarantine creation has spiked above the pilot threshold.
-          runbook_url: https://github.com/WasalX/wasalx-platform/tree/main/docs/runbooks
+          runbook_url: https://github.com/WasalX/wasalx-platform/blob/main/docs/runbooks/alert-response.md#media-quarantine-spike
 
   - name: wasalx-infrastructure
     rules:
@@ -143,21 +150,21 @@ groups:
         labels: { severity: critical, owner: platform }
         annotations:
           summary: Connector database callers are waiting for a pool connection.
-          runbook_url: https://github.com/WasalX/wasalx-platform/tree/main/docs/runbooks
+          runbook_url: https://github.com/WasalX/wasalx-platform/blob/main/docs/runbooks/alert-response.md#database-saturation
       - alert: WasalXDependencyUnavailable
         expr: min by (component, dependency) (wasalx_dependency_ready) < 1
         for: 2m
         labels: { severity: critical, owner: platform }
         annotations:
           summary: A runtime dependency is reporting unavailable.
-          runbook_url: https://github.com/WasalX/wasalx-platform/tree/main/docs/runbooks
+          runbook_url: https://github.com/WasalX/wasalx-platform/blob/main/docs/runbooks/alert-response.md#dependency-unavailable
       - alert: WasalXSearchClusterRed
         expr: elasticsearch_cluster_health{status="red"} > 0
         for: 2m
         labels: { severity: critical, owner: platform }
         annotations:
           summary: The Zammad search cluster is red.
-          runbook_url: https://github.com/WasalX/wasalx-platform/tree/main/docs/runbooks
+          runbook_url: https://github.com/WasalX/wasalx-platform/blob/main/docs/runbooks/alert-response.md#search-saturation
       - alert: WasalXSearchDiskLow
         expr: >-
           min(elasticsearch_node_fs_disk_available)
@@ -167,7 +174,7 @@ groups:
         labels: { severity: critical, owner: platform }
         annotations:
           summary: Search-cluster free disk is below 15%.
-          runbook_url: https://github.com/WasalX/wasalx-platform/tree/main/docs/runbooks
+          runbook_url: https://github.com/WasalX/wasalx-platform/blob/main/docs/runbooks/alert-response.md#search-disk-low
       - alert: WasalXObjectStorageLow
         expr: >-
           minio_cluster_health_capacity_usable_free_bytes
@@ -177,21 +184,21 @@ groups:
         labels: { severity: critical, owner: platform }
         annotations:
           summary: Object-storage usable free capacity is below 15%.
-          runbook_url: https://github.com/WasalX/wasalx-platform/tree/main/docs/runbooks
+          runbook_url: https://github.com/WasalX/wasalx-platform/blob/main/docs/runbooks/alert-response.md#object-storage-saturation
       - alert: WasalXObjectStorageNodeOffline
         expr: minio_cluster_health_nodes_offline_count > 0
         for: 2m
         labels: { severity: critical, owner: platform }
         annotations:
           summary: Object storage reports an offline node.
-          runbook_url: https://github.com/WasalX/wasalx-platform/tree/main/docs/runbooks
+          runbook_url: https://github.com/WasalX/wasalx-platform/blob/main/docs/runbooks/alert-response.md#object-storage-node-offline
       - alert: WasalXRedisMemoryHigh
         expr: redis_memory_used / clamp_min(redis_maxmemory, 1) > 0.85 and redis_maxmemory > 0
         for: 10m
         labels: { severity: warning, owner: platform }
         annotations:
           summary: Redis memory use is above 85% of its configured maximum.
-          runbook_url: https://github.com/WasalX/wasalx-platform/tree/main/docs/runbooks
+          runbook_url: https://github.com/WasalX/wasalx-platform/blob/main/docs/runbooks/alert-response.md#redis-memory-high
       - alert: WasalXCollectorExportFailure
         expr: >-
           sum(rate(otelcol_exporter_send_failed_spans[5m])) > 0
@@ -200,4 +207,4 @@ groups:
         labels: { severity: critical, owner: platform }
         annotations:
           summary: OpenTelemetry Collector exports are failing.
-          runbook_url: https://github.com/WasalX/wasalx-platform/tree/main/docs/runbooks
+          runbook_url: https://github.com/WasalX/wasalx-platform/blob/main/docs/runbooks/alert-response.md#collector-export-failure

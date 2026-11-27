@@ -4,6 +4,7 @@ import {Client} from 'pg';
 import {createMetaCostScenario,createMetaCostPrivacyJob,linkMetaCostReference} from './meta-cost-scenarios-postgres.mjs';
 import {metaCostStatementCsv} from '../services/control-api/dist/meta-cost.controller.js';
 import {MetaCostSourceRepository,MetaCostSourceService} from '../services/connector-worker/dist/services/connector-worker/src/meta-cost-source.js';
+import {MediaRuntimeError} from '../services/connector-worker/dist/services/connector-worker/src/media-runtime.js';
 import {PrivacyRepository,PrivacyLegalHoldError} from '../services/connector-worker/dist/services/connector-worker/src/privacy-repository.js';
 import {PrivacyProcessor} from '../services/connector-worker/dist/services/connector-worker/src/privacy-processor.js';
 import {PrivacyController} from '../services/control-api/dist/privacy.controller.js';
@@ -339,7 +340,47 @@ export async function verifyMetaStatementConcurrentUpload(options){
   await f.storage.delete(target.objectKey);await recovered.markTargetExternal(job,job.lease,target);
   const summary=await recovered.finalize(job,job.lease);assert.equal(summary.metaCostSourcesPurged,1);
   assert.equal(await recovered.complete(job,job.lease,summary),true);assert.equal(f.deletes.length,2);assert.equal(writes,1);
-  return{oneAdmittedPutAcrossConcurrentAndRestartedCalls:true,privacyWaitsForTerminalWrite:true,lateWriteNeverRestoresReady:true,terminalDeleteResponseLossRecoverable:true};
+
+  const refused = await f.reserve();
+  let rejectedPuts = 0;
+  let proposedAttempt;
+  const rejectingRepository = new MetaCostSourceRepository({ connect: async () => {
+    const client = await f.worker.connect();
+    return {
+      query: async (sql, values) => {
+        if (sql.includes('app.settle_meta_cost_source_write')) {
+          assert.equal(values[3], 'NOT_WRITTEN');
+          proposedAttempt = values[2];
+          throw new Error('Synthetic settlement database failure');
+        }
+        return client.query(sql, values);
+      },
+      release: () => client.release(),
+    };
+  } });
+  const rejectingUpload = new MetaCostSourceService(rejectingRepository, f.scanner, {
+    ...f.storage,
+    put: async () => { rejectedPuts++; throw new MediaRuntimeError('Synthetic storage refusal', 'MEDIA_STORAGE_HTTP', false); },
+  });
+  const retry = () => rejectingUpload.upload(f.tenantId, refused.id, refused.bytes, 'application/json');
+  await assert.rejects(retry, error => error.code === 'SOURCE_WRITE_UNRESOLVED');
+  const unresolved = await f.read(refused.id);
+  assert.equal(unresolved.sourceState, 'UPLOADING');
+  assert.equal(unresolved.writeDisposition, 'ADMITTED');
+  assert.equal(unresolved.writeAttemptId, proposedAttempt);
+  await assert.rejects(retry, error => error.code === 'SOURCE_WRITE_UNRESOLVED');
+  await f.action('META_SOURCE_RECONCILE', refused.id, {
+    expectedVersion: Number(unresolved.version), originalSha256: unresolved.originalSha256,
+    writeAttemptId: proposedAttempt, outcome: 'NOT_WRITTEN', scanSha256: unresolved.scanSha256,
+    terminalDispositionEvidenceSha256: sha('Synthetic definitive refusal for the admitted attempt'),
+  });
+  const settled = await f.read(refused.id);
+  assert.equal(settled.writeAttemptId, proposedAttempt);
+  assert.equal(settled.writeDisposition, 'NOT_WRITTEN');
+  assert.equal(settled.sourceState, 'PURGE_PENDING');
+  await assert.rejects(retry, dbCode('P0002'));
+  assert.equal(rejectedPuts, 1);
+  return{oneAdmittedPutAcrossConcurrentAndRestartedCalls:true,privacyWaitsForTerminalWrite:true,lateWriteNeverRestoresReady:true,terminalDeleteResponseLossRecoverable:true,rejectedSettlementRemainsFencedUntilReconciled:true};
  }finally{release?.();await upload?.catch(()=>undefined);await f.close();}
 }
 

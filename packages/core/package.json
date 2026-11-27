@@ -8,6 +8,10 @@
       "types": "./dist/display-time-zone.d.ts",
       "default": "./dist/display-time-zone.js"
     },
+    "./meta-marketing-preferences": {
+      "types": "./dist/meta-marketing-preferences.d.ts",
+      "default": "./dist/meta-marketing-preferences.js"
+    },
     "./meta-test-phone-policy": {
       "types": "./dist/meta-test-phone-policy.d.ts",
       "default": "./dist/meta-test-phone-policy.js"
@@ -131,6 +135,10 @@
     "./direct-customer-close": {
       "types": "./dist/direct-customer-close.d.ts",
       "default": "./dist/direct-customer-close.js"
+    },
+    "./delivery": {
+      "types": "./dist/delivery.d.ts",
+      "default": "./dist/delivery.js"
     },
     "./direct-delivery-guards": {
       "types": "./dist/direct-delivery-guards.d.ts",

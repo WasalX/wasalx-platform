@@ -13,12 +13,39 @@ import {
 const INSTRUMENTATION_NAME = "io.wasalx.platform";
 const INSTRUMENTATION_VERSION = "0.1.0";
 
-const sensitiveKey = /(?:^|_)(?:body|text|payload|secret|token|authorization|cookie|password|qr|passkey|phone|message|reference|group_name|title|filename|url)(?:_|$)/iu;
-// Generic strings are redacted only when a phone-like value is explicitly
-// international (+...) or uses whitespace/parentheses. This deliberately does
-// not match ISO timestamps, UUIDs, durations, or ordinary numeric counters.
-const phoneLike = /(?:\+\d[\d\s()-]{7,}\d|\b\d{2,4}(?:[ ()]\d{2,4}){2,}\b)/gu;
+const sensitiveKey = /(?:^|_)(?:body|text|payload|secret|token|authorization|cookie|password|qr|pass_?key|phone|reference|url|group_name|messages?|title|filename|api_key|access_key|credentials?|private_key|signature|t?otp|passphrase|hmac|sessions?|jwt|key|sig)(?:_|$)/iu;
+// Provider message, chat, and recipient identifiers can contain phone numbers.
+const personalFieldKey = /(?:^|_)(?:e_?mails?|recipients?|subjects?|contacts?|senders?|user_?names?|push_?names?|chat_ids?|wamids?|wa_?ids?|participants?|authors?|nicknames?|mobiles?|msisdns?|tels?|telephones?|cellphones?|(?:from|to|caller)_numbers?|whatsapp_numbers?|jids?|(?:first|last|full|display|recipient|customer|agent|profile|nick)_names?)(?:_|$)|^(?:names?|customer|number|whatsapp)$/iu;
+const mobileMetadataKey = /^(?:is_mobile|mobile_platform)$/iu;
+const addressKey = /(?:^|\.)(?:to|from|cc|bcc|reply[ _-]?to|mail[ _-]?from|address)$/iu;
+const internalIdKey = /^(?:contact|sender|subject|e_?mail)_ids?$/iu;
+const messageCounterKey = /^messages?_(?:count|sent)$/iu;
+const providerMessageIdLike = /\b(?:wamid\.[A-Za-z0-9+/_=-]+|(?:true|false)_[\d-]+@(?:c\.us|g\.us|lid|s\.whatsapp\.net)_[A-Za-z0-9_-]+(?:@(?:c\.us|lid|s\.whatsapp\.net))?|[\d-]+@lid\b(?!-|\.[\p{L}\p{N}-]))/gu;
+const emailLike = /[\p{L}\p{N}.!#$%&'*+/=?^`{|}~-]{1,64}@[\p{L}\p{N}-]{1,63}(?:\.[\p{L}\p{N}-]{1,63})+/gu;
+const phoneZero = String.raw`[0\u0660\u06f0\uff10]`;
+const phoneNonZero = String.raw`[1-9\u0661-\u0669\u06f1-\u06f9\uff11-\uff19]`;
+const barePhonePattern = String.raw`${phoneNonZero}\p{Nd}{9,14}|${phoneZero}\p{Nd}{8,13}|${phoneZero}{2}${phoneNonZero}\p{Nd}{7,13}`;
+const barePhoneLike = new RegExp(`^(?:${barePhonePattern})$`, "u");
+const spacedDateLike = String.raw`(?:0[1-9]|[12]\d|3[01]) (?:0[1-9]|1[0-2]) (?:19|20)\d{2}(?!\s+\p{Nd})`;
+const dateLike = String.raw`(?:\p{Nd}{4}-\p{Nd}{2}-\p{Nd}{2}|\p{Nd}{2}-\p{Nd}{2}-\p{Nd}{4}|\p{Nd}{2}\.\p{Nd}{2}\.\p{Nd}{4}|${spacedDateLike})(?![.-]?\p{Nd})`;
+const phoneStart = String.raw`(?<![\p{L}\p{N}_.]|\p{Nd}-|[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-)(?!${dateLike})`;
+// Only formatted numbers may follow a label hyphen, so label-hyphen-digits IDs (req-<digits>) survive.
+const internationalPrefix = String.raw`(?:\+|${phoneZero}{2}(?=\p{Nd}{0,14}[\s().-]+\p{Nd})[\s.-]*(?=${phoneNonZero}))`;
+const internationalPhonePattern = String.raw`${internationalPrefix}(?:\p{Nd}[\s().-]*){7,14}\p{Nd}`;
+const phoneSeparator = String.raw`[\s.-]+`;
+const countryCodePattern = String.raw`${phoneNonZero}\p{Nd}{0,2}${phoneSeparator}`;
+const groupedPhonePattern = String.raw`(?:(?:\(?\p{Nd}{2,4}\)?${phoneSeparator}){2,3}\p{Nd}{4}|\p{Nd}{3,5}${phoneSeparator}\p{Nd}{6,7}|\p{Nd}{2}\.\p{Nd}{2}\.\p{Nd}{6})`;
+// A bare 4+7 whitespace split with no trunk zero is also a pair of ordinary numbers.
+const spacedNumberPair = String.raw`${phoneNonZero}\p{Nd}{3}\s+\p{Nd}{7}(?!\p{Nd})`;
+const phoneLike = new RegExp(
+  String.raw`${phoneStart}(?:${internationalPhonePattern}|(?:${countryCodePattern}|(?!${spacedNumberPair}))${groupedPhonePattern}|(?<!-)(?:${barePhonePattern}))(?![\p{L}\p{N}_-]|\.\p{Nd})`,
+  "gu",
+);
+const trailingToken = /(?<!\S)\S+$/u;
+const trailingPhoneFragment = new RegExp(String.raw`${phoneStart}\+?[\p{Nd}(][\p{Nd}\s().-]*$`, "u");
+const logTextLimit = 2_000;
 const bearerLike = /\b(?:bearer|basic)\s+[A-Za-z0-9._~+/=-]+/giu;
+const jwtLike = /\beyJ[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+){2,4}(?![\w-])/gu;
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const requestIdPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 const traceParentPattern = /^00-([0-9a-f]{32})-([0-9a-f]{16})-([0-9a-f]{2})$/iu;
@@ -67,6 +94,7 @@ export const metricDefinitions = {
   wasalx_delivery_terminal_failure_total: { kind: "counter", description: "Terminal delivery failures" },
   wasalx_delivery_outcome_unknown_total: { kind: "counter", description: "Provider send outcomes that cannot be determined safely" },
   wasalx_delivery_receipts_total: { kind: "counter", description: "Provider delivery receipt processing outcomes" },
+  wasalx_agent_reply_signal_total: { kind: "counter", description: "Read and typing outcomes for agent replies" },
   wasalx_delivery_persistence_failure_total: { kind: "counter", description: "Provider sends whose durable completion could not be persisted" },
   wasalx_connection_state: { kind: "gauge", description: "Observed connection count by state" },
   wasalx_connection_transition_total: { kind: "counter", description: "Connection lifecycle transitions" },
@@ -104,20 +132,79 @@ export type MetricName = keyof typeof metricDefinitions;
 const instruments = new Map<MetricName, ReturnType<typeof createInstrument>>();
 
 export function redactLogValue(value: unknown, key = ""): unknown {
-  if (sensitiveKey.test(key)) return "[REDACTED]";
+  return redactValue(value, key);
+}
+
+function redactValue(value: unknown, key: string, ancestors?: WeakSet<object>, useToJSON = true): unknown {
+  const separatedKey = key.replace(/[.\s-]+/gu, "_");
+  const normalizedKey = separatedKey
+    .replace(/IDs(?=$|[^a-z])/gu, "Ids")
+    .replace(/([A-Z])([A-Z][a-z])/gu, "$1_$2")
+    .replace(/([a-z0-9])([A-Z])/gu, "$1_$2");
+  if (internalIdKey.test(normalizedKey)) {
+    if (typeof value === "string" && uuidPattern.test(value)) return value;
+    if (Array.isArray(value)) {
+      const items: readonly unknown[] = value;
+      const ids = Array.from({ length: Math.min(items.length, 50) }, (_, index) => items[index]);
+      if (ids.every((id) => typeof id === "string" && uuidPattern.test(id))) return ids;
+    }
+  }
+  const messageCounter = typeof value === "number" && Number.isSafeInteger(value) && value >= 0 &&
+    messageCounterKey.test(normalizedKey);
+  if (!messageCounter && (
+    sensitiveKey.test(separatedKey) || sensitiveKey.test(normalizedKey) ||
+    (!mobileMetadataKey.test(normalizedKey) &&
+      (personalFieldKey.test(separatedKey) || personalFieldKey.test(normalizedKey))) ||
+    addressKey.test(key)
+  )) {
+    return "[REDACTED]";
+  }
+  if (typeof value === "bigint") value = String(value);
+  if (typeof value === "number" && key === "" && barePhoneLike.test(String(value))) return "[PHONE]";
   if (typeof value === "string") {
-    const cleaned = value.replace(bearerLike, "[CREDENTIAL]").replace(phoneLike, "[PHONE]");
-    return cleaned.length > 2_000 ? `${cleaned.slice(0, 2_000)}…` : cleaned;
+    const prefix = truncateLogText(value);
+    // A field label distinguishes an opaque digit-only value from unlabelled phone text.
+    if (key && /^\p{Nd}+$/u.test(prefix)) return prefix;
+    const scrubbed = prefix.replace(bearerLike, "[CREDENTIAL]").replace(jwtLike, "[CREDENTIAL]")
+      .replace(providerMessageIdLike, "[REDACTED]");
+    const cleaned = (scrubbed.includes("@") ? scrubbed.replace(emailLike, "[EMAIL]") : scrubbed)
+      .replace(phoneLike, "[PHONE]");
+    return value.length > logTextLimit || cleaned.length > logTextLimit
+      ? `${truncateLogText(cleaned)}\u2026`
+      : cleaned;
   }
-  if (Array.isArray(value)) return value.slice(0, 50).map((item) => redactLogValue(item));
   if (value && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>)
-        .slice(0, 100)
-        .map(([entryKey, entryValue]) => [entryKey, redactLogValue(entryValue, entryKey)]),
-    );
+    const path = ancestors ?? new WeakSet<object>();
+    if (path.has(value)) return "[REDACTED]";
+    path.add(value);
+    try {
+      const toJSON = useToJSON ? (value as { toJSON?: unknown }).toJSON : undefined;
+      if (typeof toJSON === "function") {
+        const projected: unknown = Reflect.apply(toJSON, value, [key]);
+        if (projected !== value) return redactValue(projected, key, path, false);
+      }
+      if (Array.isArray(value)) {
+        return Array.from({ length: Math.min(value.length, 50) }, (_, index) => redactValue(value[index], "", path));
+      }
+      return Object.fromEntries(
+        Object.entries(value).slice(0, 100)
+          .map(([entryKey, entryValue]) => [entryKey, redactValue(entryValue, entryKey, path)]),
+      );
+    } catch {
+      return "[REDACTED]";
+    } finally {
+      path.delete(value);
+    }
   }
-  return value;
+  return typeof value === "function" ? undefined : value;
+}
+
+function truncateLogText(value: string) {
+  if (value.length <= logTextLimit) return value;
+  // A phone can span several whitespace-delimited tokens at the cut.
+  const prefix = value.slice(0, logTextLimit);
+  const completeTokens = /\s/u.test(value[logTextLimit]) ? prefix : prefix.replace(trailingToken, "");
+  return completeTokens.replace(trailingPhoneFragment, "");
 }
 
 export function parseTraceParent(value: string | null | undefined) {
@@ -238,7 +325,7 @@ export function recordDeliveryState(provider: Provider, state: string, reason = 
 
 export function recordStructuredLog(level: LogLevel, event: string, fields: Record<string, unknown> = {}) {
   const active = trace.getSpan(context.active())?.spanContext();
-  const entry = redactLogValue({
+  const entry = redactValue({
     timestamp: new Date().toISOString(),
     level,
     event: boundedEventName(event),
@@ -246,7 +333,7 @@ export function recordStructuredLog(level: LogLevel, event: string, fields: Reco
       ? { trace_id: active.traceId, span_id: active.spanId }
       : {}),
     ...fields,
-  }) as Record<string, unknown>;
+  }, "", undefined, false) as Record<string, unknown>;
   const output = `${JSON.stringify(entry)}\n`;
   if (typeof process !== "undefined" && process.stdout && process.stderr) {
     if (level === "error" || level === "warn") process.stderr.write(output);

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { readTenantPortalSource } from "./helpers/tenant-portal-source.mjs";
 
 const root = new URL("../", import.meta.url);
 const source = (path) => readFile(new URL(path, root), "utf8");
@@ -30,7 +31,7 @@ test("direct assignment attribution is revision fenced", async () => {
 
 test("delivery rows and details render only projected hold metadata", async () => {
   const [portal, english, arabic] = await Promise.all([
-    source("app/WasalXApp.tsx"),
+    readTenantPortalSource(),
     source("lib/i18n/messages/en/tenant.ts"),
     source("lib/i18n/messages/ar/tenant.ts"),
   ]);

@@ -3,12 +3,12 @@ FROM docker.io/library/golang:1.27.4-alpine@sha256:70bd7ddea8b6cbe5d6943cde279d6
 ARG TARGETOS=linux
 ARG TARGETARCH=amd64
 ENV GOPROXY=https://proxy.golang.org,direct
-ADD --checksum=sha256:f09117dd6ad62d3f53d2618ba3950ced4a318110b95ce5afe76b7df0ba74000f \
-  https://github.com/prometheus/alertmanager/archive/refs/tags/v0.34.0.tar.gz /tmp/source.tar.gz
+# The module proxy can reset HTTP/2 streams during a cold build.
+ENV GODEBUG=http2client=0
+ADD https://github.com/prometheus/alertmanager.git#085f0ef7eb41da24cab8cd000f1345b6250f2edb /src
 ADD --checksum=sha256:990d0be563b733bd0eae180dd609591164028f80cdf47ee8c1c3a1bfafff8d23 \
   https://github.com/prometheus/alertmanager/releases/download/v0.34.0/alertmanager-web-ui-0.34.0.tar.gz /tmp/ui.tar.gz
-RUN mkdir /src && tar -xzf /tmp/source.tar.gz -C /src --strip-components=1 && \
-    tar -xzf /tmp/ui.tar.gz -C /src/ui/app
+RUN tar -xzf /tmp/ui.tar.gz -C /src/ui/app
 WORKDIR /src
 RUN go get google.golang.org/grpc@v1.83.2
 RUN CGO_ENABLED=0 GOOS="$TARGETOS" GOARCH="$TARGETARCH" go build -mod=mod -trimpath -tags netgo \

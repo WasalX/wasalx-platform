@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { observeDuration, recordMetric } from "@wasalx/observability";
+import { observeDuration, recordMetric, recordStructuredLog, safeErrorCode } from "@wasalx/observability";
 import { PrivacyLegalHoldError, PrivacyRepositoryError, type PrivacyJob, type PrivacyRepository, type PrivacyTarget } from "./privacy-repository.js";
 import { PrivacyZammadClient, PrivacyZammadError } from "./privacy-zammad.js";
 import { SecretResolutionError, type SecretResolver } from "./secrets.js";
@@ -17,6 +17,7 @@ export type PrivacyProcessorResult = {
   failedTerminal: number;
   legalHoldBlocked: number;
   leaseLost: number;
+  persistenceFailed: number;
 };
 
 export class PrivacyProcessor {
@@ -42,6 +43,7 @@ export class PrivacyProcessor {
       failedTerminal: 0,
       legalHoldBlocked: 0,
       leaseLost: 0,
+      persistenceFailed: 0,
     };
     for (const job of jobs) {
       const startedAt = Date.now();
@@ -59,7 +61,19 @@ export class PrivacyProcessor {
         }
       } catch (error) {
         const failure = classifyPrivacyFailure(error, job);
-        const persisted = await this.repository.fail(job, leaseId, failure).catch(() => false);
+        let persisted: boolean;
+        try {
+          persisted = await this.repository.fail(job, leaseId, failure);
+        } catch (persistenceError) {
+          result.persistenceFailed += 1;
+          recordPrivacyOutcome(job, "persistence_failed", startedAt);
+          recordStructuredLog("error", "privacy.failure_persistence_failed", {
+            tenant_id: job.tenantId,
+            privacy_job_id: job.id,
+            error_code: safeErrorCode(persistenceError),
+          });
+          continue;
+        }
         if (!persisted) {
           result.leaseLost += 1;
           recordPrivacyOutcome(job, "lease_lost", startedAt);
@@ -179,6 +193,7 @@ export class PrivacyProcessor {
       local: {
         messages: local.messages,
         participantIdentities: local.participantIdentities,
+        ...(local.whatsappMarketingPreferences ? { whatsappMarketingPreferences: local.whatsappMarketingPreferences } : {}),
         metaDirectAliases: local.metaDirectAliases,
         metaDirectIdentityEvents: local.metaDirectIdentityEvents,
         metaDirectRecipients: local.metaDirectRecipients,

@@ -13,26 +13,28 @@ import subprocess
 import sys
 import tarfile
 import tempfile
-import time
 import urllib.request
-from urllib.error import HTTPError
+
+from image_registry_retry import registry_output
 
 
 ROOT = Path(__file__).resolve().parents[2]
 REPOSITORY = "WasalX/wasalx-platform"
 SOURCE = "https://github.com/" + REPOSITORY
 MAIN_PUBLISHER = SOURCE + "/.github/workflows/branch-image.yml@refs/heads/main"
+CATALOG_PATH = "scripts/release/product-images.json"
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 SHA = re.compile(r"[0-9a-f]{40}")
 ADDON_STAGED = ("zammad-package/", "build/zammad/", "build/addon-licenses/", "tests/fixtures/")
 RERUN_ALL = {
     "scripts/release/images-by-digest.py",  # Selects, builds, and inspects images.
+    "scripts/release/image_registry_retry.py",  # Shared by image builds and publishing.
     ".github/workflows/ci.yml",  # Configures the PR image build jobs and their inputs.
-    "scripts/release/product-images.json",  # Supplies the Dockerfile and image matrix.
+    CATALOG_PATH,  # Supplies the Dockerfile and image matrix.
     "zammad-addon.json",  # Pins the public add-on source passed to image builds.
 }
 CACHED_IMAGES = {
-    "production-prometheus", "zammad", "production-otel", "control-api", "connector-worker", "portal",
+    "production-alertmanager", "production-prometheus", "zammad", "production-otel", "control-api", "connector-worker", "portal",
     "tenant-provisioner", "tenant-workspace-controller", "workspace-provider", "identity-policy-activator",
     "invitation-mailer",
 }
@@ -41,7 +43,7 @@ CREDENTIAL = re.compile(rb"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----\r?\
 PEM = re.compile(rb"-----BEGIN ((?:RSA |EC |OPENSSH )?PRIVATE KEY)-----\r?\n"
                  rb"(?:[A-Za-z0-9+/=]+\r?\n)+-----END \1-----")
 # Public built-in hello-world TLS key: cloudflared 2026.9.1, tlsconfig/hello_ca.go.
-CLOUDFLARED_SOURCE = "e75d9a314ae07ae42564c0d3115b9e33d8a7329d99771951ab7b67144461bd84"
+CLOUDFLARED_SOURCE = "https://github.com/cloudflare/cloudflared.git#f11dea9cb7079e90a982c1a2d5548ab40847fdcf"
 PUBLIC_KEYS = {"production-cloudflared": {"usr/local/bin/cloudflared": {
     "17ac4c2ca3deb87202cd2c101d4da9d4f4c0ec3d51a0381729329102b28e61a4"}}}
 ZAMMAD_PUBLIC_BASE = "ghcr.io/zammad/zammad@sha256:390705d0eefd8a473293c1f9130cb2f40a2484bd629dd3b33aa0e700ee86d13b"
@@ -73,21 +75,6 @@ def run(*args, cwd=None):
     return subprocess.check_output(args, cwd=cwd, text=True).strip()
 
 
-def retry(action):
-    # shortcut: retry command failures with fixed backoff until error classes are needed.
-    for attempt in range(1, 4):
-        try:
-            return action()
-        except subprocess.CalledProcessError:
-            if attempt == 3:
-                raise
-            time.sleep(10 * attempt)
-
-
-def run_retry(*args):
-    return retry(lambda: run(*args))
-
-
 def write(path, value):
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     Path(path).write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
@@ -97,15 +84,19 @@ def sha256(raw):
     return "sha256:" + hashlib.sha256(raw).hexdigest()
 
 
-def catalog():
-    rows = json.loads((ROOT / "scripts/release/product-images.json").read_text())
-    require(len(rows) == 21 and len({r["image"] for r in rows}) == 21, "Invalid image catalog")
+def catalog(*, commit=None):
+    raw = (ROOT / CATALOG_PATH).read_text() if commit is None else run("git", "show", f"{commit}:{CATALOG_PATH}", cwd=ROOT)
+    rows = json.loads(raw)
+    require(rows and len({r["image"] for r in rows}) == len(rows), "Invalid image catalog")
+    if commit is None:
+        require(len(rows) == 21, "Invalid image catalog")
     for row in rows:
         require(re.fullmatch(r"[a-z]+(?:-[a-z]+)*", row["image"]), "Invalid image name")
-        require(row["dockerfile"] == ("infra/docker/Dockerfile.zammad" if row["image"] == "zammad"
-                                    else "Dockerfile." + row["image"]), "Invalid Dockerfile")
-        require((ROOT / row["dockerfile"]).is_file(), "Missing Dockerfile")
         require(type(row.get("stagesAddon", False)) is bool, "Invalid add-on staging flag")
+        if commit is None:
+            require(row["dockerfile"] == ("infra/docker/Dockerfile.zammad" if row["image"] == "zammad"
+                                        else "Dockerfile." + row["image"]), "Invalid Dockerfile")
+            require((ROOT / row["dockerfile"]).is_file(), "Missing Dockerfile")
     return rows
 
 
@@ -383,9 +374,8 @@ def inspect_layers(archive, layers, base_layers, public_keys=None, licenses=None
 def inspect_image(reference, row, commit, tree, directory, licenses=None):
     text = (ROOT / row["dockerfile"]).read_text()
     if row["image"] in PUBLIC_KEYS:
-        require("ADD --checksum=sha256:" + CLOUDFLARED_SOURCE in text and
-                "https://github.com/cloudflare/cloudflared/archive/refs/tags/2026.9.1.tar.gz" in text,
-                "Public key-content allowance requires the reviewed source archive")
+        require(f"ADD {CLOUDFLARED_SOURCE} /src" in instructions(text),
+                "Public key-content allowance requires the reviewed source commit")
     public_keys = PUBLIC_KEYS.get(row["image"], {})
     public_members = {}
     if row["image"] == "zammad":
@@ -431,14 +421,7 @@ def inspect_image(reference, row, commit, tree, directory, licenses=None):
 
 
 def pull(reference):
-    for attempt in range(3):
-        try:
-            run("docker", "pull", "--platform", "linux/amd64", reference)
-            return
-        except subprocess.CalledProcessError:
-            if attempt == 2:
-                raise
-            time.sleep(attempt + 1)
+    registry_output("docker", "pull", "--platform", "linux/amd64", reference, delays=(1, 2))
 
 
 def cache_options(image, mode):
@@ -469,7 +452,10 @@ def build(image, output, cache="off"):
         context = Path(directory) / "source"
         context.mkdir()
         archive_path = Path(directory) / "source.tar"
-        subprocess.run(["git", "archive", "--format=tar", "--output=" + str(archive_path), commit], cwd=ROOT, check=True)
+        subprocess.run(
+            ["git", "-c", "core.autocrlf=false", "archive", "--format=tar", "--output=" + str(archive_path), commit],
+            cwd=ROOT, check=True,
+        )
         archive_digest = sha256(archive_path.read_bytes())
         with tarfile.open(archive_path) as archive:
             archive.extractall(context, filter="data")
@@ -491,7 +477,7 @@ def build(image, output, cache="off"):
                     for name in ["LICENSE", "COPYING", "THIRD-PARTY-NOTICES"]} if addon else {}
         dockerfile_digest = sha256((context / row["dockerfile"]).read_bytes())
         # Publication exports a cache but never imports one. No host context or secret/SSH mounts.
-        retry(lambda: subprocess.run(["docker", "buildx", "build", "--platform", "linux/amd64",
+        registry_output("docker", "buildx", "build", "--platform", "linux/amd64",
                         "--output", "type=docker,rewrite-timestamp=true",
                         "--provenance=false", "--sbom=false", *cache_args, "--file", str(context / row["dockerfile"]),
                         "--tag", reference, "--build-arg", "WASALX_CANDIDATE_SHA=" + commit,
@@ -500,7 +486,7 @@ def build(image, output, cache="off"):
                         *portal_args,
                         "--label", "org.opencontainers.image.source=" + SOURCE,
                         "--label", "org.opencontainers.image.revision=" + commit,
-                        "--label", "io.wasalx.source.tree=" + tree, str(context)], check=True))
+                        "--label", "io.wasalx.source.tree=" + tree, str(context), capture_stdout=False)
         inspection = inspect_image(reference, row, commit, tree, directory, licenses)
     receipt = {"image": image, "reference": reference, "commit": commit, "tree": tree, "status": "built",
                "platform": "linux/amd64", "sourceArchiveDigest": archive_digest, "addonSource": addon,
@@ -568,8 +554,8 @@ def verify_signatures(reference, *, commit=None):
               "--certificate-oidc-issuer", "https://token.actions.githubusercontent.com"]
     if commit is not None:
         common += ["--certificate-github-workflow-sha", commit]
-    run_retry("cosign", "verify", *common, reference)
-    run_retry("cosign", "verify-attestation", *common, "--type", "slsaprovenance", reference)
+    registry_output("cosign", "verify", *common, reference)
+    registry_output("cosign", "verify-attestation", *common, "--type", "slsaprovenance", reference)
 
 
 def publish(receipt_path):
@@ -586,12 +572,13 @@ def publish(receipt_path):
         contact_digest = receipt.get("contactEmailSha256")
         require(isinstance(contact_digest, str) and DIGEST.fullmatch(contact_digest), "Invalid portal contact email digest")
         contact_input["contactEmailSha256"] = contact_digest
-    result = run_retry("docker", "push", receipt["reference"])
+    result = registry_output("docker", "push", receipt["reference"], retry_unknown_blob=True).decode("utf-8")
     matches = re.findall(r"digest: (sha256:[0-9a-f]{64})", result)
     require(len(set(matches)) == 1, "Missing unique published digest")
     digest = matches[0]
     reference = repository + "@" + digest
-    raw = run_retry("docker", "buildx", "imagetools", "inspect", "--raw", reference)
+    raw = registry_output("docker", "buildx", "imagetools", "inspect", "--raw", reference,
+                          retry_missing_manifest=True)
     # The digest is checked over registry bytes by the client; never hash whitespace-normalized JSON.
     verify_manifest(json.loads(raw), receipt["inspection"]["configDigest"])
     receipt.update({"digest": digest, "configDigest": receipt["inspection"]["configDigest"],
@@ -613,8 +600,8 @@ def publish(receipt_path):
                  "materials": [{"uri": "git+" + SOURCE, "digest": {"sha1": commit, "gitTree": tree}}]}
     predicate_path = str(receipt_path) + ".predicate.json"
     write(predicate_path, predicate)
-    run_retry("cosign", "sign", "--yes", reference)
-    run_retry("cosign", "attest", "--yes", "--type", "slsaprovenance", "--predicate", predicate_path, reference)
+    registry_output("cosign", "sign", "--yes", reference)
+    registry_output("cosign", "attest", "--yes", "--type", "slsaprovenance", "--predicate", predicate_path, reference)
     verify_signatures(reference)
     pull(reference)
     row = next(r for r in catalog() if r["image"] == receipt["image"])
@@ -626,10 +613,11 @@ def publish(receipt_path):
     write(receipt_path, receipt)
 
 
-def assemble(records):
-    rows = catalog()
+def assemble(records, *, rows=None):
+    rows = catalog() if rows is None else rows
+    expected = {row["image"] for row in rows}
     addons = addon_images(rows)
-    require(len(records) == 21 and {r["image"] for r in records} == {r["image"] for r in rows},
+    require(expected and len(records) == len(rows) == len(expected) and {r["image"] for r in records} == expected,
             "Complete unique image receipts required")
     require(len({(r["commit"], r["tree"]) for r in records}) == 1, "Mixed source identities")
     published, pending_images = {}, {}
@@ -650,6 +638,11 @@ def assemble(records):
             "pending": dict(sorted(pending_images.items()))}
 
 
+def require_main_published_rows(rows):
+    require(all(row.get("status") == "published" and row.get("workflow") == MAIN_PUBLISHER for row in rows),
+            "Main workflow publication required for every image")
+
+
 def verify_publication(manifest_path):
     commit, tree = coordinates()
     raw = Path(manifest_path).read_bytes()
@@ -659,8 +652,7 @@ def verify_publication(manifest_path):
     require(assembled["publicationComplete"] and raw == (json.dumps(assembled, indent=2) + "\n").encode(),
             "Complete, unmodified publication manifest required")
     require((manifest["commit"], manifest["tree"]) == (commit, tree), "Publication source differs from tagged source")
-    require(all(row["status"] == "published" and row["workflow"] == MAIN_PUBLISHER for row in rows),
-            "Main workflow publication required for every image")
+    require_main_published_rows(rows)
     for row in rows:
         reference = row["pullReference"]
         registry_manifest = subprocess.check_output(["docker", "buildx", "imagetools", "inspect", "--raw", reference])
@@ -669,64 +661,9 @@ def verify_publication(manifest_path):
         verify_signatures(reference, commit=commit)
 
 
-def stage_hosted_bundles(manifest_path):
-    """Download exact public OCI bytes for the installer to verify offline."""
-    path = Path(manifest_path)
-    manifest = json.loads(path.read_bytes())
-    require(manifest == assemble(list(manifest["images"].values())), "Complete published manifest required")
-    types = {"https://sigstore.dev/cosign/sign/v1": "signature", "https://slsa.dev/provenance/v0.2": "provenance"}
-    for image, row in manifest["images"].items():
-        repository = "wasalx/" + image
-        with urllib.request.urlopen("https://ghcr.io/token?scope=repository:" + repository + ":pull", timeout=30) as response:
-            token = json.load(response)["token"]
-
-        def registry(kind, reference):
-            request = urllib.request.Request(f"https://ghcr.io/v2/{repository}/{kind}/{reference}", headers={
-                "Authorization": "Bearer " + token,
-                "Accept": ("application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json, "
-                           "application/vnd.docker.distribution.manifest.v2+json"),
-            })
-            with urllib.request.urlopen(request, timeout=30) as response:
-                raw = response.read(2**20 + 1)
-            require(len(raw) <= 2**20, "OCI metadata exceeds staging limit")
-            if kind != "referrers" and DIGEST.fullmatch(reference):
-                require(sha256(raw) == reference, "OCI object digest mismatch")
-            return raw
-
-        digest = row["digest"]
-        raw = registry("manifests", digest)
-        verify_manifest(json.loads(raw), row["configDigest"])
-        try:
-            index = json.loads(registry("referrers", digest))
-        except HTTPError as error:
-            if error.code != 404:
-                raise
-            index = json.loads(registry("manifests", digest.replace(":", "-")))
-        bundles = {}
-        for descriptor in index["manifests"]:
-            reference = descriptor["digest"]
-            require(DIGEST.fullmatch(reference), "Invalid OCI referrer digest")
-            referrer = json.loads(registry("manifests", reference))
-            if referrer.get("artifactType") != "application/vnd.dev.sigstore.bundle.v0.3+json":
-                continue
-            require(referrer["subject"]["digest"] == digest and len(referrer["layers"]) == 1, "Invalid Sigstore referrer")
-            blob_digest = referrer["layers"][0]["digest"]
-            require(DIGEST.fullmatch(blob_digest), "Invalid Sigstore blob digest")
-            blob = registry("blobs", blob_digest)
-            payload = json.loads(base64.b64decode(json.loads(blob)["dsseEnvelope"]["payload"], validate=True))
-            if (name := types.get(payload["predicateType"])) is not None:
-                bundles[name] = blob
-        require(set(bundles) == set(types.values()), "Signature and provenance bundles required")
-        destination = path.parent / image
-        destination.mkdir(mode=0o700)
-        (destination / "manifest.json").write_bytes(raw)
-        for name, blob in bundles.items():
-            (destination / f"{name}.sigstore.json").write_bytes(blob)
-
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=["matrix", "build", "pending", "publish", "assemble", "verify-publication", "stage-hosted-bundles", "loaded-config"])
+    parser.add_argument("command", choices=["matrix", "build", "pending", "publish", "assemble", "verify-publication", "loaded-config"])
     parser.add_argument("--image")
     diff = parser.add_mutually_exclusive_group()
     diff.add_argument("--pull-request", action="store_true")
@@ -752,8 +689,6 @@ if __name__ == "__main__":
         publish(args.output)
     elif args.command == "verify-publication":
         verify_publication(args.manifest)
-    elif args.command == "stage-hosted-bundles":
-        stage_hosted_bundles(args.manifest)
     elif args.command == "pending":
         pending(args.image, args.output)
     else:

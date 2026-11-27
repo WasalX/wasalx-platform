@@ -124,6 +124,7 @@ test("release assets use one bounded mirror attempt and reject corrupt bytes bef
     const source = await read("scripts/release/fetch-verified-asset.sh");
     assert.match(source, /--retry 0[\s\S]*--connect-timeout 3 --max-time 8/u);
     assert.match(source, /--proto '=https' --proto-redir '=https'[\s\S]*--retry-max-time 120/u);
+    assert.doesNotMatch(source, /--retry-all-errors/u);
     const infra = await read("scripts/validate-infra.sh");
     const prepare = infra.split("prepare_verified_archive() {")[1].split("prepare_pinned_provider() {")[0];
     assert(prepare.indexOf('"$checksum_url"') < prepare.indexOf("fetch-verified-asset.sh"), "Helm/Tofu metadata must come directly from upstream before mirror bytes");
@@ -171,7 +172,8 @@ test("infrastructure validation keeps Docker on fullruntime and pins native clou
   const script = await read("scripts/validate-infra.sh");
   assert.match(script, /\.wasalx-infra-tool-cache/);
   assert.match(script, /cached infrastructure tool failed checksum verification/);
-  assert.match(script, /--retry 3 --retry-all-errors/);
+  assert.match(script, /--retry 3 --retry-delay 2 --retry-max-time 120/u);
+  assert.doesNotMatch(script, /--retry-all-errors/u);
   assert.match(script, /NATIVE_INFRA=false/);
   assert.match(script, /\bdocker\s+run/);
   assert.match(script, /TOFU_IMAGE="ghcr\.io\/opentofu\/opentofu@sha256:[0-9a-f]{64}"/);
@@ -299,7 +301,7 @@ test("native promtool preserves its pinned version and the public alert fixture 
   assert(compose.includes(`prom/prometheus:v${version}@sha256:3c42b892cf723fa54d2f262c37a0e1f80aa8c8ddb1da7b9b0df9455a35a7f893`));
   const fixture = (await read("tests/fixtures/production-backup-alerts.yaml")).replaceAll("\r\n", "\n");
   const c1Fixture = fixture.replace(/^- (rules\.yaml|application-rules\.yaml)$/gm, "- /checks/$1");
-  assert.equal(createHash("sha256").update(c1Fixture).digest("hex"), "9fbf1d71d03626aeb3566677544f1874e0a4a1fd58eea56d9dc8a1ec85566ace");
+  assert.equal(createHash("sha256").update(c1Fixture).digest("hex"), "38196eee96e3b7fe5a81477515b1c12e9c6eb200be90a84581817a08c65b16bc");
 });
 
 type ComposeEnvironment = Record<string, string | number | boolean | null>;
@@ -463,6 +465,7 @@ test("Compose connection hosts resolve in the base file, full override and merge
 
 test("full Compose exposes bootstrap identity overrides with the public fixture defaults", async () => {
   const [full, example] = await Promise.all([readComposeEnvironments("compose.full.yaml"), read(".env.example")]);
+  assert.equal(full["keycloak-bootstrap"].WASALX_KEYCLOAK_BOOTSTRAP_MODE, "${WASALX_KEYCLOAK_BOOTSTRAP_MODE-reconcile}");
   const defaults = {
     "keycloak-bootstrap": {
       QUALIFICATION_OWNER_USERNAME: "example.owner",
@@ -483,7 +486,7 @@ test("full Compose exposes bootstrap identity overrides with the public fixture 
   }
 });
 
-test("Keycloak bootstrap validates existing usernames before writing and reconciles matching identities", async (t) => {
+test("Keycloak bootstrap preserves existing state in read-only mode and reconciles matching identities in setup mode", async (t) => {
   const ownerId = "10000000-0000-4000-8000-000000000001";
   const isolationId = "isolation-id";
   const operatorId = "10000000-0000-4000-8000-000000000002";
@@ -493,12 +496,40 @@ test("Keycloak bootstrap validates existing usernames before writing and reconci
   const ownerPath = `${tenantUsers}/${ownerId}`;
   const isolationPath = `${tenantUsers}/${isolationId}`;
   const operatorPath = `${platformUsers}/${operatorId}`;
+  const preserve = "preserve-existing";
+  const invalidMode = /WASALX_KEYCLOAK_BOOTSTRAP_MODE must be reconcile or preserve-existing/u;
   const scenarios = [
     { name: "the default owner matches and the missing isolation user is created" },
     { name: "all three overrides are trimmed, lowercased, and used", overrides: true, existingIsolation: "custom.isolation" },
     { name: "a seeded owner mismatch prevents every write", existingOwner: "custom.owner", error: "QUALIFICATION_OWNER" },
     { name: "an isolation email match with a different username prevents every write", existingIsolation: "custom.isolation", error: "ISOLATION_OWNER" },
     { name: "platform mismatch prevents every write", existingOperator: "custom.platform", error: "PLATFORM_OPERATOR" },
+    { name: "invalid reconcile configuration fails before login", smtpHost: "example.test",
+      configError: /Keycloak SMTP configuration must be complete/u },
+    { name: "invalid reconcile origin fails before login", portalOrigin: "malformed-origin",
+      configError: /^Error: WASALX_PORTAL_PUBLIC_ORIGIN is invalid$/u },
+    { name: "unsupported bootstrap mode fails before login", mode: "unknown", configError: invalidMode },
+    { name: "empty bootstrap mode fails before login", mode: "", configError: invalidMode },
+    { name: "preserve requires the administrator username", mode: preserve, missingAdmin: "KEYCLOAK_ADMIN",
+      configError: /KEYCLOAK_ADMIN is required/u },
+    { name: "preserve requires the administrator password", mode: preserve, missingAdmin: "KEYCLOAK_ADMIN_PASSWORD",
+      configError: /KEYCLOAK_ADMIN_PASSWORD is required/u },
+    { name: "preserve verifies both realms, configured users and all clients", mode: preserve, existingIsolation: "example.isolation" },
+    { name: "preserve fails closed on a lookup error", mode: preserve, realmStatus: 503, preserveError: /wasalx realm lookup/u },
+    { name: "preserve refuses a missing required isolation owner", mode: preserve, preserveError: /seeded isolation user is missing/u },
+    { name: "preserve refuses an ambiguous user lookup", mode: preserve, ambiguousUser: true, preserveError: /user lookup was ambiguous/u },
+    { name: "preserve refuses a missing seeded owner", mode: preserve, missingSeed: ownerPath,
+      preserveError: /seeded user is missing for wasalx(?:\n|$)/u },
+    { name: "preserve refuses a missing seeded operator", mode: preserve, missingSeed: operatorPath,
+      existingIsolation: "example.isolation", preserveError: /seeded user is missing for wasalx-platform/u },
+    { name: "preserve refuses a mismatched seeded username", mode: preserve, existingOwner: "custom.owner",
+      preserveError: /existing user has a different username.*WASALX_QUALIFICATION_OWNER_USERNAME/u },
+    { name: "preserve refuses an ambiguous client lookup", mode: preserve, existingIsolation: "example.isolation",
+      clientCount: 2, preserveError: /client lookup was ambiguous/u },
+    { name: "preserve refuses a missing client", mode: preserve, existingIsolation: "example.isolation",
+      clientCount: 0, preserveError: /seeded client is missing/u },
+    { name: "preserve refuses an unexpected client ID", mode: preserve, existingIsolation: "example.isolation",
+      wrongClient: true, preserveError: /client lookup returned an unexpected client/u },
   ];
   for (const scenario of scenarios) {
     await t.test(scenario.name, async (subtest) => {
@@ -506,20 +537,21 @@ test("Keycloak bootstrap validates existing usernames before writing and reconci
       const isolation = scenario.overrides ? "custom.isolation" : "example.isolation";
       const operator = scenario.overrides ? "custom.platform" : "example.platform";
       const env = {
-        KEYCLOAK_ADMIN: "synthetic-admin",
-        KEYCLOAK_ADMIN_PASSWORD: "synthetic-admin-password",
+        KEYCLOAK_ADMIN: scenario.missingAdmin === "KEYCLOAK_ADMIN" ? undefined : "synthetic-admin",
+        KEYCLOAK_ADMIN_PASSWORD: scenario.missingAdmin === "KEYCLOAK_ADMIN_PASSWORD" ? undefined : "synthetic-admin-password",
         KEYCLOAK_BASE_URL: "http://127.0.0.1:8080",
-        WASALX_QUALIFICATION_OWNER_PASSWORD: "synthetic-owner-password",
-        WASALX_ISOLATION_OWNER_PASSWORD: "synthetic-isolation-password",
-        WASALX_PLATFORM_OPERATOR_PASSWORD: "synthetic-operator-password",
+        WASALX_KEYCLOAK_BOOTSTRAP_MODE: scenario.mode,
+        WASALX_QUALIFICATION_OWNER_PASSWORD: scenario.mode ? undefined : "synthetic-owner-password",
+        WASALX_ISOLATION_OWNER_PASSWORD: scenario.mode ? undefined : "synthetic-isolation-password",
+        WASALX_PLATFORM_OPERATOR_PASSWORD: scenario.mode ? undefined : "synthetic-operator-password",
         WASALX_QUALIFICATION_OWNER_EMAIL: "",
         WASALX_ISOLATION_OWNER_EMAIL: isolationEmail,
-        WASALX_KEYCLOAK_SMTP_HOST: "",
+        WASALX_KEYCLOAK_SMTP_HOST: scenario.smtpHost ?? "",
         WASALX_KEYCLOAK_SMTP_PORT: "",
         WASALX_KEYCLOAK_SMTP_FROM: "",
         WASALX_KEYCLOAK_SMTP_USER: "",
         WASALX_KEYCLOAK_SMTP_PASSWORD: "",
-        WASALX_PORTAL_PUBLIC_ORIGIN: undefined,
+        WASALX_PORTAL_PUBLIC_ORIGIN: scenario.portalOrigin,
         WASALX_ZAMMAD_PUBLIC_ORIGIN: undefined,
         WASALX_QUALIFICATION_OWNER_USERNAME: scenario.overrides ? ` ${owner.toUpperCase()} ` : undefined,
         WASALX_ISOLATION_OWNER_USERNAME: scenario.overrides ? ` ${isolation.toUpperCase()} ` : undefined,
@@ -541,22 +573,38 @@ test("Keycloak bootstrap validates existing usernames before writing and reconci
       if (scenario.existingIsolation) {
         users.set(isolationPath, { id: isolationId, username: scenario.existingIsolation, email: isolationEmail });
       }
+      if (scenario.missingSeed) users.delete(scenario.missingSeed);
       const writes: { method: string; path: string; body: Record<string, unknown> }[] = [];
+      const adminRequests: { method: string; path: string; clientId: string | null }[] = [];
       const lookedUpUsernames = new Set<string>();
-      subtest.mock.method(globalThis, "fetch", (input: string, init?: RequestInit) => {
+      const mockFetch = subtest.mock.method(globalThis, "fetch", (input: string, init?: RequestInit) => {
         const { pathname: path, searchParams } = new URL(input);
         const method = init?.method ?? "GET";
         if (path === "/realms/master/protocol/openid-connect/token") {
+          assert.equal(method, "POST");
           return Response.json({ access_token: "synthetic-token".repeat(3) });
         }
+        adminRequests.push({ method, path, clientId: searchParams.get("clientId") });
+        if (scenario.mode && method !== "GET") return new Response(null, { status: 403 });
         if (method !== "GET") {
           const body = JSON.parse(String(init?.body));
           writes.push({ method, path, body });
           if (method === "POST" && path === tenantUsers) users.set(isolationPath, { ...body, id: isolationId });
           return new Response(null, { status: method === "POST" ? 201 : 204 });
         }
-        if (path.endsWith("/clients") || path.endsWith("/credentials")) return Response.json([]);
+        if (path === "/admin/realms/wasalx" || path === "/admin/realms/wasalx-platform") {
+          return scenario.realmStatus
+            ? new Response("synthetic private error payload", { status: scenario.realmStatus })
+            : Response.json({ realm: path.split("/").at(-1) });
+        }
+        if (path.endsWith("/clients")) {
+          const clientId = scenario.wrongClient ? "unrelated-client" : searchParams.get("clientId");
+          return Response.json(Array.from({ length: scenario.clientCount ?? (scenario.mode ? 1 : 0) },
+            (_, index) => ({ id: `client-${index}`, clientId })));
+        }
+        if (path.endsWith("/credentials")) return Response.json([]);
         if (path === tenantUsers || path === platformUsers) {
+          if (scenario.ambiguousUser) return Response.json([{ id: "first" }, { id: "second" }]);
           const field = searchParams.has("email") ? "email" : "username";
           const value = searchParams.get(field);
           if (field === "username" && value !== null) lookedUpUsernames.add(value);
@@ -576,11 +624,33 @@ test("Keycloak bootstrap validates existing usernames before writing and reconci
       const previousExitCode = process.exitCode;
       let exitCode;
       try {
+        if (scenario.configError) {
+          await assert.rejects(import(script.href), scenario.configError);
+          assert.equal(mockFetch.mock.callCount(), 0);
+          return;
+        }
         await import(script.href);
         exitCode = process.exitCode;
       } finally {
         stderr.mock.restore();
         process.exitCode = previousExitCode;
+      }
+      if (scenario.mode) {
+        assert.ok(adminRequests.length > 0);
+        assert.ok(adminRequests.every(({ method, path }) => method === "GET" && path.startsWith("/admin/realms/")));
+        assert.doesNotMatch(errors.join(""), /synthetic private error payload/u);
+        if (scenario.preserveError) {
+          assert.equal(exitCode, 1);
+          assert.match(errors.join(""), scenario.preserveError);
+        } else {
+          assert.deepEqual(errors, []);
+          assert.equal(exitCode, previousExitCode);
+          assert.deepEqual(adminRequests.map(({ path, clientId }) => clientId ?? path).sort(), [
+            "/admin/realms/wasalx", "/admin/realms/wasalx-platform", ownerPath, tenantUsers, operatorPath,
+            "wasalx-portal", "wasalx-00000000000040008000000000000001", "wasalx-platform-portal",
+          ].sort());
+        }
+        return;
       }
       if (scenario.error) {
         assert.equal(exitCode, 1);
@@ -1220,6 +1290,23 @@ test("all WasalX deployables have pinned, non-root, health-checked container ima
   assert.match(compose, /DEV_SECRET_STORE_JSON: \$\{DEV_SECRET_STORE_JSON:-\{\}\}/);
 });
 
+test("Dockerfiles pin the Node base image at most once", async () => {
+  const files = spawnSync("git", ["ls-files", "-z", "--", ":(glob)**/Dockerfile*"], {
+    cwd: new URL("../", import.meta.url),
+    encoding: "utf8",
+  });
+  assert.ifError(files.error);
+  assert.equal(files.status, 0, files.stderr);
+  const dockerfiles = files.stdout.split("\0").filter(Boolean);
+  assert.ok(dockerfiles.includes("Dockerfile.portal"), "Dockerfile discovery must include the repository root");
+  const nodePin = /(?<![\w.-])node(?::[\w.-]+)?@sha256:[a-f0-9]{64}\b/giu;
+  for (const file of dockerfiles) {
+    const dockerfile = (await read(file)).replace(/^[ \t]*#.*$/gm, "");
+    const pins = dockerfile.match(nodePin) ?? [];
+    assert.ok(pins.length <= 1, `${file} has ${pins.length} Node base pins: ${pins.join(", ")}`);
+  }
+});
+
 test("Docker dependency stages coalesce safely and keep pnpm trust checks enabled", async () => {
   assert.doesNotMatch(await read("Dockerfile.connector-worker"), /^#\s*syntax=/m);
   const backendDockerfiles = [
@@ -1341,6 +1428,11 @@ test("Docker smoke may reuse only a complete, explicitly verified local image se
 
 
 
+
+test("Helm explicitly leaves invitation mail unrestricted in staging and production", async () => {
+  const workloads = await read("infra/helm/wasalx/templates/workloads.yaml");
+  assert.match(workloads, /\{\{- if and \(eq \$name "invitation-mailer"\) \(has \$root\.Values\.environment \(list "staging" "production"\)\) \}\}\s+- \{ name: WASALX_TEST_EMAIL_RECIPIENT_ALLOWLIST, value: "\*" \}\s+\{\{- end \}\}/u);
+});
 
 test("Helm and Terraform keep workload, migration, and secret-cleanup credentials isolated", async () => {
   const workloads = await read("infra/helm/wasalx/templates/workloads.yaml");

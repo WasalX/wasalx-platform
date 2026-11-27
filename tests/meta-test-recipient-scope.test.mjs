@@ -121,10 +121,11 @@ test("Meta account redaction preserves classification and never promotes observa
 });
 
 test("Meta final send/upload boundary guards every content kind before checkpoints/network with redacted logs",async(t)=>{
-  const saved={scope:process.env.WASALX_TEST_RECIPIENT_ALLOWLIST,fetch:globalThis.fetch,warn:console.warn};
-  t.after(()=>{if(saved.scope===undefined)delete process.env.WASALX_TEST_RECIPIENT_ALLOWLIST;else process.env.WASALX_TEST_RECIPIENT_ALLOWLIST=saved.scope;globalThis.fetch=saved.fetch;console.warn=saved.warn});
+  const saved={scope:process.env.WASALX_TEST_RECIPIENT_ALLOWLIST,fetch:globalThis.fetch};
+  t.after(()=>{if(saved.scope===undefined)delete process.env.WASALX_TEST_RECIPIENT_ALLOWLIST;else process.env.WASALX_TEST_RECIPIENT_ALLOWLIST=saved.scope;globalThis.fetch=saved.fetch});
   process.env.WASALX_TEST_RECIPIENT_ALLOWLIST=JSON.stringify([phone,"123456789@g.us"]);
-  const requests=[],warnings=[],checkpoints=[];console.warn=(...args)=>warnings.push(args);
+  const requests=[],warnings=[],checkpoints=[];
+  t.mock.method(process.stderr, "write", (line) => { warnings.push(String(line)); return true; });
   globalThis.fetch=async(url,init)=>{requests.push({url:String(url),body:init.body});return Response.json(String(url).endsWith("/media")?{id:"synthetic-media"}:{messages:[{id:"wamid.sent"}]})};
   const guarded=adapter({beforeRequest:async()=>{checkpoints.push("request")},beforeMessageSend:async()=>{checkpoints.push("message")}});
   const input={connectionId:"synthetic",groupId:phone,recipientType:"DIRECT",text:"Synthetic owner text",idempotencyKey:"synthetic"};
@@ -136,8 +137,16 @@ test("Meta final send/upload boundary guards every content kind before checkpoin
   await assert.rejects(guarded.prepareMedia({...input,groupId:foreign,media:variants[1].media}),{code:"META_TEST_RECIPIENT_NOT_ALLOWED"});
   await assert.rejects(guarded.request(`/${phoneId}/messages`,{method:"POST",body:{recipient_type:"group",to:phone}},"mutation",true),{code:"META_TEST_RECIPIENT_NOT_ALLOWED"});
   assert.equal(requests.length,count);assert.equal(checkpoints.length,checks);
-  assert(warnings.length>=11);assert(warnings.every(args=>args.length===1&&args[0]==="Meta test recipient scope refused outbound request"));
-  assert.equal(JSON.stringify(warnings).includes(phone),false);assert.equal(JSON.stringify(warnings).includes("synthetic-private-token"),false);assert.equal(JSON.stringify(warnings).includes(input.text),false);
+  assert(warnings.length >= 11);
+  for (const line of warnings) {
+    const { timestamp, request_id, ...entry } = JSON.parse(line);
+    assert.deepEqual(entry, {
+      level: "warn", event: "meta.test_recipient_scope_refused",
+      component: "meta-connector", error_code: "META_TEST_RECIPIENT_NOT_ALLOWED",
+    });
+    assert.match(timestamp, /^\d{4}-\d{2}-\d{2}T/u);
+    assert.match(request_id, /^[a-f0-9-]{36}$/u);
+  }
   // A mutation during an awaited preflight is fenced again at the final send edge.
   const body={recipient_type:"individual",to:phone};
   const racing=adapter({beforeMessageSend:async()=>{body.to=foreign}});
@@ -156,11 +165,11 @@ test("Meta final send/upload boundary guards every content kind before checkpoin
 });
 
 test("excluded Meta deliveries stop before begin-send, secrets, native writes and media staging",async(t)=>{
-  const previous=process.env.WASALX_TEST_RECIPIENT_ALLOWLIST,warn=console.warn;
-  t.after(()=>{if(previous===undefined)delete process.env.WASALX_TEST_RECIPIENT_ALLOWLIST;else process.env.WASALX_TEST_RECIPIENT_ALLOWLIST=previous;console.warn=warn});
-  process.env.WASALX_TEST_RECIPIENT_ALLOWLIST=JSON.stringify([phone]);console.warn=()=>{};
+  const previous=process.env.WASALX_TEST_RECIPIENT_ALLOWLIST;
+  t.after(()=>{if(previous===undefined)delete process.env.WASALX_TEST_RECIPIENT_ALLOWLIST;else process.env.WASALX_TEST_RECIPIENT_ALLOWLIST=previous});
+  process.env.WASALX_TEST_RECIPIENT_ALLOWLIST=JSON.stringify([phone]);
   const effects=[],failures=[];
-  const processor=new DeliveryProcessor({beginSend:async()=>effects.push("begin"),fail:async(_j,_l,retryable,error)=>failures.push({retryable,error})},{resolve:async()=>{effects.push("secret");throw new Error("Unexpected secret read")}},{metaGraphVersion:"v24.0"},8,{prepare:async()=>{effects.push("media");throw new Error("Unexpected media preparation")}});
+  const processor=new DeliveryProcessor({whatsAppMarketingOptedOut:async()=>false,beginSend:async()=>effects.push("begin"),fail:async(_j,_l,retryable,error)=>failures.push({retryable,error})},{resolve:async()=>{effects.push("secret");throw new Error("Unexpected secret read")}},{metaGraphVersion:"v24.0"},8,{prepare:async()=>{effects.push("media");throw new Error("Unexpected media preparation")}});
   const job={id:"synthetic",provider:"meta",tenantId:"synthetic",connectionId:"synthetic",recipientType:"GROUP",groupId:phone,ticketId:"42",text:"Synthetic",contentType:"text/plain",attempts:1,idempotencyKey:"synthetic"};
   assert.equal(await processor.deliver(job,"synthetic-lease"),false);assert.equal(await processor.deliver({...job,media:{mimeType:"image/png"}},"synthetic-lease"),false);
   assert.deepEqual(effects,[]);assert.equal(failures.length,2);assert(failures.every(item=>!item.retryable&&item.error.includes("outside the configured test scope")));
@@ -172,9 +181,21 @@ test("guarded Meta directory makes no provider request or repository write and p
   process.env.WASALX_TEST_RECIPIENT_ALLOWLIST=JSON.stringify([phone]);
   let requests=0,queries=0;globalThis.fetch=async()=>{requests++;throw new Error("Unexpected directory request")};
   assert.deepEqual(await adapter().listGroups("synthetic"),{groups:[],nextCursor:undefined});assert.equal(requests,0);
+  const warnings = [];
+  t.mock.method(process.stderr, "write", (line) => { warnings.push(String(line)); return true; });
   const guarded=adapter(),clientApi=new HttpMetaGroupsClient(new URL("https://graph.test"),"v24.0","synthetic-private-token",phoneId,async()=>{throw new Error("Unexpected API request checkpoint")});
   for(const operation of [()=>guarded.checkGroupsCapability("synthetic"),()=>guarded.getGroup("synthetic",phone),()=>guarded.createGroup("synthetic",{subject:"Synthetic"}),()=>guarded.getGroupInviteLink("synthetic",phone),()=>guarded.resetGroupInviteLink("synthetic",phone),()=>guarded.updateGroup("synthetic",phone,{subject:"Synthetic"}),()=>guarded.listGroupsPage("synthetic",undefined,1),()=>guarded.syncBusinessAppData("synthetic","contacts",async()=>{throw new Error("Unexpected bulk checkpoint")}),()=>guarded.syncBusinessAppData("synthetic","history",async()=>{throw new Error("Unexpected bulk checkpoint")}),()=>clientApi.capability(),()=>clientApi.createGroup({subject:"Synthetic"}),()=>clientApi.getInviteLink(phone),()=>clientApi.resetInviteLink(phone),()=>clientApi.updateGroup(phone,{subject:"Synthetic"}),()=>clientApi.threadControl("take",undefined,{kind:"PHONE",value:foreign},"10000000-0000-4000-8000-000000000001")])await assert.rejects(operation(),{code:"META_TEST_RECIPIENT_NOT_ALLOWED"});
   assert.equal(requests,0);
+  const groupClientEntries = warnings.map((line) => JSON.parse(line)).filter((entry) => entry.component === "meta-groups-client");
+  assert.equal(groupClientEntries.length, 6);
+  for (const { timestamp, request_id, ...entry } of groupClientEntries) {
+    assert.deepEqual(entry, {
+      level: "warn", event: "meta.test_recipient_scope_refused",
+      component: "meta-groups-client", error_code: "META_TEST_RECIPIENT_NOT_ALLOWED",
+    });
+    assert.match(timestamp, /^\d{4}-\d{2}-\d{2}T/u);
+    assert.match(request_id, /^[a-f0-9-]{36}$/u);
+  }
   const client={query:async()=>{queries++;throw new Error("Unexpected group persistence")}},job={provider:"META",tenantId:"synthetic",connectionId:"synthetic"};
   await synchronizeGroups(client,job,[]);
   await assert.rejects(synchronizeGroups(client,job,[{id:phone,name:"Foreign group",participants:0}]),{code:"META_TEST_RECIPIENT_NOT_ALLOWED"});assert.equal(queries,0);

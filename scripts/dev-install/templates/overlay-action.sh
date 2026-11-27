@@ -14,7 +14,7 @@ RUN="$(cat "$STATE/run-id")"
 source "$STATE/host.env"
 # shellcheck source=/dev/null
 source "$STATE/dev-step-lock.sh"
-hold_dev_step_lock
+hold_dev_step_lock "$RUN" "$MODE"
 export STATE
 ORIGINAL="$STATE/original-dropin.conf"
 ROLLBACK_KEPT="$DIR/disk-install-$RUN.rolled-back.$RUN.qcow2"
@@ -44,7 +44,7 @@ overlay_floor() {
 }
 check_hash() { printf '%s  %s\n' "$1" "$2" | sha256sum -c -; }
 
-stamp lease start
+lease_start="$(stamp lease start)"
 root_floor
 test "$(findmnt -n -T "$STATE" -o SOURCE)" = "$STATE_MOUNT_SOURCE"
 test "$(findmnt -n -T "$DISK_STATE" -o SOURCE)" = "$STATE_MOUNT_SOURCE"
@@ -61,11 +61,14 @@ if test "$MODE" != rollback || test "$LEASE_UNIT" != "$LEASE_PREFIX-install-$RUN
 fi
 grep -Fqx "0::/system.slice/$LEASE_UNIT" /proc/self/cgroup
 (cd "$STAGING" && sha256sum --check --strict --quiet DEV-SHA256SUMS)
-for input in overlay-action.sh frozen-disk.py host.env dev-guest-phase.sh dev-step-lock.sh probe-up.py run-id; do
+for input in overlay-action.sh frozen-disk.py host-maintenance.py host.env dev-guest-phase.sh dev-step-lock.sh probe-up.py run-id; do
     cmp -s -- "$STATE/$input" "$STAGING/$input"
 done
 exec 8>>"$DISK_STATE/host-action.lock"
 flock -n 8
+/usr/bin/python3 -I -B "$STATE/host-maintenance.py" timing-origin "$TOP" ||
+    printf 'LEASE_RECEIPT_ORIGIN unavailable\n'
+printf '%s\n' "$lease_start"
 "$ENGINE_FREE" "$ENGINE_RUN"
 check_hash "$POWEROFF_SHA" "$POWEROFF_HELPER"
 
@@ -263,6 +266,7 @@ audit)
     if test "$(disk phase)" = writable; then
         check_drive "$TOP_DRIVE"
         echo 'DAILY_FROZEN_AUDIT=DEFERRED_WRITABLE_TOP'
+        finish_dev_step "$STATE"
         exit 0
     fi
     step daily-base-hash frozen_check audit
@@ -346,6 +350,7 @@ PY
     # Then verify-hosted -> original preimage -> candidate env -> preload ->
     # admit-hosted -> action-time preimage + replace -> held smoke -> fence proofs.
     step overlay-guard-and-install guest_phase install
+    step held-smoke guest_phase smoke
     check_drive "$OVERLAY_DRIVE"
     step terminal-frozen-proof frozen_check verify
     printf 'DEV_OVERLAY_DONE %s %s held_smoke=PASS fence=PASS release=HELD\n' "$(date -u +%FT%TZ)" "$REV" | tee "$STATE/install.done"
@@ -396,3 +401,4 @@ commit)
     printf 'COMMIT_PASS %s overlay_retained=%s\n' "$(date -u +%FT%TZ)" "$COMMIT_KEPT"
     ;;
 esac
+finish_dev_step "$STATE"

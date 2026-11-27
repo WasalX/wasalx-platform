@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import assert from "node:assert/strict";
+import { validateUnitAddonInputs } from "./fetch-zammad-addon.mjs";
 import { ciRuntime } from "./release/ci-browser-runtime.mjs";
 
 export function unitRubyPrerequisite(execute = spawnSync, env = process.env) {
@@ -43,6 +44,7 @@ const unitInventory = ["tests/operator-input.test.mjs","tests/no-agent-instructi
   "tests/group-designation-evidence.test.mjs",
   "tests/group-workspace-receipts.test.mjs",
   "tests/hosted-ci.test.mjs",
+  "tests/source-endpoint-literals.test.mjs",
   "tests/i18n-foundation.test.mjs",
   "tests/i18n-key-usage.test.mjs",
   "tests/i18n-server-surfaces.test.mjs",
@@ -90,6 +92,7 @@ const unitInventory = ["tests/operator-input.test.mjs","tests/no-agent-instructi
   "tests/simulation-stage-fixtures.test.mjs",
   "tests/smtp-simulation-server.test.mjs",
   "tests/smtp-simulation-tls.test.mjs",
+  "tests/synthetic-browser-trace.test.mjs",
   "tests/tenant-shell-i18n.test.mjs",
   "tests/waha-simulation-adapter.test.mjs",
   "tests/waha-simulation-control.test.mjs",
@@ -128,6 +131,7 @@ const localUnitFiles = [...unitFiles, ...Object.keys(unitAllowlist).filter(file 
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
+    validateUnitAddonInputs();
     console.log(`Unit Ruby prerequisite: ${unitRubyPrerequisite()} (minitest available)`);
     // Bound file workers on the shared runner; suites also spawn Ruby/Python children.
     const result = spawnSync(process.execPath, ["--experimental-strip-types", "--test", `--test-concurrency=${unitConcurrency()}`, ...localUnitFiles], { stdio: "inherit" });

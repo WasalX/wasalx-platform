@@ -78,7 +78,7 @@ export async function ticketEventWorkflowJourney(page: Page, testInfo: TestInfo,
   await expect(initialBinding.getByRole("combobox", { name: t("workspace.mode"), exact: true })).toHaveValue("LEGACY");
   await expect(initialBinding.getByText(t("workspace.effectiveLegacy"), { exact: true })).toBeVisible();
   await panel.getByRole("button", { name: t("workspace.create"), exact: true }).click();
-  const draft = panel.locator("form.panel.bot-flow-editor");
+  const draft = panel.locator("div.panel.bot-flow-editor");
   await expect(draft.locator('option[value="REFERENCE_MESSAGES"]')).toHaveCount(0);
   await draft.getByRole("textbox", { name: t("name"), exact: true }).fill("Ticket reference workflow");
   await draft.getByRole("textbox", { name: t("text"), exact: true }).fill("Reference: ");
@@ -104,6 +104,12 @@ export async function ticketEventWorkflowJourney(page: Page, testInfo: TestInfo,
   await sampleState.selectOption("RESOLVED");
   await expect(draft.getByText(t("preview.noEffects"), { exact: true })).toBeVisible();
   await sampleState.selectOption("OPEN");
+  // The preview lives outside the draft form, so Enter in a preview value cannot save a version.
+  const writesBeforeEnter = writes.length;
+  const sampleReference = draft.getByRole("group", { name: t("variable.case.reference"), exact: true }).getByRole("textbox", { name: t("preview.value"), exact: true });
+  await expect(sampleReference).toHaveJSProperty("form", null);
+  await sampleReference.press("Enter");
+  expect(writes).toHaveLength(writesBeforeEnter);
   await draft.getByRole("button", { name: t("workspace.save"), exact: true }).click();
   await expect(draft).toHaveCount(0);
   await panel.getByRole("button", { name: t("workspace.publish"), exact: true }).click();
@@ -179,14 +185,34 @@ export async function ticketEventWorkflowJourney(page: Page, testInfo: TestInfo,
   await panel.locator(".bot-version-list").getByRole("button", { name: closureName, exact: false }).click();
   const detail = panel.locator("section.panel.bot-flow-detail");
   await expect(detail.getByRole("heading", { name: closureName, exact: true })).toBeVisible();
-  await expect(detail.locator('select option[value="REFERENCE_MESSAGES"]:checked')).toHaveCount(1);
+  const reactionTarget = (editor: typeof detail) => editor.locator("fieldset.bot-node-card")
+    .filter({ has: page.getByRole("textbox", { name: reactionEmojiName, exact: true }) })
+    .getByRole("combobox", { name: t("quote"), exact: false });
+  await expect(reactionTarget(detail)).toHaveCount(1);
+  await expect(reactionTarget(detail)).toBeDisabled();
+  await expect(reactionTarget(detail)).toHaveValue("REFERENCE_MESSAGES");
   await detail.getByRole("button", { name: t("preview.run"), exact: true }).click();
   await expect(detail.getByRole("status")).toContainText(previewSummary);
   await expect(detail.getByText(t("preview.targetReferenceMessages"), { exact: true })).toBeVisible();
   await panel.getByRole("button", { name: t("workspace.edit"), exact: true }).click();
-  await expect(draft.locator('select option[value="REFERENCE_MESSAGES"]:checked')).toHaveCount(1);
+  await expect(reactionTarget(draft)).toBeEnabled();
+  await expect(reactionTarget(draft)).toHaveValue("REFERENCE_MESSAGES");
   await draft.getByRole("button", { name: messages["automation.common.cancel"], exact: true }).click();
   await expect(draft).toHaveCount(0);
+
+  const savedVersions = panel.locator(".bot-version-list");
+  const preview = detail.getByRole("region", { name: t("preview.title"), exact: true });
+  const provider = preview.getByRole("combobox", { name: t("preview.provider"), exact: true });
+  await savedVersions.getByRole("button").filter({ has: page.getByText("Ticket reference workflow", { exact: true }) }).click();
+  await expect(detail.getByRole("heading", { name: "Ticket reference workflow", exact: true })).toBeVisible();
+  await provider.selectOption("META");
+  await preview.getByRole("button", { name: t("preview.run"), exact: true }).click();
+  await expect(preview.getByRole("status")).toBeVisible();
+  await savedVersions.getByRole("button").filter({ has: page.getByText("Ticket reference workflow updated", { exact: true }) }).click();
+  await expect(detail.getByRole("heading", { name: "Ticket reference workflow updated", exact: true })).toBeVisible();
+  await expect(provider).toHaveValue("WAHA");
+  await expect(preview.getByRole("status")).toHaveCount(0);
+
   expect(writes.slice(beforeClosureWrites).map(write => write.path)).toEqual(["/api/bot-flows"]);
   const geometry = await page.evaluate(() => ({ width: innerWidth, scroll: document.documentElement.scrollWidth, dir: document.documentElement.dir }));
   expect(geometry.scroll).toBeLessThanOrEqual(geometry.width + 1);

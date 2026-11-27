@@ -24,6 +24,8 @@ connectorRetries:
   wahaDeliveryMaxAttempts: 8
   metaDeliveryMaxAttempts: 8
   zammadStatusMaxAttempts: 8
+  botActionMaxAttempts: 8
+  botHandoffMaxAttempts: 8
 observability:
   enabled: true
   otlpEndpoint: "https://otel-collector.observability.svc.cluster.local:4318"
@@ -38,7 +40,7 @@ observability:
     enabled: false
     namespace: observability
     labels: { release: kube-prometheus-stack }
-    runbookBaseUrl: "https://github.com/WasalX/wasalx-platform/tree/main/docs/runbooks"
+    runbookBaseUrl: "https://github.com/WasalX/wasalx-platform/blob/main/docs/runbooks/alert-response.md"
 wahaBaseUrl: "http://waha.wasalx.svc.cluster.local:3000"
 wahaAdminSecretReference: "secret://platform/waha-admin"
 # Public HTTPS origin accepted by Meta and WAHA. The connector appends the
@@ -204,8 +206,8 @@ provisioner:
   reconcilerServiceAccountNamespace: ""
   workspaceBaseDomain: "support.example.com"
   oidcIssuer: "https://identity.example.com/realms/wasalx"
-  packageVersion: "0.5.84"
-  packageSha256: "9673aefce89b6aa4d767eed01ae574d48397de28de5ff6f4c65d86ceee6ee761"
+  packageVersion: "0.5.85"
+  packageSha256: "5dd05809de037aa9a1ccbe10b4c2efda5cd94005aba5595613348b4174339cac"
 
   reconcileTimeoutMs: "45000"
   driverTimeoutMs: "60000"
@@ -302,6 +304,8 @@ invitationMailer:
   # This worker Secret must provide the discovery-capable, mailer-only
   # INVITATION_MAILER_DATABASE_URL, the sidecar read token, private-key secret
   # references, provider endpoint/reference, sender/template, and portal origin.
+  # Development requires WASALX_TEST_EMAIL_RECIPIENT_ALLOWLIST in the Secret.
+  # The staging and production workload templates supply '*'.
   # Set INVITATION_MAILER_TENANT_ID only for an intentionally dedicated tenant
   # worker; the shared deployment omits it and discovers only tenant UUIDs with
   # eligible jobs through its SECURITY DEFINER function.

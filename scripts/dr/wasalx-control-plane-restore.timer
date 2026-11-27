@@ -1,0 +1,9 @@
+[Unit]
+Description=Rehearse WasalX control-plane PostgreSQL recovery each quarter
+
+[Timer]
+OnCalendar=*-01,04,07,10-01 04:00:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

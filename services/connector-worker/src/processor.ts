@@ -1,6 +1,6 @@
 import {currentMetaRuntimeCandidate} from "./meta-request-provenance.js";
 import {currentMetaTransportBinding} from "./meta-transport-binding.js";
-import {verifyMetaInheritedTemplateSend} from "./meta-template-send.js";
+import {isVerifiedNonMarketingTemplate,verifyMetaInheritedTemplateSend} from "./meta-template-send.js";
 import {parseMetaBillingSnapshot} from "../../../packages/core/src/meta-account-policy.js";
 import {assertMetaLifecycleAccess} from "../../../packages/core/src/meta-account-relation.js";
 import {assertMetaCredentialProof} from "../../../packages/core/src/meta-account-relation.js";
@@ -8,11 +8,18 @@ import {MetaDirectEffectNotAttempted,assertMetaDirectAccountProof,MetaDirectIden
 import { renderNumberedChoices, renderOutboundText } from "../../../packages/core/src/outbound-text.js";
 import type { MessagingProviderAdapter } from "../../../packages/connectors/src/types.js";
 import { Buffer } from "node:buffer";
+import timers from "node:timers/promises";
 import { MetaGroupsAdapter, assertMetaTestOutboundAllowed } from "../../../packages/connectors/src/meta.js";
 import { parseWahaTestRecipientAllowlist } from "../../../packages/core/src/waha-test-recipient-scope.js";
 import { ProviderError } from "../../../packages/connectors/src/types.js";
 import { WahaAdapter, assertWahaTestOutboundAllowed } from "../../../packages/connectors/src/waha.js";
-import { backoffMs } from "../../../packages/core/src/delivery.js";
+import {
+  backoffMs,
+  botHandoffMaxAttemptsFromEnvironment,
+  boundedAttempts,
+  DEFAULT_MAX_ATTEMPTS,
+  MAX_BOT_HANDOFF_ATTEMPTS,
+} from "../../../packages/core/src/delivery.js";
 import { advanceBotFlow, parseBotFlow } from "../../../packages/core/src/bot-flow.js";
 import { ZammadClient, ZammadError } from "../../../packages/zammad/src/client.js";
 import { MediaRuntimeError, isQuarantinedMediaError, isRetryableMediaError, type OutboundMediaPipeline } from "./media-runtime.js";
@@ -21,6 +28,7 @@ import { executeBotAction } from "./bot-action.js";
 import { SecretResolutionError, type SecretResolver } from "./secrets.js";
 import type { BotActionJob, BotHandoffJob, ConversationStateJob, DirectCustomerCloseJob, DeliveryJob, StatusJob } from "./types.js";
 import {
+  currentTraceCarrier,
   observeDuration,
   recordDeliveryState,
   recordMetric,
@@ -29,12 +37,15 @@ import {
 } from "@wasalx/observability";
 
 const GROUP_REACTION_CONTENT_TYPE="application/vnd.wasalx.whatsapp-reaction";
+const AGENT_REPLY_SIGNAL_TIMEOUT_MS = 2_000;
+const AGENT_REPLY_SIGNAL_MAX_ATTEMPTS = 3;
 
 export class DeliveryProcessor{
-  private readonly repository:OutboxRepository;private readonly secrets:SecretResolver;private readonly providerConfig:{wahaBaseUrl?:string;metaGraphVersion:string;metaAppId?:string};private readonly retryPolicy:DeliveryRetryPolicy;private readonly outboundMedia?:OutboundMediaPipeline;private readonly mediaSlots:AsyncSemaphore;
+  private readonly repository:OutboxRepository;private readonly secrets:SecretResolver;private readonly providerConfig:{wahaBaseUrl?:string;metaGraphVersion:string;metaAppId?:string};private readonly retryPolicy:Required<DeliveryRetryPolicy>;private readonly outboundMedia?:OutboundMediaPipeline;private readonly mediaSlots:AsyncSemaphore;
   constructor(repository:OutboxRepository,secrets:SecretResolver,providerConfig:{wahaBaseUrl?:string;metaGraphVersion:string;metaAppId?:string},retryPolicy:number|DeliveryRetryPolicy=DEFAULT_RETRY_POLICY,outboundMedia?:OutboundMediaPipeline,maxConcurrentMedia=2){if(!Number.isInteger(maxConcurrentMedia)||maxConcurrentMedia<1||maxConcurrentMedia>10)throw new Error("Outbound media concurrency is invalid");this.repository=repository;this.secrets=secrets;this.providerConfig=providerConfig;this.retryPolicy=normalizeRetryPolicy(retryPolicy);this.outboundMedia=outboundMedia;this.mediaSlots=new AsyncSemaphore(maxConcurrentMedia)}
-  async drainTenant(tenantId:string,metaTransitionEventIds:string[]=[]){if(metaTransitionEventIds.length>32||metaTransitionEventIds.some(id=>!(/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/u).test(id)))throw new Error("Invalid transition wake");const actionLease=crypto.randomUUID();const actions=await this.repository.claimBotActions(tenantId,actionLease);await Promise.all(actions.map(job=>this.runBotAction(job,actionLease)));const deliveryLease=crypto.randomUUID();const jobs=await this.repository.claimDeliveries(tenantId,deliveryLease);await Promise.all(groupDeliveriesByDestination(jobs).map(async destination=>{for(const job of destination)if(!await(job.media?this.mediaSlots.run(()=>this.deliver(job,deliveryLease)):this.deliver(job,deliveryLease)))break}));const handoffLease=crypto.randomUUID();const handoffs=(await this.repository.claimBotHandoffs?.(tenantId,handoffLease))??[];await Promise.all(handoffs.map(job=>this.runBotHandoff(job,handoffLease)));const closeLease=crypto.randomUUID();const closes=(await this.repository.claimDirectCustomerCloses?.(tenantId,closeLease))??[];for(const job of closes)await this.runDirectCustomerClose(job,closeLease);const conversationStateLease=crypto.randomUUID();const conversationStates=(await this.repository.claimConversationStates?.(tenantId,conversationStateLease))??[];await Promise.all(conversationStates.map(job=>this.reportConversationState(job,conversationStateLease)));const statusLease=crypto.randomUUID();const statuses=await this.repository.claimStatuses(tenantId,statusLease);await Promise.all(statuses.map(job=>this.reportStatus(job,statusLease)));await this.repository.reconsiderMetaIdentityTransitions?.(tenantId,{conversationIds:[...new Set([...actions.filter(job=>job.origin==="DIRECT_FLOW").map(job=>job.conversationId),...handoffs.map(job=>job.conversationId),...conversationStates.map(job=>job.conversationId)])],deliveryIds:[...new Set([...jobs.map(job=>job.id),...statuses.map(job=>job.deliveryId)])],ticketIds:closes.map(job=>job.ticketId),sourceEventIds:metaTransitionEventIds},this.providerConfig.metaAppId??"");return{actions:actions.length,deliveries:jobs.length,statuses:statuses.length}}
+  async drainTenant(tenantId:string,metaTransitionEventIds:string[]=[]){if(metaTransitionEventIds.length>32||metaTransitionEventIds.some(id=>!(/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/u).test(id)))throw new Error("Invalid transition wake");const actionLease=crypto.randomUUID();const actions=await this.repository.claimBotActions(tenantId,actionLease);await Promise.all(actions.map(job=>this.runBotAction(job,actionLease)));const deliveryLease=crypto.randomUUID();const jobs=await this.repository.claimDeliveries(tenantId,deliveryLease);const replySignals:Promise<void>[]=[];await Promise.all(groupDeliveriesByDestination(jobs).map(async destination=>{for(const job of destination)if(!await(job.media?this.mediaSlots.run(()=>this.deliver(job,deliveryLease,replySignals)):this.deliver(job,deliveryLease,replySignals)))break}));const handoffLease=crypto.randomUUID();const handoffs=(await this.repository.claimBotHandoffs?.(tenantId,handoffLease))??[];await Promise.all(handoffs.map(job=>this.runBotHandoff(job,handoffLease)));const closeLease=crypto.randomUUID();const closes=(await this.repository.claimDirectCustomerCloses?.(tenantId,closeLease))??[];for(const job of closes)await this.runDirectCustomerClose(job,closeLease);const conversationStateLease=crypto.randomUUID();const conversationStates=(await this.repository.claimConversationStates?.(tenantId,conversationStateLease))??[];await Promise.all(conversationStates.map(job=>this.reportConversationState(job,conversationStateLease)));const statusLease=crypto.randomUUID();const statuses=await this.repository.claimStatuses(tenantId,statusLease);await Promise.all(statuses.map(job=>this.reportStatus(job,statusLease)));await this.repository.reconsiderMetaIdentityTransitions?.(tenantId,{conversationIds:[...new Set([...actions.filter(job=>job.origin==="DIRECT_FLOW").map(job=>job.conversationId),...handoffs.map(job=>job.conversationId),...conversationStates.map(job=>job.conversationId)])],deliveryIds:[...new Set([...jobs.map(job=>job.id),...statuses.map(job=>job.deliveryId)])],ticketIds:closes.map(job=>job.ticketId),sourceEventIds:metaTransitionEventIds},this.providerConfig.metaAppId??"");await Promise.all(replySignals);return{actions:actions.length,deliveries:jobs.length,statuses:statuses.length}}
   private async runBotAction(job:BotActionJob,leaseId:string){
+    const retriesRemain = job.attempts < this.retryPolicy.botAction;
     let result:Awaited<ReturnType<typeof executeBotAction>>=job.recordedResult??{state:"FAILED_TERMINAL",safeError:"Bot action result is unavailable"};
     if(!job.recordedResult){
       try{
@@ -43,12 +54,12 @@ export class DeliveryProcessor{
         const secret=job.authScheme==="BEARER"?await this.secrets.resolve(job.secretReference!,{kind:"bot-action",tenantId:job.tenantId,actionKey:job.actionKey!,actionKind:job.kind}):undefined;
         result=await executeBotAction(job,secret?.accessToken??secret?.token??secret?.value,undefined,job.origin==="DIRECT_FLOW"?()=>this.repository.assertBotActionIdentityCurrent(job,leaseId,this.providerConfig.metaAppId??""):undefined);
       }catch(error){
-        if(error instanceof MetaDirectEffectNotAttempted&&job.origin==="DIRECT_FLOW"){if(error.reason==="BUSY"&&job.attempts<8)await this.repository.retryBotAction(job,leaseId,safeError(error),new Date(Date.now()+backoffMs(job.attempts)).toISOString());else await this.repository.holdUnattemptedBotActionIdentity(job,leaseId);return;}
-        const retryable=error instanceof SecretResolutionError&&error.retryable&&job.attempts<8;
+        if(error instanceof MetaDirectEffectNotAttempted&&job.origin==="DIRECT_FLOW"){if(error.reason==="BUSY"&&retriesRemain)await this.repository.retryBotAction(job,leaseId,safeError(error),new Date(Date.now()+backoffMs(job.attempts)).toISOString());else await this.repository.holdUnattemptedBotActionIdentity(job,leaseId);return;}
+        const retryable=error instanceof SecretResolutionError&&error.retryable&&retriesRemain;
         if(retryable){await this.repository.retryBotAction(job,leaseId,safeError(error),new Date(Date.now()+backoffMs(job.attempts)).toISOString());return}
         result={state:"FAILED_TERMINAL",safeError:safeError(error)};
       }
-      if(result.state==="FAILED_RETRYABLE"&&job.attempts<8){await this.repository.retryBotAction(job,leaseId,result.safeError,new Date(Date.now()+result.retryAfterMs).toISOString());return}
+      if(result.state==="FAILED_RETRYABLE"&&retriesRemain){await this.repository.retryBotAction(job,leaseId,result.safeError,new Date(Date.now()+result.retryAfterMs).toISOString());return}
       if(result.state==="OUTCOME_UNKNOWN"){await this.repository.outcomeUnknownBotAction(job,leaseId,result.safeError);return}
       await this.repository.recordBotActionResult(job,leaseId,result.state==="SUCCEEDED"?"SUCCEEDED":"FAILED_TERMINAL",result.state==="SUCCEEDED"?result.variables:{},result.state==="SUCCEEDED"?undefined:result.safeError);
     }
@@ -79,7 +90,7 @@ export class DeliveryProcessor{
       const key=`bot-handoff:${job.id}`;
       if(!await client.hasTicketArticlePreference(ticketId,"wasalx_handoff_key",key))await client.addArticle(ticketId,{body:"WasalX bot handed this WhatsApp conversation to a person.",content_type:"text/plain",type:"note",internal:true,sender:"System",subject:"Human handoff",preferences:{wasalx_handoff_key:key}});
       await this.repository.completeBotHandoff(job,leaseId);
-    }catch(error){if(error instanceof MetaDirectEffectNotAttempted&&error.reason!=="BUSY"){await this.repository.failBotHandoff(job,leaseId,safeError(error));return;}const retryable=job.attempts<8&&(!(error instanceof ZammadError)||error.retryable)&&(!(error instanceof SecretResolutionError)||error.retryable);const detail=safeError(error);if(retryable)await this.repository.retryBotHandoff(job,leaseId,detail,new Date(Date.now()+backoffMs(job.attempts)).toISOString());else await this.repository.failBotHandoff(job,leaseId,detail)}
+    }catch(error){if(error instanceof MetaDirectEffectNotAttempted&&error.reason!=="BUSY"){await this.repository.failBotHandoff(job,leaseId,safeError(error));return;}const retryable=job.attempts<this.retryPolicy.botHandoff&&(!(error instanceof ZammadError)||error.retryable)&&(!(error instanceof SecretResolutionError)||error.retryable);const detail=safeError(error);if(retryable)await this.repository.retryBotHandoff(job,leaseId,detail,new Date(Date.now()+backoffMs(job.attempts)).toISOString());else await this.repository.failBotHandoff(job,leaseId,detail)}
   }
   private async adapter(job:DeliveryJob,leaseId:string,authorizeTestRecipient?: (bsuid:string)=>Promise<string|undefined>,checkTestRecipient?:()=>Promise<void>):Promise<MessagingProviderAdapter>{
     const secret=await this.secrets.resolve(job.connectionSecretReference,job.provider==="waha"?{kind:"exact",expectedReference:job.connectionSecretReference}:{kind:"meta-connection",tenantId:job.tenantId,connectionId:job.connectionId});
@@ -103,8 +114,8 @@ export class DeliveryProcessor{
     };
     // Reject invalid metadata before staging any source/article/provider work.
     assertProof();
-    const beforeRequest=async()=>{
-      try{await this.repository.assertMetaDeliveryContextCurrent(job,leaseId);}
+    const beforeRequest=async(purpose?: "agent-reply-signal")=>{
+      try{if(purpose!=="agent-reply-signal")await this.repository.assertMetaDeliveryContextCurrent(job,leaseId);}
       catch(error){if(error instanceof ProviderError)throw error;throw new ProviderError("Meta credential context could not be checked.",true,"META_CREDENTIAL_CONTEXT_UNAVAILABLE",undefined,true);}
       await checkTestRecipient?.();
       assertProof();
@@ -119,7 +130,9 @@ export class DeliveryProcessor{
         // A failed/missing local descriptor is UNKNOWN, never a caller-selected mode.
         let runtime;
         try{runtime=await currentMetaRuntimeCandidate({...await currentMetaTransportBinding(this.providerConfig.metaGraphVersion),graphVersion:this.providerConfig.metaGraphVersion});}catch{/* UNKNOWN */}
-        await this.repository.admitMetaMessageRequest(job,leaseId,hash,runtime,phoneNumberId,templateProof);assertProof();
+        const nonMarketing=Boolean(job.template&&await this.repository.whatsAppMarketingOptedOut(job)
+          &&await isVerifiedNonMarketingTemplate(job,adapter));
+        await this.repository.admitMetaMessageRequest(job,leaseId,hash,runtime,phoneNumberId,templateProof,nonMarketing);assertProof();
         await checkTestRecipient?.();
       }
       catch(error){if(error instanceof ProviderError)throw error;throw new ProviderError("Message request admission is unavailable.",true,"META_MESSAGE_ADMISSION_UNAVAILABLE",undefined,true);}
@@ -128,7 +141,7 @@ export class DeliveryProcessor{
       wabaIdFor:()=>job.metaCredentialContext?.wabaId??"",beforeRequest,beforeMessageSend,authorizeTestRecipient});
     return adapter;
   }
-  private async deliver(job:DeliveryJob,leaseId:string){
+  private async deliver(job:DeliveryJob,leaseId:string,replySignals:Promise<void>[]){
     let adapter:MessagingProviderAdapter;
     let sendInput!:Parameters<MessagingProviderAdapter["send"]>[0];
     let checkTestRecipient=async()=>{};
@@ -240,8 +253,12 @@ export class DeliveryProcessor{
       return false;
     }
     const sendStartedAt=Date.now();let result:Awaited<ReturnType<MessagingProviderAdapter["send"]>>;
+    let replySending = true;
+    if (job.directOrigin==="HUMAN"&&job.botConversationId&&job.ticketId&&job.articleId&&(job.batchSequence??0)===0) {
+      replySignals.push(this.signalAgentReply(job, leaseId, adapter, sendInput, () => replySending));
+    }
     try{
-      result=await adapter.send(sendInput);
+      result=await adapter.send(sendInput).finally(() => { replySending = false; });
     }catch(error){
       const detail=safeError(error);
       if(!(error instanceof ProviderError)||!error.outcomeKnown){await this.repository.outcomeUnknown(job,leaseId,detail,error instanceof ProviderError?error.code:undefined);observeDuration("wasalx_provider_send_seconds",sendStartedAt,{provider:job.provider,result:"outcome_unknown"});observeOutboundToProvider(job,"outcome_unknown");recordDeliveryState(job.provider,"OUTCOME_UNKNOWN",telemetryErrorCode(error));return false}
@@ -258,6 +275,62 @@ export class DeliveryProcessor{
     observeOutboundToProvider(job,"succeeded");
     recordDeliveryState(job.provider,result.state);
     return true;
+  }
+  private async signalAgentReply(
+    job: DeliveryJob,
+    leaseId: string,
+    adapter: MessagingProviderAdapter,
+    input: Parameters<MessagingProviderAdapter["send"]>[0],
+    replySending: () => boolean,
+  ) {
+    const { traceparent, requestId } = currentTraceCarrier();
+    const record = (signal: string, result: string) =>
+      recordMetric("wasalx_agent_reply_signal_total", 1, { provider: job.provider, operation: signal, result });
+    const recordFailure = (signal: string, error: unknown) => {
+      record(signal, "failed");
+      recordStructuredLog("warn", "delivery.agent_reply_signal_failed", {
+        request_id: traceparent?.split("-")[1] ?? requestId,
+        tenant_id: job.tenantId, delivery_id: job.id, provider: job.provider,
+        signal, error_code: telemetryErrorCode(error),
+      });
+    };
+    try {
+      const source = await this.repository.admitAgentReplySignal(job, leaseId);
+      if (!source) return;
+      const operations = adapter.agentReplySignals?.({
+        connectionId: input.connectionId,
+        groupId: input.groupId,
+        metaDirectRecipient: input.metaDirectRecipient,
+        inboundMessageId: source.messageId,
+      });
+      if (!operations?.length) {
+        record("read-and-typing", "unsupported");
+        return;
+      }
+      await Promise.all(operations.map(async operation => {
+        for (let attempt = 1; attempt <= AGENT_REPLY_SIGNAL_MAX_ATTEMPTS; attempt++) {
+          try {
+            const current = await this.repository.admitAgentReplySignal(job, leaseId, source.id);
+            if (!current) {
+              record(operation.kind, "no-longer-eligible");
+              return;
+            }
+            const result = await operation.send(AbortSignal.timeout(AGENT_REPLY_SIGNAL_TIMEOUT_MS),
+              () => current.canType && replySending());
+            record(operation.kind, result);
+            return;
+          } catch (error) {
+            if (!(error instanceof ProviderError && error.retryable) || attempt === AGENT_REPLY_SIGNAL_MAX_ATTEMPTS) {
+              recordFailure(operation.kind, error);
+              return;
+            }
+            await timers.setTimeout(backoffMs(attempt));
+          }
+        }
+      }));
+    } catch (error) {
+      recordFailure("read-and-typing", error);
+    }
   }
   private async runDirectCustomerClose(job:DirectCustomerCloseJob,leaseId:string){
     let attempted=job.state==='OUTCOME_UNKNOWN';let context:Awaited<ReturnType<ZammadClient['readDirectCustomerCloseContext']>>|undefined;
@@ -285,11 +358,44 @@ export class DeliveryProcessor{
 }
 function groupDeliveriesByDestination(jobs:DeliveryJob[]){const destinations=new Map<string,DeliveryJob[]>();for(const job of jobs){const key=JSON.stringify([job.connectionId,job.groupId]);const destination=destinations.get(key);if(destination)destination.push(job);else destinations.set(key,[job])}return[...destinations.values()].map(destination=>{const unitCreatedAt=new Map<string,string>();for(const job of destination){const unit=job.batchId??job.id;const createdAt=job.createdAt??"";const current=unitCreatedAt.get(unit);if(current===undefined||createdAt<current)unitCreatedAt.set(unit,createdAt)}return destination.sort((left,right)=>compareDeliveryOrder(left,right,unitCreatedAt))})}
 function compareDeliveryOrder(left:DeliveryJob,right:DeliveryJob,unitCreatedAt:Map<string,string>){if(left.batchId&&left.batchId===right.batchId)return(left.batchSequence??0)-(right.batchSequence??0)||left.id.localeCompare(right.id);const leftUnit=left.batchId??left.id;const rightUnit=right.batchId??right.id;return(unitCreatedAt.get(leftUnit)??"").localeCompare(unitCreatedAt.get(rightUnit)??"")||leftUnit.localeCompare(rightUnit)}
-export type DeliveryRetryPolicy={waha:number;meta:number;zammadStatus:number};
-export const DEFAULT_RETRY_POLICY:DeliveryRetryPolicy={waha:8,meta:8,zammadStatus:8};
-export function retryPolicyFromEnvironment(env:Record<string,string|undefined>):DeliveryRetryPolicy{return{waha:boundedAttempts(env.WAHA_DELIVERY_MAX_ATTEMPTS,"WAHA_DELIVERY_MAX_ATTEMPTS"),meta:boundedAttempts(env.META_DELIVERY_MAX_ATTEMPTS,"META_DELIVERY_MAX_ATTEMPTS"),zammadStatus:boundedAttempts(env.ZAMMAD_STATUS_MAX_ATTEMPTS,"ZAMMAD_STATUS_MAX_ATTEMPTS")}}
-function normalizeRetryPolicy(value:number|DeliveryRetryPolicy):DeliveryRetryPolicy{if(typeof value==="number"){const attempts=boundedAttempts(String(value),"delivery retry attempts");return{waha:attempts,meta:attempts,zammadStatus:attempts}}return{waha:boundedAttempts(String(value.waha),"WAHA retry attempts"),meta:boundedAttempts(String(value.meta),"Meta retry attempts"),zammadStatus:boundedAttempts(String(value.zammadStatus),"Zammad status retry attempts")}}
-function boundedAttempts(value:string|undefined,label:string){if(value===undefined)return DEFAULT_RETRY_POLICY.waha;const parsed=Number(value);if(!Number.isSafeInteger(parsed)||parsed<1||parsed>25)throw new Error(`${label} must be between 1 and 25`);return parsed}
+export type DeliveryRetryPolicy = {
+  waha: number;
+  meta: number;
+  zammadStatus: number;
+  botAction?: number;
+  botHandoff?: number;
+};
+export const DEFAULT_RETRY_POLICY: Required<DeliveryRetryPolicy> = {
+  waha: DEFAULT_MAX_ATTEMPTS,
+  meta: DEFAULT_MAX_ATTEMPTS,
+  zammadStatus: DEFAULT_MAX_ATTEMPTS,
+  botAction: DEFAULT_MAX_ATTEMPTS,
+  botHandoff: DEFAULT_MAX_ATTEMPTS,
+};
+
+export function retryPolicyFromEnvironment(env: Record<string, string | undefined>): Required<DeliveryRetryPolicy> {
+  return {
+    waha: boundedAttempts(env.WAHA_DELIVERY_MAX_ATTEMPTS, "WAHA_DELIVERY_MAX_ATTEMPTS"),
+    meta: boundedAttempts(env.META_DELIVERY_MAX_ATTEMPTS, "META_DELIVERY_MAX_ATTEMPTS"),
+    zammadStatus: boundedAttempts(env.ZAMMAD_STATUS_MAX_ATTEMPTS, "ZAMMAD_STATUS_MAX_ATTEMPTS"),
+    botAction: boundedAttempts(env.BOT_ACTION_MAX_ATTEMPTS, "BOT_ACTION_MAX_ATTEMPTS"),
+    botHandoff: botHandoffMaxAttemptsFromEnvironment(env),
+  };
+}
+
+function normalizeRetryPolicy(value: number | DeliveryRetryPolicy): Required<DeliveryRetryPolicy> {
+  if (typeof value === "number") {
+    const attempts = boundedAttempts(String(value), "delivery retry attempts");
+    return { ...DEFAULT_RETRY_POLICY, waha: attempts, meta: attempts, zammadStatus: attempts };
+  }
+  return {
+    waha: boundedAttempts(String(value.waha), "WAHA retry attempts"),
+    meta: boundedAttempts(String(value.meta), "Meta retry attempts"),
+    zammadStatus: boundedAttempts(String(value.zammadStatus), "Zammad status retry attempts"),
+    botAction: boundedAttempts(String(value.botAction ?? DEFAULT_RETRY_POLICY.botAction), "BOT_ACTION_MAX_ATTEMPTS"),
+    botHandoff: boundedAttempts(String(value.botHandoff ?? DEFAULT_RETRY_POLICY.botHandoff), "BOT_HANDOFF_MAX_ATTEMPTS", MAX_BOT_HANDOFF_ATTEMPTS),
+  };
+}
 function observeOutboundToProvider(job:DeliveryJob,result:string){if(!job.createdAt)return;const createdAt=new Date(job.createdAt).getTime();if(Number.isFinite(createdAt)&&createdAt<=Date.now())observeDuration("wasalx_outbound_to_provider_seconds",createdAt,{provider:job.provider,result})}
 function safeError(error:unknown){return(error instanceof Error?error.message:"Unknown worker error").replace(/(token|secret|authorization|api[-_ ]?key)\s*[=:]\s*\S+/gi,"$1=[REDACTED]").slice(0,500)}
 function workerErrorCode(error:unknown){return error&&typeof error==="object"&&"code" in error&&typeof error.code==="string"?error.code:"OUTBOUND_MEDIA_REJECTED"}

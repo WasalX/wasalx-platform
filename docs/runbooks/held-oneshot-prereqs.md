@@ -31,6 +31,14 @@ the approved guest hostname before every installer stage or full stack
 verification. The hostname must match exactly; missing, empty or mismatched
 values refuse before installer actions. There is no default.
 
+For a guarded DEV install, pass `--dev-skip-public-webhook-preflight` on every
+installer stage, including `verify-hosted`. The installer writes
+`public webhook preflight skipped by DEV option` once to stderr. In the Compose
+stages, this default-off option replaces the public webhook check with a local
+notice. Stack verification records the skip in its receipt. The installer
+refuses the option for staging, production and rehearsals. The webhook origin
+must still be configured.
+
 When admitting DEV review origins with `--dev-review-origin` and
 `--dev-review-identity-origin`, also set `WASALX_DEV_REVIEW_ORIGIN_SUFFIX` to the
 approved hostname suffix. Keep it set for subsequent stages and full stack
@@ -64,7 +72,37 @@ does not describe its new running state. Source-input equivalence does not
 relax exact SHA, tree, Dockerfile, build-context or package identity checks.
 Runtime install/release and provider acceptance require separate evidence.
 
+## Verify an existing Keycloak installation
+
+Select `WASALX_KEYCLOAK_BOOTSTRAP_MODE=preserve-existing` when rerunning
+`keycloak-bootstrap` against a populated identity service. After the normal
+administrator token request, the one-shot uses GET only on the Keycloak admin
+API. It checks both realms, the seeded owner and operator, the isolation owner
+when configured by email, and all three bootstrap clients. Failed, missing,
+ambiguous or unexpected lookups cause a nonzero exit.
+
+Fresh Compose installations use `WASALX_KEYCLOAK_BOOTSTRAP_MODE=reconcile` by
+default to initialize the identities imported with the realms. Reconciliation
+can reset passwords and change realm, client and user settings.
+See the [DEV guest runner contract](../../scripts/dev-install/README.md#existing-dev-keycloak).
+
 ## Provision a full-stack invitee
+
+Set `WASALX_TEST_EMAIL_RECIPIENT_ALLOWLIST` in the private Compose environment.
+On DEV, use a JSON array of exact, approved test email addresses or `[]` to
+deny all mail. For staging and production, set the explicit value `*` for
+unrestricted mail. Helm supplies `*` in staging and production. Its development
+invitation mailer reads the policy from its Secret. A missing or invalid policy
+fails startup. Invitation deliveries
+outside the list fail without retrying. Set the separate
+`WASALX_KEYCLOAK_PASSWORD_RESET_ENABLED` switch to `true` only when testing
+password reset mail for an approved recipient. Leave it off for other mail
+tests. Apply changes through the guarded installer procedure. On an existing
+realm, run the approved Keycloak bootstrap reconciliation before testing the
+self-service password reset link.
+
+Upgrade the full Compose files and Keycloak image together. The Compose
+command requires the fenced providers, so an older image fails startup.
 
 Before accepting an invitation, the invitee needs an email-verified account in the `wasalx` realm. Confirm control of the invitation address before provisioning.
 On the full-stack host, set `private_dir` to a directory outside the checkout owned by UID 1000 with mode `0700`. Set `email_file` to a private file containing the address on one line.

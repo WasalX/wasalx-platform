@@ -1,7 +1,9 @@
-.panel { margin-block: 1rem; }
-.actions { display: flex; flex-wrap: wrap; gap: .5rem; }
-.editor { display: grid; gap: 1rem; margin-block-start: 1rem; }
-.policy { min-inline-size: 0; padding: 1rem; border: 1px solid var(--wx-color-border); border-radius: .75rem; }
-.enabled { display: flex; align-items: center; gap: .5rem; margin-block: .75rem; }
+.panel { margin-block: var(--wx-space-4); }
+.body { display: grid; gap: var(--wx-space-3); padding: var(--wx-space-4); font-size: var(--wx-font-size-2); }
+.body :is(p, ul) { margin: 0; }
+.actions { display: flex; flex-wrap: wrap; gap: var(--wx-space-2); }
+.editor { display: grid; gap: var(--wx-space-4); }
+.policy { min-inline-size: 0; padding: var(--wx-space-4); border: 1px solid var(--wx-color-border); border-radius: var(--wx-radius-dialog); }
+.enabled { display: flex; align-items: center; gap: var(--wx-space-2); margin-block: var(--wx-space-3); }
 .editor select { inline-size: 100%; min-inline-size: 0; min-block-size: var(--wx-control-height); }
 .enabled input { inline-size: auto; min-block-size: auto; }

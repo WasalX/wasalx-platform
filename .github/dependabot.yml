@@ -113,9 +113,8 @@ updates:
       - dependency-name: "keycloak/keycloak"
       # Upgrade with the promtool pin in scripts/validate-infra.sh and the infra contract test.
       - dependency-name: "prom/prometheus"
-      # Coordinate MinIO server upgrades with the manual ghcr.io/wasalx mirror dispatch.
+      # Stage object-storage pins in the full Compose inventory before activation. See DELIVERY.md.
       - dependency-name: "minio/minio"
-      # Coordinate MinIO client upgrades with the manual ghcr.io/wasalx mirror dispatch.
       - dependency-name: "minio/mc"
       # Refresh the provider contract in tests/fixtures/waha/installed-contract.json with each upgrade.
       - dependency-name: "devlikeapro/waha"

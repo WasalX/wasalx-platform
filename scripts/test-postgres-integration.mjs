@@ -68,7 +68,8 @@ import { verifyGroupDesignation } from "../tests/group-designation-postgres.mjs"
 import { verifyNativeMembership } from "../tests/native-membership-postgres.mjs";
 import { verifyNativeRouting } from "../tests/native-routing-postgres.mjs";
 import {verifyWahaRenewal} from '../tests/waha-renewal-postgres.mjs';
-import {verifyRoutingReconnect} from '../tests/routing-reconnect-postgres.mjs';
+import {verifyNotionOAuthRecovery,verifyRoutingReconnect} from '../tests/routing-reconnect-postgres.mjs';
+import {seedNotionOAuthUpgrade,verifyNotionOAuthUpgrade} from "../tests/notion-oauth-upgrade-postgres.mjs";
 
 const { shard, report } = parsePostgresShardArgs(process.argv.slice(2));
 const executed = [];
@@ -465,7 +466,29 @@ try{
     await migrate(protectedPrefix);
     const routingUpgrade=await seedMetaRoutingLegacyUpgrade(admin);
     metaIdentityRoutingHistory=await seedMetaDirectLegacyRoutingHistory(admin);
+    const marketingMigration="0205_whatsapp_marketing_preferences.sql";
+    for(const file of migrationFiles.filter(file=>file>="0171_meta_external_routing.sql"&&file<marketingMigration)){
+      await writeFile(resolve(protectedPrefix,file),await readFile(new URL(file,controlMigrationsUrl)));
+    }
+    await migrate(protectedPrefix);
+    const legacyContacts=()=>admin.query("SELECT id,tenant_id,connection_id,external_participant_id FROM participant_identities ORDER BY id").then(result=>result.rows);
+    const previousContacts=await legacyContacts();
+    assert.ok(previousContacts.length>0,"Upgrade holds existing contact data");
+    await admin.query("BEGIN");
+    try{
+      await admin.query(await readFile(new URL(marketingMigration,controlMigrationsUrl),"utf8"));
+      assert.deepEqual(await legacyContacts(),previousContacts);
+      assert.equal((await admin.query("SELECT count(*)::int n FROM whatsapp_marketing_preferences")).rows[0].n,0);
+    }finally{
+      await admin.query("ROLLBACK");
+    }
+    assert.equal((await admin.query("SELECT to_regclass('public.whatsapp_marketing_preferences') AS relation")).rows[0].relation,null);
+    await writeFile(resolve(protectedPrefix,marketingMigration),await readFile(new URL(marketingMigration,controlMigrationsUrl)));
+    await migrate(protectedPrefix);
+    const notionOAuthUpgrade=await seedNotionOAuthUpgrade(admin);
     await migrate(controlMigrationsPath);
+    assert.deepEqual(await legacyContacts(),previousContacts);
+    await timeScenario("notionOAuthUpgrade",()=>verifyNotionOAuthUpgrade(admin,notionOAuthUpgrade,appUrl,cleanupUrl));
     // These identities reuse the existing tenant/connection/session parent key.
     const sessionForeignKeys=(await admin.query(`SELECT relation.relname AS relation,c.convalidated AS validated,
       ARRAY(SELECT a.attname::text FROM unnest(c.conkey) WITH ORDINALITY k(attnum,n)
@@ -2112,6 +2135,41 @@ try{
   assert.deepEqual(drainedInvitationTenants.rows,[]);
   await assert.rejects(()=>meteringIngest.query("SELECT count(*) FROM usage_meter_events"),error=>error.code==="42501");
   await assert.rejects(()=>platformOperations.query("SELECT count(*) FROM platform_operations_audit_events"),error=>error.code==="42501");
+  for (const [timeZone, utcInstant, expectedCost] of [
+    ["America/Los_Angeles", "2090-09-01 00:15:00+00", "11"],
+    ["Asia/Riyadh", "2090-08-31 22:00:00+00", "7"],
+  ]) {
+    await fixtureAdmin.query("BEGIN");
+    try {
+      await fixtureAdmin.query(`
+        SET LOCAL TIME ZONE '${timeZone}';
+        DO $test$
+        DECLARE
+          fixed_clock constant text := 'TIMESTAMPTZ ''${utcInstant}''';
+          definition text := pg_get_functiondef('app.operator_platform_operations_overview(text,text)'::regprocedure);
+        BEGIN
+          -- Freeze both spellings of the transaction clock in the installed function.
+          EXECUTE replace(replace(definition, 'now()', fixed_clock),
+            'current_date', '(' || fixed_clock || ')::date');
+        END;
+        $test$;
+        INSERT INTO public.usage_daily_rollups
+          (tenant_id, usage_day, meter_key, currency, estimated_cost_micros)
+        SELECT '10000000-0000-4000-8000-000000000001', usage_day, 'INBOUND_MESSAGES', 'USD', cost
+        FROM (VALUES (DATE '2090-08-31', 7), (DATE '2090-09-01', 11)) AS rollups(usage_day, cost)
+        WHERE usage_day <= DATE '${utcInstant.slice(0, 10)}';
+        SET LOCAL ROLE wasalx_platform_operations_client;
+      `);
+      const overview=await fixtureAdmin.query(
+        "SELECT app.operator_platform_operations_overview('metering-test','overview-utc-month')->'month_cost_summary' AS month_cost_summary",
+      );
+      assert.deepEqual(overview.rows[0].month_cost_summary,[
+        {currency:"USD",estimated_cost_micros:expectedCost,unpriced_quantity:"0.000000"},
+      ],`The overview should use the UTC month in ${timeZone}`);
+    } finally {
+      await fixtureAdmin.query("ROLLBACK");
+    }
+  }
   const capturedMetering=await meteringIngest.query("SELECT app.capture_next_usage_metering_period() AS result");
   assert.equal(typeof capturedMetering.rows[0].result,"object");
   assert.equal(typeof capturedMetering.rows[0].result.caught_up,"boolean");
@@ -5930,6 +5988,8 @@ try{
     ]))).rows,[{state:"SUCCEEDED",stage:"DONE"}]);
   }finally{await retryHoldRepository.close()}
 
+  await timeScenario("notionOAuthRecovery",()=>verifyNotionOAuthRecovery({app,admin:fixtureAdmin,cleanupUrl}));
+
   sharedCoreSummary=JSON.stringify({migrations:migrationFiles.length,postgres_rls:"passed",cross_tenant:"blocked",tenant_administration_cross_tenant:"blocked",invitation_mailer_role_isolation:"passed",invitation_mailer_shared_discovery:"passed",invitation_mailer_delivery_fencing:"passed",identity_policy_activation_role_isolation:"passed",identity_policy_activation_fencing:"passed",metering_ingest_role_isolation:"passed",metering_hourly_capture:"passed",platform_operations_role_isolation:"passed",metering_exact_replay:"passed",metering_changed_replay:"blocked",support_role_isolation:"passed",tenant_resume_role_isolation:"passed",tenant_resume_idempotency:"passed",tenant_resume_stale_fence:"blocked",tenant_resume_evidence_gate:"passed",tenant_resume_atomic_materialization:"passed",waha_registry_role_isolation:"passed",waha_operator_role_isolation:"passed",waha_rollout_gate_role_isolation:"passed",waha_rollout_active_assignment_removal:"blocked",waha_rollout_empty_disabled_removal:"passed",waha_rollout_identity_change:"blocked",waha_rollout_out_of_set_registration:"blocked",waha_rollout_out_of_set_reactivation:"blocked",waha_assignment_fencing:"passed",duplicate_waha_identity:"blocked",onboarding_scan_acknowledgement:"passed",webhook_route_lookup:"passed",oidc_membership_discovery:"passed",durable_scheduler:"passed",operational_metrics:"passed",delivery_claims:claimed.rowCount,duplicate_claims:0,recovered_expired_leases:1,connection_operation_claims:1,recovered_connection_operation_leases:1,stale_operation_fence:"blocked",lifecycle_public_execute:"revoked",provider_status_generation_fence:"passed",provider_status_timestamp_fence:"passed",provider_status_lifecycle_fence:"passed",lifecycle_route_pause_transaction:"passed",secret_cleanup_role_isolation:"passed",secret_cleanup_claims:1,recovered_secret_cleanup_leases:1,secret_cleanup_tenant_delete_order:"passed",inbound_claims:1,recovered_inbound_leases:1,inbound_e2e:"passed",privacy_group_uuid_canonicalization:"passed",privacy_finalize_atomic_completion:"passed",retention_retry_hold_fresh_sweep:"passed",retention_shared_reference_hold:"passed",retention_shared_live_reference:"passed",status_claims:status.rowCount,audit_append_only:"passed"});
 }catch(error){
   sharedCoreFailure=error;
@@ -5963,7 +6023,7 @@ if(shouldRun("nativeRouting"))try{process.stdout.write(`${JSON.stringify(await r
   for(const [name,verify] of [
     ["worker",()=>verifyMetaLifecycleWorker(adminUrl,connectorWorkerConfig)],
     ["consumers",()=>verifyMetaLifecycleConsumers(adminUrl,connectorWorkerConfig,appUrl)],
-    ["ingress",()=>verifyMetaLifecycleIngress(adminUrl,appUrl)],
+    ["ingress",()=>verifyMetaLifecycleIngress(adminUrl,appUrl,connectorWorkerConfig)],
   ]){
     const scenario="metaLifecycle/"+name;
     if(!shouldRun(scenario))continue;

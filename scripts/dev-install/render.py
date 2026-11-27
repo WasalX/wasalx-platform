@@ -20,7 +20,7 @@ PULL_TIMER = "wasalx-dev-pull.timer"
 SCRIPTS = ("dispatch.py", "probe.py", "receive.py")
 HOST_SCRIPTS = (
     "dev-guest-phase.sh", "dev-step-lock.sh", "frozen-disk.py", "host-maintenance.py",
-    "install-or-discard.sh", "overlay-action.sh", "probe-up.py", "register.sh",
+    "install-or-discard.sh", "overlay-action.sh", "probe-up.py", "register.sh", "run-install.sh",
 )
 HOST_PATHS = (
     "ALLOW_START", "DEV_STEP_LOCK", "DIR", "DISK_MOUNT_SOURCE", "DISK_STATE", "DROPIN", "ENGINE_FREE", "GUEST_KEY",
@@ -106,7 +106,8 @@ def absolute_path(value):
 
 def render_host(identity, run_id, commit, receipts, bundle):
     fields = set(HOST_PATHS) | HOST_PATTERNS.keys() | set(HOST_NUMBERS) | {"TOP_CHAIN"}
-    if not isinstance(identity, dict) or set(identity) - {"LEASE_RECEIPT_SHA256S"} != fields:
+    optional = {"DEV_STEP_RECORD", "LEASE_RECEIPT_SHA256S", "LEASE_RECEIPT_POLICY"}
+    if not isinstance(identity, dict) or set(identity) - optional != fields:
         raise ValueError("invalid host identity fields")
     for key in HOST_PATHS:
         if not absolute_path(identity[key]):
@@ -137,16 +138,24 @@ def render_host(identity, run_id, commit, receipts, bundle):
     raw_receipts = [path.read_bytes() for path in receipts]
     if [hashlib.sha256(raw).hexdigest() for raw in raw_receipts] != expected:
         raise ValueError("lease receipt SHA-256 mismatch")
-    lease_budgets = run_path(str(TEMPLATES / "host-maintenance.py"))["lease_budgets"]
-    leases = lease_budgets(raw.decode("utf-8") for raw in raw_receipts)
+    maintenance = run_path(str(TEMPLATES / "host-maintenance.py"))
+    record_path = maintenance["dev_step_record_path"](identity)
+    if (not absolute_path(record_path)
+            or PurePosixPath(record_path).is_relative_to(PurePosixPath(identity["DEV_STEP_LOCK"]).parent)):
+        raise ValueError("invalid host path: DEV_STEP_RECORD")
+    policy = identity.get("LEASE_RECEIPT_POLICY")
+    texts = [raw.decode("utf-8") for raw in raw_receipts]
+    leases = maintenance["lease_budgets"](texts if maintenance["lease_receipts_match"](texts, policy) else [])
     for key in ("INSTALL_SECONDS", "DISCARD_SECONDS"):
         if not 0 < leases[key] < 2**31:
             raise ValueError(f"invalid lease duration: {key}")
 
     env = {
         **identity, **leases, "TOP_CHAIN": json.dumps(chain), "REV": commit,
-        "LEASE_RECEIPT_SHA256S": json.dumps(expected),
+        "DEV_STEP_RECORD": record_path, "LEASE_RECEIPT_SHA256S": json.dumps(expected),
     }
+    if "LEASE_RECEIPT_POLICY" in identity:
+        env["LEASE_RECEIPT_POLICY"] = json.dumps(policy, sort_keys=True)
     files = {name: (TEMPLATES / name).read_text(encoding="utf-8").encode() for name in HOST_SCRIPTS}
     files["run-id"] = (run_id + "\n").encode()
     files["host.env"] = "".join(f"export {key}={shlex.quote(str(value))}\n"
@@ -173,8 +182,8 @@ def render_pull(identity, bundle):
         "pull-config.json": (json.dumps(config, indent=2, sort_keys=True) + "\n").encode(),
     }
     for name in (
-        "scripts/dev-install/pull-verify.mjs", "scripts/release/installer-hosted-images.mjs",
-        "release/installer-images.json",
+        "scripts/dev-install/pull-verify.mjs", "scripts/release/installer-hosted-images.mjs", "scripts/installer-evidence.mjs",
+        "scripts/release/installer-hosted-bundles.py", "scripts/release/cosign-pin.json", "release/installer-images.json",
     ):
         files[name] = (ROOT / name).read_bytes()
     write_packet(bundle, files)

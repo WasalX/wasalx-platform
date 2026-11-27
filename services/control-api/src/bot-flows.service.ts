@@ -6,6 +6,7 @@ import { directMessageCapabilities, parseBotFlow, validateBotFlowVariableProvena
 import { parseTicketEventFlow, ticketEvents, validateTicketEventCapabilities, type TicketEventDefinition } from "@wasalx/core/ticket-event-flow";
 import { maximumMediaBytes, normalizeMediaMime, safeMediaFilename } from "@wasalx/core/media";
 import { providerOutboundMediaRule } from "@wasalx/core/provider-media-capabilities";
+import { botHandoffMaxAttemptsFromEnvironment } from "@wasalx/core/delivery";
 import { isOwnedSecretReference } from "@wasalx/core/secret-reference";
 import { clientRoutingApplies, clientRoutingTargetBlockers, hasCredentialQueryParameter, parseClientRouting, resolveClientRoute, type ClientRoutingDefinition, type ClientRoutingInput } from "@wasalx/core/client-routing";
 import type { PoolClient } from "pg";
@@ -13,6 +14,7 @@ import { appendAudit } from "./audit.js";
 import { DatabaseService } from "./database.service.js";
 import { TenantDrainService } from "./tenant-drain.service.js";
 import type { Principal } from "./types.js";
+import { listCursor, listLimit, takeListPage, type ListPageQuery } from "./list-pagination.js";
 import { ZammadRoutingCatalogService } from "./zammad-routing-catalog.service.js";
 import { WebhookSecretService } from "./webhook-secret.service.js";
 import { RoutingConnectorsConfig } from "./routing-connectors.config.js";
@@ -38,18 +40,34 @@ type ConversationEventCursor = { v:1; tenant:string; conversation:string; at:str
 const CONVERSATION_PAGE_MAX=100;
 const LEGACY_CONVERSATION_LIMIT=200;
 const CATALOG_PAGE_MAX=100;
-const LEGACY_CATALOG_LIMIT=200;
 type CatalogKind="FLOW"|"ROUTING"|"ACTION";
 type CatalogCursor={v:1;tenant:string;kind:CatalogKind;sort:string;id:string};
+type NotionOAuthReadback = {
+  integration_id: string;
+  status: "PENDING" | "CLAIMED" | "EXPIRED" | "COMMITTED" | "ABORTED" | "UNRESOLVED";
+  display_name: string;
+  external_account_id: string | null;
+  revision: string | number;
+};
 
 @Injectable()
 export class BotFlowsService {
+  private readonly botHandoffMaxAttempts = botHandoffMaxAttemptsFromEnvironment(process.env);
+
   constructor(private readonly database: DatabaseService,private readonly drain:TenantDrainService,private readonly catalogs:ZammadRoutingCatalogService,private readonly webhookSecrets?:WebhookSecretService,private readonly routingConnectors?:RoutingConnectorsConfig,private readonly secretProvisioning?:SecretProvisioningService) {}
 
-  list(principal: Principal) {
-    return this.database.rows(
+  async list(principal: Principal, query: ListPageQuery = {}) {
+    const limit = listLimit(query.limit);
+    const cursor = listCursor(query.cursor);
+    const rows = await this.database.rows<Record<string, unknown> & { flow_version_id: string }>(
       principal.tenantId,
-      `SELECT family.id AS family_id,COALESCE(NULLIF(version.definition->>'name',''),family.name) AS name,version.id AS flow_version_id,
+      `WITH cursor_position AS (
+         SELECT family.name,version.version,version.id
+           FROM bot_flow_versions version JOIN bot_flow_families family
+             ON family.tenant_id=version.tenant_id AND family.id=version.family_id
+          WHERE version.tenant_id=$1 AND version.id=$2::uuid
+       )
+       SELECT family.id AS family_id,COALESCE(NULLIF(version.definition->>'name',''),family.name) AS name,version.id AS flow_version_id,
               version.version,version.state,version.revision,version.snapshot_sha256,
               version.definition,version.created_at,version.activated_at,version.retired_at,
               COALESCE(assignment_data.assignment_count,0)::bigint AS assignment_count
@@ -62,11 +80,15 @@ export class BotFlowsService {
               AND assignment.flow_family_id=family.id AND assignment.flow_version_id=version.id
               AND assignment.state='ACTIVE'
          ) assignment_data ON true
-        WHERE family.tenant_id=$1
-        ORDER BY family.name,version.version DESC
-        LIMIT $2`,
-      [principal.tenantId,LEGACY_CATALOG_LIMIT],
+        WHERE family.tenant_id=$1 AND ($2::uuid IS NULL OR EXISTS (
+          SELECT 1 FROM cursor_position boundary
+           WHERE family.name>boundary.name OR
+              (family.name=boundary.name AND (version.version,version.id)<(boundary.version,boundary.id))
+        ))
+        ORDER BY family.name,version.version DESC,version.id DESC LIMIT $3`,
+      [principal.tenantId,cursor,limit+1],
     );
+    return takeListPage(rows, limit, row => row.flow_version_id);
   }
 
   async ticketEventConfiguration(principal:Principal){
@@ -164,17 +186,38 @@ export class BotFlowsService {
         AND assignment.flow_family_id=family.id AND assignment.flow_version_id=version.id AND assignment.state='ACTIVE') assignment_data ON true
       WHERE family.tenant_id=$1 AND version.id=$2`,[principal.tenantId,id]))[0];if(!row)throw new NotFoundException("Bot flow version was not found");return row}
 
-  listMediaAssets(principal:Principal,requestedIds:string[]=[]){if(requestedIds.length>100)throw new BadRequestException("Too many media files were requested");const ids=[...new Set(requestedIds.map(value=>uuid(value,"Media asset ID")))];return this.database.rows(principal.tenantId,`WITH requested AS (
-      SELECT id,filename,mime_type,byte_size,state,created_at,updated_at FROM bot_media_assets
-       WHERE tenant_id=$1 AND state='READY' AND id=ANY($2::uuid[])
-    ),recent AS (
-      SELECT id,filename,mime_type,byte_size,state,created_at,updated_at FROM bot_media_assets
-       WHERE tenant_id=$1 AND state='READY' ORDER BY created_at DESC,id LIMIT 200
-    ),catalog AS (
-      SELECT * FROM requested UNION ALL SELECT * FROM recent
-    ) SELECT id,filename,mime_type,byte_size,state,created_at,updated_at FROM (
-      SELECT DISTINCT ON (id) * FROM catalog ORDER BY id,created_at DESC
-    ) bounded ORDER BY created_at DESC,id`,[principal.tenantId,ids])}
+  async listMediaAssets(principal: Principal, requestedIds: string[] = [], query: ListPageQuery = {}) {
+    if (requestedIds.length > 100) throw new BadRequestException("Too many media files were requested");
+    const ids = [...new Set(requestedIds.map(value => uuid(value, "Media asset ID")))];
+    const limit = listLimit(query.limit);
+    const cursor = listCursor(query.cursor);
+    const rows = await this.database.rows<Record<string, unknown> & { id: string; pagination_requested: boolean }>(
+      principal.tenantId, `WITH requested AS (
+        SELECT id,filename,mime_type,byte_size,state,created_at,updated_at,true AS pagination_requested
+          FROM bot_media_assets WHERE tenant_id=$1 AND state='READY' AND $3::uuid IS NULL AND id=ANY($2::uuid[])
+      ), cursor_position AS (
+        SELECT created_at,id FROM bot_media_assets WHERE tenant_id=$1 AND state='READY' AND id=$3::uuid
+      ), recent AS (
+        SELECT id,filename,mime_type,byte_size,state,created_at,updated_at,false AS pagination_requested
+          FROM bot_media_assets WHERE tenant_id=$1 AND state='READY' AND NOT (id=ANY($2::uuid[]))
+           AND ($3::uuid IS NULL OR EXISTS (
+             SELECT 1 FROM cursor_position boundary WHERE
+               bot_media_assets.created_at<boundary.created_at OR
+               (bot_media_assets.created_at=boundary.created_at AND bot_media_assets.id>boundary.id)
+           ))
+         ORDER BY created_at DESC,id LIMIT $4
+      ) SELECT * FROM requested UNION ALL SELECT * FROM recent ORDER BY created_at DESC,id`,
+      [principal.tenantId, ids, cursor, limit+1],
+    );
+    const { items: normal, next_cursor } = takeListPage(rows.filter(row => !row.pagination_requested), limit, row => row.id);
+    const normalIds = new Set(normal.map(row => row.id));
+    const items = rows.filter(row => row.pagination_requested || normalIds.has(row.id)).map(row => {
+      const item: Record<string, unknown> = { ...row };
+      delete item.pagination_requested;
+      return item;
+    });
+    return { items, next_cursor };
+  }
 
   async createMediaAsset(principal:Principal,idempotencyKey:string,requestId:string,body:unknown){
     requireOperationKey(idempotencyKey);uuid(idempotencyKey,"Media upload idempotency key");const input=mediaAssetInput(body);const requestSha256=hash(input);
@@ -204,16 +247,22 @@ export class BotFlowsService {
     });
   }
 
-  async listActions(principal: Principal) {
-    const rows=await this.database.rows<Record<string,unknown>>(principal.tenantId,`SELECT id,action_key,name,kind,endpoint_url,http_method,
+  async listActions(principal: Principal, query: ListPageQuery = {}) {
+    const limit = listLimit(query.limit);
+    const cursor = listCursor(query.cursor);
+    const rows=await this.database.rows<Record<string,unknown>&{id:string}>(principal.tenantId,`SELECT id,action_key,name,kind,endpoint_url,http_method,
       auth_scheme,secret_reference,headers,response_mapping,timeout_ms,max_response_bytes,state,revision,
       active_revision_id,revision AS active_action_revision,created_at,updated_at
-      FROM bot_action_definitions WHERE tenant_id=$1 ORDER BY name,action_key LIMIT $2`,[principal.tenantId,LEGACY_CATALOG_LIMIT]);
-    const visible:Array<Record<string,unknown>&{capabilities:ReturnType<typeof botActionCapabilities>}>=rows.map(row=>{const capabilities=botActionCapabilities({
+      FROM bot_action_definitions WHERE tenant_id=$1 AND ($2::uuid IS NULL OR (name,action_key)>
+        (SELECT name,action_key FROM bot_action_definitions WHERE tenant_id=$1 AND id=$2::uuid))
+      ORDER BY name,action_key LIMIT $3`,[principal.tenantId,cursor,limit+1]);
+    const page = takeListPage(rows, limit, row => row.id);
+    const visible:Array<Record<string,unknown>&{capabilities:ReturnType<typeof botActionCapabilities>}>=page.items.map(row=>{const capabilities=botActionCapabilities({
       kind:row.kind,endpointUrl:row.endpoint_url,httpMethod:row.http_method,authScheme:row.auth_scheme,secretReference:row.secret_reference,
     });return{...row,capabilities,qualification_supported:row.state==="ACTIVE"&&capabilities.retry_semantics==="REPLAY_SAFE"}});
-    if(principal.role==="tenant_owner"||principal.role==="tenant_admin")return visible;
-    return visible.map(row=>({...row,endpoint_url:redactEndpointQuery(row.endpoint_url),secret_reference:null,headers:{}}));
+    const items = principal.role==="tenant_owner"||principal.role==="tenant_admin" ? visible
+      : visible.map(row=>({...row,endpoint_url:redactEndpointQuery(row.endpoint_url),secret_reference:null,headers:{}}));
+    return { items, next_cursor: page.next_cursor };
   }
 
   async actionCatalog(principal:Principal,input:{cursor?:unknown;limit?:string}={}){
@@ -235,17 +284,25 @@ export class BotFlowsService {
     return principal.role==="tenant_owner"||principal.role==="tenant_admin"?visible:{...visible,endpoint_url:redactEndpointQuery(visible.endpoint_url),secret_reference:null,headers:{}};
   }
 
-  async listActionRevisions(principal:Principal,actionKeyValue:string){
+  async listActionRevisions(principal:Principal,actionKeyValue:string,query:ListPageQuery={}){
     const actionKey=actionKeyPath(actionKeyValue);
-    const rows=await this.database.rows<Record<string,unknown>>(principal.tenantId,`SELECT revision.id,revision.revision,revision.name,revision.kind,
+    const limit = listLimit(query.limit);
+    const cursor = listCursor(query.cursor);
+    const rows=await this.database.rows<Record<string,unknown>&{id:string}>(principal.tenantId,`SELECT revision.id,revision.revision,revision.name,revision.kind,
       revision.endpoint_url,revision.http_method,revision.auth_scheme,revision.headers,revision.response_mapping,
       revision.timeout_ms,revision.max_response_bytes,revision.state,revision.snapshot_sha256,revision.created_at,
       revision.id=action.active_revision_id AS active
       FROM bot_action_definitions action JOIN bot_action_revisions revision
         ON revision.tenant_id=action.tenant_id AND revision.action_definition_id=action.id
-      WHERE action.tenant_id=$1 AND action.action_key=$2 ORDER BY revision.revision DESC LIMIT $3`,[principal.tenantId,actionKey,LEGACY_CATALOG_LIMIT]);
-    if(!rows.length)throw new NotFoundException("Bot action was not found");
-    return rows.map(row=>principal.role==="tenant_owner"||principal.role==="tenant_admin"?row:{...row,endpoint_url:redactEndpointQuery(row.endpoint_url),headers:{}});
+      WHERE action.tenant_id=$1 AND action.action_key=$2 AND ($3::uuid IS NULL OR revision.revision<
+        (SELECT boundary.revision FROM bot_action_revisions boundary
+          WHERE boundary.tenant_id=$1 AND boundary.action_definition_id=action.id AND boundary.id=$3::uuid))
+      ORDER BY revision.revision DESC LIMIT $4`,[principal.tenantId,actionKey,cursor,limit+1]);
+    if(!rows.length && !cursor)throw new NotFoundException("Bot action was not found");
+    const page = takeListPage(rows, limit, row => row.id);
+    const items = principal.role==="tenant_owner"||principal.role==="tenant_admin" ? page.items
+      : page.items.map(row=>({...row,endpoint_url:redactEndpointQuery(row.endpoint_url),headers:{}}));
+    return { items, next_cursor: page.next_cursor };
   }
 
   async restoreActionRevision(principal:Principal,actionKeyValue:string,revisionValue:string,idempotencyKey:string,requestId:string,body:unknown){
@@ -338,7 +395,7 @@ export class BotFlowsService {
     WHERE conversation.tenant_id=$1
       AND ($2::timestamptz IS NULL OR (conversation.last_activity_at,conversation.id)<($2::timestamptz,$3::uuid))
     ORDER BY conversation.last_activity_at DESC,conversation.id DESC LIMIT $4`,[
-      principal.tenantId,cursor?.at??null,cursor?.id??null,limit+(paginated?1:0),
+      principal.tenantId,cursor?.at??null,cursor?.id??null,limit+1,
     ]);
     const pageRows=rows.slice(0,limit);
     const items=pageRows.map(row=>{
@@ -346,7 +403,6 @@ export class BotFlowsService {
       delete item.pagination_activity_at;
       return item;
     });
-    if(!paginated)return items;
     return{items,next_cursor:rows.length>limit?encodeConversationCursor(principal.tenantId,pageRows.at(-1)!):null};
   }
 
@@ -382,11 +438,18 @@ export class BotFlowsService {
     });
   }
 
-  async listRouting(principal:Principal){
-    const rows=await this.database.rows<Record<string,unknown>>(principal.tenantId,`SELECT id,version,state,revision,definition,snapshot_sha256,
-      created_at,activated_at,retired_at FROM client_routing_versions WHERE tenant_id=$1 ORDER BY version DESC LIMIT $2`,[principal.tenantId,LEGACY_CATALOG_LIMIT]);
-    if(principal.role==="tenant_owner"||principal.role==="tenant_admin")return rows;
-    return rows.map(row=>({...row,definition:redactRoutingSecrets(row.definition)}));
+  async listRouting(principal:Principal,query:ListPageQuery={}){
+    const limit = listLimit(query.limit);
+    const cursor = listCursor(query.cursor);
+    const rows=await this.database.rows<Record<string,unknown>&{id:string}>(principal.tenantId,`SELECT id,version,state,revision,definition,snapshot_sha256,
+      created_at,activated_at,retired_at FROM client_routing_versions
+      WHERE tenant_id=$1 AND ($2::uuid IS NULL OR (version,id)<
+        (SELECT version,id FROM client_routing_versions WHERE tenant_id=$1 AND id=$2::uuid))
+      ORDER BY version DESC,id DESC LIMIT $3`,[principal.tenantId,cursor,limit+1]);
+    const page = takeListPage(rows, limit, row => row.id);
+    const items = principal.role==="tenant_owner"||principal.role==="tenant_admin" ? page.items
+      : page.items.map(row=>({...row,definition:redactRoutingSecrets(row.definition)}));
+    return { items, next_cursor: page.next_cursor };
   }
 
   async routingCatalog(principal:Principal,input:{cursor?:unknown;limit?:string}={}){
@@ -531,16 +594,119 @@ export class BotFlowsService {
     const authorization=new URL("https://api.notion.com/v1/oauth/authorize");authorization.search=new URLSearchParams({client_id:config.notionOAuthClientId,response_type:"code",owner:"user",redirect_uri:config.notionOAuthRedirectUri,state}).toString();return{authorizationUrl:authorization.toString(),integrationId:row.integration_id};
   }
 
-  async completeNotionRoutingOAuth(principal:Principal,requestId:string,body:unknown){const config=this.routingConnectors;if(!config?.notionOAuthEnabled||!this.webhookSecrets||!this.secretProvisioning)throw new ServiceUnavailableException("Notion connection is not configured in this deployment");const input=routingOAuthCallback(body);const stateHash=createHash("sha256").update(input.state).digest("hex");const claim=await this.database.withTenant(principal.tenantId,async client=>{await requirePrivilegedAuthentication(client,principal,"connecting a Notion workspace");return(await client.query<{integration_id:string;secret_reference:string;redirect_uri:string}>("SELECT * FROM app.claim_client_routing_notion_oauth($1,$2)",[stateHash,principal.userId])).rows[0]});if(!claim)throw new ConflictException("Notion authorization expired or was already used. Connect again.");
-    let stored=false;
-    try{
-      if(claim.redirect_uri!==config.notionOAuthRedirectUri)throw new ConflictException("Notion authorization configuration changed. Connect again.");
-      const clientSecret=await this.webhookSecrets.resolveHmac(config.notionOAuthClientSecretReference,{kind:"exact",expectedReference:config.notionOAuthClientSecretReference});const token=await exchangeNotionCode(input.code,claim.redirect_uri,config.notionOAuthClientId,clientSecret);
-      await this.secretProvisioning.storeRoutingCredential(claim.secret_reference,{accessToken:token.accessToken,hmacKey:Buffer.from(randomBytes(32)).toString("base64url"),...(token.refreshToken?{refreshToken:token.refreshToken}:{})});stored=true;const connected=await this.database.withTenant(principal.tenantId,async client=>{const row=(await client.query<{integration_id:string;display_name:string;external_account_id:string;revision:string|number}>("SELECT * FROM app.complete_client_routing_notion_oauth($1,$2,$3,$4)",[claim.integration_id,principal.userId,token.workspaceName,token.workspaceId])).rows[0];if(!row)throw new ConflictException("Notion connection changed. Connect again.");await appendAudit(client,principal,{action:"client_routing.integration_connected",targetType:"client_routing_integration",targetId:row.integration_id,requestId,newValue:{provider:"NOTION",display_name:row.display_name,revision:Number(row.revision)}});return row});return{integrationId:connected.integration_id,provider:"NOTION",displayName:connected.display_name,revision:Number(connected.revision)}
-    }catch(error){if(stored)await this.secretProvisioning.deleteSecret(claim.secret_reference).catch(()=>undefined);await this.abortNotionRoutingOAuth(principal,requestId,{state:input.state,reason:"FAILED"}).catch(()=>undefined);if(postgresCode(error)==="23505")throw new ConflictException("This Notion workspace is already connected");throw error}
+  async completeNotionRoutingOAuth(principal: Principal, requestId: string, body: unknown) {
+    const config = this.routingConnectors;
+    const secrets = this.secretProvisioning;
+    if (!config?.notionOAuthEnabled || !this.webhookSecrets || !secrets) {
+      throw new ServiceUnavailableException("Notion connection is not configured in this deployment");
+    }
+    const input = routingOAuthCallback(body);
+    const stateHash = createHash("sha256").update(input.state).digest("hex");
+    const claim = await this.database.withTenant(principal.tenantId, async (client) => {
+      await requirePrivilegedAuthentication(client, principal, "connecting a Notion workspace");
+      return (await client.query<{ integration_id: string; secret_reference: string; redirect_uri: string }>(
+        "SELECT * FROM app.claim_current_client_routing_notion_oauth($1,$2)", [stateHash, principal.userId],
+      )).rows[0];
+    });
+    if (!claim) throw new ConflictException("Notion authorization expired or was already used. Connect again.");
+
+    let connected: Pick<NotionOAuthReadback, "integration_id" | "display_name" | "revision">;
+    try {
+      if (claim.redirect_uri !== config.notionOAuthRedirectUri) {
+        throw new ConflictException("Notion authorization configuration changed. Connect again.");
+      }
+      const clientSecret = await this.webhookSecrets.resolveHmac(config.notionOAuthClientSecretReference, {
+        kind: "exact", expectedReference: config.notionOAuthClientSecretReference,
+      });
+      const token = await exchangeNotionCode(input.code, claim.redirect_uri, config.notionOAuthClientId, clientSecret);
+
+      connected = await this.database.withTenant(principal.tenantId, async (client) => {
+        const attempt = await this.readNotionOAuth(client, principal, stateHash);
+        if (attempt?.integration_id !== claim.integration_id || attempt.status !== "CLAIMED") {
+          throw new ConflictException("Notion connection changed. Connect again.");
+        }
+        if (attempt.external_account_id !== null && attempt.external_account_id !== token.workspaceId) {
+          throw new ConflictException("Reconnect using the same Notion workspace.");
+        }
+        await secrets.storeRoutingCredential(claim.secret_reference, {
+          accessToken: token.accessToken,
+          hmacKey: Buffer.from(randomBytes(32)).toString("base64url"),
+          ...(token.refreshToken ? { refreshToken: token.refreshToken } : {}),
+        });
+        const row = (await client.query<typeof connected>(
+          "SELECT * FROM app.complete_claimed_client_routing_notion_oauth($1,$2,$3,$4)",
+          [stateHash, principal.userId, token.workspaceName, token.workspaceId],
+        )).rows[0];
+        if (!row) throw new ConflictException("Notion connection changed. Connect again.");
+        await appendAudit(client, principal, {
+          action: "client_routing.integration_connected", targetType: "client_routing_integration",
+          targetId: row.integration_id, requestId,
+          newValue: { provider: "NOTION", display_name: row.display_name, revision: Number(row.revision) },
+        });
+        return row;
+      });
+    } catch (error) {
+      let reconciled;
+      try {
+        reconciled = await this.database.withTenant<NotionOAuthReadback | "aborted" | undefined>(principal.tenantId, async (client) => {
+          const attempt = await this.readNotionOAuth(client, principal, stateHash);
+          if (attempt?.integration_id !== claim.integration_id) return;
+          if (attempt.status === "COMMITTED") return attempt;
+          if (attempt.status === "ABORTED") return "aborted";
+          if (attempt.status === "CLAIMED") {
+            const aborted = await this.abortNotionOAuth(client, principal, stateHash, "FAILED", requestId);
+            if (aborted === claim.integration_id) return "aborted";
+          }
+        });
+      } catch {
+        // A new connection's staged cleanup record survives a failed readback or abort.
+      }
+      if (!reconciled) {
+        throw new ServiceUnavailableException({
+          code: "NOTION_OAUTH_RECOVERY_PENDING",
+          message: "Notion connection status could not be confirmed. Refresh before trying again.",
+        });
+      }
+      if (reconciled === "aborted") {
+        if (postgresCode(error) === "23505") throw new ConflictException("This Notion workspace is already connected");
+        if (error instanceof ConflictException) throw error;
+        throw new ServiceUnavailableException("Notion connection could not be completed. Connect again.");
+      }
+      connected = reconciled;
+    }
+    return {
+      integrationId: connected.integration_id, provider: "NOTION",
+      displayName: connected.display_name, revision: Number(connected.revision),
+    };
   }
 
-  async abortNotionRoutingOAuth(principal:Principal,requestId:string,body:unknown){const input=routingOAuthAbort(body);const stateHash=createHash("sha256").update(input.state).digest("hex");const integrationId=await this.database.withTenant(principal.tenantId,async client=>{const row=(await client.query<{integration_id:string|null}>("SELECT app.abort_client_routing_notion_oauth($1,$2) AS integration_id",[stateHash,principal.userId])).rows[0];const id=row?.integration_id??null;if(id)await appendAudit(client,principal,{action:"client_routing.integration_aborted",targetType:"client_routing_integration",targetId:id,requestId,newValue:{provider:"NOTION",reason:input.reason}});return id});return{aborted:integrationId!==null,integrationId}}
+  private async readNotionOAuth(client: PoolClient, principal: Principal, stateHash: string) {
+    return (await client.query<NotionOAuthReadback>(
+      "SELECT * FROM app.read_client_routing_notion_oauth($1,$2)", [stateHash, principal.userId],
+    )).rows[0];
+  }
+
+  async abortNotionRoutingOAuth(principal: Principal, requestId: string, body: unknown) {
+    const input = routingOAuthAbort(body);
+    const stateHash = createHash("sha256").update(input.state).digest("hex");
+    const integrationId = await this.database.withTenant(principal.tenantId, (client) =>
+      this.abortNotionOAuth(client, principal, stateHash, input.reason, requestId));
+    return { aborted: integrationId !== null, integrationId };
+  }
+
+  private async abortNotionOAuth(
+    client: PoolClient, principal: Principal, stateHash: string, reason: "FAILED" | "DENIED", requestId: string,
+  ) {
+    const row = (await client.query<{ integration_id: string | null }>(
+      "SELECT app.abort_client_routing_notion_oauth($1,$2) AS integration_id", [stateHash, principal.userId],
+    )).rows[0];
+    const id = row?.integration_id ?? null;
+    if (id) await appendAudit(client, principal, {
+      action: "client_routing.integration_aborted", targetType: "client_routing_integration",
+      targetId: id, requestId, newValue: { provider: "NOTION", reason },
+    });
+    return id;
+  }
 
   async listRoutingSources(principal:Principal){const rows=await this.database.rows<Record<string,unknown>&{source_id:string;secret_reference:string;sync_mode:string}>(principal.tenantId,`SELECT source.source_id,source.kind,source.sync_mode,source.state,source.snapshot_revision,source.snapshot_sha256,
       source.last_success_at,source.next_due_at,source.safe_error,source.secret_reference,
@@ -672,8 +838,8 @@ export class BotFlowsService {
         if(input.action==="RETRY_HANDOFF"){
           if(!current.handoff_id)throw new ConflictException("No failed human handoff is available to retry");
           const retried=retryableHandoff?await client.query(`UPDATE bot_handoff_jobs SET state='QUEUED',available_at=now(),safe_error=NULL,updated_at=now()
-            WHERE tenant_id=$1 AND id=$2 AND state='FAILED_RETRYABLE' AND attempts<8
-              AND lease_id IS NULL AND lease_expires_at IS NULL`,[principal.tenantId,current.handoff_id]):await client.query(`INSERT INTO bot_handoff_jobs
+            WHERE tenant_id=$1 AND id=$2 AND state='FAILED_RETRYABLE' AND attempts<$3
+              AND lease_id IS NULL AND lease_expires_at IS NULL`,[principal.tenantId,current.handoff_id,this.botHandoffMaxAttempts]):await client.query(`INSERT INTO bot_handoff_jobs
             (tenant_id,conversation_id,source_event_id,handoff_node_id,zammad_group_id,zammad_owner_id,priority)
             SELECT tenant_id,conversation_id,source_event_id,handoff_node_id,zammad_group_id,zammad_owner_id,priority FROM bot_handoff_jobs
             WHERE tenant_id=$1 AND id=$2 AND state='FAILED_TERMINAL' ON CONFLICT DO NOTHING`,[principal.tenantId,current.handoff_id]);
@@ -1187,7 +1353,7 @@ function routingOAuthStart(value:unknown){const body=object(value??{},"Notion au
 
 function routingOAuthCallback(value:unknown){const body=object(value,"Notion authorization callback");const state=boundedText(body.state,"OAuth state",128);const code=boundedText(body.code,"Notion authorization code",2048);if(!/^[A-Za-z0-9_-]{43}$/u.test(state))throw new BadRequestException("Notion authorization state is invalid");if(Array.from(code).some(character=>{const value=character.codePointAt(0)??0;return value<32||value===127}))throw new BadRequestException("Notion authorization code is invalid");return{state,code}}
 
-function routingOAuthAbort(value:unknown){const body=object(value,"Notion authorization cancellation");const state=boundedText(body.state,"OAuth state",128);if(!/^[A-Za-z0-9_-]{43}$/u.test(state))throw new BadRequestException("Notion authorization state is invalid");if(body.reason!=="DENIED"&&body.reason!=="FAILED")throw new BadRequestException("Notion authorization cancellation reason is invalid");return{state,reason:body.reason}}
+function routingOAuthAbort(value:unknown):{state:string;reason:"DENIED"|"FAILED"}{const body=object(value,"Notion authorization cancellation");const state=boundedText(body.state,"OAuth state",128);if(!/^[A-Za-z0-9_-]{43}$/u.test(state))throw new BadRequestException("Notion authorization state is invalid");if(body.reason!=="DENIED"&&body.reason!=="FAILED")throw new BadRequestException("Notion authorization cancellation reason is invalid");return{state,reason:body.reason}}
 
 function routingCredential(value:unknown){
   const body=object(value,"Routing credential");
@@ -1262,8 +1428,8 @@ function assignmentState(value:unknown){const body=object(value,"Assignment stat
 function assignmentAttribution(value:unknown){const body=object(value,"Assignment attribution request");return{agentPrefix:boundedText(body.agentPrefix,"Agent prefix",80),agentIdentityPlacement:agentIdentityPlacement(body.agentIdentityPlacement),expectedRevision:boundedNumber(body.expectedRevision,1,Number.MAX_SAFE_INTEGER,"Expected revision")}}
 function agentIdentityPlacement(value:unknown):"HEADER"|"FOOTER"|"OFF"{if(value===undefined)return"HEADER";if(value!=="HEADER"&&value!=="FOOTER"&&value!=="OFF")throw new BadRequestException("Agent identity placement is invalid");return value}
 
-function conversationPageLimit(value:string){
-  if(!/^[1-9][0-9]{0,2}$/u.test(value))throw new BadRequestException("Conversation page limit is invalid");
+function conversationPageLimit(value:unknown){
+  if(typeof value!=="string"||!/^[1-9][0-9]{0,2}$/u.test(value))throw new BadRequestException("Conversation page limit is invalid");
   const limit=Number(value);
   if(limit>CONVERSATION_PAGE_MAX)throw new BadRequestException("Conversation page limit is invalid");
   return limit;

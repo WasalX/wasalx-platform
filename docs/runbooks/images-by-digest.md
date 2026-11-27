@@ -1,30 +1,52 @@
 # Published product images
 
-The `ci` workflow builds and inspects affected images for pull requests and
-merge-queue runs. Shared or unrecognized inputs and unavailable diffs trigger
-all 21 catalog images. The PR and merge-queue `ci-gate` checks cover these
-builds, which run without registry login, package writes or OIDC.
+The CI workflow requires affected PR image builds and inspects every catalog
+entry in the merge queue. Queue and PR builds use the public source archive
+and pinned inputs. They can import public GHCR cache layers and have read-only
+workflow permissions.
 
-On a push to `main`, `ci` calls `release` in
-`.github/workflows/branch-image.yml` to build, inspect, publish, sign and
-attest the full catalog. Package writes are limited to the publish and alias
-jobs. OIDC is limited to the publish lanes. Admission to the DEV environment
-requires a successful `ci` run on `main` with the `images-manifest` artifact.
+On a push to `main`, CI calls
+[branch-image.yml](../../.github/workflows/branch-image.yml). Publication
+requires a successful merge-queue `ci-gate` for the exact commit and tree.
+Each publish job builds and inspects its own image from that commit, exports
+GHCR cache layers for heavy images, then publishes, signs, and verifies the
+image digest. DEV admission uses the successful publish run and complete
+`images-manifest` for the exact commit.
 
-The publish jobs on `main` export one GHCR cache tag per heavy
-image, without importing layers. PR and merge-queue builds import those
-layers anonymously and run the same image inspection. The cache package
-must be public for anonymous cache hits. The first publish creates the
-package and seeds the cache. Check the anonymous access before claiming a
-warm-cache timing. Cosign produces the signature and SLSA attestation.
-Exact-SHA image pushes, signing, and attestation allow up to three attempts.
+The GHCR cache package must be public for anonymous cache hits. The first
+publish creates the package and seeds the cache. Check anonymous access before
+claiming a warm-cache timing. Cosign produces the signature and SLSA attestation.
+The [registry retry policy](../../scripts/release/image_registry_retry.py)
+allows at most three attempts for recognized transient HTTP and network
+failures or a registry command deadline. The immutable image push also retries
+the exact Docker error "unknown blob" within that same limit, logging each
+failed push attempt and its output. The first read-back after the push also
+retries Docker's missing-manifest error for the exact published digest with the
+same 10 and 20 second backoff. Build, authorization, signature, provenance and
+digest errors fail on the first attempt. Unclassified failures
+also fail immediately. Release tool and infrastructure downloads use curl's
+standard transient retry set with a time budget. Verification failures stop
+before the downloaded bytes are used.
 
 Each package is `ghcr.io/wasalx/<image>`, tagged with the full public commit SHA.
-Each main commit publishes independently. After its manifest is uploaded, a
-serialized job advances each `main` discovery alias only when the commit
-descends from the revision on the current alias. The job summary records skips
-when the revision or ancestry is unknown or the update would move backwards.
-Exact-SHA tags and manifest receipts remain available.
+Each main commit publishes independently. The [main image aliases workflow](../../.github/workflows/main-image-aliases.yml)
+resolves the triggering successful CI run's manifest by immutable artifact ID.
+The artifact includes `images-manifest-attempt.json`, which records the producing
+run ID, attempt and SHA-256 of the unchanged `images-manifest.json` bytes. The
+alias job validates that binding and checks the receipt against the triggering
+commit's actual tree and historical image catalog before registry login. A
+reassembled manifest may use earlier published image receipts from the same
+run. If a later successful attempt reuses the entire earlier manifest, the job
+reports `HELD_PRIOR_ATTEMPT` and leaves the aliases alone. A missing binding or
+a manifest from a newer attempt fails the alias job before registry access.
+The serialized job advances each `main` discovery alias only when the commit
+descends from the revision on the current alias. The job summary identifies the source commit,
+CI run and attempt. It records advanced and verified aliases, aliases kept at
+the expected digest, and skipped moves when the revision or ancestry is unknown
+or the update would move backwards. A registry failure or digest mismatch fails
+the alias workflow. Earlier moves may already have landed when an update fails.
+The CI result, exact-SHA tags and manifest receipts retain their publication
+outcomes independently of the alias run.
 Resolve the alias once, then use only `@sha256:<manifest digest>`.
 The `images-manifest` artifact requires one receipt for every matrix row, all
 bound to the same commit and tree. When the plan marks both add-on images
@@ -65,8 +87,9 @@ prove any of them. Preserve the previous verified manifest/config pair for rollb
 
 ## Signature and provenance
 
-Cosign is pinned to v3.0.6 and its Linux AMD64 SHA256 in the workflow. The
-installer requires this exact certificate identity for hosted admission.
+The signing workflows, release promotion and DEV pull verifier use the same
+[Cosign version and Linux amd64 SHA-256](../../scripts/release/cosign-pin.json).
+The installer requires this exact certificate identity for hosted admission.
 
 `https://github.com/WasalX/wasalx-platform/.github/workflows/branch-image.yml@refs/heads/main`
 
@@ -81,6 +104,16 @@ honesty or release approval. Sigstore verification failure means no admission.
 The optional `admit-hosted` stage admits already loaded images. It never pulls,
 loads, builds, replaces or starts a service. Keep the existing local
 `preflight -> build -> replace -> smoke` path for local builds.
+During image preparation, a confirmed missing image can trigger a candidate build
+or a pinned dependency pull. Docker access errors and invalid inspection output
+stop the stage. Correct the inspection failure before retrying.
+
+An exited, non-target container with Docker restart policy `no` can be retained
+in the replacement preimage even when its Compose hash differs. The private
+preimage records both hashes and the suspected Compose reference field families.
+Replacement and rollback refuse to target or recreate that container, including
+when the drift involves `network_mode` or fields that could not be identified.
+A project-wide Compose replacement includes every active service in this check.
 
 After the verify-only gate below passes, run the existing `preflight --capture-preimage` for the exact
 candidate/project **without hosted flags**. Retain its private replacement
@@ -88,9 +121,10 @@ preimage and rollback tags. Admission requires that existing preimage; capturing
 it after overwriting mutable image references loses the original tag custody.
 The external preload/transfer procedure remains separately controlled.
 
-On the trusted networked host, use cosign v3.1.4 to verify each exact inventory
-`pullReference` with the identity and issuer above. Beside `images-manifest.json`,
-retain one directory per image ID with the raw registry `manifest.json` and the
+On the trusted networked host, check the pinned Cosign binary's SHA-256 before
+using it to verify each exact inventory `pullReference` with the identity and
+issuer above. Beside `images-manifest.json`, retain one directory per image ID with
+the raw registry `manifest.json` and the
 publisher's OCI-referrer Sigstore v0.3 bundle blobs as `signature.sigstore.json`
 and `provenance.sigstore.json`. Their predicate types are respectively
 `https://sigstore.dev/cosign/sign/v1` and `https://slsa.dev/provenance/v0.2`.
@@ -151,6 +185,47 @@ This stage does not qualify live provider behavior, operator acceptance or
 production release. Legacy release-bundle, assisted and
 historical evidence contracts are unchanged.
 
+### Pre-staged registry installs
+
+Run the existing verify-only gate and transfer the signed evidence as described
+above. On the staging host, copy each signed product image and digest-pinned
+dependency from the active Compose profiles into the read-only guest registry
+without changing its manifest or index bytes. For source digest `sha256:<hex>`,
+publish it at `<registry-host>:<port>/staged/<hex>@sha256:<hex>`. The repository
+path is keyed by digest so identical manifests need only one staged copy. Keep
+any index and its required platform manifests in the registry.
+
+Restrict guest egress to the staging registry. Configure Docker to trust that
+registry. For any endpoint other than `localhost:<port>` or `127.0.0.1:<port>`,
+include the exact `host:port` in the installer process's
+`WASALX_LOCAL_REGISTRY_ALLOWLIST` (comma-separated). Use
+`--local-registry <registry-host>:<port>` through preflight, preload, admission,
+replacement and smoke. Retain the generated registry Compose overlay beside the
+environment file for preimage and rollback checks. Use an environment file unique
+to the candidate when its Compose inputs change.
+
+For a [fresh held DEV project](../../scripts/dev-install/README.md#fresh-held-guest-projects),
+add `--dev-fresh-held` on replace and smoke. If using the simulator, also pass
+`--dev-simulator` from preflight through smoke so each stage uses the same
+Compose model.
+
+Run `preflight --capture-preimage` with the registry option before preload. Run
+`preload-hosted` with the three hosted flags and the registry option after
+capture. It verifies the evidence offline, pulls each exact digest from the
+staging registry, and populates the existing product aliases. The installer
+rewrites digest-pinned dependency image refs to the staging registry and
+validates the loaded registry digests. Replacement uses Compose with pulls and
+builds disabled. Pass the registry option with the hosted flags for subsequent
+stages that read the Compose model.
+
+The full installer nightly stages the signed product images and pinned dependencies, makes
+the registry read-only, blocks public registry access for Docker, and checks the
+loaded registry digests and container identity through the existing admission
+and smoke stages. It copies the Linux AMD64 manifests plus their original
+multi-platform indexes. The smoke stage checks the running Zammad package
+against the catalog at the signed image publication's source commit.
+Failed smoke checks report a check name or verifier line and a redacted reason.
+
 ## Public build inputs and inspection
 
 The add-on build input **`PUBLIC_ADDON_SOURCE`** supplies the source for Zammad and
@@ -191,12 +266,20 @@ public tuple in the archived build context. The effective Dockerfile digest and
 add-on tuple are recorded in the receipt and attestation. If a configured source
 is unavailable anonymously, those builds fail; this workflow supplies no credential
 and never publishes private source.
+
+The builder archives with `git -c core.autocrlf=false archive` so host settings
+cannot turn LF line endings in the committed source into CRLF in the build context.
+
 Public dependency registries and the reviewed
 Dockerfiles remain build inputs. The builder uses the public archive, pinned
 inputs and no secret or SSH mounts. Only the main publish lane authenticates
 to GHCR to export cache layers and publish images.
 Default BuildKit provenance is disabled; the inspected public predicate is
 attested explicitly instead.
+
+The cold Keycloak build retries a pinned Wolfi APK install once after a
+two-second delay when APK reports a temporary fetch error. Both attempts use
+the same package constraints and signature verification.
 
 The same inspector runs before login/push and after pulling the published digest.
 It checks exact labels and environment against public Dockerfile declarations
@@ -214,8 +297,8 @@ The content contract admits one publicly distributed demo private key in Cloudfl
 built-in hello-world TLS service, only in `usr/local/bin/cloudflared` for the
 `production-cloudflared` image. Its entire PEM content SHA256 is
 `17ac4c2ca3deb87202cd2c101d4da9d4f4c0ec3d51a0381729329102b28e61a4`, verified
-against `tlsconfig/hello_ca.go` in the Dockerfile's checksum-pinned public
-2026.9.1 source archive. Other keys, changed content or a changed archive pin
+against `tlsconfig/hello_ca.go` at the public commit pinned in the Dockerfile
+for Cloudflared 2026.9.1. Other keys, changed content or a changed source pin
 fail closed. No runtime deployment credential is exempted.
 
 Zammad copies `/usr/local` and `/opt/zammad` from its approved public upstream

@@ -6,6 +6,63 @@ import { MetaGroupsAdapter } from "../services/connector-worker/dist/packages/co
 import { WahaAdapter } from "../services/connector-worker/dist/packages/connectors/src/waha.js";
 import { advanceBotFlow, parseBotFlow } from "../services/connector-worker/dist/packages/core/src/bot-flow.js";
 
+test("Meta combines read and typing for an inbound webhook message without sending a reply", async t => {
+  const webhook = JSON.parse(readFileSync(new URL("./fixtures/meta-primary-delivery-webhook.json", import.meta.url)));
+  const { messages, metadata } = webhook.entry[0].changes[0].value;
+  const requests = [];
+  t.mock.method(globalThis, "fetch", async (url, init) => {
+    requests.push({ path: url.pathname, method: init.method, body: JSON.parse(init.body) });
+    return Response.json({ success: true });
+  });
+  const preflightEntered = Promise.withResolvers(), preflight = Promise.withResolvers();
+  let finishingReply = false;
+  const adapter = new MetaGroupsAdapter({ accessToken: "synthetic-token-1234", graphVersion: "v24.0",
+    phoneNumberIdFor: () => metadata.phone_number_id,
+    beforeRequest: async () => {
+      if (finishingReply) { preflightEntered.resolve(); await preflight.promise; }
+    },
+    beforeMessageSend: async () => assert.fail("Read and typing must not consume send admission") });
+  const input = { connectionId: "synthetic", groupId: messages[0].from, inboundMessageId: messages[0].id };
+  const [operation] = adapter.agentReplySignals(input);
+  assert.equal(operation.kind, "read-and-typing");
+  assert.equal(await operation.send(new AbortController().signal, () => true), "sent");
+  assert.deepEqual(requests, [{ path: `/v24.0/${metadata.phone_number_id}/messages`, method: "POST",
+    body: { messaging_product: "whatsapp", status: "read", message_id: messages[0].id, typing_indicator: { type: "text" } } }]);
+  assert.throws(() => adapter.agentReplySignals({ ...input, inboundMessageId: "not a Meta ID" }), { code: "META_INVALID_REQUEST" });
+  finishingReply = true;
+  const lateSignal = operation.send(new AbortController().signal, () => finishingReply);
+  await preflightEntered.promise;
+  finishingReply = false;
+  preflight.resolve();
+  assert.equal(await lateSignal, "read-only");
+  assert.deepEqual(requests[1], { path: `/v24.0/${metadata.phone_number_id}/messages`, method: "POST",
+    body: { messaging_product: "whatsapp", status: "read", message_id: messages[0].id } });
+});
+
+test("WAHA targets one inbound ID and reports an unsupported typing endpoint", async t => {
+  const chatId = "12025550120@c.us";
+  const adapter = new WahaAdapter({ baseUrl: "https://waha.example", apiKey: "synthetic", sessionFor: () => "synthetic-session" });
+  const inboundMessageId = `false_${chatId}_3EB0965B123D06E0B70741`;
+  const inbound = await adapter.normalizeDirectWebhook("synthetic", { event: "message", payload: {
+    id: inboundMessageId, from: chatId, fromMe: false, body: "Synthetic", timestamp: 1_760_000_000,
+  } }, new Headers());
+  const requests = [];
+  t.mock.method(globalThis, "fetch", async (url, init) => {
+    requests.push([url.pathname, JSON.parse(init.body)]);
+    return new Response(null, { status: url.pathname === "/api/sendSeen" ? 201 : 501 });
+  });
+  const input = { connectionId: "synthetic", groupId: inbound.chatId, inboundMessageId: inbound.messageId };
+  const [read, typing] = adapter.agentReplySignals(input);
+  assert.equal(await read.send(new AbortController().signal, () => false), "sent");
+  assert.equal(await typing.send(new AbortController().signal, () => false), "skipped");
+  assert.equal(await typing.send(new AbortController().signal, () => true), "unsupported");
+  const target = { session: "synthetic-session", chatId };
+  assert.deepEqual(requests, [["/api/sendSeen", { ...target, messageIds: [inboundMessageId] }], ["/api/startTyping", target]]);
+  assert.throws(() => adapter.agentReplySignals({ ...input, groupId: "12025550121@c.us" }), { code: "WAHA_INVALID_REQUEST" });
+  assert.throws(() => adapter.agentReplySignals({ ...input, inboundMessageId: inboundMessageId.replace("false_", "true_") }), { code: "WAHA_INVALID_REQUEST" });
+  assert.equal(requests.length, 2);
+});
+
 test("131030 is a terminal TEST recipient rejection, never a group-capability error or fallback",async t=>{
   const old=globalThis.fetch;let calls=0;
   t.after(()=>{globalThis.fetch=old});
@@ -175,7 +232,7 @@ test("classifies official Meta errors by numeric code and retains only safe diag
       [190,"META_AUTHENTICATION_FAILED",false],[131005,"META_PERMISSION_REQUIRED",false],[131009,"META_INVALID_REQUEST",false],
       [131047,"META_CUSTOMER_WINDOW_CLOSED",false],[130429,"META_RATE_LIMITED",true],[131056,"META_RATE_LIMITED",true],
       [131000,"META_SERVER_ERROR",true],[131016,"META_SERVER_ERROR",true],[131026,"META_DELIVERY_REJECTED",false],
-      [131050,"META_DELIVERY_REJECTED",false],[131051,"META_DELIVERY_REJECTED",false],[131052,"META_DELIVERY_REJECTED",false],[131053,"META_DELIVERY_REJECTED",false],
+      [131050,"META_MARKETING_OPTED_OUT",false],[131051,"META_DELIVERY_REJECTED",false],[131052,"META_DELIVERY_REJECTED",false],[131053,"META_DELIVERY_REJECTED",false],
     ]){
       globalThis.fetch=async()=>new Response(JSON.stringify({error:{code:graphCode,error_subcode:7,type:"OAuthException",message:"private token material"}}),{status:400,headers:{"content-type":"application/json"}});
       await assert.rejects(()=>adapter.send({connectionId:"c1",groupId:"12025550102",recipientType:"DIRECT",text:"Hello",idempotencyKey:String(graphCode)}),error=>{

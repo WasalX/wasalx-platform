@@ -42,8 +42,9 @@ import {
   type BotFlowInput,
   type BotFlowNode,
 } from "../packages/core/src/bot-flow";
-import { operatorFailureMessage, operatorLocalFailure, createLatestRequestFence, operatorResponseFailure, type CodedOperatorError } from "../lib/operator-ui";
+import { operatorFailure, operatorFailureMessage, operatorLocalFailure, createLatestRequestFence, operatorResponseFailure, type CodedOperatorError, type OperatorFailure } from "../lib/operator-ui";
 import { useI18n } from "./I18nProvider";
+import { MarketingIcon } from "./MarketingIcon";
 import { InlineConfirmation, ModalDialog } from "./ModalDialog";
 import { useVisibleRefresh } from "./use-visible-refresh";
 import { TicketEventWorkflows, isTicketEventFlowRow } from "./TicketEventWorkflows";
@@ -590,11 +591,9 @@ export function BotAutomation({
     return (
       <section
         className="panel bot-loading"
-        role="status"
-        aria-live="polite"
         aria-busy="true"
-        aria-label={t("bot.loading")}
       >
+        <p className="sr-only" role="status" aria-label={t("bot.loading")}>{t("bot.loading")}</p>
         <span aria-hidden="true" />
         <span aria-hidden="true" />
         <span aria-hidden="true" />
@@ -1053,7 +1052,7 @@ function Flows({
         {nextCursor ? <button type="button" className="routing-version-toggle" disabled={loadingMore} onClick={loadMore}>{t(loadingMore ? "bot.flows.loadingMore" : "bot.flows.loadMore")}</button> : null}
       </aside>
       {loadingDetail ? (
-        <section className="panel bot-loading" role="status" aria-live="polite" aria-busy="true" aria-label={t("bot.flows.loadingDetail")}><span aria-hidden="true" /><span aria-hidden="true" /><span aria-hidden="true" /></section>
+        <section className="panel bot-loading" aria-busy="true"><p className="sr-only" role="status" aria-label={t("bot.flows.loadingDetail")}>{t("bot.flows.loadingDetail")}</p><span aria-hidden="true" /><span aria-hidden="true" /><span aria-hidden="true" /></section>
       ) : detailError ? (
         <section className="panel settings-load-error" role="alert"><span>!</span><div><b>{t("bot.flows.detailUnavailable")}</b><p>{detailError}</p><button className="button small" onClick={retryDetail}>{t("automation.common.reload")}</button></div></section>
       ) : selected?.definition !== undefined ? (
@@ -1253,7 +1252,7 @@ function FlowDetail({
             <details className="routing-raw">
               <summary>{t("bot.flow.schema.title")}</summary>
               <p>{t("bot.flow.schema.help")}</p>
-              <pre aria-label={t("bot.flow.schema.label")}><code>{JSON.stringify(definition, null, 2)}</code></pre>
+              <pre dir="ltr" aria-label={t("bot.flow.schema.label")}><code>{JSON.stringify(definition, null, 2)}</code></pre>
             </details>
           ) : null}
           <FlowSimulator key={String(row.flow_version_id)} definition={definition} actions={actions} supportTeams={supportTeams} />
@@ -1344,6 +1343,7 @@ function FlowSimulator({
         {t("bot.simulator.values")}
         <textarea
           id="bot-simulator-variables"
+          dir="ltr"
           value={variablesText}
           onChange={(event) => {
             setVariablesText(event.target.value);
@@ -1474,7 +1474,7 @@ function WorkflowComparison({
     {comparison.settings.length || changedNodes.length ? <ol className="bot-node-list">
       {comparison.settings.map((setting, index) => <li key={setting.field}>
         <span>{formatNumber(index + 1, locale)}</span>
-        <div><b>{t(`bot.comparison.setting.${setting.field}`)}</b><p><bdi>{comparisonSettingValue(setting.field, setting.before, beforeDefinition, locale, t)}</bdi> → <bdi>{comparisonSettingValue(setting.field, setting.after, afterDefinition, locale, t)}</bdi></p></div>
+        <div><b>{t(`bot.comparison.setting.${setting.field}`)}</b><p><bdi>{comparisonSettingValue(setting.field, setting.before, beforeDefinition, locale, t)}</bdi> <span className="reading-arrow" aria-hidden="true"><MarketingIcon name="arrow" /></span> <bdi>{comparisonSettingValue(setting.field, setting.after, afterDefinition, locale, t)}</bdi></p></div>
       </li>)}
       {changedNodes.map((change, index) => {
         const node = change.after ?? change.before!;
@@ -1484,7 +1484,7 @@ function WorkflowComparison({
           <span>{formatNumber(comparison.settings.length + index + 1, locale)}</span>
           <div>
             <b>{t(`bot.comparison.${change.kind}`)} · {nodeTitle(node.type, t)}</b>
-            <p>{change.kind === "added" ? <bdi>{after}</bdi> : change.kind === "removed" ? <bdi>{before}</bdi> : <><bdi>{before}</bdi><span aria-hidden="true"> → </span><bdi>{after}</bdi></>}</p>
+            <p>{change.kind === "added" ? <bdi>{after}</bdi> : change.kind === "removed" ? <bdi>{before}</bdi> : <><bdi>{before}</bdi> <span className="reading-arrow" aria-hidden="true"><MarketingIcon name="arrow" /></span> <bdi>{after}</bdi></>}</p>
           </div>
         </li>;
       })}
@@ -1926,12 +1926,12 @@ function Conversations({
             <div><h2 id="bot-execution-title">{t("bot.conversations.executionTitle", { ticket: isolate(`#${String(currentExecutionTarget.zammad_ticket_number ?? t("bot.conversations.pending"))}`) })}</h2><p>{t("bot.conversations.executionHelp")}</p></div>
             <button type="button" aria-label={t("bot.conversations.closeExecution")} onClick={closeExecution}>{t("bot.conversations.close")}</button>
           </div>
-          {eventsLoading ? <section className="bot-loading" role="status" aria-live="polite" aria-busy="true" aria-label={t("bot.conversations.loadingExecution")}><span aria-hidden="true" /><span aria-hidden="true" /><span aria-hidden="true" /></section>
+          {eventsLoading ? <section className="bot-loading" aria-busy="true"><p className="sr-only" role="status" aria-label={t("bot.conversations.loadingExecution")}>{t("bot.conversations.loadingExecution")}</p><span aria-hidden="true" /><span aria-hidden="true" /><span aria-hidden="true" /></section>
           : eventsError ? <div className="settings-feedback error" role="alert"><span>!</span><p>{t("bot.conversations.executionFailed")}</p><button type="button" className="button small" onClick={() => void loadEvents(executionId)}>{t("automation.common.reload")}</button></div>
           : eventPage.items.length ? <ol className="bot-node-list">
               {[...eventPage.items].reverse().map((event, index) => <li key={event.id}>
                 <span>{formatNumber(index + 1, locale)}</span>
-                <div><b>{workflowEventLabel(event.kind, t)}</b><p>{workflowStepLabel(event.from, executionDefinition, "start", locale, t)} → {workflowStepLabel(event.to, executionDefinition, "end", locale, t)} · {formatTime(event.at, locale, t)}</p></div>
+                <div><b>{workflowEventLabel(event.kind, t)}</b><p>{workflowStepLabel(event.from, executionDefinition, "start", locale, t)} <span className="reading-arrow" aria-hidden="true"><MarketingIcon name="arrow" /></span> {workflowStepLabel(event.to, executionDefinition, "end", locale, t)} · {formatTime(event.at, locale, t)}</p></div>
               </li>)}
             </ol>
           : <EmptyState title={t("bot.conversations.noTimeline")} body={t("bot.conversations.noTimelineHelp")} />}
@@ -2144,7 +2144,7 @@ export function PluginCatalog({
   canWrite: boolean;
   mutationHeaders: Record<string, string>;
 }) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const requestError = useCallback((status: number) => t("automation.common.requestFailed", { status }), [t]);
   const [actions, setActions] = useState<Row[]>([]);
   const [actionCursor, setActionCursor] = useState<string | null>(null);
@@ -2155,7 +2155,7 @@ export function PluginCatalog({
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [mutationError, setMutationError] = useState<CodedOperatorError | null>(null);
+  const [mutationError, setMutationError] = useState<OperatorFailure | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const saveIntent = useRef<{ fingerprint: string; credentialKey: string; actionKey: string } | null>(null);
   const restoreKeys = useRef(new Map<string,string>());
@@ -2231,9 +2231,7 @@ export function PluginCatalog({
       await load(true);
       return true;
     } catch (problem) {
-      setMutationError(problem instanceof Error && "code" in problem
-        ? problem as CodedOperatorError
-        : Object.assign(new Error(operatorFailureMessage(problem, t("bot.errors.change"))), { code: "UNKNOWN" as const }));
+      setMutationError(operatorFailure(problem, t("bot.errors.change"), locale));
       return false;
     } finally {
       setSaving(false);
@@ -2246,11 +2244,15 @@ export function PluginCatalog({
       const response=await fetch(`/api/bot-flows/actions/${encodeURIComponent(actionKey)}/revisions/${revision}/restore`,{method:"POST",headers:{...mutationHeaders,"idempotency-key":key},body:JSON.stringify({expectedRevision})});
       if(!response.ok)throw await operatorResponseFailure(response,requestError(response.status));
       restoreKeys.current.delete(intent);setNotice(t("plugins.history.restored",{revision}));await load(true);return true;
-    }catch(problem){setMutationError(problem instanceof Error&&"code" in problem?problem as CodedOperatorError:Object.assign(new Error(operatorFailureMessage(problem, t("bot.errors.change"))),{code:"UNKNOWN" as const}));return false}
-    finally{setSaving(false)}
+    } catch (problem) {
+      setMutationError(operatorFailure(problem, t("bot.errors.change"), locale));
+      return false;
+    } finally {
+      setSaving(false);
+    }
   };
   if (loadError && !loading && !actions.length) return <section className="panel settings-load-error" role="alert"><span>!</span><div><p>{loadError}</p><button className="button small" onClick={() => void load()}>{t("automation.common.reload")}</button></div></section>;
-  if (loading && !actions.length) return <section className="panel bot-loading" role="status" aria-live="polite" aria-busy="true" aria-label={t("plugins.loading")}><span aria-hidden="true" /><span aria-hidden="true" /><span aria-hidden="true" /></section>;
+  if (loading && !actions.length) return <section className="panel bot-loading" aria-busy="true"><p className="sr-only" role="status" aria-label={t("plugins.loading")}>{t("plugins.loading")}</p><span aria-hidden="true" /><span aria-hidden="true" /><span aria-hidden="true" /></section>;
   return <div className="plugin-catalog">
     {loadError ? <div className="settings-feedback error bot-feedback" role="alert"><span>!</span><p>{loadError}</p><button className="button small" onClick={() => void load()}>{t("automation.common.reload")}</button></div> : null}
     {notice ? <div className="settings-feedback success bot-feedback" role="status"><span>✓</span><p>{notice}</p></div> : null}
@@ -2277,7 +2279,7 @@ function Actions({
   integrations: Row[];
   canWrite: boolean;
   saving: boolean;
-  mutationError: CodedOperatorError | null;
+  mutationError: OperatorFailure | null;
   clearMutationError: () => void;
   mutationHeaders: Record<string, string>;
   saveAction: (body: Record<string, unknown>, credential: string) => Promise<boolean>;
@@ -2476,7 +2478,7 @@ function ActionForm({
   row: Row;
   integrations: Row[];
   saving: boolean;
-  mutationError: CodedOperatorError | null;
+  mutationError: OperatorFailure | null;
   mutationHeaders: Record<string, string>;
   cancel: () => void;
   save: (body: Record<string, unknown>, credential: string) => Promise<void>;
@@ -3177,7 +3179,7 @@ function FlowEditor({
             </label>
           </div>
         </fieldset> : null}
-        <Suspense fallback={<section className="workflow-canvas bot-loading" role="status" aria-live="polite" aria-busy="true" aria-label={t("bot.canvas.loading")}><span aria-hidden="true" /><span aria-hidden="true" /><span aria-hidden="true" /></section>}>
+        <Suspense fallback={<section className="workflow-canvas bot-loading" aria-busy="true"><p className="sr-only" role="status" aria-label={t("bot.canvas.loading")}>{t("bot.canvas.loading")}</p><span aria-hidden="true" /><span aria-hidden="true" /><span aria-hidden="true" /></section>}>
           <WorkflowCanvas
             definition={value}
             palette={NODE_TYPES.map((type) => ({ type, label: nodeTitle(type, t) }))}
@@ -4372,7 +4374,7 @@ function comparisonSettingValue(
   if (field === "keepOpenPolicy") return keepOpenPolicySummary(definition, locale, t);
   if (field === "welcomeResendMinutes") return definition?.welcomeResendMinutes == null ? t("bot.welcome.off") : t("bot.welcome.summary", { minutes: formatNumber(definition.welcomeResendMinutes, locale) });
   if (field === "entryCommands") return definition?.entryCommands?.length
-    ? definition.entryCommands.map(entry => `${entry.aliases.join(" / ")} → ${isolate(workflowStepLabel(entry.target, definition, "start", locale, t))} · ${t(entry.enabled ? "bot.entry.enabled" : "bot.entry.disabled")}`).join("; ")
+    ? definition.entryCommands.map(entry => t("bot.entry.summary", { aliases: isolate(entry.aliases.join(" / ")), target: isolate(workflowStepLabel(entry.target, definition, "start", locale, t)), state: t(entry.enabled ? "bot.entry.enabled" : "bot.entry.disabled") })).join("; ")
     : t("bot.entry.none");
   if (field === "mainMenuNodeId") value = definition?.mainMenuNodeId ?? definition?.start ?? "";
   else if (field !== "start") return String(value);

@@ -1,3 +1,4 @@
+import { withPostgresClock } from "./support/postgres-clock.mjs";
 import assert from 'node:assert/strict';
 import {withFixtureTenant,routingFixtureEnvironment,observeRoutingFixture} from './meta-routing-fixture.mjs';
 import {metaRoutingUnits} from '../packages/core/dist/meta-routing.js';
@@ -218,13 +219,31 @@ export async function verifyMetaDirectIdentityPostgres(adminUrl,workerConfig,app
   const groupId=randomUUID();await admin.query("INSERT INTO whatsapp_groups(id,tenant_id,connection_id,external_group_id,display_name) VALUES($1,$2,$3,$4,'Fixture group')",[groupId,tenantId,connectionId,`${prefix}@g.us`]);
   const rosterId='12025550167@c.us';
   await admin.query("INSERT INTO group_workspace_participants(tenant_id,whatsapp_group_id,external_participant_id,display_name) VALUES($1,$2,$3,'Raw group fixture')",[tenantId,groupId,rosterId]);
+  const otherPhone='15558880199';
+  const readMarketingPreferences=async c=>(await c.query(`SELECT id,subject_kind,subject,opted_out,observed_at
+   FROM whatsapp_marketing_preferences WHERE tenant_id=$1 ORDER BY id`,[tenantId])).rows;
+  const marketingPreferences=await tx(async c=>{
+   for(const [number,alias] of [[phone,bsuid],[otherPhone,null]]){
+    await c.query("SELECT app.record_whatsapp_marketing_preference($1,$2,true,$3,'PREFERENCE_WEBHOOK',$4,$5)",
+     [number,alias,'2026-01-01T00:00:00Z',connectionId,randomUUID()]);
+   }
+   return readMarketingPreferences(c);
+  });
+  assert.deepEqual(marketingPreferences.map(row=>[row.subject_kind,row.subject,row.opted_out]).sort(),
+   [['BSUID',bsuid,true],['PHONE',phone,true],['PHONE',otherPhone,true]]);
+  const contactPreferences=marketingPreferences.filter(row=>row.subject!==otherPhone);
+  const unrelatedPreferences=marketingPreferences.filter(row=>row.subject===otherPhone);
   for(const [scope,value] of [['TENANT',tenantId],['PARTICIPANT',phone],['PARTICIPANT',bsuid],['ZAMMAD_TICKET',ticketId],['ZAMMAD_USER','98231']]){
    const job=await createJob(scope,value);const exported=await privacy.exportData(job,job.leaseId);
    assert.equal(exported.metaDirectRecipients.length,scope==='TENANT'?5:4,`${scope} export includes exactly its snapshot and receipt history`);
    assert.equal(exported.metaDirectRecipients.some(row=>row.delivery_id===routingHistory.legacyDelivery),scope==='TENANT','Only whole-tenant export includes separate original legacy history');
    assert.equal(exported.metaDirectRecipients.find(row=>row.receipt_id===receiptId).receipt_status,'SENT');
    assert.equal(exported.metaDirectAliases.length,2);
-   if(scope==='PARTICIPANT')assert.equal(exported.groupWorkspaceParticipants.length,0,'Groups roster uses exact ID, not DIRECT alias closure');
+   if(scope==='TENANT')assert.deepEqual(exported.whatsappMarketingPreferences,marketingPreferences);
+   if(scope==='PARTICIPANT'){
+    assert.equal(exported.groupWorkspaceParticipants.length,0,'Groups roster uses exact ID, not DIRECT alias closure');
+    assert.deepEqual(exported.whatsappMarketingPreferences,contactPreferences,'Both participant identifiers export the same two opt-outs');
+   }
    await finishExport(job);
   }
   const rosterExport=await createJob('PARTICIPANT',rosterId);const rosterResult=await privacy.exportData(rosterExport,rosterExport.leaseId);
@@ -244,6 +263,25 @@ export async function verifyMetaDirectIdentityPostgres(adminUrl,workerConfig,app
    VALUES($1,$2,$3,$4,$5,$5,'Synthetic joint identity mapping',clock_timestamp(),$6) RETURNING id`,
    [tenantId,input.event.id,connectionId,input.event.providerEventId,phone,{direct:true,zammad_customer_id:98231}]);
   assert.equal(normalizedSource.rowCount,1);
+  await tx(async c=>{
+   const repository=new PrivacyRepository({});
+   repository.tenant=(scope,work)=>{assert.equal(scope,tenantId);return work(c)};
+   for(const [scope,value,label] of [['PARTICIPANT',phone,'participant phone'],['PARTICIPANT',bsuid,'participant BSUID'],['ZAMMAD_USER','98231','Zammad user']]){
+    await c.query('SAVEPOINT marketing_preference_delete');
+    try{
+     const job=await createJob(scope,value,'DELETE',c);
+     await repository.discover(job,job.leaseId);
+     job.stage='EXTERNAL';
+     await c.query(`UPDATE privacy_job_targets SET state='EXTERNAL_COMPLETE'
+      WHERE job_id=$1 AND target_type IN ('ZAMMAD_TICKET','ZAMMAD_USER','MEDIA_OBJECT','EXPORT_ARTIFACT','EXPORT_OBJECT')`,[job.id]);
+     await repository.finalize(job,job.leaseId);
+     assert.deepEqual(await readMarketingPreferences(c),unrelatedPreferences,`${label} deletion removes both linked opt-outs only`);
+    }finally{
+     await c.query('ROLLBACK TO SAVEPOINT marketing_preference_delete');
+     await c.query('RELEASE SAVEPOINT marketing_preference_delete');
+    }
+   }
+  });
   // Independent invoker boundary: temp evidence must never seal invented native-customer authority.
   // A fresh worker backend ensures the trigger/validator is first planned with shadows present.
   const capsuleShadow=new Client({...workerConfig,options:'-c statement_timeout=5000 -c lock_timeout=3000'});await capsuleShadow.connect();
@@ -630,6 +668,18 @@ export async function verifyMetaDirectIdentityPostgres(adminUrl,workerConfig,app
    [historical,tenantId,assignmentId,connectionId,versionId,phone,reference(phone),ticketId]));
   const database={withTenant:(scope,fn)=>tx(fn,scope,apiPool),rows:(scope,sql,values)=>tx(async c=>(await c.query(sql,values)).rows,scope,apiPool)};
   const controller=new ZammadInternalController(database,{verify:async()=>({tenantId,instanceId,userId:'3',groupIds:['2'],groupAdmin:false})},{wake:async()=>{throw new Error('Read-only preflight cannot enqueue')}});
+  await queueScenario(async c=>{
+   await c.query("UPDATE normalized_messages SET provider_timestamp='2035-01-15T19:00:00Z' WHERE tenant_id=$1 AND id=$2",
+    [tenantId,normalizedSource.rows[0].id]);
+   await c.query("UPDATE normalized_messages SET provider_timestamp='2035-01-15T20:00:00Z',from_me=true WHERE tenant_id=$1 AND event_inbox_id=$2",
+    [tenantId,confirm.event.id]);
+   const db={withTenant:async(scope,fn)=>{assert.equal(scope,tenantId);return fn(c)},
+    rows:async(scope,sql,values)=>{assert.equal(scope,tenantId);return(await c.query(sql,values)).rows}};
+   const ticketContext=new ZammadInternalController(db,{verify:async()=>({tenantId,instanceId})},
+    {wake:async()=>assert.fail('context cannot wake workers')});
+   const context=await ticketContext.ticketContext('Synthetic native claims',ticketId);
+   assert.equal(context.service_window_expires_at,'2035-01-16T19:00:00.000Z');
+  },apiPool);
   const previousMetaAppId=process.env.META_APP_ID;process.env.META_APP_ID=appId;
   try{
    assert.deepEqual(await controller.outboundPreflight('Synthetic native claims',connectionId,phone,ticketId),{available:true,keep_open:false});
@@ -910,30 +960,28 @@ export async function verifyMetaDirectIdentityPostgres(adminUrl,workerConfig,app
   });
   // A real alias lock delays the final source CAS past lease expiry. Releasing
   // that lock must roll back the preceding alias hold, not commit half a fence.
-  await transitionScenario(async c=>{
+  await withPostgresClock(admin,'app.drain_meta_direct_transitions(uuid,uuid,boolean)',advance=>transitionScenario(async c=>{
    const item=await conservativeItem(false),blocker=await pool.connect();
    try{
     await blocker.query('BEGIN');await blocker.query("SELECT set_config('app.tenant_id',$1,true)",[tenantId]);
     await blocker.query('SELECT id FROM meta_direct_identity_aliases WHERE id=$1 FOR UPDATE',[bsuidAlias]);
-    const lease=(await c.query("UPDATE event_inbox SET lease_expires_at=clock_timestamp()+interval '2 seconds' WHERE id=$1 RETURNING lease_expires_at",[item.event.id])).rows[0];assert(lease.lease_expires_at);
+    const lease=(await c.query("UPDATE event_inbox SET lease_expires_at=clock_timestamp()+interval '10 minutes' WHERE id=$1 RETURNING lease_expires_at::text",[item.event.id])).rows[0];assert(lease.lease_expires_at);
     const before=await transitionSnapshot(c),pid=(await c.query('SELECT pg_backend_pid() pid')).rows[0].pid;
     await c.query('SAVEPOINT initial_hold_expiry');
     const pending=c.query('SELECT app.drain_meta_direct_transitions($1,$2,true) result',[item.event.id,item.leaseId]).then(value=>({value}),error=>({error}));
     let blocked=false;
-    for(let attempt=0;attempt<100;attempt++){
-     if((await admin.query('SELECT cardinality(pg_blocking_pids($1))>0 blocked',[pid])).rows[0].blocked){blocked=true;break;}
-     await new Promise(resolve=>setTimeout(resolve,10));
-    }
+    const deadline=performance.now()+1000;
+    do{
+     blocked=(await admin.query('SELECT cardinality(pg_blocking_pids($1))>0 blocked',[pid])).rows[0].blocked;
+    }while(!blocked&&performance.now()<deadline);
     assert.equal(blocked,true,'Expiry oracle must reach the actual alias lock after admission');
-    // The lease value was returned from PostgreSQL; the wait is tied to that exact
-    // expiry, not an assumed JS timestamp precision or arbitrary scheduler race.
-    await admin.query('SELECT pg_sleep(GREATEST(0,EXTRACT(EPOCH FROM ($1::timestamptz-clock_timestamp())))+0.02)',[lease.lease_expires_at]);
+    await advance(lease.lease_expires_at);
     await blocker.query('ROLLBACK');
     const settled=await pending;assert.equal(settled.error?.code,'55000','Final live-lease CAS denies partial mutation');
     await c.query('ROLLBACK TO SAVEPOINT initial_hold_expiry');
     assert.deepEqual(await transitionSnapshot(c),before,'Expired final CAS rolls back all alias/source changes');
    }finally{await blocker.query('ROLLBACK');blocker.release();}
-  });
+  }));
 
   await transitionScenario(async c=>{
    const before=(await c.query('SELECT * FROM bot_conversations WHERE id=$1',[conversationId])).rows[0];
@@ -1523,6 +1571,7 @@ export async function verifyMetaDirectIdentityPostgres(adminUrl,workerConfig,app
   const deletion=await createJob('TENANT',tenantId,'DELETE');
   await assert.rejects(()=>privacy.discover(deletion,deletion.leaseId),{name:'PrivacyLegalHoldError'});
   await assert.rejects(()=>privacy.finalize(deletion,deletion.leaseId),{name:'PrivacyLegalHoldError'});
+  assert.deepEqual(await tx(readMarketingPreferences),marketingPreferences,'An active hold preserves the stored opt-outs');
   assert.equal((await admin.query('SELECT stage FROM privacy_jobs WHERE id=$1',[deletion.id])).rows[0].stage,'DISCOVER');
   assert.equal((await admin.query('SELECT id FROM privacy_job_targets WHERE job_id=$1',[deletion.id])).rowCount,0);
   assert.equal((await admin.query('SELECT meta_direct_recipient FROM delivery_outbox WHERE id=$1',[deliveries[0]])).rows[0].meta_direct_recipient.redacted,undefined);
@@ -1543,6 +1592,7 @@ export async function verifyMetaDirectIdentityPostgres(adminUrl,workerConfig,app
   assert.equal((await admin.query('SELECT id FROM privacy_legal_holds WHERE id=$1',[lateHoldId])).rowCount,0);
   assert.equal((await admin.query('SELECT stage FROM privacy_jobs WHERE id=$1',[deletion.id])).rows[0].stage,'EXTERNAL');
   const result=await privacy.finalize(deletion,deletion.leaseId);
+  assert.deepEqual(await tx(readMarketingPreferences),[],'Tenant privacy deletion removes its opt-outs once the hold is released');
   assert.equal((await admin.query('SELECT state,stage FROM privacy_jobs WHERE id=$1',[deletion.id])).rows[0].state,'SUCCEEDED');
   assert.equal((await admin.query('SELECT id FROM meta_direct_identity_aliases WHERE tenant_id=$1',[tenantId])).rowCount,0);
   const removedAnchor=(await admin.query('SELECT meta_direct_native_anchor,meta_direct_anchor_retention_job_id FROM event_inbox WHERE id=$1',[input.event.id])).rows[0];

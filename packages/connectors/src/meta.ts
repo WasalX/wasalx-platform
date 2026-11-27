@@ -3,9 +3,12 @@ import { readMetaTemplateInventory } from './meta-template-read.js';
 import { metaTemplateCopyBody, type MetaTemplateCopyRequest } from './meta-template-copy.js';
 import { MetaAccountTransitionCalls } from './meta-account-transition-execute.js';
 import { createHash } from "node:crypto";
+import { recordStructuredLog, safeRequestId } from "@wasalx/observability";
 import { metaAccountFundingProof } from "../../core/src/meta-account-policy.js";
 import {readMetaTransitionInventory} from './meta-account-transition-read.js';
 import type {
+  AgentReplySignal,
+  AgentReplySignalInput,
   ConnectionState,
   DirectProviderMessage,
   DirectProviderIdentityChange,
@@ -89,7 +92,7 @@ export type MetaConfig = {
   wabaIdFor?: (connectionId: string) => string;
   baseUrl?: string;
   timeoutMs?: number;
-  beforeRequest?: () => Promise<void>;
+  beforeRequest?: (purpose?: "agent-reply-signal") => Promise<void>;
   /** Exact final Messages HTTP admission, after upload/preparation. */
   beforeFinancialMutation?: (requestSha256: string) => Promise<void>;
   /** Distinct nonfinancial template-copy effect; stable transition checkpoint is mandatory. */
@@ -649,6 +652,31 @@ export class MetaGroupsAdapter implements MessagingProviderAdapter {
     return metaAccountFundingProof(accountId, owner, funding,new Date(),{value:currency,graphVersion:this.config.graphVersion});
   }
 
+  agentReplySignals(input: AgentReplySignalInput): AgentReplySignal[] {
+    const messageId = validatedMessageId(input.inboundMessageId);
+    const phoneId = this.phoneNumberId(input.connectionId);
+    return [{
+      kind: "read-and-typing",
+      send: async (signal, canType) => {
+        await this.assertTestRecipient({ recipient_type: "individual", ...this.recipientFields({ ...input, recipientType: "DIRECT" }) });
+        let typing = false;
+        const result = await this.request<{ success?: boolean }>(`/${encodeURIComponent(phoneId)}/messages`, {
+          method: "POST",
+          get body() {
+            // Resolve presence at serialization, after the asynchronous request preflight.
+            typing = canType();
+            return { messaging_product: "whatsapp", status: "read", message_id: messageId,
+              ...(typing ? { typing_indicator: { type: "text" } } : {}) };
+          },
+          purpose: "agent-reply-signal",
+          signal,
+        }, "read");
+        if (result?.success !== true) throw invalidResponse("Meta did not acknowledge the reply signal.", true);
+        return typing ? "sent" : "read-only";
+      },
+    }];
+  }
+
   async send(input: SendMessage) {
     if (input.messagingAccountId !== undefined && !/^[0-9]{1,32}$/u.test(input.messagingAccountId))
       throw new ProviderError("Meta account context is unavailable.",false,"META_ACCOUNT_CONTEXT_INVALID");
@@ -821,7 +849,7 @@ export class MetaGroupsAdapter implements MessagingProviderAdapter {
     return{allocationConfigId:allocation,deleted:raw.request_status==="DELETED",requestStatus:raw.request_status};
   }
 
-  private recipientFields(input: SendMessage): { to: string } | { recipient: string } {
+  private recipientFields(input: Pick<SendMessage, "recipientType" | "groupId" | "metaDirectRecipient">): { to: string } | { recipient: string } {
     if (input.recipientType !== "DIRECT") {
       if (input.metaDirectRecipient !== undefined) throw directIdentityError();
       return { to: validatedId(input.groupId, "group ID") };
@@ -888,6 +916,7 @@ export class MetaGroupsAdapter implements MessagingProviderAdapter {
       formData?: FormData;
       headers?: HeadersInit;
       signal?: AbortSignal;
+      purpose?: "agent-reply-signal";
       beforeDispatch?: () => Promise<void>;
     },
     semantics: GraphRequestSemantics,
@@ -903,7 +932,7 @@ export class MetaGroupsAdapter implements MessagingProviderAdapter {
     // A rejected preflight proves that no request was dispatched. Keep its
     // classification outside the network/unknown-effect error boundary.
     if (messageSend) await this.assertTestRecipient(init.body);
-    await this.config.beforeRequest?.();
+    await this.config.beforeRequest?.(init.purpose);
     await init.beforeDispatch?.();
     if (messageSend) {
       const phoneNumberId=/^\/([0-9]{1,32})\/messages$/u.exec(path)?.[1];
@@ -959,9 +988,10 @@ export class MetaGroupsAdapter implements MessagingProviderAdapter {
         const code = metaErrorCode(response.status, parsed);
         const retryable = retryableStatus || code === "META_RATE_LIMITED" || code === "META_SERVER_ERROR";
         const providerError = objectValue(objectValue(parsed)?.error);
-        const concreteRejection = typeof providerError?.code === "number" && Number.isSafeInteger(providerError.code)
-          && providerError.code >= 0 && typeof providerError.message === "string"
-          && boundedString(providerError.message, 4096) !== undefined && !hasControlCharacters(providerError.message);
+        const concreteRejection = code === "META_MARKETING_OPTED_OUT"
+          || (typeof providerError?.code === "number" && Number.isSafeInteger(providerError.code)
+            && providerError.code >= 0 && typeof providerError.message === "string"
+            && boundedString(providerError.message, 4096) !== undefined && !hasControlCharacters(providerError.message));
         const rejectedOutcomeKnown = semantics !== "mutation" || (concreteRejection && !retryable);
         throw new ProviderError(
           safeMetaError(response.status, code, retryable, parsed),
@@ -1018,8 +1048,11 @@ export function assertMetaTestOutboundAllowed(input: SendMessage, scope = parseW
 
 function assertMetaTestRequestAllowed(body: unknown, scope: WahaTestRecipientAllowlist) {
   if (metaTestSendAllowed(scope, body)) return;
-  console.warn("Meta test recipient scope refused outbound request");
-  throw new ProviderError("The recipient is outside the configured test scope.", false, "META_TEST_RECIPIENT_NOT_ALLOWED", undefined, true);
+  const errorCode = "META_TEST_RECIPIENT_NOT_ALLOWED";
+  recordStructuredLog("warn", "meta.test_recipient_scope_refused", {
+    request_id: safeRequestId(), component: "meta-connector", error_code: errorCode,
+  });
+  throw new ProviderError("The recipient is outside the configured test scope.", false, errorCode, undefined, true);
 }
 
 function metaChoiceMessage(text:string,options:Array<{id:string;label:string}>,buttonLabel="Choose"){
@@ -1389,7 +1422,8 @@ function metaErrorCode(status: number, value: unknown) {
   if (graphCode === 131005) return "META_PERMISSION_REQUIRED";
   if (graphCode === 131062) return "META_UNSUPPORTED_MESSAGE";
   if (graphCode === 131009) return "META_INVALID_REQUEST";
-  if (graphCode === 131026 || graphCode === 131050 || graphCode === 131051 || graphCode === 131052 || graphCode === 131053) return "META_DELIVERY_REJECTED";
+  if (graphCode === 131050) return "META_MARKETING_OPTED_OUT";
+  if (graphCode === 131026 || graphCode === 131051 || graphCode === 131052 || graphCode === 131053) return "META_DELIVERY_REJECTED";
   if (status === 429 || graphCode === 4 || graphCode === 17 || graphCode === 32 || graphCode === 613 || graphCode === 130429 || graphCode === 131056) {
     return "META_RATE_LIMITED";
   }
@@ -1408,6 +1442,7 @@ function safeMetaError(status: number, code: string, retryable: boolean, value: 
   let message: string;
   if (code === "META_TEST_RECIPIENT_NOT_ALLOWED") message = "Meta rejected this recipient for the test number.";
   else if (code === "META_AUTHENTICATION_FAILED") message = "Meta credentials are invalid or expired.";
+  else if (code === "META_MARKETING_OPTED_OUT") message = "The contact has stopped WhatsApp marketing messages.";
   else if (code === "META_CUSTOMER_WINDOW_CLOSED") message = "The customer-service window is closed; send an approved template instead.";
   else if (code === "META_PERMISSION_REQUIRED") message = "This Meta number is not permitted to perform the requested action.";
   else if (code === "META_GROUPS_UNAVAILABLE") message = "The requested Meta action is unavailable for this number.";

@@ -170,10 +170,10 @@ test("external routing create and activation require recent MFA before mutation"
 test("keeps read-only external routing definitions parseable without exposing secrets",async()=>{
   const external={...definition,sources:[...definition.sources,{id:"notion",name:"Notion",kind:"NOTION",syncMode:"WEBHOOK",secretReference:`secret://tenants/${tenantId}/routing/notion`,endpointUrl:"https://api.notion.com/v1/data_sources/d9824bdc-8445-4327-be8b-5b47500af6ce/query",fieldMapping:{}},{id:"crm",name:"CRM",kind:"HTTP_JSON",syncMode:"WEBHOOK",secretReference:`secret://tenants/${tenantId}/routing/crm`,endpointUrl:"https://crm.example/routes?tenant=northstar",fieldMapping:{}}]};
   const service=new BotFlowsService({rows:async()=>[{definition:external}]},null,null);
-  const [row]=await service.listRouting({...principal,role:"auditor"});
+  const {items:[row]}=await service.listRouting({...principal,role:"auditor"});
   assert.equal(row.definition.sources[1].secretReference,"secret://redacted/routing/configured");
   assert.equal(row.definition.sources[2].endpointUrl,"https://crm.example/routes");
-  assert.equal((await service.listRouting(principal))[0].definition.sources[2].endpointUrl,"https://crm.example/routes?tenant=northstar");
+  assert.equal((await service.listRouting(principal)).items[0].definition.sources[2].endpointUrl,"https://crm.example/routes?tenant=northstar");
   assert.equal(JSON.stringify(row).includes(tenantId),false);
 });
 
@@ -316,27 +316,118 @@ test("qualifies a draft routing source through one revision-fenced non-mutating 
   assert.equal(calls.some(call=>call.sql.includes("activate_client_routing_version")||call.sql.includes("client_routing_source_state")),false);
 });
 
-test("a failed Notion exchange revokes its claimed tenant and user-bound connection",async()=>{
-  const state="s".repeat(43);let aborted=false;let abortAudit=null;const client={query:async(sql,values=[])=>{
-    if(sql.includes("SELECT privileged_reauth_minutes"))return{rows:[{privileged_reauth_minutes:15}]};
-    if(sql.includes("claim_client_routing_notion_oauth"))return{rows:[{integration_id:"87000000-0000-4000-8000-000000000001",secret_reference:`secret://tenants/${tenantId}/routing/integrations/87000000-0000-4000-8000-000000000001`,redirect_uri:"http://localhost:3000/api/client-routing/oauth/notion/callback"}]};
-    if(sql.includes("abort_client_routing_notion_oauth")){assert.equal(values[1],userId);aborted=true;return{rows:[{integration_id:"87000000-0000-4000-8000-000000000001"}]}}
-    if(sql.includes("INSERT INTO audit_events")){abortAudit=values[6];return{rows:[]}}
-    throw new Error(`Unexpected query: ${sql}`);
-  }};const service=new BotFlowsService({withTenant:async(_tenant,operation)=>operation(client)},null,null,{resolveHmac:async()=>{throw new Error("secret unavailable")}},{notionOAuthEnabled:true,notionOAuthRedirectUri:"http://localhost:3000/api/client-routing/oauth/notion/callback",notionOAuthClientId:"client"},{storeRoutingCredential:async()=>assert.fail("credential must not be stored")});
-  await assert.rejects(()=>service.completeNotionRoutingOAuth(principal,"request",{state,code:"temporary-code"}),/secret unavailable/);
-  assert.equal(aborted,true);assert.deepEqual(abortAudit,{provider:"NOTION",reason:"FAILED"});
+function notionCallbackFixture(t, options = {}) {
+  const state = "s".repeat(43);
+  const stateHash = createHash("sha256").update(state).digest("hex");
+  const integrationId = "87000000-0000-4000-8000-000000000001";
+  const reference = `secret://tenants/${tenantId}/routing/integrations/${integrationId}`;
+  const redirectUri = "http://localhost:3000/api/client-routing/oauth/notion/callback";
+  const workspaceId = "88000000-0000-4000-8000-000000000001";
+  const displayName = "Fixture workspace";
+  const calls = { stores: 0, deletes: 0, aborts: 0, readbacks: [], audits: [] };
+  let committed = false;
+  t.mock.method(globalThis, "fetch", async () => Response.json({
+    access_token: "notion-access-token-value", workspace_id: workspaceId, workspace_name: displayName,
+  }));
+  const client = { query: async (sql, values = []) => {
+    if (sql.includes("SELECT privileged_reauth_minutes")) return { rows: [{ privileged_reauth_minutes: 15 }] };
+    if (/claim_(?:current_)?client_routing_notion_oauth/u.test(sql)) {
+      assert.deepEqual(values, [stateHash, userId]);
+      return { rows: [{ integration_id: integrationId, secret_reference: reference, redirect_uri: redirectUri }] };
+    }
+    if (sql.includes("read_client_routing_notion_oauth")) {
+      assert.deepEqual(values, [stateHash, userId]);
+      const status = committed ? "COMMITTED" : "CLAIMED";
+      calls.readbacks.push(status);
+      if (options.readbackFailure && committed) throw new Error(reference);
+      return { rows: [{
+        integration_id: integrationId, status, display_name: displayName, revision: committed ? "2" : "1",
+        external_account_id: committed ? workspaceId : options.externalAccountId ?? null,
+      }] };
+    }
+    if (/complete_(?:claimed_)?client_routing_notion_oauth/u.test(sql)) {
+      if (options.duplicate) throw Object.assign(new Error("duplicate workspace"), { code: "23505" });
+      committed = true;
+      return { rows: [{ integration_id: integrationId, display_name: displayName, revision: "2" }] };
+    }
+    if (sql.includes("abort_client_routing_notion_oauth")) {
+      assert.deepEqual(values, [stateHash, userId]);
+      calls.aborts++;
+      if (options.abortFailure) throw new Error(reference);
+      return { rows: [{ integration_id: committed ? null : integrationId }] };
+    }
+    if (sql.includes("INSERT INTO audit_events")) {
+      calls.audits.push(values[6]);
+      return { rows: [] };
+    }
+    assert.fail(`Unexpected query: ${sql}`);
+  } };
+  const service = new BotFlowsService({
+    withTenant: async (tenant, operation) => {
+      assert.equal(tenant, tenantId);
+      const wasCommitted = committed;
+      const result = await operation(client);
+      if (options.ackFailure && !wasCommitted && committed) throw new Error(reference);
+      return result;
+    },
+  }, null, null, {
+    resolveHmac: async () => {
+      if (options.exchangeFailure) throw new Error(reference);
+      return "notion-client-secret-value";
+    },
+  }, { notionOAuthEnabled: true, notionOAuthRedirectUri: redirectUri, notionOAuthClientId: "client" }, {
+    storeRoutingCredential: async (storedReference) => { assert.equal(storedReference, reference); calls.stores++; },
+    deleteSecret: async () => { calls.deletes++; },
+  });
+  return {
+    complete: () => service.completeNotionRoutingOAuth(principal, "request", { state, code: "temporary-code" }),
+    calls, integrationId, displayName,
+  };
+}
+
+test("a failed Notion exchange revokes its claimed tenant and user-bound connection", async (t) => {
+  const { complete, calls } = notionCallbackFixture(t, { exchangeFailure: true });
+  await assert.rejects(complete, /Notion connection could not be completed/u);
+  assert.deepEqual(calls, { stores: 0, deletes: 0, aborts: 1, readbacks: ["CLAIMED"], audits: [{ provider: "NOTION", reason: "FAILED" }] });
 });
 
-test("a duplicate Notion workspace deletes the new secret and revokes the connecting record",{concurrency:false},async()=>{
-  const previousFetch=globalThis.fetch;const state="d".repeat(43);let stored=false;let deleted=false;let aborted=false;const client={query:async(sql)=>{
-    if(sql.includes("SELECT privileged_reauth_minutes"))return{rows:[{privileged_reauth_minutes:15}]};
-    if(sql.includes("claim_client_routing_notion_oauth"))return{rows:[{integration_id:"87000000-0000-4000-8000-000000000002",secret_reference:`secret://tenants/${tenantId}/routing/integrations/87000000-0000-4000-8000-000000000002`,redirect_uri:"http://localhost:3000/api/client-routing/oauth/notion/callback"}]};
-    if(sql.includes("complete_client_routing_notion_oauth"))throw Object.assign(new Error("duplicate workspace"),{code:"23505"});
-    if(sql.includes("abort_client_routing_notion_oauth")){aborted=true;return{rows:[{integration_id:"87000000-0000-4000-8000-000000000002"}]}}
-    if(sql.includes("INSERT INTO audit_events"))return{rows:[]};throw new Error(`Unexpected query: ${sql}`);
-  }};try{globalThis.fetch=async()=>new Response(JSON.stringify({access_token:"notion-access-token-value",workspace_id:"88000000-0000-4000-8000-000000000001",workspace_name:"Northstar workspace"}),{status:200,headers:{"content-type":"application/json"}});const service=new BotFlowsService({withTenant:async(_tenant,operation)=>operation(client)},null,null,{resolveHmac:async()=>"notion-client-secret-value"},{notionOAuthEnabled:true,notionOAuthRedirectUri:"http://localhost:3000/api/client-routing/oauth/notion/callback",notionOAuthClientId:"client"},{storeRoutingCredential:async()=>{stored=true},deleteSecret:async()=>{deleted=true}});await assert.rejects(()=>service.completeNotionRoutingOAuth(principal,"request",{state,code:"temporary-code"}),/already connected/)}finally{globalThis.fetch=previousFetch}
-  assert.equal(stored,true);assert.equal(deleted,true);assert.equal(aborted,true);
+test("a duplicate Notion workspace revokes the stage for durable cleanup", async (t) => {
+  const { complete, calls } = notionCallbackFixture(t, { duplicate: true });
+  await assert.rejects(complete, /already connected/u);
+  assert.deepEqual(calls, { stores: 1, deletes: 0, aborts: 1, readbacks: ["CLAIMED", "CLAIMED"], audits: [{ provider: "NOTION", reason: "FAILED" }] });
+});
+
+test("losing the activation acknowledgement preserves the committed Notion connection", async (t) => {
+  const { complete, calls, integrationId, displayName } = notionCallbackFixture(t, { ackFailure: true });
+  const result = await complete().catch((error) => error);
+  assert.equal(calls.deletes, 0);
+  assert.equal(calls.aborts, 0);
+  assert.deepEqual(calls.readbacks, ["CLAIMED", "COMMITTED"]);
+  assert.deepEqual(result, { integrationId, provider: "NOTION", displayName, revision: 2 });
+});
+
+test("failed Notion readback or abort returns only a redacted recovery result", async (t) => {
+  for (const options of [{ ackFailure: true, readbackFailure: true }, { duplicate: true, abortFailure: true }]) {
+    await t.test(JSON.stringify(options), async (subtest) => {
+      const { complete, calls } = notionCallbackFixture(subtest, options);
+      await assert.rejects(complete, (error) => {
+        assert.deepEqual(error.getResponse(), {
+          code: "NOTION_OAUTH_RECOVERY_PENDING",
+          message: "Notion connection status could not be confirmed. Refresh before trying again.",
+        });
+        return true;
+      });
+      assert.equal(calls.deletes, 0);
+      assert.equal(calls.aborts, options.abortFailure ? 1 : 0);
+    });
+  }
+});
+
+test("Notion reconnect rejects a different workspace before writing the active reference", async (t) => {
+  const { complete, calls } = notionCallbackFixture(t, { externalAccountId: "previous-workspace" });
+  await assert.rejects(complete, /same Notion workspace/u);
+  assert.equal(calls.stores, 0);
+  assert.equal(calls.deletes, 0);
 });
 
 test("activation rejects a stale Zammad routing target before mutation",async()=>{

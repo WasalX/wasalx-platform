@@ -16,6 +16,7 @@
   },
   "include": [
     "src/display-time-zone.ts",
+    "src/meta-marketing-preferences.ts",
     "src/meta-test-phone-policy.ts",
     "src/meta-test-recipient-link.ts",
     "src/meta-test-recipient-scope.ts",
@@ -42,6 +43,7 @@
     "src/tenant-permissions.ts",
     "src/ticket-event-runtime.ts",
     "src/outbound-text.ts",
+    "src/delivery.ts",
     "src/ticket-command-guards.ts",
     "src/direct-keep-open.ts",
     "src/direct-customer-close.ts",

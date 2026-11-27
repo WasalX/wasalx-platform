@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readTenantPortalSource } from "./helpers/tenant-portal-source.mjs";
 import { readFile } from "node:fs/promises";
 import ts from "typescript";
 import * as React from "react";
@@ -47,7 +48,7 @@ test("a newer Workspace lifecycle cannot verify the older Team member snapshot",
 });
 
 test("both panels keep the latest shared observation across interleaved Team and Workspace reads", async () => {
-  const source = await readFile(new URL("../app/WasalXApp.tsx", import.meta.url), "utf8");
+  const source = await readTenantPortalSource();
   const ast = ts.createSourceFile("WasalXApp.tsx", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
   const team = ast.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === "TeamAccess") as ts.FunctionDeclaration;
   const declarations = team.body!.statements.filter(node => ts.isVariableStatement(node) && /^(?:const \[nativeAccountRead|const nativeObservationFence|const beginNativeObservationRead|const completeNativeObservationRead)/u.test(node.getText(ast)));

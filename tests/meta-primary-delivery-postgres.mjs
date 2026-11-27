@@ -7,6 +7,8 @@ import {parseMetaDirectIdentity,assertMetaDirectEffectCurrent} from '../packages
 import {resolveMetaDirectMessage} from '../services/connector-worker/dist/services/connector-worker/src/meta-direct-identity.js';
 import {bindMetaPrimaryRouting} from '../services/connector-worker/dist/services/connector-worker/src/meta-routing.js';
 import {OutboxRepository} from '../services/connector-worker/dist/services/connector-worker/src/repository.js';
+import {InboundRepository} from '../services/connector-worker/dist/services/connector-worker/src/inbound-repository.js';
+import {whatsappMarketingOptedOut} from '../services/connector-worker/dist/services/connector-worker/src/whatsapp-marketing-preferences.js';
 import {reserveDirectNativeReply,admitDirectReplyIntent} from '../services/control-api/dist/direct-native-operations.js';
 import {queueOutboundParts} from '../services/control-api/dist/zammad-internal.controller.js';
 import {MetaThreadControlService} from '../services/control-api/dist/meta-thread-control.service.js';
@@ -70,7 +72,7 @@ export async function verifyMetaPrimaryDelivery({admin,db,pool,controller,reques
    await c.query(`INSERT INTO bot_conversations(id,tenant_id,assignment_id,connection_id,flow_version_id,external_chat_id,state,current_node_id,zammad_ticket_id,zammad_ticket_number,last_activity_at,normalized_reference,zammad_customer_id)
     VALUES($1,$2,$3,$4,$5,$6,'BOT','done',$7,$7,clock_timestamp(),$8,$9)`,[conversation,tenantId,assignment,connectionId,version,canonical,ticket,`BOT-${String(index).padStart(12,'0')}`,customer]);
    await c.query(`INSERT INTO normalized_messages(tenant_id,event_inbox_id,connection_id,external_message_id,external_group_id,external_participant_id,message_text,provider_timestamp,provider_metadata)
-    VALUES($1,$2,$3,$4,$5,$5,'Synthetic primary fixture',clock_timestamp(),$6)`,[tenantId,id,connectionId,message.id,canonical,{direct:true,zammad_customer_id:customer}]);
+    VALUES($1,$2,$3,$4,$5,$5,'Synthetic primary fixture',clock_timestamp(),$6)`,[tenantId,id,connectionId,message.id,canonical,{direct:true,input_type:'text',zammad_customer_id:customer}]);
    await c.query("UPDATE event_inbox SET status='PROCESSED',lease_id=NULL,lease_expires_at=NULL WHERE id=$1",[id]);
    const enqueue=async(origin='BOT',source=id,created=null)=>{
     const did=randomUUID();return(await c.query(`INSERT INTO delivery_outbox(id,tenant_id,connection_id,bot_conversation_id,external_chat_id,zammad_ticket_id,zammad_article_id,message_body,content_type,idempotency_key,state,direct_origin,meta_routing_source_event_id,created_at)
@@ -111,7 +113,7 @@ export async function verifyMetaPrimaryDelivery({admin,db,pool,controller,reques
    await resolveMetaDirectMessage(c,{...event,id:newPrimaryId,providerEventId:laterValue.messages[0].id,payload:laterPayload},laterLease,
     {provider:'meta',connectionId,messageId:laterValue.messages[0].id,metaIdentity:parseMetaDirectIdentity(laterValue.messages[0],laterValue.contacts).identity},appId);
    await c.query(`INSERT INTO normalized_messages(tenant_id,event_inbox_id,connection_id,external_message_id,external_group_id,external_participant_id,message_text,provider_timestamp,provider_metadata)
-    VALUES($1,$2,$3,$4,$5,$5,'Synthetic later primary',clock_timestamp(),$6)`,[tenantId,newPrimaryId,connectionId,laterValue.messages[0].id,canonical,{direct:true,zammad_customer_id:customer}]);
+    VALUES($1,$2,$3,$4,$5,$5,'Synthetic later primary',clock_timestamp(),$6)`,[tenantId,newPrimaryId,connectionId,laterValue.messages[0].id,canonical,{direct:true,input_type:'text',zammad_customer_id:customer}]);
    await c.query("UPDATE event_inbox SET status='PROCESSED',lease_id=NULL,lease_expires_at=NULL WHERE id=$1",[newPrimaryId]);
   });
   await db.withTenant(tenantId,async c=>{
@@ -130,6 +132,58 @@ export async function verifyMetaPrimaryDelivery({admin,db,pool,controller,reques
     VALUES($1,$2,$3,$4,$5,$6,'Synthetic agent reply','text/plain',$7,'QUEUED','HUMAN') RETURNING *`,[tenantId,connectionId,conversation,canonical,ticket,String(83000+index),randomUUID()])).rows[0];
    assert.equal(result.meta_routing_source_event_id,newPrimaryId);
    assert.equal(await repository.metaDeliveryContextCurrent(c,{...job,id:result.id,metaDirectRecipientSnapshot:result.meta_direct_recipient}),true);
+   await c.query('SAVEPOINT agent_reply_signals');
+   const laterMessageId=laterValue.messages[0].id;
+   // Freeze an ordered inbound pair before the reply's existing outbox timestamp.
+   await c.query(`INSERT INTO message_links(tenant_id,connection_id,external_message_id,zammad_ticket_id,direction,created_at)
+    VALUES($1,$2,$3,$5,'INBOUND',$6::timestamptz-interval '2 seconds'),
+          ($1,$2,$4,$5,'INBOUND',$6::timestamptz-interval '1 second')`,
+    [tenantId,connectionId,message.id,laterMessageId,ticket,result.created_at]);
+   const replyLease=randomUUID();
+   await c.query(`UPDATE delivery_outbox SET state='SENDING',attempts=1,lease_id=$2,
+      lease_expires_at=clock_timestamp()+interval '1 minute' WHERE id=$1`,[result.id,replyLease]);
+   const signalRepository=Object.create(OutboxRepository.prototype);
+   signalRepository.tenant=async(scope,operation)=>{
+    assert.equal((await c.query('SELECT app.current_tenant_id() AS tenant')).rows[0].tenant,scope);
+    return operation(c);
+   };
+   const signalJob={...job,id:result.id,attempts:1,metaDirectRecipientSnapshot:result.meta_direct_recipient};
+   assert.equal(await signalRepository.admitAgentReplySignal(signalJob,randomUUID()),undefined);
+
+   await c.query('SAVEPOINT reply_signal_paused');
+   await c.query("UPDATE connections SET state='PAUSED' WHERE tenant_id=$1 AND id=$2",[tenantId,connectionId]);
+   assert.equal(await signalRepository.admitAgentReplySignal(signalJob,replyLease),undefined);
+   await c.query('ROLLBACK TO SAVEPOINT reply_signal_paused');
+
+   await c.query('SAVEPOINT reply_signal_other_tenant');
+   await c.query("SELECT set_config('app.tenant_id',$1,true)",[foreignTenant]);
+   assert.equal(await signalRepository.admitAgentReplySignal({...signalJob,tenantId:foreignTenant},replyLease),undefined);
+   await c.query('ROLLBACK TO SAVEPOINT reply_signal_other_tenant');
+
+   await c.query('SAVEPOINT reply_signal_privacy');
+   const privacyJobId=randomUUID();
+   const privacyJob=await c.query(`INSERT INTO privacy_jobs(id,tenant_id,job_type,scope_type,scope_value,disposition,
+    idempotency_key,unmatched_diagnostic_hours_snapshot)
+    SELECT $1::uuid,tenant_id,'RETENTION_SWEEP','TENANT',tenant_id::text,'RETENTION_DELETE',$1::text,
+      unmatched_diagnostic_hours FROM retention_policies WHERE tenant_id=$2`,[privacyJobId,tenantId]);
+   assert.equal(privacyJob.rowCount,1);
+   await c.query(`INSERT INTO privacy_job_targets(tenant_id,job_id,target_type,target_id,target_sha256)
+    SELECT tenant_id,$1,'NORMALIZED_MESSAGE',id::text,encode(digest(id::text,'sha256'),'hex')
+    FROM normalized_messages WHERE tenant_id=$2 AND connection_id=$3 AND external_message_id=$4`,
+    [privacyJobId,tenantId,connectionId,laterMessageId]);
+   assert.equal(await signalRepository.admitAgentReplySignal(signalJob,replyLease),undefined,
+    'A privacy target on the latest inbound prevents signaling an older inbound');
+   await c.query('ROLLBACK TO SAVEPOINT reply_signal_privacy');
+
+   const selected=await signalRepository.admitAgentReplySignal(signalJob,replyLease);
+   assert.equal(selected?.messageId,laterMessageId);
+   assert.equal(selected.canType,true);
+   assert.deepEqual(await signalRepository.admitAgentReplySignal(signalJob,replyLease,selected.id),selected);
+   assert.equal(await signalRepository.admitAgentReplySignal(signalJob,replyLease),undefined);
+   await c.query(`UPDATE delivery_outbox SET state='SENT',external_message_id='wamid.synthetic-reply',
+     lease_id=NULL,lease_expires_at=NULL WHERE id=$1`,[result.id]);
+   assert.deepEqual(await signalRepository.admitAgentReplySignal(signalJob,replyLease,selected.id),{...selected,canType:false});
+   await c.query('ROLLBACK TO SAVEPOINT agent_reply_signals');
    await c.query('SAVEPOINT primary_config_fence');
    await c.query("UPDATE provider_sessions SET provider_state_data=jsonb_set(provider_state_data,'{metaRouting}','{\"version\":1}') WHERE id=$1",[sessionId]);
    assert.equal((await guard(c,participant,[id])).allowed,false);assert.equal(await repository.metaDeliveryContextCurrent(c,job),false);
@@ -188,6 +242,118 @@ export async function verifyMetaPrimaryDelivery({admin,db,pool,controller,reques
  if(failures.length)throw new AggregateError(failures,'Primary delivery failure union');
 
  const last=contexts.at(-1);
+ const route=await db.resolveMetaWebhookRoute(phoneNumberId);
+ assert.equal(route?.tenant_id,tenantId);
+ const phone=last.message.from;
+ const preference=(optedOut,seconds,accountId=wabaId)=>{
+  const marketingPreference={phone,bsuid:null,accountId,optedOut,observedAt:new Date(Date.UTC(2026,10,24,10,0,seconds)).toISOString()};
+  const payloadSha256=createHash('sha256').update(JSON.stringify(marketingPreference)).digest('hex');
+  return{eventType:'user_preferences',providerEventId:'preference:v1:'+payloadSha256,marketingPreference,
+   payload:{redacted:true,payload_sha256:payloadSha256},payloadSha256,routeKey:phoneNumberId,providerSessionKey:phoneNumberId,providerEngine:'CLOUD_API'};
+ };
+ const acceptPreference=(...args)=>db.acceptWebhookEvent(route,preference(...args),appId);
+ const optedOut=c=>whatsappMarketingOptedOut(c,tenantId,connectionId,last.job.metaDirectRecipientSnapshot);
+ assert.equal(await worker(optedOut),false);
+ await assert.rejects(()=>acceptPreference(true,0,'999999'),/Webhook route was not found/);
+ const stop=await acceptPreference(true,1);
+ assert.equal(stop.duplicate,false);
+ assert.deepEqual(await acceptPreference(true,1),{id:stop.id,duplicate:true});
+ assert.equal(await worker(optedOut),true,'The signed phone preference is resolved for the verified direct recipient');
+ assert.equal(await db.withTenant(foreignTenant,optedOut),false);
+ await assert.rejects(()=>db.withTenant(foreignTenant,c=>c.query(
+  "UPDATE whatsapp_marketing_preferences SET tenant_id=$1 WHERE tenant_id=$2",[foreignTenant,tenantId])),{code:'42501'});
+ await assert.rejects(()=>db.withTenant(tenantId,c=>c.query(
+  'UPDATE whatsapp_marketing_preferences SET opted_out=false WHERE tenant_id=$1',[tenantId])),{code:'42501'});
+ await assert.rejects(()=>db.withTenant(foreignTenant,c=>c.query(
+  "INSERT INTO whatsapp_marketing_preferences (tenant_id,subject_kind,subject,opted_out,observed_at) VALUES ($1,'PHONE',$2,true,$3)",
+  [tenantId,phone,'2026-11-24T10:00:00Z'])),{code:'42501'});
+ await acceptPreference(false,1);
+ assert.equal(await worker(optedOut),true,'Stop wins an ambiguous same-second update');
+ const resume=await acceptPreference(false,3);
+ assert.equal((await acceptPreference(false,3)).duplicate,true);
+ await acceptPreference(true,2);
+ assert.equal(await worker(optedOut),false,'An older Stop cannot roll back a confirmed Resume');
+ const seedMarketingDelivery=async(context,state,lease,externalId)=>{
+  const deliveryId=randomUUID();
+  return withFixtureTenant(admin,tenantId,async()=>{
+   const inserted=await admin.query(`INSERT INTO delivery_outbox
+    (id,tenant_id,connection_id,bot_conversation_id,external_chat_id,zammad_ticket_id,
+      message_body,content_type,idempotency_key,state,direct_origin,attempts,lease_id,lease_expires_at,external_message_id,meta_routing_source_event_id)
+    SELECT $1::uuid,tenant_id,connection_id,bot_conversation_id,external_chat_id,zammad_ticket_id,
+      'Synthetic template','text/plain',$1::text,$2,direct_origin,1,$3::uuid,
+      CASE WHEN $3::uuid IS NOT NULL THEN now()+interval '10 minutes' END,$4,meta_routing_source_event_id
+    FROM delivery_outbox WHERE tenant_id=$5 AND id=$6`,[deliveryId,state,lease,externalId,tenantId,context.job.id]);
+   assert.equal(inserted.rowCount,1);
+   await admin.query("INSERT INTO delivery_attempts(tenant_id,delivery_id,attempt_number,state,started_at) VALUES($1,$2,1,$3,$4)",
+    [tenantId,deliveryId,state,'2026-11-24T10:00:04.000Z']);
+   return deliveryId;
+  });
+ };
+ const syncLease=randomUUID(),syncDelivery=await seedMarketingDelivery(last,'SENDING',syncLease,null);
+ await new OutboxRepository(pool).fail({...last.job,id:syncDelivery,attempts:1,
+  template:{name:'synthetic_notice',languageCode:'en_US',bodyParameters:[]}},syncLease,false,
+  'Synthetic marketing rejection',undefined,false,'META_MARKETING_OPTED_OUT');
+ assert.equal(await worker(optedOut),true);
+ await worker(async c=>{
+  const observation=(await c.query("SELECT opted_out FROM whatsapp_marketing_preferences WHERE tenant_id=$1 AND subject_kind='PHONE' AND subject=$2",[tenantId,phone])).rows[0];
+  assert.deepEqual(observation,{opted_out:true});
+  assert.deepEqual((await c.query('SELECT state,provider_code FROM delivery_attempts WHERE tenant_id=$1 AND delivery_id=$2',[tenantId,syncDelivery])).rows,
+    [{state:'FAILED_TERMINAL',provider_code:'META_MARKETING_OPTED_OUT'}]);
+  assert.deepEqual((await c.query('SELECT state,lease_id,manual_retry_allowed FROM delivery_outbox WHERE tenant_id=$1 AND id=$2',[tenantId,syncDelivery])).rows,
+    [{state:'FAILED_TERMINAL',lease_id:null,manual_retry_allowed:false}]);
+ });
+
+ // A status receipt can act only on the recipient of its matched delivery.
+ const inbound=new InboundRepository(pool), first=contexts[0], receiptId=randomUUID(), groupReceiptId=randomUUID();
+ const statusExternalId='wamid.synthetic-'+randomUUID(), groupExternalId='wamid.synthetic-'+randomUUID();
+ await seedMarketingDelivery(first,'SENT',null,statusExternalId);
+ await withFixtureTenant(admin,tenantId,async()=>{
+  for(const id of [receiptId,groupReceiptId]){
+   await admin.query("INSERT INTO event_inbox(id,tenant_id,connection_id,provider,provider_event_id,event_type,payload,payload_sha256,status) VALUES($1::uuid,$2,$3,'META',$1::text,'message.status','{}',$4,'PROCESSED')",
+    [id,tenantId,connectionId,'a'.repeat(64)]);
+  }
+  const group=randomUUID(),ruleFamily=randomUUID(),rule=randomUUID(),binding=randomUUID(),delivery=randomUUID();
+  await admin.query("INSERT INTO whatsapp_groups(id,tenant_id,connection_id,external_group_id,display_name) VALUES($1::uuid,$2,$3,$1::text,'Synthetic preference group')",[group,tenantId,connectionId]);
+  await admin.query("INSERT INTO rule_families(id,tenant_id,name,created_by) VALUES($1::uuid,$2,$1::text,$3)",[ruleFamily,tenantId,actor]);
+  await admin.query("INSERT INTO rule_sets(id,tenant_id,family_id,name,version,state,snapshot_sha256,created_by) VALUES($1::uuid,$2,$3,$1::text,1,'DRAFT',$4,$5)",
+   [rule,tenantId,ruleFamily,createHash('sha256').update('[]').digest('hex'),actor]);
+  await admin.query(`INSERT INTO group_bindings(id,tenant_id,whatsapp_group_id,rule_set_id,zammad_group_id,default_priority,assignment_mode,acknowledgement_template,agent_prefix,retention_days,state)
+   VALUES($1,$2,$3,$4,'Operations','normal','zammad_auto','Synthetic','Agent',30,'DRAFT')`,[binding,tenantId,group,rule]);
+  const {rows}=await admin.query(`INSERT INTO delivery_outbox(id,tenant_id,connection_id,group_binding_id,zammad_ticket_id,zammad_article_id,message_body,content_type,idempotency_key,state,external_message_id)
+   VALUES($1::uuid,$2,$3,$4,'80005','1','Synthetic group message','text/plain',$1::text,'SENT',$5) RETURNING meta_direct_recipient`,[delivery,tenantId,connectionId,binding,groupExternalId]);
+  assert.deepEqual(rows,[{meta_direct_recipient:null}]);
+ });
+ const failedReceipt=(id,externalMessageId)=>inbound.applyDeliveryReceipt(
+  {id,tenantId,connectionId,provider:'meta'},
+  {provider:'meta',connectionId,externalMessageId,scope:'MESSAGE',status:'FAILED',providerStatus:'FAILED',
+   receiptKey:createHash('sha256').update(id).digest('hex'),timestamp:'2026-11-24T10:00:05.000Z',errorCodes:['131050'],metadata:{errorCount:1}});
+ const receiptAuditCount=id=>db.withTenant(tenantId,async c=>(await c.query(
+  "SELECT count(*)::int n FROM audit_events WHERE tenant_id=$1 AND request_id=$2 AND action='whatsapp.marketing_preference_changed' AND new_value->>'reason'='PROVIDER_131050'",
+  [tenantId,id])).rows[0].n);
+ const preferenceRows=()=>worker(async c=>(await c.query(
+  'SELECT id,subject_kind,opted_out,observed_at FROM whatsapp_marketing_preferences WHERE tenant_id=$1 ORDER BY id',[tenantId])).rows);
+ assert.equal(await worker(c=>whatsappMarketingOptedOut(c,tenantId,connectionId,first.job.metaDirectRecipientSnapshot)),false);
+ assert.equal(await failedReceipt(receiptId,statusExternalId),'APPLIED');
+ assert.equal(await worker(c=>whatsappMarketingOptedOut(c,tenantId,connectionId,first.job.metaDirectRecipientSnapshot)),true);
+ assert.equal(await receiptAuditCount(receiptId),1);
+ assert.equal(await failedReceipt(receiptId,statusExternalId),'DUPLICATE');
+ assert.equal(await receiptAuditCount(receiptId),1,'Receipt replay adds no second preference audit');
+ const priorPreferences=await preferenceRows();
+ assert.equal(await failedReceipt(groupReceiptId,groupExternalId),'APPLIED');
+ assert.deepEqual(await preferenceRows(),priorPreferences,'A receipt without a direct recipient leaves preferences intact');
+ assert.equal(await receiptAuditCount(groupReceiptId),0);
+ await db.withTenant(tenantId,async c=>{
+  const accepted=await withFixtureTenant(admin,tenantId,async()=>(await admin.query(
+   'SELECT status,payload,meta_webhook_app_id FROM event_inbox WHERE tenant_id=$1 AND id=$2',[tenantId,stop.id])).rows[0]);
+  assert.deepEqual(accepted,{status:'PROCESSED',payload:preference(true,1).payload,meta_webhook_app_id:appId});
+  const audit=(await c.query("SELECT target_id,new_value,request_id FROM audit_events WHERE request_id=ANY($1::text[]) AND action='whatsapp.marketing_preference_changed'",
+   [[stop.id,resume.id,syncDelivery]])).rows;
+  assert.equal(audit.filter(row=>row.request_id===stop.id&&row.new_value.opted_out&&row.new_value.reason==='PREFERENCE_WEBHOOK').length,1);
+  assert.equal(audit.filter(row=>row.request_id===resume.id&&!row.new_value.opted_out).length,1);
+  assert.ok(audit.some(row=>row.request_id===syncDelivery&&row.new_value.opted_out&&row.new_value.reason==='PROVIDER_131050'));
+  assert.ok(audit.every(row=>/^[a-f0-9-]{36}$/u.test(row.target_id)));
+  assert.ok(!JSON.stringify(audit).includes(phone),'Audit uses IDs and enumerated reasons only');
+ });
  const eligible=c=>c.query('SELECT app.meta_primary_delivery_eligible($1,$2,$3,$4,$5,$6) AS eligible',[connectionId,sessionId,phoneNumberId,wabaId,appId,runtime]).then(r=>r.rows[0].eligible);
  assert.equal(await worker(eligible),true);
  await rotate();

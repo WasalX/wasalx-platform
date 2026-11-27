@@ -17,6 +17,7 @@
   --wx-font-size-5: 1.25rem;
   --wx-font-size-6: 1.5rem;
   --wx-font-size-7: 2rem;
+  --wx-font-size-display: 3.75rem; /* public-page hero only */
   --wx-line-height-compact: 1.25;
   --wx-line-height-default: 1.43;
   --wx-line-height-relaxed: 1.6;
@@ -40,6 +41,7 @@
   --wx-radius-dialog: 0.75rem;
   --wx-control-height: 2.25rem;
   --wx-icon-size: 1.5rem;
+  --wx-icon-size-inline: 1rem;
   --wx-sidebar-width: 15rem;
   --wx-topbar-height: 3.5rem;
   --wx-content-max: 90rem;
@@ -68,6 +70,8 @@
   font-family: var(--wx-font-sans);
 }
 
+/* The root canvas takes the theme too, so overscroll and the area past the content never show the browser default. */
+html:has(.theme-dark),
 .theme-dark {
   --wx-color-page: #09090b;
   --wx-color-sidebar: #0d0d0f;
@@ -86,6 +90,7 @@
   --wx-color-success: #45c58a;
   --wx-color-warning: #f3ad4e;
   --wx-color-danger: #f06b6b;
+  --wx-color-danger-solid: #954242;
   --wx-color-on-solid: #ffffff;
   --wx-color-qr-surface: #ffffff;
   --wx-color-provider-waha: #22a06b;
@@ -103,6 +108,7 @@
   color-scheme: dark;
 }
 
+html:has(.theme-light),
 .theme-light {
   --wx-color-page: #f7f7f8;
   --wx-color-sidebar: #ffffff;
@@ -118,9 +124,10 @@
   --wx-color-accent-strong: #5141c8;
   --wx-color-accent-solid: #6557d8;
   --wx-color-accent-solid-hover: #5141c8;
-  --wx-color-success: #167d53;
-  --wx-color-warning: #a45e09;
-  --wx-color-danger: #c64343;
+  --wx-color-success: #14744d;
+  --wx-color-warning: #965608;
+  --wx-color-danger: #b73737;
+  --wx-color-danger-solid: #7b2a2a;
   --wx-color-on-solid: #ffffff;
   --wx-color-qr-surface: #ffffff;
   --wx-color-provider-waha: #16855a;
