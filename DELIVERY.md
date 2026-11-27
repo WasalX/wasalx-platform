@@ -1,6 +1,6 @@
 # WasalX delivery
 
-Follows engineering standard v1.20.
+Follows engineering standard v1.29.9.
 
 WasalX Delivery owns this document, releases, deploys, rollback, and alerts. See [Test policy](#test-policy) for QA and CI ownership.
 
@@ -9,10 +9,10 @@ Use the [observability runbook](docs/runbooks/alert-response.md) to triage runti
 ## Branching and merging
 
 - Open PRs from short-lived branches against trunk `main`. Merge, split, or close each PR within two days of its first push. Delete merged branches and branches with no PR after seven days without a push.
-- Workers push their own branches and open PRs under the project's agent identity. The queue squashes and requires every PR in a group to pass.
+- Workers push their own branches and open ready PRs under the project's agent identity, with auto-merge on (see the critical PR rule below). The queue squashes and requires every PR in a group to pass.
 - Only critical changes, mapped to paths in [Critical paths](AGENTS.md#critical-paths), get one independent review.
 - For all other changes, the thread that made the change opens its own PR and merges it once required CI is green. No second review or lead sign-off is required. Never bypass required CI or branch protection.
-- For a critical PR, the author enables auto-merge only after the reviewer's passing verdict comment names the current head SHA. Before any later push, disable auto-merge, check queue membership, and remove the PR if queued. A push after the verdict needs a new verdict only when it adds a new critical change. Tests check the fix for a finding, not another review.
+- For a critical PR, only the deciding reviewer posts the verdict, as a comment line `VERDICT: GO <sha>` or `VERDICT: NO_GO <sha>` with the full 40-character head SHA it reviewed. The author enables auto-merge only after a GO names the current head SHA. Before any later push, disable auto-merge, check queue membership, and remove the PR if queued. A later push that leaves every critical path as reviewed needs no new verdict. A push that changes a critical path, and any fix after a NO_GO, gets a re-check of that push only by the same reviewer, ending in a new verdict. Tests check the fix for a finding, not another full review.
 - Update `main` only through the protected queue, which qualifies the exact combined tree. Never force-push or rewrite history.
 - Run agent pushes, PR operations, merges, reruns, and issue and board writes only through the project's reviewed GitHub App helper. Never print its installation token. For settings steps the App cannot perform, see §8 (“Agents try first”) in the delivery-orchestration skill (private).
 
@@ -50,8 +50,10 @@ Run `pre-commit run --files <paths>` for the same source hooks locally. Use `ruf
 
 - The [application Playwright config](playwright.application.config.ts) selects the journeys that run at 820 px. Mark tablet coverage on each journey with `@tablet`.
 
+- Fix each defect at its root cause, and show the cause with evidence (a reproduction, log, trace, or measurement) in its issue or PR. Don't work around it: no one-off special cases, suppressed errors, skipped checks, allowlist entries for real defects, raised retries or timeouts, or manual steps in place of a fix. If the root fix is blocked, name the blocker and wait on it. Rolling back to the last good release during an incident is not a workaround.
+- Code that takes untrusted or varied input, such as parsers, limits, boundaries, and time zones, gets property and edge-case tests. Each bug that reached `main` adds its failing case as a regression test.
 - Fix a failing test or the defect it found. Keep required checks and lint rules in place. CI must pass on its first attempt without skipping tests or widening timeouts. File a flaky test as a High-priority bug and fix it or revert the change that introduced it.
-- WasalX QA owns tests at every layer, the end-to-end journey catalogue, samples and fixtures, coverage, failing and flaky tests, and nightly suite results. QA runs the pre-release sweep. WasalX Delivery owns the [merge gate](#branching-and-merging), pipeline faults, and [CI speed](#checks).
+- WasalX QA owns tests at every layer, the end-to-end journey catalogue, samples and fixtures, coverage, failing and flaky tests, and nightly suite results. File a red nightly run as a bug the same day with the run linked. QA runs the pre-release sweep. WasalX Delivery owns the [merge gate](#branching-and-merging), pipeline faults, and [CI speed](#checks).
 - Revert the offending change if `main` or the merge queue stays red for 30 minutes. Replacements must preserve the original regression coverage. A test file that only detects changes may be removed after two weeks of evidence. Keep authorization, privacy, migration, and concurrency tests.
 - Record known Node unit-test failures in [test-quarantine.json](scripts/test-quarantine.json) with the runner file path, exact test name, owner, and UTC expiry date (`expiresOn`, `YYYY-MM-DD`). The hosted unit reporter labels matching failures and keeps their failing result. A row expires at midnight UTC on its expiry date and fails the unit check.
 - Every test file belongs to a named runner. Keep runner ownership and the coverage inventory current. The [ownership guard](tests/hosted-ci.test.mjs) detects gaps and stale entries.
@@ -145,6 +147,8 @@ The `portal-integration` job enforces the `/app` JavaScript budget. Keep the oth
 
 ## Deviations
 
+WasalX Delivery records deviations. A deviation that relaxes a rule protecting secrets, personal data, or private identifiers is decided by the WasalX Master after one independent review.
+
 | Rule | Reason | Review date |
 | --- | --- | --- |
 | §4 CI privacy check on every push and in the queue | Hosted CI uses generic public patterns. The full deny list and commit identity checks stay in the private pre-push check. | 2026-12-14 |
@@ -159,4 +163,6 @@ The `portal-integration` job enforces the `/app` JavaScript budget. Keep the oth
 | §6 Automatic production backups and quarterly restore tests | There is no production data yet. The [control-plane backup and restore runbook](docs/runbooks/control-plane-backup-restore.md) covers enabling backups, installing the quarterly timer, and recording the first successful host rehearsal. | 2026-12-14 |
 | §1 One formatter and one linter per language in CI | The Keycloak Java extension still lacks formatter and lint checks. | 2026-12-14 |
 | §1 Source-style coverage | Existing files stay outside the source-style gate until the baseline format lands after the `v0.1.0-rc.1` tag. Control API migrations remain outside SQLFluff until hosted coverage proves the PostgreSQL dialect parses them. [Tracking issue #233](https://github.com/WasalX/wasalx-platform/issues/233) | 2026-12-14 |
+| §3 Critical-PR verdict enforced by a step inside `ci-gate` | The step is not built yet. Critical PRs use the manual check above: auto-merge only after a GO names the current head. PRs that change workflow files keep that manual check even after the step lands. | 2026-12-14 |
+| §4 Nightly full test suite on `main` at no cost | Only the installer rehearsal runs nightly. Main pushes do not rerun the test suite (see the full-suite row above). | 2026-12-14 |
 | §6 Staging rollback rehearsal for every release candidate | Staging is not in service. Once it is, deploy each RC, roll back to the previous release, verify health, and record the rehearsal in the deployment audit. | 2026-12-14 |
