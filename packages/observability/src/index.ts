@@ -15,7 +15,7 @@ const INSTRUMENTATION_VERSION = "0.1.0";
 
 const sensitiveKey = /(?:^|_)(?:body|text|payload|secret|token|authorization|cookie|password|qr|pass_?key|phone|reference|url|group_name|messages?|title|filename|api_key|access_key|credentials?|private_key|signature|t?otp|passphrase|hmac|sessions?|jwt|key|sig)(?:_|$)/iu;
 // Provider message, chat, and recipient identifiers can contain phone numbers.
-const personalFieldKey = /(?:^|_)(?:e_?mails?|recipients?|subjects?|contacts?|senders?|user_?names?|push_?names?|chat_ids?|wamids?|wa_?ids?|participants?|authors?|nicknames?|mobiles?|msisdns?|tels?|telephones?|cellphones?|from_numbers?|whatsapp_numbers?|jids?|(?:first|last|full|display|recipient|customer|agent|profile|nick)_names?)(?:_|$)|^(?:names?|customer|number|whatsapp)$/iu;
+const personalFieldKey = /(?:^|_)(?:e_?mails?|recipients?|subjects?|contacts?|senders?|user_?names?|push_?names?|chat_ids?|wamids?|wa_?ids?|participants?|authors?|nicknames?|mobiles?|msisdns?|tels?|telephones?|cellphones?|(?:from|to|caller)_numbers?|whatsapp_numbers?|jids?|(?:first|last|full|display|recipient|customer|agent|profile|nick)_names?)(?:_|$)|^(?:names?|customer|number|whatsapp)$/iu;
 const mobileMetadataKey = /^(?:is_mobile|mobile_platform)$/iu;
 const addressKey = /(?:^|\.)(?:to|from|cc|bcc|reply[ _-]?to|mail[ _-]?from|address)$/iu;
 const internalIdKey = /^(?:contact|sender|subject|e_?mail)_ids?$/iu;
@@ -26,16 +26,19 @@ const phoneZero = String.raw`[0\u0660\u06f0\uff10]`;
 const phoneNonZero = String.raw`[1-9\u0661-\u0669\u06f1-\u06f9\uff11-\uff19]`;
 const barePhonePattern = String.raw`${phoneNonZero}\p{Nd}{9,14}|${phoneZero}\p{Nd}{8,13}|${phoneZero}{2}${phoneNonZero}\p{Nd}{7,13}`;
 const barePhoneLike = new RegExp(`^(?:${barePhonePattern})$`, "u");
-const dateLike = String.raw`(?:\p{Nd}{4}-\p{Nd}{2}-\p{Nd}{2}|\p{Nd}{2}-\p{Nd}{2}-\p{Nd}{4}|\p{Nd}{2}\.\p{Nd}{2}\.\p{Nd}{4})(?![.-]?\p{Nd})`;
+const spacedDateLike = String.raw`(?:0[1-9]|[12]\d|3[01]) (?:0[1-9]|1[0-2]) (?:19|20)\d{2}(?!\s+\p{Nd})`;
+const dateLike = String.raw`(?:\p{Nd}{4}-\p{Nd}{2}-\p{Nd}{2}|\p{Nd}{2}-\p{Nd}{2}-\p{Nd}{4}|\p{Nd}{2}\.\p{Nd}{2}\.\p{Nd}{4}|${spacedDateLike})(?![.-]?\p{Nd})`;
 const phoneStart = String.raw`(?<![\p{L}\p{N}_.]|\p{Nd}-|[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-)(?!${dateLike})`;
 // Only formatted numbers may follow a label hyphen, so label-hyphen-digits IDs (req-<digits>) survive.
 const internationalPrefix = String.raw`(?:\+|${phoneZero}{2}(?=\p{Nd}{0,14}[\s().-]+\p{Nd})[\s.-]*(?=${phoneNonZero}))`;
 const internationalPhonePattern = String.raw`${internationalPrefix}(?:\p{Nd}[\s().-]*){7,14}\p{Nd}`;
 const phoneSeparator = String.raw`[\s.-]+`;
 const countryCodePattern = String.raw`${phoneNonZero}\p{Nd}{0,2}${phoneSeparator}`;
-const groupedPhonePattern = String.raw`(?:(?:\(?\p{Nd}{2,4}\)?${phoneSeparator}){2,3}\p{Nd}{4}|\p{Nd}{3,5}${phoneSeparator}\p{Nd}{6,7})`;
+const groupedPhonePattern = String.raw`(?:(?:\(?\p{Nd}{2,4}\)?${phoneSeparator}){2,3}\p{Nd}{4}|\p{Nd}{3,5}${phoneSeparator}\p{Nd}{6,7}|\p{Nd}{2}\.\p{Nd}{2}\.\p{Nd}{6})`;
+// A bare 4+7 whitespace split with no trunk zero is also a pair of ordinary numbers.
+const spacedNumberPair = String.raw`${phoneNonZero}\p{Nd}{3}\s+\p{Nd}{7}(?!\p{Nd})`;
 const phoneLike = new RegExp(
-  String.raw`${phoneStart}(?:${internationalPhonePattern}|(?:${countryCodePattern})?${groupedPhonePattern}|(?<!-)(?:${barePhonePattern}))(?![\p{L}\p{N}_-]|\.\p{Nd})`,
+  String.raw`${phoneStart}(?:${internationalPhonePattern}|(?:${countryCodePattern}|(?!${spacedNumberPair}))${groupedPhonePattern}|(?<!-)(?:${barePhonePattern}))(?![\p{L}\p{N}_-]|\.\p{Nd})`,
   "gu",
 );
 const trailingToken = /(?<!\S)\S+$/u;
