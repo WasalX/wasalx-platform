@@ -30,13 +30,15 @@ test("synthetic browser traces protect the raw trace", async (t) => {
       writeFile(args.at(-1), "sanitized trace").then(() => done(null), done);
     },
   );
+  t.after(() => {
+    sanitizer.mock.restore();
+    syncBuiltinESMExports();
+  });
   // The helper captures the promisified child process function at import time.
   syncBuiltinESMExports();
-  const { syntheticBrowserTrace } =
-    await import("./helpers/synthetic-browser-trace.mjs").finally(() => {
-      sanitizer.mock.restore();
-      syncBuiltinESMExports();
-    });
+  const { syntheticBrowserTrace } = await import(
+    "./helpers/synthetic-browser-trace.mjs"
+  );
 
   let rawPath;
   let filesBeforeSanitizing;
