@@ -52,9 +52,7 @@ download_nightly_image_manifest() {
   else
     require_main_ancestor "$base" >&2 || return
     candidates=$base
-    if [[ "$mode" == pr-fixture ]]; then
-      candidates=$(git rev-list --first-parent --max-count=5 "$base") || return
-    elif ! git cat-file -e "$base^{commit}"; then
+    if ! git cat-file -e "$base^{commit}"; then
       git fetch --no-tags --depth=1 origin "$base" >&2 || return
     fi
   fi
@@ -89,11 +87,7 @@ download_nightly_image_manifest() {
 
     gh run download "$run" --repo "$GITHUB_REPOSITORY" --name images-manifest --dir "$directory" >&2 || return
     tree=$(git rev-parse "$commit^{tree}") || return
-    if [[ "$mode" == pr-fixture ]]; then
-      catalog=$(cat scripts/release/product-images.json) || return
-    else
-      catalog=$(git show "$commit:scripts/release/product-images.json") || return
-    fi
+    catalog=$(git show "$commit:scripts/release/product-images.json") || return
     complete=$(jq -ers --arg commit "$commit" --arg tree "$tree" --arg repo "$GITHUB_REPOSITORY" \
       --argjson catalog "$catalog" '
       if length == 1 and (.[0] | .schemaVersion == 1 and .repository == $repo and .platform == "linux/amd64"
@@ -111,19 +105,12 @@ download_nightly_image_manifest() {
       continue
     fi
 
-    if [[ "$mode" == pr-fixture ]]; then
-      summary="PR signed-image fixture uses main publication $commit (run $run, PR base $base)."
-    elif [[ "$mode" == latest ]]; then
+    if [[ "$mode" == latest ]]; then
       summary="Selected main publication $commit (run $run), skipped $((examined - 1)) newer commits."
     else
       summary="Exact main publication $commit is complete (run $run)."
     fi
-    if [[ "$mode" == pr-fixture && "$commit" != "$base" ]]; then
-      summary+=" The PR base has no complete green publication."
-      printf '::warning::%s\n' "$summary" >&2
-    else
-      printf '%s\n' "$summary" >&2
-    fi
+    printf '%s\n' "$summary" >&2
     if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
       printf '%s\n' "$summary" >> "$GITHUB_STEP_SUMMARY" || return
     fi
@@ -131,10 +118,7 @@ download_nightly_image_manifest() {
     return
   done <<< "$candidates"
 
-  if [[ "$mode" == pr-fixture ]]; then
-    echo "::error::No complete green main publication for PR fixture base $base in up to five first-parent commits" >&2
-    return 1
-  elif [[ "$mode" == latest ]]; then
+  if [[ "$mode" == latest ]]; then
     summary="BLOCKED: No complete green main publication from the last $max_age_hours hours (searched up to $max_commits first-parent main commits)."
   else
     summary="BLOCKED: Exact main publication for $base is unavailable ($reason)."

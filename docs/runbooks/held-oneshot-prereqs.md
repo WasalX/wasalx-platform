@@ -89,8 +89,6 @@ self-service password reset link.
 
 Upgrade the full Compose files and Keycloak image together. The Compose
 command requires the fenced providers, so an older image fails startup.
-The disposable hosted rehearsal checks the candidate Keycloak image and
-bootstrap separately when it installs a signed image set from an older commit.
 
 Before accepting an invitation, the invitee needs an email-verified account in the `wasalx` realm. Confirm control of the invitation address before provisioning.
 On the full-stack host, set `private_dir` to a directory outside the checkout owned by UID 1000 with mode `0700`. Set `email_file` to a private file containing the address on one line.
