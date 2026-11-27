@@ -439,7 +439,7 @@ export class PrivacyController {
       if (!scope) throw new BadRequestException("Target is unavailable");
       const digest = scopeHash(scope.type,scope.value);
       if (requestType === "DELETE" && await hasApplicableHold(client, scope)) {
-        throw new ConflictException("An active legal hold blocks this deletion scope");
+        throw new ConflictException({ code: "LEGAL_HOLD_ACTIVE", message: "An active legal hold blocks this deletion scope" });
       }
       const privacyRequest = (
         await client.query<{ id: string; state: string }>(

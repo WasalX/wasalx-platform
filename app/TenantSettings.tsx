@@ -607,8 +607,10 @@ export function PrivacyRequestDialog({requestType,mutationHeaders,close,complete
         body:JSON.stringify({requestType,scopeType,scopeValue:needsValue?privacyFriendlyScopeValue(scopeType,scopeValue):undefined,selection_sha256:target.selection?.selection_sha256,confirmation:requestType==="DELETE"?confirmation:undefined})});
       if(!execution.isCurrent())return;
       if(!response.ok){
-        const message=response.status===409?t("tenant.privacy.target.stale"):await apiError(response);
-        if(execution.isCurrent()){if([401,403,409].includes(response.status))target.clear();setError(message);}
+        // A hold refusal keeps the chosen target: picking it again cannot help.
+        const held=response.status===409&&((await response.clone().json().catch(()=>null)) as {code?:unknown}|null)?.code==="LEGAL_HOLD_ACTIVE";
+        const message=held?t("tenant.privacy.error.holdBlocksDeletion"):response.status===409?t("tenant.privacy.target.stale"):await apiError(response);
+        if(execution.isCurrent()){if(!held&&[401,403,409].includes(response.status))target.clear();setError(message);}
         return;
       }
       const returned=parsePrivacyMutationAcknowledgement(await response.json(),requestType,scopeType);
