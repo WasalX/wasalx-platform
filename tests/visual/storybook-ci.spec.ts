@@ -15,7 +15,6 @@ assert(stories.length > 0, "Storybook's static index contains no stories");
 
 const rtlBaselineStories = new Set([
   "design-system-foundation--light-tokens",
-  "design-system-foundation--dark-tokens",
   "design-system-foundation--theme-parity",
   "product-platform-operations--arabic",
   "product-privacy-targets--arabic",

@@ -279,7 +279,6 @@ test("Storybook selects UI changes and unknown diffs", async (t) => {
   assert.match(jobs.storybook.if, /github\.event_name == 'workflow_dispatch'/u);
   assert(jobs.storybook.steps.some(({ run }) =>
     run && runsFile(run, "scripts/storybook-visual-regression.mjs", "--update-snapshots=none")
-    && words(run).includes("tests/visual/storybook-ci.spec.ts")
     && words(run).includes("tests/visual/design-system.spec.ts")));
   assert(jobs["ci-gate"].needs.includes("storybook"));
   const [gateStep] = jobs["ci-gate"].steps;

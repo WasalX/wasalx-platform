@@ -12,11 +12,7 @@
       "p95_minutes": 0.2
     },
     "storybook": {
-      "measured_at": "2026-11-27",
-      "runs": 1,
-      "first_run": 45932082363,
-      "last_run": 45932082363,
-      "p95_minutes": 5.8333
+      "p95_minutes": 4.4333
     },
     "dependency-review": {
       "p95_minutes": 0.25
