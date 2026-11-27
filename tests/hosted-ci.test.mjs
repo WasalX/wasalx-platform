@@ -290,11 +290,12 @@ test("Storybook selects UI changes and unknown diffs", async (t) => {
   t.after(() => rm(directory, { recursive: true, force: true }));
   const output = join(directory, "output");
 
-  for (const [status, expected] of [[0, "false"], [1, "true"], [128, "true"]]) {
+  const base = "a".repeat(40);
+  for (const [baseRef, status, expected] of [[base, 0, "false"], [base, 1, "true"], [base, 128, "true"], ["", 0, "true"]]) {
     await writeFile(output, "");
     const result = runWorkflowScript(
       `git() { case " $* " in *" app/ "*) return "$DIFF_STATUS";; *) return 0;; esac; }\n${selection.run}`,
-      { BASE: "a".repeat(40), DIFF_STATUS: String(status), GITHUB_OUTPUT: output },
+      { BASE: baseRef, DIFF_STATUS: String(status), GITHUB_OUTPUT: output.replaceAll("\\", "/") },
     );
     assert.equal(result.status, 0, result.stderr);
     assert.equal((await readFile(output, "utf8")).trim(), `needed=${expected}`);
@@ -1393,7 +1394,7 @@ test("PR image results gate affected changes while the merge queue requires the 
   assert.equal(imageBuilder.uses, publisherBuilder.uses);
   assert.equal(imageBuilder.with.version, publisherBuilder.with.version);
   assert.equal(imageBuilder.with["cache-binary"], true);
-  assert.equal(publisherBuilder.with["cache-binary"], true);
+  assert.equal(publisherBuilder.with["cache-binary"], false);
   assert.equal(imageBuilder.with.cleanup, false);
   assert.equal(images["continue-on-error"], undefined);
   assert.equal(prImages["continue-on-error"], undefined);
@@ -1466,26 +1467,32 @@ test("main publication requires a successful queue gate for the exact commit", a
 gh() {
   case "$*" in
     *"/actions/workflows/ci.yml/runs -f event=merge_group -f head_sha=$GITHUB_SHA "*) printf '%s\n' "$RUNS" ;;
-    "api repos/$GITHUB_REPOSITORY/actions/runs/123/attempts/2/jobs?per_page=100") printf '%s\n' "$JOBS" ;;
+    "api --paginate --slurp repos/$GITHUB_REPOSITORY/actions/runs/123/attempts/2/jobs?per_page=100")
+      printf '%s\n' "$JOB_PAGES" ;;
+    "api repos/$GITHUB_REPOSITORY/actions/runs/123/attempts/2/jobs?per_page=100")
+      jq '.[0]' <<< "$JOB_PAGES" ;;
     *) return 99 ;;
   esac
 }
 `;
-  for (const [candidate, job, expected] of [
-    [row, gate, true],
-    [null, gate, false],
-    [row, null, false],
-    [{ ...row, head_sha: "b".repeat(40) }, gate, false],
-    [{ ...row, event: "pull_request" }, gate, false],
-    [{ ...row, head_branch: "gh-readonly-queue/other/pr-1" }, gate, false],
-    [row, { ...gate, conclusion: "failure" }, false],
-    [row, { ...gate, status: "in_progress" }, false],
+  const otherJobs = Array.from({ length: 100 }, (_, index) => ({ name: `Build image ${index}` }));
+  for (const [candidate, pages, expected] of [
+    [row, [[gate]], true],
+    [row, [otherJobs, [gate]], true],
+    [row, [[gate, ...otherJobs.slice(1)], [gate]], false],
+    [null, [[gate]], false],
+    [row, [[]], false],
+    [{ ...row, head_sha: "b".repeat(40) }, [[gate]], false],
+    [{ ...row, event: "pull_request" }, [[gate]], false],
+    [{ ...row, head_branch: "gh-readonly-queue/other/pr-1" }, [[gate]], false],
+    [row, [[{ ...gate, conclusion: "failure" }]], false],
+    [row, [[{ ...gate, status: "in_progress" }]], false],
   ]) {
     await writeFile(summary, "");
     const result = runWorkflowScript(mock + script, {
       GITHUB_SHA: sha, GITHUB_REPOSITORY: repo, GITHUB_STEP_SUMMARY: summary,
       RUNS: JSON.stringify({ total_count: candidate ? 1 : 0, workflow_runs: candidate ? [candidate] : [] }),
-      JOBS: JSON.stringify({ jobs: job ? [job] : [] }),
+      JOB_PAGES: JSON.stringify(pages.map(jobs => ({ total_count: pages.flat().length, jobs }))),
     });
     assert.ifError(result.error);
     assert.equal(result.status === 0, expected, result.stderr);
@@ -1635,15 +1642,19 @@ test("optional PR lanes run on diff errors and gate their applicable checks", as
   ]) {
     const detector = changes.steps.find(step => step.id === id);
     assert.equal(detector.if, id === "infra" || id === "zammad" ? undefined : "github.event_name == 'pull_request'");
-    if (id === "infra") assert.equal(detector.env.BASE, "${{ steps.selector-base.outputs.sha }}");
-    for (const [status, needed] of [[0, false], [1, true], [128, true]]) {
-      const outputFile = join(directory, `${id}-${status}`);
+    const usesSharedBase = id === "infra" || id === "zammad";
+    if (usesSharedBase) assert.equal(detector.env.BASE, "${{ steps.selector-base.outputs.sha }}");
+    const cases = [["HEAD^1", 0, false], ["HEAD^1", 1, true], ["HEAD^1", 128, true]];
+    if (usesSharedBase) cases.push(["", 0, true]);
+    for (const [baseRef, status, needed] of cases) {
+      const outputFile = join(directory, `${id}-${baseRef ? status : "empty"}`);
       const result = runWorkflowScript(`git() {
-  if [[ "$*" == "merge-base --is-ancestor HEAD^1 HEAD" && "$LANE" == zammad ]]; then return 0; fi
   test "$*" = "diff --quiet --no-ext-diff --no-renames HEAD^1 HEAD -- $DIFF_PATHS" || exit 99
   return "$DIFF_STATUS"
 }
-${detector.run}`, { GITHUB_OUTPUT: outputFile.replaceAll("\\", "/"), DIFF_PATHS: diffPaths, DIFF_STATUS: String(status), BASE: "HEAD^1", LANE: id });
+${detector.run}`, {
+        GITHUB_OUTPUT: outputFile.replaceAll("\\", "/"), DIFF_PATHS: diffPaths, DIFF_STATUS: String(status), BASE: baseRef,
+      });
       assert.equal(result.status, 0, result.error?.message ?? result.stderr);
       assert.equal((await readFile(outputFile, "utf8")).trim(), `needed=${needed}`);
     }
@@ -1714,7 +1725,9 @@ ${detector.run}`, { GITHUB_OUTPUT: outputFile.replaceAll("\\", "/"), DIFF_PATHS:
 test("Zammad compatibility selects changes to outbound dependencies and service build inputs", async t => {
   const { jobs } = parse(await read(".github/workflows/ci.yml"));
   const { run, env } = jobs.changes.steps.find(step => step.id === "zammad");
-  assert.equal(env.BASE, "${{ github.event_name == 'pull_request' && 'HEAD^1' || github.event.merge_group.base_sha }}");
+  const selector = jobs.changes.steps.find(step => step.id === "selector-base");
+  assert.equal(env.BASE, "${{ steps.selector-base.outputs.sha }}");
+  assert.equal(selector.env.BASE, "${{ github.event_name == 'pull_request' && 'HEAD^1' || github.event.merge_group.base_sha }}");
   const directory = await mkdtemp(join(tmpdir(), "zammad-compatibility-selection-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const git = (...args) => execFileSync("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", ...args], {
@@ -1724,11 +1737,15 @@ test("Zammad compatibility selects changes to outbound dependencies and service 
   git("commit", "--quiet", "--allow-empty", "-m", "Base");
   const base = git("rev-parse", "HEAD").trim();
   const output = join(directory, "selection");
-  const selected = async baseRef => {
+  const runSelector = async (script, baseRef) => {
     await writeFile(output, "");
-    const result = runWorkflowScript(run, { BASE: baseRef, GITHUB_OUTPUT: output.replaceAll("\\", "/") }, directory);
+    const result = runWorkflowScript(script, { BASE: baseRef, GITHUB_OUTPUT: output.replaceAll("\\", "/") }, directory);
     assert.equal(result.status, 0, result.error?.message ?? result.stderr);
     return (await readFile(output, "utf8")).trim();
+  };
+  const selected = async baseRef => {
+    const resolved = await runSelector(selector.run, baseRef);
+    return runSelector(run, resolved.replace(/^sha=/u, ""));
   };
   for (const [path, expected] of [
     ["services/control-api/src/ticket-reply-target.ts", true],
@@ -1757,6 +1774,9 @@ test("Zammad compatibility selects changes to outbound dependencies and service 
   assert.equal(await selected(git("rev-parse", "HEAD^1").trim()), "needed=false", "a docs-only group skips compatibility");
   assert.equal(await selected(""), "needed=true", "a missing base cannot skip compatibility");
   assert.equal(await selected("0".repeat(40)), "needed=true", "an unresolvable base cannot skip compatibility");
+  const nonAncestor = git("commit-tree", git("rev-parse", "HEAD^{tree}").trim(), "-p", base, "-m", "Other branch").trim();
+  git("diff", "--quiet", nonAncestor, "HEAD");
+  assert.equal(await selected(nonAncestor), "needed=true", "a clean diff against a non-ancestor cannot skip compatibility");
 });
 
 test("Zammad compatibility gates CI and reuses the same job on the nightly schedule", async () => {

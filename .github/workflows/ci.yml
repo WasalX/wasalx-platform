@@ -134,11 +134,10 @@ jobs:
           echo "needed=$needed" >> "$GITHUB_OUTPUT"
       - id: zammad
         env:
-          BASE: ${{ github.event_name == 'pull_request' && 'HEAD^1' || github.event.merge_group.base_sha }}
+          BASE: ${{ steps.selector-base.outputs.sha }}
         run: |
           needed=true
-          if [[ -n "$BASE" ]] && git merge-base --is-ancestor "$BASE" HEAD &&
-            git diff --quiet --no-ext-diff --no-renames "$BASE" HEAD -- \
+          if [[ -n "$BASE" ]] && git diff --quiet --no-ext-diff --no-renames "$BASE" HEAD -- \
             compose.full.yaml .dockerignore infra/docker/Dockerfile.zammad infra/docker/full/zammad/ \
             zammad-addon.json zammad-package/ build/zammad/ release/installer-images.json \
             ':(glob)scripts/*zammad*' ':(glob)scripts/contracts/*mailbox*' scripts/release/operator-input.mjs \
