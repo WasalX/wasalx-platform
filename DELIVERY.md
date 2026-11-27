@@ -62,6 +62,8 @@ Before every push, run the private privacy check on the diff, commits, branch na
 
 The [public privacy workflow](.github/workflows/privacy.yml) scans newly introduced commit text, paths, added lines, and PR and issue titles and bodies with generic patterns. The scan runs on branch pushes, PRs, and the merge queue. `ci-gate` fails if the scan fails on a PR, in the queue, or on a push to main. PR title or body edits trigger the privacy workflow by itself. Issue findings appear in Actions after publication. Findings show a location, line, and rule, and redact paths that match a rule.
 
+The byte-line scan exempts PNGs directly in the Linux visual baseline directory when the committed blob has valid chunk framing and checksums and contains only the allowed non-text chunk types. The scan still checks baseline paths. An invalid baseline produces a `binary-png` finding and remains subject to the byte-line scan. See the [public scanner](scripts/public-privacy.py).
+
 ## Environments
 
 | Environment | Use and data |
