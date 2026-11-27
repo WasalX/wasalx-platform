@@ -1,5 +1,6 @@
 import { expect, type Page, type TestInfo } from "@playwright/test";
 import { getMessages } from "../../lib/i18n/messages";
+import { journeyCapturePath } from "./journey-captures.mjs";
 
 export async function captureTenantDesign(
   page: Page,
@@ -52,13 +53,15 @@ export async function captureTenantDesign(
         `theme-${theme}`,
       );
       const screen = view === "overview" ? "shell" : view;
-      await testInfo.attach(
-        `${screen}-${locale}-${testInfo.project.name}-${theme}`,
-        {
-          body: await page.screenshot({ animations: "disabled" }),
-          contentType: "image/png",
-        },
-      );
+      await page.screenshot({
+        path: journeyCapturePath(
+          `tenant-${screen}`,
+          testInfo.project.name,
+          theme,
+          locale,
+        ),
+        animations: "disabled",
+      });
     }
   }
 }
