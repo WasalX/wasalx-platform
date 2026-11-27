@@ -21,6 +21,8 @@ For `WasalXOutboundQueueStalled`, compare delivery queue age and depth with work
 
 For `WasalXDurableWorkQueueStalled`, break down queue age and depth by `queue`. Compare the affected queue with scheduler heartbeat, worker readiness, and database metrics. Inspect the oldest item's safe state for a blocked lease, scheduled retry, or terminal error. Recover the affected processor and confirm work resumes through its normal lease path.
 
+For `native_projection.failed`, use `projection` to locate the membership or routing worker. The `discovery` phase ends the current pass. The `tenant` phase allows the pass to continue, and `wake` identifies an immediate background operation. After restoring the dependency, confirm eligible work advances on the next scheduled pass and use the existing reconciliation flow for uncertain native effects.
+
 ## Inbound latency
 
 For `WasalXInboundLatencySLOBreach`, compare the acceptance-to-Zammad p95 with sample volume and inbox age. Use traces to distinguish inbox wait from ticket or article operation time. Follow [inbound queue stalled](#inbound-queue-stalled) or [Zammad errors](#zammad-errors) based on the slow stage, then confirm p95 recovery under comparable traffic.
