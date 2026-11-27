@@ -1,23 +1,21 @@
 # Published product images
 
-The `ci` workflow builds and inspects affected images for pull requests and
-merge-queue runs. Shared or unrecognized inputs and unavailable diffs trigger
-all 21 catalog images. The PR and merge-queue `ci-gate` checks cover these
-builds, which run without registry login, package writes or OIDC.
+The CI workflow requires affected PR image builds and inspects every catalog
+entry in the merge queue. Queue and PR builds use the public source archive
+and pinned inputs. They can import public GHCR cache layers and have read-only
+workflow permissions.
 
-On a push to `main`, `ci` calls `release` in
-`.github/workflows/branch-image.yml` to build, inspect, publish, sign and
-attest the full catalog. Package writes are limited to the publish and alias
-jobs. OIDC is limited to the publish lanes. DEV admission uses a successful
-`ci` push run and its complete `images-manifest` for the exact commit.
-The manifest job summary records whether immutable publication is complete.
+On a push to `main`, CI calls
+[branch-image.yml](../../.github/workflows/branch-image.yml). Publication
+requires a successful merge-queue `ci-gate` for the exact commit and tree.
+Each publish job builds and inspects its own image from that commit, exports
+GHCR cache layers for heavy images, then publishes, signs, and verifies the
+image digest. DEV admission uses the successful publish run and complete
+`images-manifest` for the exact commit.
 
-The publish jobs on `main` export one GHCR cache tag per heavy
-image, without importing layers. PR and merge-queue builds import those
-layers anonymously and run the same image inspection. The cache package
-must be public for anonymous cache hits. The first publish creates the
-package and seeds the cache. Check the anonymous access before claiming a
-warm-cache timing. Cosign produces the signature and SLSA attestation.
+The GHCR cache package must be public for anonymous cache hits. The first
+publish creates the package and seeds the cache. Check anonymous access before
+claiming a warm-cache timing. Cosign produces the signature and SLSA attestation.
 The [registry retry policy](../../scripts/release/image_registry_retry.py)
 allows at most three attempts for recognized transient HTTP and network
 failures or a registry command deadline. The immutable image push also retries

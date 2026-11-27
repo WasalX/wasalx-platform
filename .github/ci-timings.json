@@ -26,9 +26,6 @@
     "full-unit": {
       "p95_minutes": 2.2167
     },
-    "lint-on-push": {
-      "p95_minutes": 0.6
-    },
     "integration": {
       "p95_minutes": 3.05
     },
