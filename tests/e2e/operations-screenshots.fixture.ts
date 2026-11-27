@@ -112,6 +112,56 @@ export function registerOperationsScreenshots(locale: "en" | "ar") {
                 (element) => element.scrollWidth - element.clientWidth,
               ),
             ).toBeLessThanOrEqual(0);
+            // On phone cards each status badge ends at the inline end of its row, in both directions.
+            const badgeGaps = await table
+              .locator("tbody tr")
+              .evaluateAll((rows) =>
+                rows
+                  .filter((row) => getComputedStyle(row).display === "grid")
+                  .map((row) => {
+                    const style = getComputedStyle(row);
+                    const box = row.getBoundingClientRect();
+                    const badge = row
+                      .querySelector("td:nth-child(4) .status")!
+                      .getBoundingClientRect();
+                    return style.direction === "rtl"
+                      ? badge.left - box.left - parseFloat(style.paddingLeft)
+                      : box.right - parseFloat(style.paddingRight) - badge.right;
+                  }),
+              );
+            if (testInfo.project.name === "mobile-390") {
+              expect(badgeGaps.length).toBeGreaterThan(0);
+            }
+            for (const gap of badgeGaps) {
+              expect(Math.abs(gap)).toBeLessThanOrEqual(1);
+            }
+            // The italic redacted excerpt keeps its slanted last glyph unless the text really overflows.
+            const clippedExcerpts = await table
+              .locator(".redacted-message .excerpt")
+              .evaluateAll((excerpts) => {
+                const context = document
+                  .createElement("canvas")
+                  .getContext("2d")!;
+                return excerpts.filter((excerpt) => {
+                  const style = getComputedStyle(excerpt);
+                  if (
+                    style.fontStyle !== "italic" ||
+                    style.direction === "rtl" ||
+                    excerpt.scrollWidth > excerpt.clientWidth
+                  ) {
+                    return false;
+                  }
+                  context.font = style.font;
+                  const ink = context.measureText(
+                    excerpt.textContent ?? "",
+                  ).actualBoundingBoxRight;
+                  return (
+                    parseFloat(style.paddingLeft) + ink >
+                    excerpt.getBoundingClientRect().width
+                  );
+                }).length;
+              });
+            expect(clippedExcerpts).toBe(0);
           }
           const fullPage = state !== "detail";
           if (fullPage) {
