@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -48,6 +49,85 @@ test("release promotion uses existing tags and the intended environment protecti
   assert.equal(jobs.prod.if, "${{ !contains(github.ref_name, '-rc.') }}");
   assert.equal(preflight.if, jobs.prod.if);
   assert.match(preflight.steps[0].run, /^\[\[ "\$\{GITHUB_REF_NAME,,\}" != \*-rc\.\* \]\] \|\| \{ [^\n]*; exit 1; \}$/mu);
+});
+
+test("release promotion verifies the registry's exact manifest bytes", () => {
+  const bash =
+    process.platform === "win32" ? "C:/Program Files/Git/bin/bash.exe" : "bash";
+  const image = "registry.example/fixture/worker";
+  const tag = "v1.2.3-rc.1";
+  const manifest =
+    '{"schemaVersion":2,"mediaType":"application/vnd.docker.distribution.manifest.v2+json"}';
+  const digest = `sha256:${createHash("sha256").update(manifest).digest("hex")}`;
+  const fixture = String.raw`
+source() { [[ "$1" == scripts/release/image-manifest.sh ]]; }
+git() { printf 'fixture-commit\n'; }
+require_tag_commit() { :; }
+mktemp() { printf 'fixture-directory\n'; }
+download_main_image_manifest() { :; }
+cosign() { :; }
+python3() { :; }
+jq() {
+  case "$2" in
+    '.linuxAmd64Sha256') printf 'fixture-pin\n' ;;
+    '.images[].pullReference') printf '%s@%s\n' "$FIXTURE_IMAGE" "$FIXTURE_DIGEST" ;;
+    *) return 2 ;;
+  esac
+}
+sha256sum() {
+  if [[ "$*" == '--check --strict' ]]; then cat >/dev/null; else command sha256sum "$@"; fi
+}
+docker() {
+  local alias="$FIXTURE_IMAGE:$GITHUB_REF_NAME"
+  case "$*" in
+    "buildx imagetools create --prefer-index=false --tag $alias $FIXTURE_IMAGE@$FIXTURE_DIGEST") ;;
+    "buildx imagetools inspect --format {{.Manifest.Digest}} $alias")
+      printf 'Name: %s\nMediaType: application/vnd.docker.distribution.manifest.v2+json\nDigest: %s\n' "$alias" "$FIXTURE_DIGEST"
+      ;;
+    "buildx imagetools inspect --raw $alias") printf '%s' "$FIXTURE_MANIFEST" ;;
+    *) return 2 ;;
+  esac
+}
+gh() {
+  case "$1 $2" in
+    'release view') printf 'release not found\n'; return 1 ;;
+    'release create') printf 'prerelease created\n' ;;
+    *) return 2 ;;
+  esac
+}
+builtin source scripts/release/promote-tag.sh
+`;
+  for (const bytes of [manifest, `${manifest}\n`]) {
+    const result = spawnSync(bash, ["--noprofile", "--norc", "-c", fixture], {
+      cwd: fileURLToPath(new URL("../", import.meta.url)),
+      encoding: "utf8",
+      timeout: 10_000,
+      windowsHide: true,
+      env: {
+        ...process.env,
+        GITHUB_REPOSITORY: "WasalX/wasalx-platform",
+        GITHUB_EVENT_NAME: "push",
+        GITHUB_REF: `refs/tags/${tag}`,
+        GITHUB_REF_NAME: tag,
+        RUNNER_TEMP: "fixture-temp",
+        FIXTURE_IMAGE: image,
+        FIXTURE_DIGEST: digest,
+        FIXTURE_MANIFEST: bytes,
+      },
+    });
+    assert.ifError(result.error);
+    if (bytes === manifest) {
+      assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+      assert.equal(result.stdout.trim(), "prerelease created");
+    } else {
+      assert.equal(result.status, 1, `${result.stdout}${result.stderr}`);
+      const actual = `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
+      assert.equal(
+        result.stdout.trim(),
+        `::error::Digest mismatch for ${image}:${tag} (expected ${digest}, got ${actual})`,
+      );
+    }
+  }
 });
 
 test("stable release preflight requires successful main CI and a published RC for the same commit", async () => {
