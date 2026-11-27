@@ -1,10 +1,12 @@
 import json
 import os
 from pathlib import Path
+import struct
 import subprocess
 import sys
 import tempfile
 import unittest
+import zlib
 
 
 SCANNER = Path(__file__).resolve().parents[1] / "scripts/public-privacy.py"
@@ -13,6 +15,23 @@ IP = ".".join(("172", "19", "7", "42"))
 HOST = ".".join(("sample", "internal"))
 PATH = "Q:" + "\\Users\\sample\\config"
 KEY = "-----BEGIN " + "OPENSSH PRIVATE KEY-----"
+
+BASELINE = "tests/visual/__screenshots__/linux/sample.png"
+
+
+def png_chunk(kind, payload):
+    chunk = kind + payload
+    return struct.pack(">I", len(payload)) + chunk + struct.pack(">I", zlib.crc32(chunk))
+
+
+def sample_png(pixels=b"\0", ancillary=b""):
+    return b"".join((
+        b"\x89PNG\r\n\x1a\n",
+        png_chunk(b"IHDR", struct.pack(">IIBBBBB", len(pixels), 1, 8, 0, 0, 0, 0)),
+        ancillary,
+        png_chunk(b"IDAT", zlib.compress(b"\0" + pixels, level=0)),
+        png_chunk(b"IEND", b""),
+    ))
 
 
 class PublicPrivacyTest(unittest.TestCase):
@@ -153,6 +172,61 @@ class PublicPrivacyTest(unittest.TestCase):
         head = self.commit("Replace symlink with a file")
         self.assertEqual(self.scan("pull_request", self.pr(), 1, head), [
             'privacy "mode-fixture":1 github-token',
+        ])
+
+    def write_png(self, data, path=BASELINE):
+        file = self.repo / path
+        file.parent.mkdir(parents=True, exist_ok=True)
+        file.write_bytes(data)
+
+    def test_pr_accepts_valid_baseline_from_earlier_commit(self):
+        self.write_png(sample_png(PATH.encode("ascii")))
+        self.commit("Add screenshot")
+        (self.repo / BASELINE).unlink()
+        head = self.commit("Remove screenshot")
+        self.assertEqual(self.scan("pull_request", self.pr(), 0, head), [])
+
+    def test_pr_scans_png_bytes_outside_the_direct_baseline_directory(self):
+        path_bytes = PATH.encode("ascii")
+        data = sample_png(path_bytes)
+        nested = BASELINE.replace("/sample.png", "/nested/sample.png")
+        for path in (BASELINE, "outside.png", nested):
+            self.write_png(data, path)
+        head = self.commit("Add screenshots")
+        line = data[:data.index(path_bytes)].count(b"\n") + 1
+        self.assertCountEqual(self.scan("pull_request", self.pr(), 1, head), [
+            f'privacy "outside.png":{line} private-path',
+            f'privacy "{nested}":{line} private-path',
+        ])
+
+    def test_pr_scans_valid_baseline_path(self):
+        path = BASELINE.replace("sample.png", f"sample@{HOST} .png")
+        self.write_png(sample_png(PATH.encode("ascii")), path)
+        head = self.commit("Add screenshot")
+        self.assertEqual(self.scan("pull_request", self.pr(), 1, head), [
+            'privacy "<redacted path>":1 private-host',
+        ])
+
+    def test_pr_rejects_baseline_with_text_chunk(self):
+        self.write_png(sample_png(ancillary=png_chunk(b"tEXt", b"label\0sample")))
+        head = self.commit("Add screenshot with text")
+        self.assertEqual(self.scan("pull_request", self.pr(), 1, head), [
+            f'privacy "{BASELINE}":1 binary-png',
+        ])
+
+    def test_pr_rejects_baseline_with_bad_crc(self):
+        data = sample_png()
+        self.write_png(data[:-1] + bytes([data[-1] ^ 1]))
+        head = self.commit("Add screenshot with invalid checksum")
+        self.assertEqual(self.scan("pull_request", self.pr(), 1, head), [
+            f'privacy "{BASELINE}":1 binary-png',
+        ])
+
+    def test_pr_rejects_baseline_with_trailing_bytes(self):
+        self.write_png(sample_png() + b"trailing")
+        head = self.commit("Add screenshot with trailing bytes")
+        self.assertEqual(self.scan("pull_request", self.pr(), 1, head), [
+            f'privacy "{BASELINE}":1 binary-png',
         ])
 
     def test_missing_payload_fails_closed(self):
