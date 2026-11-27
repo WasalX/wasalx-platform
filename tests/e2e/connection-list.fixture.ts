@@ -2,37 +2,36 @@ import { expect, test, type Page } from "@playwright/test";
 import { arabicMessages } from "../../lib/i18n/messages/ar/index.ts";
 import { englishMessages } from "../../lib/i18n/messages/en/index.ts";
 
+type ConnectionFixture = { returnsState: "ACTION_REQUIRED" | "PAUSED" };
+type DashboardResponse = { data: { connections: Record<string, unknown>[] } };
+
 export function registerConnectionListJourneys(
   locale: "en" | "ar",
   open: (page: Page, view: string) => Promise<void>,
 ) {
   const messages = locale === "ar" ? arabicMessages : englishMessages;
   const official = messages["tenant.connections.officialWhatsApp"];
+  const localizedMethod = messages["tenant.connection.method.official"];
   const operations = "Operations line";
   const returns = "Returns desk";
 
   async function openList(
     page: Page,
-    fixture: { returnsState: "ACTION_REQUIRED" | "PAUSED" } | null = {
+    fixture: ConnectionFixture | null = {
       returnsState: "ACTION_REQUIRED",
     },
   ) {
     await page.route("**/api/dashboard", async (route) => {
       const response = await route.fetch();
-      const body = (await response.json()) as {
-        data: { connections: Array<Record<string, unknown>> };
-      };
+      const body: DashboardResponse = await response.json();
       if (fixture) {
-        const operationsLine = body.data.connections.find(
-          (row) => row.name === operations,
-        );
-        const returnsDesk = body.data.connections.find(
-          (row) => row.name === returns,
-        );
-        if (!operationsLine || !returnsDesk) {
+        const { connections } = body.data;
+        const officialRow = connections.find((row) => row.name === operations);
+        const returnsDesk = connections.find((row) => row.name === returns);
+        if (!officialRow || !returnsDesk) {
           throw new Error("The two messaging connection fixtures are required");
         }
-        Object.assign(operationsLine, {
+        Object.assign(officialRow, {
           provider: "META",
           provider_state: "AVAILABLE",
           webhook_state: "ACTIVE",
@@ -89,11 +88,7 @@ export function registerConnectionListJourneys(
 
   for (const [label, query, expected] of [
     ["number", "12025550101", returns],
-    [
-      "localized method",
-      messages["tenant.connection.method.official"],
-      operations,
-    ],
+    ["localized method", localizedMethod, operations],
   ]) {
     test(`Messaging connections search by ${label} shows the matching number`, async ({ page }) => {
       const { rows, search } = await openList(page);
@@ -130,9 +125,7 @@ export function registerConnectionListJourneys(
   });
 
   test("Messaging connections restores all rows when the selected state disappears", async ({ page }) => {
-    const fixture: { returnsState: "ACTION_REQUIRED" | "PAUSED" } = {
-      returnsState: "ACTION_REQUIRED",
-    };
+    const fixture: ConnectionFixture = { returnsState: "ACTION_REQUIRED" };
     const { rows, state } = await openList(page, fixture);
     await state.selectOption({
       label: messages["tenant.status.actionRequired"],
@@ -146,9 +139,8 @@ export function registerConnectionListJourneys(
     });
     const previousState = state.locator('option[value="ACTION_REQUIRED"]');
     await expect(previousState).toHaveCount(0);
-    await expect(state.locator("option:checked")).toHaveText(
-      messages["tenant.connections.allStates"],
-    );
+    const allStates = messages["tenant.connections.allStates"];
+    await expect(state.locator("option:checked")).toHaveText(allStates);
     await expect(rows).toHaveCount(2);
     await expect(rows.getByText(operations, { exact: true })).toBeVisible();
     await expect(rows.getByText(returns, { exact: true })).toBeVisible();
