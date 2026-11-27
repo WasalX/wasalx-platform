@@ -1,1 +1,1 @@
-FROM cgr.dev/chainguard/redis:latest@sha256:0cd153cbb3d09fc56eeb4c3b6097ef6f264cd5eb55383d464ecb9bb92bd0fb36
+FROM cgr.dev/chainguard/redis:latest@sha256:27d638294719b97b1082533a3bfdb9edc5ef8b56fbf4617a8dbf39ddd841730b
