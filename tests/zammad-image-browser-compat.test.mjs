@@ -2164,7 +2164,7 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
       assert.deepEqual(mobileFailures, [], "native mobile collected failure union");
     } catch (error) {
       const chooser = mobilePhase === "reply-channel-chooser"
-        ? await readNativeDiagnostic(Promise.all([channelChooser.count(), whatsAppChannel.count(), whatsAppChannel.isVisible()])
+        ? await readNativeDiagnostic(Promise.all([channelChooser.count(), whatsAppChannel.count(), whatsAppChannel.first().isVisible()])
           .then(([dialogs, options, optionVisible]) => ({ dialogs, options, optionVisible })))
         : null;
       await writeFile(join(evidenceDirectory, "native-mobile-public-failure.json"), JSON.stringify({

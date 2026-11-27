@@ -51,7 +51,8 @@ def public_trace(raw, output):
                 path = PurePosixPath(file)
                 stacks["files"].append(
                     f"tests/{path.name}"
-                    if path.parent.name == "tests" and path.name.endswith("-browser.mjs")
+                    if path.parent.name == "tests"
+                    and path.name.endswith("-browser.mjs")
                     else ""
                 )
             for call, frames in original["stacks"]:
@@ -64,7 +65,9 @@ def public_trace(raw, output):
                     stacks["stacks"].append([call, safe_frames])
 
     with ZipFile(output, "w", ZIP_DEFLATED) as archive:
-        archive.writestr("trace.trace", "".join(json.dumps(event) + "\n" for event in events))
+        archive.writestr(
+            "trace.trace", "".join(json.dumps(event) + "\n" for event in events)
+        )
         archive.writestr("trace.stacks", json.dumps(stacks))
 
 

@@ -6,7 +6,9 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
 const run = promisify(execFile);
-const sanitizer = fileURLToPath(new URL("./public-browser-trace.py", import.meta.url));
+const sanitizer = fileURLToPath(
+  new URL("./public-browser-trace.py", import.meta.url),
+);
 
 export function syntheticBrowserTrace(browser, base, output) {
   const enabled = process.env.WASALX_SYNTHETIC_UI_TRACE === "1";
@@ -14,7 +16,9 @@ export function syntheticBrowserTrace(browser, base, output) {
   return {
     async newContext(options) {
       if (enabled && !/^http:\/\/127\.0\.0\.1:\d+$/u.test(base)) {
-        throw new Error("Public browser traces require a loopback Storybook fixture");
+        throw new Error(
+          "Public browser traces require a loopback Storybook fixture",
+        );
       }
       const context = await browser.newContext(options);
       // Playwright couples DOM snapshots to raw network recording.
