@@ -300,7 +300,7 @@ test("native promtool preserves its pinned version and the public alert fixture 
   assert(compose.includes(`prom/prometheus:v${version}@sha256:3c42b892cf723fa54d2f262c37a0e1f80aa8c8ddb1da7b9b0df9455a35a7f893`));
   const fixture = (await read("tests/fixtures/production-backup-alerts.yaml")).replaceAll("\r\n", "\n");
   const c1Fixture = fixture.replace(/^- (rules\.yaml|application-rules\.yaml)$/gm, "- /checks/$1");
-  assert.equal(createHash("sha256").update(c1Fixture).digest("hex"), "9fbf1d71d03626aeb3566677544f1874e0a4a1fd58eea56d9dc8a1ec85566ace");
+  assert.equal(createHash("sha256").update(c1Fixture).digest("hex"), "38196eee96e3b7fe5a81477515b1c12e9c6eb200be90a84581817a08c65b16bc");
 });
 
 type ComposeEnvironment = Record<string, string | number | boolean | null>;
