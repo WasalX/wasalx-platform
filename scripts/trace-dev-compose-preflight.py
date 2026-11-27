@@ -40,9 +40,9 @@ if [ "$action" = dump ]; then
 fi
 """
 
-EVENT = re.compile(
-    r"^\s*.+-(\d+)\s+\[\d+\]\s+\S+\s+(\d+\.\d+): (\w+): (.*)$"
-)
+EVENT = re.compile(r"^\s*.+-(\d+)\s+\[\d+\]\s+\S+\s+(\d+\.\d+): (.*)$")
+WRITE = re.compile(r"sys_writev?\(fd:\s*(0x[12]|[12]),")
+WRITE_RESULT = re.compile(r"sys_writev? -> (0x[0-9a-f]+)$")
 
 
 def report(trace):
@@ -61,7 +61,8 @@ def report(trace):
         match = EVENT.match(line)
         if not match:
             continue
-        tid, stamp, event, detail = match.groups()
+        tid, stamp, payload = match.groups()
+        event, _, detail = payload.partition(": ")
         seconds, micros = stamp.split(".")
         nanos = int(seconds) * 1_000_000_000 + int(micros.ljust(9, "0"))
 
@@ -86,21 +87,22 @@ def report(trace):
                 print(f"{nanos} Compose {name} exec")
         elif tid in phases:
             leader, phase = phases[tid]
-            if event in ("sys_enter_write", "sys_enter_writev"):
-                fd = re.search(r"\bfd:\s*(\w+)", detail)
-                if fd:
-                    writes[tid] = int(fd[1], 0)
-            elif event in ("sys_exit_write", "sys_exit_writev"):
+            if write := WRITE.match(payload):
+                writes[tid] = int(write[1], 0)
+            elif result := WRITE_RESULT.fullmatch(payload):
                 fd = writes.pop(tid, None)
                 key = (leader, fd)
-                if fd is not None and int(detail.rsplit(" ", 1)[-1], 16) > 0:
+                if fd is not None and 0 < int(result[1], 16) <= sys.maxsize:
                     if key not in first_output:
                         first_output.add(key)
                         print(f"{nanos} phase {phase} first output fd {fd}")
             elif event == "connect":
                 if "family=2 port=0 address=16777343 " in detail:
                     endpoint = "disconnected Engine endpoint"
-                elif 'path="/var/run/docker.sock"' in detail or 'path="/run/docker.sock"' in detail:
+                elif (
+                    'path="/var/run/docker.sock"' in detail
+                    or 'path="/run/docker.sock"' in detail
+                ):
                     endpoint = "Docker Unix socket"
                 else:
                     endpoint = "other endpoint"
@@ -110,19 +112,27 @@ def report(trace):
                     print(f"{nanos} phase {phase} exit")
                 phases.pop(tid)
                 parents.pop(tid, None)
+                writes.pop(tid, None)
 
 
 def main(command):
-    observer = subprocess.Popen(
-        ["sudo", "-n", "bash", "-c", TRACE, "trace-dev-compose-preflight", str(os.getpid())],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    readable, _, _ = select.select([observer.stdout], [], [], 2)
-    ready = bool(readable) and observer.stdout.readline() == b"ready\n"
+    observer = None
+    try:
+        observer = subprocess.Popen(
+            ["sudo", "-n", "bash", "-c", TRACE, "trace-preflight", str(os.getpid())],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+    except OSError:
+        pass
+    ready = False
+    if observer:
+        readable, _, _ = select.select([observer.stdout], [], [], 2)
+        ready = bool(readable) and observer.stdout.readline() == b"ready\n"
     status = subprocess.call(command)
-    trace, errors = observer.communicate(b"dump\n" if status else b"discard\n")
+    if observer:
+        trace, errors = observer.communicate(b"dump\n" if status else b"discard\n")
 
     if status:
         subprocess.call(
@@ -137,4 +147,3 @@ def main(command):
 
 if __name__ == "__main__":
     sys.exit(main(sys.argv[1:]))
-
