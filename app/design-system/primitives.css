@@ -242,6 +242,19 @@
   white-space: nowrap;
 }
 
+/* Card actions (DESIGN.md): one row in reading order when they fit; an equal full-width stack on phones. */
+.wx-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--wx-space-2);
+}
+
+@media (max-width: 760px) {
+  .wx-card-actions { flex-direction: column; align-items: stretch; }
+  .wx-card-actions > * { inline-size: 100%; }
+}
+
 @keyframes wx-spin { to { transform: rotate(360deg); } }
 @keyframes wx-skeleton { to { background-position-x: -220%; } }
 

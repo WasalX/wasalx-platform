@@ -689,7 +689,7 @@ try {
   await page.locator(".wx-group-choice").filter({ hasText: "Customers A" }).click();
   await expect(page.locator(".wx-group-header h2")).toHaveText("Customers A");
   await expect(page.locator("#wx-group-message")).toHaveCount(0);
-  await expect(page.locator(".wx-group-messages .wx-group-actions")).toHaveCount(0);
+  await expect(page.locator(".wx-group-messages .wx-card-actions")).toHaveCount(0);
   assert.equal(state.writes.length, 0);
   assert.equal(state.count("GROUP_READ"), 0, "read-only view does not advance team read markers");
   await context.close();

@@ -669,7 +669,7 @@ function GroupInboxSession({ selectedGroup, selectedMessage = null, selectGroup,
               {message.delivery_hold_reason ? <p className="wx-group-meta">{t("groups.deliveryHeld")}</p> : null}
               {message.reaction_active_emoji ? <span>{t("groups.reactionCurrent", { emoji: message.reaction_active_emoji })}</span> : null}
               {message.reaction_delivery_state ? <span>{t("groups.reactionState", { state: t(`groups.delivery.${message.reaction_delivery_state}`) })}</span> : null}
-              {canWrite && actionable(message) ? <div className="wx-group-actions">
+              {canWrite && actionable(message) ? <div className="wx-card-actions">
                 {message.quote_allowed ? <button type="button" className={button} disabled={!writable} onClick={() => {
                   updateDraft(group.id, value => ({ ...value, quote: message })); composer.current?.focus();
                 }}>{t("groups.quoteReply")}</button> : null}
