@@ -101,6 +101,9 @@ spec:
             - { name: ZAMMAD_STORAGE_CLASS_NAME, value: {{ .Values.provisioner.controller.storageClassName | quote }} }
             - { name: ZAMMAD_RESOURCE_PROFILES_JSON, value: {{ toJson .Values.provisioner.controller.resourceProfiles | quote }} }
             - { name: ZAMMAD_BACKUP_SCHEDULE, value: {{ .Values.provisioner.controller.backupSchedule | quote }} }
+            {{- with .Values.provisioner.controller.zammadDisplayTimeZone }}
+            - { name: WASALX_ZAMMAD_DISPLAY_TIMEZONE, value: {{ . | quote }} }
+            {{- end }}
             - { name: ZAMMAD_ALLOWED_EGRESS_JSON, value: {{ toJson .Values.provisioner.controller.allowedEgressCidrs | quote }} }
           resources: {{ toYaml .Values.provisioner.controller.resources | nindent 12 }}
           readinessProbe: { httpGet: { path: /readyz, port: health }, initialDelaySeconds: 5, periodSeconds: 10, timeoutSeconds: 3, failureThreshold: 3 }

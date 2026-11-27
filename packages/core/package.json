@@ -4,6 +4,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./display-time-zone": {
+      "types": "./dist/display-time-zone.d.ts",
+      "default": "./dist/display-time-zone.js"
+    },
     "./meta-marketing-preferences": {
       "types": "./dist/meta-marketing-preferences.d.ts",
       "default": "./dist/meta-marketing-preferences.js"

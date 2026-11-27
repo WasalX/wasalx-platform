@@ -412,6 +412,7 @@
               }
             },
             "backupSchedule": { "type": "string", "minLength": 9, "maxLength": 100 },
+            "zammadDisplayTimeZone": { "type": "string", "maxLength": 64 },
             "leaseDurationSeconds": { "type": "string", "pattern": "^(?:10[0-9]|11[0-9]|120)$" },
             "pollIntervalMs": { "type": "string", "pattern": "^(?:[1-9][0-9]{3,4}|60000)$" },
             "allowedEgressCidrs": {

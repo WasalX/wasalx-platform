@@ -326,6 +326,9 @@ importers:
 
   services/tenant-provisioner:
     dependencies:
+      '@wasalx/core':
+        specifier: workspace:*
+        version: link:../../packages/core
       '@wasalx/observability':
         specifier: workspace:*
         version: link:../../packages/observability

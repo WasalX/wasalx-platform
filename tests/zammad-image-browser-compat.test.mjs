@@ -143,7 +143,7 @@ x-environment: &environment
   ZAMMAD_HTTP_TYPE: http
   ZAMMAD_FQDN: ${runnerContainer ? "zammad-nginx:8080" : `127.0.0.1:${port}`}
   NGINX_PORT: "8080"
-  TZ: Asia/Riyadh
+  TZ: UTC
   WASALX_CONTROL_URL: http://${fixtureHost}:${fixturePort}
   WASALX_PORTAL_URL: https://portal.compat.wasalx.invalid
   WASALX_TENANT_ID: ${tenantId}
@@ -226,6 +226,7 @@ services:
       WASALX_ZAMMAD_BOOTSTRAP_EMAIL: ${bootstrapEmail}
       WASALX_ZAMMAD_BOOTSTRAP_OIDC_SUBJECT: ${bootstrapSubject}
       WASALX_ZAMMAD_BOOTSTRAP_NAME: Compatibility Administrator
+      WASALX_ZAMMAD_DISPLAY_TIMEZONE: Asia/Riyadh
       WASALX_ZAMMAD_BOOTSTRAP_PASSWORD: ${bootstrapPassword}
       WASALX_ZAMMAD_BOOTSTRAP_PREVIOUS_EMAIL: ${legacyBootstrapEmail}
       WASALX_ZAMMAD_AGENT_EMAIL: ${agentEmail}

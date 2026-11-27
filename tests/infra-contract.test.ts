@@ -8,6 +8,7 @@ import { createHash } from "node:crypto";
 import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parse as parseYaml } from "yaml";
+import { wasalxTimeZone } from "../packages/core/src/display-time-zone.ts";
 
 const read = (path: string) =>
   readFile(new URL(`../${path}`, import.meta.url), "utf8");
@@ -316,6 +317,48 @@ async function readComposeEnvironments(file: string): Promise<Record<string, Com
     })) : environment ?? {}];
   }));
 }
+
+test("Compose services only set TZ to UTC", async () => {
+  const files = ["compose.yaml", "compose.full.yaml", "compose.smoke.yaml"];
+  for (const file of files) {
+    const services = await readComposeEnvironments(file);
+    const nonUtc = Object.entries(services)
+      .filter(([, environment]) => Object.hasOwn(environment, "TZ") && environment.TZ !== "UTC")
+      .map(([service]) => service);
+    assert.deepEqual(nonUtc, [], file);
+  }
+});
+
+test("full Compose Zammad backup starts outside the nightly install window", async () => {
+  const [full, source] = await Promise.all([
+    readComposeEnvironments("compose.full.yaml"), read(".github/workflows/nightly-install.yml"),
+  ]);
+  const backup = full["zammad-backup"];
+  assert.equal(backup.TZ, "UTC");
+  const time = /^([01]\d|2[0-3]):([0-5]\d)$/u.exec(String(backup.BACKUP_TIME));
+  assert.ok(time, "expected a UTC backup time in HH:MM format");
+  const backupMinute = Number(time[1]) * 60 + Number(time[2]);
+
+  const workflow = parseYaml(source);
+  const duration = workflow.jobs["nightly-install"]["timeout-minutes"];
+  assert.ok(Number.isInteger(duration) && duration > 0, "expected a nightly install job timeout");
+  for (const { cron, timezone } of workflow.on.schedule) {
+    assert.equal(timezone ?? "UTC", "UTC");
+    const start = /^([0-5]?\d) ([01]?\d|2[0-3]) \* \* \*$/u.exec(cron);
+    assert.ok(start, "expected a daily nightly install schedule");
+    const startMinute = Number(start[2]) * 60 + Number(start[1]);
+    const minutesPerDay = 24 * 60;
+    const minutesAfterStart = (backupMinute - startMinute + minutesPerDay) % minutesPerDay;
+    assert.ok(minutesAfterStart >= duration, `backup ${backup.BACKUP_TIME} overlaps nightly install (${cron}, ${duration} minutes)`);
+  }
+});
+
+test("full Compose supplies the default Zammad display time zone", async () => {
+  const full = await readComposeEnvironments("compose.full.yaml");
+  const timeZone = full["zammad-runtime-bootstrap"].WASALX_ZAMMAD_DISPLAY_TIMEZONE;
+  assert.equal(timeZone, `\${WASALX_FULL_ZAMMAD_DISPLAY_TIMEZONE:-${wasalxTimeZone}}`);
+  assert.equal(full["tenant-workspace-controller"].WASALX_ZAMMAD_DISPLAY_TIMEZONE, timeZone);
+});
 
 function composeConnectionHosts(key: string, value: string): string[] {
   const connectionKey = /_(?:URL|DSN|HOST)$|^(?:PGHOST|MEMCACHE_SERVERS|ZAMMAD_FQDN)$/u.test(key);

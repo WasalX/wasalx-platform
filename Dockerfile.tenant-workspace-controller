@@ -24,8 +24,11 @@ RUN --mount=type=cache,id=wasalx-pnpm-v11,target=/pnpm/store,sharing=locked \
 FROM dependencies AS build
 COPY services/tenant-provisioner ./services/tenant-provisioner
 COPY packages/observability ./packages/observability
+COPY packages/core ./packages/core
+COPY lib/domain.ts lib/literal-matcher.ts ./lib/
 COPY tsconfig.json ./tsconfig.json
 RUN pnpm --filter @wasalx/observability build
+RUN pnpm --filter @wasalx/core build
 RUN pnpm --filter @wasalx/tenant-provisioner build
 RUN --mount=type=cache,id=wasalx-pnpm-v11,target=/pnpm/store,sharing=locked \
     --mount=type=cache,id=pnpm-metadata,target=/pnpm/cache,sharing=locked \
@@ -39,7 +42,7 @@ RUN observability_package="$(find /tenant-workspace-controller/node_modules/.pnp
     && observability_relative="../${observability_package#/tenant-workspace-controller/node_modules/}" \
     && ln -s "$observability_relative" /tenant-workspace-controller/node_modules/@wasalx/observability \
     && cd /tenant-workspace-controller \
-    && node -e "import('@wasalx/observability/node')"
+    && node -e "Promise.all([import('@wasalx/observability/node'),import('@wasalx/core/display-time-zone')])"
 
 FROM cgr.dev/chainguard/wolfi-base:latest@sha256:be019c1c74fe69204a42c4e10bc4d886a49bf5403ffa74374ef7baa408fc9a26 AS runtime
 RUN apk add --no-cache 'libcrypto3=3.6.5-r1' 'libssl3=3.6.5-r1' 'libstdc++=16.2.0-r1' 'zlib=1.3.1-r51'

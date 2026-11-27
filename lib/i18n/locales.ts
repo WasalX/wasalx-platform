@@ -4,7 +4,7 @@ export type Locale = (typeof supportedLocales)[number];
 export type TextDirection = "ltr" | "rtl";
 
 export const defaultLocale: Locale = "en";
-export const wasalxTimeZone = "Asia/Riyadh";
+export { wasalxTimeZone } from "../../packages/core/src/display-time-zone.ts";
 
 export const localeMetadata = {
   en: {

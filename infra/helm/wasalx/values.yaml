@@ -238,6 +238,7 @@ provisioner:
       medium: { cpu: "2", memory: 4Gi, storage: 50Gi, replicas: 2 }
       large: { cpu: "4", memory: 8Gi, storage: 100Gi, replicas: 3 }
     backupSchedule: "0 3 * * *"
+    zammadDisplayTimeZone: "" # A blank value uses the shared portal default for new Zammad workspaces.
     # Must leave a failover margin longer than the longest provider request.
     leaseDurationSeconds: "120"
     pollIntervalMs: "5000"

@@ -15,6 +15,7 @@
     ]
   },
   "include": [
+    "src/display-time-zone.ts",
     "src/meta-marketing-preferences.ts",
     "src/meta-test-phone-policy.ts",
     "src/meta-test-recipient-link.ts",

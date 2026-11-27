@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { railsLoadModel, assertRailsLoadOutput, successMarker, withRailsLoadCleanup } from "../scripts/check-zammad-rails-load.mjs";
 
 const image = "wasalx/rails-load:00000000-0000-4000-8000-000000000001";
@@ -138,4 +140,70 @@ test("fresh runtime bootstrap completes sample customer cleanup before marking s
   ].map(step => fresh.indexOf(step));
   assert.ok(positions.every((position, index) => position > (positions[index - 1] ?? -1)),
     "setup must stay pending if sample customer cleanup fails");
+});
+
+test("fresh runtime bootstrap requires the configured display time zone and passes it to Zammad", () => {
+  const bootstrap = fileURLToPath(new URL("../infra/docker/full/zammad/bootstrap-runtime.rb", import.meta.url));
+  const harness = `
+    require 'pathname'
+    require 'tmpdir'
+
+    module Wasalx
+      class ServiceIdentity
+        def self.handover_evidence? = false
+        def self.legacy_bootstrap_allowed! = true
+      end
+    end
+    class User
+      def self.find_by(email:) = new
+    end
+    class Token
+      def self.find_by(action:, token:) = nil
+    end
+    class Setting
+      def self.find_by!(name:) = self
+      def self.state_current = self
+      def self.to_h = self
+      def self.with_indifferent_access = { value: false }
+    end
+    class Rails
+      def self.root = Pathname.new(Dir.pwd)
+      def self.cache = self
+      def self.clear = nil
+    end
+    class AutoWizard
+      def self.setup
+        settings = JSON.parse(File.read(ENV.fetch('AUTOWIZARD_RELATIVE_PATH'))).fetch('Settings')
+        puts settings.find { |setting| setting.fetch('name') == 'timezone_default' }.fetch('value')
+        exit
+      end
+    end
+
+    Dir.mktmpdir { |root| Dir.chdir(root) { load ARGV.fetch(0) } }
+  `;
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(?:WASALX_|ZAMMAD_)/iu.test(key)));
+  Object.assign(env, {
+    WASALX_ZAMMAD_BOOTSTRAP_EMAIL: "operator@example.test",
+    WASALX_ZAMMAD_BOOTSTRAP_NAME: "Fixture Operator",
+    WASALX_ZAMMAD_BOOTSTRAP_PASSWORD: "synthetic-owner-password",
+    ZAMMAD_SERVICE_TOKEN: "synthetic-service-token",
+    ZAMMAD_PRIVACY_TOKEN: "synthetic-privacy-token",
+    ZAMMAD_HTTP_TYPE: "https",
+    ZAMMAD_FQDN: "support.example.test",
+    AUTOWIZARD_RELATIVE_PATH: "auto_wizard.json",
+  });
+  for (const configured of ["Asia/Tokyo", undefined, ""]) {
+    const result = spawnSync("ruby", ["-e", harness, bootstrap], {
+      env: { ...env, WASALX_ZAMMAD_DISPLAY_TIMEZONE: configured }, encoding: "utf8", windowsHide: true,
+    });
+    assert.ifError(result.error);
+    if (configured) {
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.stdout.trim(), configured);
+    } else {
+      assert.equal(result.status, 1, result.stderr);
+      assert.equal(result.stdout, "");
+      assert.equal(result.stderr.trim(), "WASALX_ZAMMAD_BOOTSTRAP_CONFIGURATION_INVALID:WASALX_ZAMMAD_DISPLAY_TIMEZONE");
+    }
+  }
 });
