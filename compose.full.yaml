@@ -129,7 +129,7 @@ services:
 
   full-qualification-seed:
     profiles: [full]
-    image: postgres:17.10-alpine@sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193
+    image: postgres:17.12-alpine@sha256:f9cf3e1f0066f0eb0c48707d864f0ac5941e9ff454a072077d97a4d278d07d73
     environment:
       PGHOST: postgres
       PGPORT: "5432"
@@ -150,7 +150,7 @@ services:
 
   public-webhook-preflight:
     profiles: [full]
-    image: node:22-bookworm-slim@sha256:e9f565d32859f0cbfb52125eafe8be39390f24dac302dc3cdf566e8ba3ab21ee
+    image: node:22-bookworm-slim@sha256:be979e5523c76fa4d5ca4ebd3099078f220aa47ec39c48ad5b5df9314debd6eb
     command:
       - node
       - --input-type=module
@@ -403,7 +403,7 @@ services:
 
   keycloak-postgresql:
     profiles: [full]
-    image: postgres:17.10-alpine@sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193
+    image: postgres:17.12-alpine@sha256:f9cf3e1f0066f0eb0c48707d864f0ac5941e9ff454a072077d97a4d278d07d73
     environment:
       POSTGRES_DB: keycloak
       POSTGRES_USER: keycloak
@@ -469,7 +469,7 @@ services:
 
   keycloak-bootstrap:
     profiles: [full]
-    image: node:22-bookworm-slim@sha256:e9f565d32859f0cbfb52125eafe8be39390f24dac302dc3cdf566e8ba3ab21ee
+    image: node:22-bookworm-slim@sha256:be979e5523c76fa4d5ca4ebd3099078f220aa47ec39c48ad5b5df9314debd6eb
     entrypoint: [node, /bootstrap/bootstrap-user.mjs]
     environment:
       WASALX_KEYCLOAK_BOOTSTRAP_MODE: ${WASALX_KEYCLOAK_BOOTSTRAP_MODE-reconcile}
@@ -552,7 +552,7 @@ services:
   clamav:
     profiles: [full]
     platform: linux/amd64
-    image: clamav/clamav:1.5.3@sha256:d06c1d6a451d616e1dd79b42f44c8c8c291bba9cf4e75ebc4d0e43c1c6dd87bb
+    image: clamav/clamav:1.5.5@sha256:64e30c0bf976198024deb3dc6d5cfe2485fb969c0f73549ba0fdb364b9469614
     environment:
       CLAMAV_NO_CLAMD: "false"
       CLAMAV_NO_FRESHCLAMD: "false"
@@ -682,7 +682,7 @@ services:
 
   zammad-postgresql:
     profiles: [full]
-    image: postgres:17.10-alpine@sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193
+    image: postgres:17.12-alpine@sha256:f9cf3e1f0066f0eb0c48707d864f0ac5941e9ff454a072077d97a4d278d07d73
     environment:
       POSTGRES_DB: zammad_production
       POSTGRES_USER: zammad
@@ -699,7 +699,7 @@ services:
 
   zammad-redis:
     profiles: [full]
-    image: redis:8.10-alpine@sha256:978f0e01593e65eed801f2402944efcd936d43b5027e4908a7897baf88ed6241
+    image: redis:8.12-alpine@sha256:5af80107c1eeecb484a2269b80a26d12bfa6521787da4663bd9f19f60a163483
     command: [redis-server, --appendonly, "yes", --save, "60", "1"]
     volumes: [zammad-redis-data:/data]
     healthcheck:
@@ -712,7 +712,7 @@ services:
 
   zammad-memcached:
     profiles: [full]
-    image: memcached:1.6.45-alpine@sha256:c29847751abb41f4c268c84fb3087fee05d4edcbda44409ccb5086e26148e8a7
+    image: memcached:1.6.45-alpine@sha256:084fb554292d1447bc2c68b80c2331b98834514f56c866bc21a61be3c2ee376d
     command: [memcached, -m, 256M]
     healthcheck:
       test: [CMD, nc, -z, 127.0.0.1, "11211"]
@@ -724,7 +724,7 @@ services:
 
   zammad-elasticsearch:
     profiles: [full]
-    image: elasticsearch:9.4.4@sha256:5b4517639f5c027e5abc0dbb29dc99e0662b2d060befe17d91c953b88020391d
+    image: elasticsearch:9.4.8@sha256:7d23da0662fd93355ac005abaca0e128ed8ed64ed92fd80cc5b3da6d5fcdc5f7
     environment:
       discovery.type: single-node
       xpack.security.enabled: "false"
@@ -848,7 +848,7 @@ services:
   # fenced evidence path in migration 0034 instead of this local-only job.
   zammad-activation:
     profiles: [full]
-    image: postgres:17.10-alpine@sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193
+    image: postgres:17.12-alpine@sha256:f9cf3e1f0066f0eb0c48707d864f0ac5941e9ff454a072077d97a4d278d07d73
     environment:
       PGHOST: postgres
       PGPORT: "5432"
@@ -868,7 +868,7 @@ services:
 
   otel-collector:
     profiles: [full]
-    image: otel/opentelemetry-collector-contrib:0.158.0@sha256:c5918f78992ee73b0d6f0e599423ac5ec52dd5d9726733114d6eca53d5a32ed5
+    image: otel/opentelemetry-collector-contrib:0.165.0@sha256:e40d61f10c9a617cca1ffd1be4d7e2b3a4b0f0001798ff07e58cabe82e618cea
     command: [--config=/etc/otelcol-contrib/config.yaml]
     volumes:
       - ./infra/docker/full/otel/collector.yaml:/etc/otelcol-contrib/config.yaml:ro
@@ -908,7 +908,7 @@ services:
 
   alertmanager:
     profiles: [full]
-    image: prom/alertmanager:v0.32.1@sha256:51a825c2a40acc3e338fdd00d622e01ec090f72be2b3ea46be0839cd47a4d286
+    image: prom/alertmanager:v0.35.0@sha256:e638797febd034838eca8b98cdbd46f951e9bf7f178777aa8669167406a9946c
     command:
       - --config.file=/etc/alertmanager/alertmanager.yaml
       - --storage.path=/alertmanager
@@ -947,7 +947,7 @@ services:
 
   grafana:
     profiles: [full]
-    image: grafana/grafana:13.1.0@sha256:121a7a9ece6dc10b969f1f96eed64b4f07dfac0d0b8abc070f7cb83bbde86f63
+    image: grafana/grafana:13.3.2@sha256:81556409ba48b2b922e0adb69a2511337d8ba7578f11962eefa6149a2d815101
     environment:
       GF_SECURITY_ADMIN_USER: ${WASALX_FULL_GRAFANA_ADMIN_USER:-wasalx-admin}
       GF_SECURITY_ADMIN_PASSWORD: ${WASALX_FULL_GRAFANA_ADMIN_PASSWORD:?Set WASALX_FULL_GRAFANA_ADMIN_PASSWORD}
