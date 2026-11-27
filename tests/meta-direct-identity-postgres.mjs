@@ -758,6 +758,95 @@ export async function verifyMetaDirectIdentityPostgres(adminUrl,workerConfig,app
     assert.equal((await c.query("SELECT count(*)::int AS count FROM audit_events WHERE tenant_id=$1 AND target_id=$2 AND action='delivery.template_queued'",
       [tenantId,queued.id])).rows[0].count,1);
    },apiPool);
+   // The real 0207 safety lock under the worker role, RLS and genuine row locks.
+   // Each refused case must return NULL; a held lock must block a revision bump.
+   const lockFunction='app.lock_meta_ticket_template_safety(uuid,uuid,text)';
+   assert.deepEqual((await admin.query(`SELECT has_function_privilege('wasalx_connector_worker',$1::text,'EXECUTE') AS worker,
+     has_function_privilege('wasalx_app',$1::text,'EXECUTE') AS app,has_function_privilege('public',$1::text,'EXECUTE') AS public,
+     prosecdef AS definer,proowner::regrole::text AS owner,'row_security=on'=ANY(proconfig) AS rls
+     FROM pg_proc WHERE oid=$1::text::regprocedure`,[lockFunction])).rows[0],
+    {worker:true,app:false,public:false,definer:true,owner:'wasalx_meta_transition_executor',rls:true});
+   const templateWaba=BigInt('0x'+randomUUID().replaceAll('-','').slice(0,12)).toString(),templateAccount=randomUUID();
+   await admin.query('INSERT INTO meta_messaging_accounts(id,tenant_id,provider_account_id) VALUES($1,$2,$3)',[templateAccount,tenantId,templateWaba]);
+   const asExecutor=async sql=>{
+    await admin.query('BEGIN');
+    try{
+     await admin.query("SET LOCAL lock_timeout='100ms'");await admin.query('SET LOCAL ROLE wasalx_meta_transition_executor');
+     await admin.query("SELECT set_config('app.tenant_id',$1,true)",[tenantId]);
+     const result=await admin.query(sql,[tenantId,templateAccount]);await admin.query('COMMIT');return result;
+    }catch(error){await admin.query('ROLLBACK');throw error}
+   };
+   await asExecutor('INSERT INTO meta_template_account_safety(tenant_id,account_id) VALUES($1,$2)');
+   const bumpRevision=()=>asExecutor('UPDATE meta_template_account_safety SET revision=revision+1 WHERE tenant_id=$1 AND account_id=$2');
+   const holder=new Client({connectionString:adminUrl,options:'-c statement_timeout=5000 -c lock_timeout=3000'});await holder.connect();
+   try{
+    await holder.query('BEGIN');await holder.query("SELECT set_config('app.tenant_id',$1,true)",[tenantId]);
+    await holder.query('SET LOCAL ROLE wasalx_app');
+    const closedAt=(await holder.query(`SELECT (max(provider_timestamp)+interval '24 hours')::text AS at FROM normalized_messages
+      WHERE tenant_id=$1 AND connection_id=$2 AND external_group_id=$3`,[tenantId,connectionId,phone])).rows[0].at;
+    assert(closedAt);
+    const query=(sql,values)=>sql==='SELECT app.meta_customer_window_open($1,$2) AS open'
+     ? holder.query('SELECT app.meta_customer_window_open($1,$2,$3) AS open',[...values,closedAt])
+     : holder.query(sql,values);
+    const db={rows:async(scope,sql,values)=>{assert.equal(scope,tenantId);return (await query(sql,values)).rows},
+     withTenant:async(scope,fn)=>{assert.equal(scope,tenantId);return fn({query})}};
+    const inventory={data:[{id:'341',name:'order_update_0',language:'ar',category:'UTILITY',status:'APPROVED',
+     parameter_format:'POSITIONAL',components:[{type:'BODY',text:'Order {{1}}'}]}]};
+    const service=new ZammadInternalController(db,{verify:async()=>({tenantId,instanceId,userId:'3',groupIds:['2'],groupAdmin:false})},
+     {wake:async()=>{}},{resolveAccessToken:async()=>templateAccessToken},
+     {create:(token,phoneId,beforeRequest)=>({templateInventory:account=>readMetaTemplateInventory(account,async()=>{await beforeRequest();return inventory})})});
+    const target={tenant_id:tenantId,connection_id:connectionId,group_id:phone,ticket_id:ticketId};
+    const [template]=(await service.ticketTemplates('Synthetic native claims',target)).templates;
+    const queued=await service.sendTicketTemplate('Synthetic native claims',{...target,template_id:template.id,request_token:randomUUID(),
+     template_sha256:template.semanticSha256,parameters:['42']});
+    assert.equal(queued.state,'QUEUED');
+    // Fixture lease and asset: the worker's SENDING lease, and this session on the synthetic account.
+    const leaseId=randomUUID();
+    await holder.query('RESET ROLE');
+    assert.equal((await holder.query(`UPDATE delivery_outbox SET state='SENDING',lease_id=$2,lease_expires_at=clock_timestamp()+interval '1 minute'
+      WHERE tenant_id=$3 AND id=$1 AND state='QUEUED'`,[queued.id,leaseId,tenantId])).rowCount,1);
+    assert.equal((await holder.query("UPDATE provider_sessions SET provider_state_data=jsonb_set(provider_state_data,'{wabaId}',to_jsonb($1::text)) WHERE tenant_id=$2 AND id=$3",
+      [templateWaba,tenantId,sessionId])).rowCount,1);
+    await holder.query('SET LOCAL ROLE wasalx_connector_worker');
+    const lock=async(lease=leaseId,account=templateWaba)=>{
+     const row=(await holder.query('SELECT current_user AS role,app.lock_meta_ticket_template_safety($1,$2,$3) AS revision',[queued.id,lease,account])).rows[0];
+     assert.equal(row.role,'wasalx_connector_worker');return row.revision;
+    };
+    const within=async work=>{await holder.query('SAVEPOINT template_lock_case');try{return await work()}finally{await holder.query('ROLLBACK TO SAVEPOINT template_lock_case')}};
+    const asAdmin=async work=>{await holder.query('RESET ROLE');await work();await holder.query('SET LOCAL ROLE wasalx_connector_worker')};
+    assert.equal(await lock(randomUUID()),null,'A wrong lease cannot lock the template generation');
+    assert.equal(await lock(leaseId,'2'),null,'Another provider account cannot lock the template generation');
+    await within(async()=>{
+     await holder.query("SELECT set_config('app.tenant_id',$1,true)",[randomUUID()]);
+     assert.equal(await lock(),null,'Another tenant scope cannot see the delivery or account');
+    });
+    await within(async()=>{
+     await holder.query('SET LOCAL ROLE wasalx_app');
+     await assert.rejects(holder.query('SELECT app.lock_meta_ticket_template_safety($1,$2,$3)',[queued.id,leaseId,templateWaba]),{code:'42501'});
+    });
+    await within(async()=>{
+     await asAdmin(async()=>assert.equal((await holder.query("UPDATE delivery_outbox SET state='CLAIMED' WHERE tenant_id=$1 AND id=$2",[tenantId,queued.id])).rowCount,1));
+     assert.equal(await lock(),null,'Only a SENDING delivery can lock the template generation');
+    });
+    await within(async()=>{
+     const job=randomUUID();
+     await asAdmin(async()=>{
+      await holder.query(`INSERT INTO public.privacy_jobs
+       (id,tenant_id,job_type,scope_type,scope_value,disposition,idempotency_key,state,stage,attempts,lease_id,lease_expires_at,fencing_token,unmatched_diagnostic_hours_snapshot)
+       VALUES($1,$2::uuid,'RETENTION_SWEEP','TENANT',$2::uuid::text,'RETENTION_DELETE',$3,'RUNNING','DISCOVER',1,$4,clock_timestamp()+interval '10 minutes',1,24)`,
+       [job,tenantId,`${prefix}-template-lock-privacy-${job}`,randomUUID()]);
+      await holder.query(`INSERT INTO public.privacy_job_targets(tenant_id,job_id,target_type,target_id,target_sha256,state)
+       VALUES($1,$2,'DELIVERY',$3,$4,'PENDING')`,[tenantId,job,queued.id,hash(queued.id)]);
+     });
+     assert.equal(await lock(),null,'An active privacy target cannot lock the template generation');
+    });
+    await within(async()=>{
+     assert.equal(await lock(),'0','A valid lease locks the current generation');
+     await assert.rejects(bumpRevision(),error=>error.code==='55P03','A held generation lock blocks a concurrent revision change');
+    });
+    await bumpRevision();
+    assert.equal(await lock(),'1','A committed revision change is visible to the next send check');
+   }finally{await holder.query('ROLLBACK').catch(()=>{});await holder.end()}
    await queueScenario(async c=>{
    await c.query("UPDATE meta_direct_identity_aliases SET state='HELD',revision=revision+1 WHERE id=$1",[bsuidAlias]);
    // Reuse this transaction for the API adapter so its held alias is visible.
