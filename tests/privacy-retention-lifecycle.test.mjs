@@ -83,7 +83,7 @@ test("privacy drain distinguishes rolled-back failure persistence from a checked
       statements.push(sql);
       if (!sql.includes("app.fail_privacy_job")) return { rows: [] };
       failureWrites.push(values.slice(0, 3));
-      if (values[0] === first.id) throw new Error("Synthetic database failure");
+      if (values[0] === first.id) throw Object.assign(new Error("Synthetic database failure"), { code: "08006" });
       return { rows: [{ failed: false }] };
     },
     release() {},
@@ -95,11 +95,26 @@ test("privacy drain distinguishes rolled-back failure persistence from a checked
   repository.discover = async () => { throw new Error("Synthetic discovery failure"); };
   const unused = async () => assert.fail("No native or storage effects expected");
   const processor = new PrivacyProcessor(repository, { resolve: unused }, { put: unused, delete: unused });
+  const stderr = t.mock.method(process.stderr, "write", () => true);
 
   assert.deepEqual(await processor.drainTenant(tenantId), {
     claimed: 2, succeeded: 0, deferred: 0, failedRetryable: 0, failedTerminal: 0,
     legalHoldBlocked: 0, leaseLost: 1, persistenceFailed: 1,
   });
+  const output = stderr.mock.calls.map(({ arguments: [line] }) => String(line));
+  stderr.mock.restore();
+  const logs = output.filter((line) => line.startsWith("{")).map((line) => JSON.parse(line));
+  assert.deepEqual(logs, [
+    {
+      timestamp: "2026-10-16T10:00:00.000Z",
+      level: "error",
+      event: "privacy.failure_persistence_failed",
+      tenant_id: tenantId,
+      privacy_job_id: first.id,
+      error_code: "08006",
+    },
+  ]);
+  assert.doesNotMatch(output.join(""), /Synthetic (?:database|discovery) failure/u);
   assert.deepEqual(failureWrites, [[first.id, leaseId, first.fencingToken], [second.id, leaseId, second.fencingToken]]);
   assert.deepEqual(statements.filter((sql) => ["BEGIN", "ROLLBACK", "COMMIT"].includes(sql)), ["BEGIN", "ROLLBACK", "BEGIN", "COMMIT"]);
   await provider.forceFlush();
