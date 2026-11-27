@@ -112,7 +112,7 @@ WasalX is an Operate surface. Operators route WhatsApp and email conversations, 
 The public pages (marketing, invitations, privacy) share the tokens but may be more expressive. The signed-in portal (`/app`, `/platform`) stays quiet.
 
 **Key Characteristics:**
-- Dark and light themes, chosen by the user or by `prefers-color-scheme` (`app/boundary-preferences.ts`); both are first-class.
+- Dark and light themes, chosen by the user or by `prefers-color-scheme` (`app/boundary-preferences.ts`); both are first-class. The root canvas (`html`) takes the active theme's page color, so overscroll and the area past the content never show the browser default.
 - English and Arabic, with `dir` set on `<html>` from the locale (`app/layout.tsx`). Every layout must mirror correctly.
 - Density over whitespace: 12-14 px working text, 34-36 px controls, tables as the main pattern.
 - Tonal layering, not shadows, separates surfaces.
@@ -162,7 +162,7 @@ One neutral zinc ramp, one violet accent, three status colors and two provider m
 - **At 760 px and below** (the shell breakpoint): the sidebar becomes a top bar with one grid (the workspace switcher on row 1, the menu toggle and profile on row 2, the navigation below), the brand and system health are hidden, and the app shell is a block. Individual screens refine at other widths (for example 520 px and 480 px); new screens use 760 px unless their layout needs another.
 - **Spacing:** `--wx-space-1..16` (4 px base: 4, 8, 12, 16, 24, 32, 48, 64). **The Spacing Rule.** `padding`, `margin`, `gap` and `inset` and their longhands use only a defined `var(--wx-space-*)` step, `0` or a 1 px hairline (`calc()`, `max()` and `clamp()` of these, `%`, `vw`, `env()` and `auto` are fine). A negative offset is `calc(-1 * var(--wx-space-*))`. There are no in-between steps: snap to the nearest one, and on a tie take the smaller unless that drops a 44 px or 24 px target. Width, height and `min-*` target sizes are not spacing. The governance test enforces this for every app stylesheet.
 - **Direction:** logical properties only (`inline-start/end`, `padding-inline`, `text-align: start`). Physical `left/right` is a defect. A known gap: `primitives.css` `.wx-data-panel th, td` use `text-align: left`; fix this before the primitive is used in the product.
-- **Tables:** 37 px headers, 57 px rows; wide tables sit in an `overflow-x: auto` wrapper and never scroll the whole page.
+- **Tables:** 37 px headers, 57 px rows; wide tables sit in an `overflow-x: auto` wrapper and never scroll the whole page. On phones (760 px and below) a table whose status or row actions would scroll off screen stacks each row instead, as Message delivery does (`.delivery-table`).
 
 ## Elevation & Depth
 
@@ -187,7 +187,7 @@ The target set is the primitives in `app/design-system/primitives.tsx` and `prim
 - **Dialog** (`ModalDialog.tsx`): at most 520 px, dialog radius, dialog shadow, scroll inside, focus trapped, Escape closes. Header, body and footer share one 16 px inline inset, and the header and footer dividers run edge to edge.
 - **Scroll region** (`ScrollRegion` in `app/tenant-ui.tsx`): any area that scrolls on its own (wide table, drawer body, transcript) uses it; it requires a name (`aria-label` or `aria-labelledby`) and sets `role="region"` and `tabIndex={0}` so keyboard users can scroll it. `WideTable` wraps it.
 - **Toast**: bottom, inline-end, inverted colors, at most 520 px.
-- **Inputs**: 34-38 px, raised background, `border-strong`; focus = violet border, a 3 px `accent-wash` ring and the shared 2 px violet outline (`Highlight` in forced colors). A field inside a container with its own focus ring (the search box) hides its outline except in forced colors; a danger field uses a danger-colored outline.
+- **Inputs**: 34-38 px, raised background, `border-strong`, body text size (14 px); a screen's fields share one field rule (Workflows and Client routing: the `.bot-automation`/`.routing-workspace` rule in `app/globals.css`); focus = violet border, a 3 px `accent-wash` ring and the shared 2 px violet outline (`Highlight` in forced colors). A field inside a container with its own focus ring (the search box) hides its outline except in forced colors; a danger field uses a danger-colored outline.
 
 ## Do's and Don'ts
 
