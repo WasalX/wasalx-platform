@@ -51,12 +51,12 @@ export async function auditWorkspaceJourney(page: Page, locale: "en" | "ar", rol
   await expect(page.getByRole("heading", { level: 1, name: copy["tenant.title.audit"], exact: true })).toBeVisible();
   await page.getByRole("combobox", { name: copy["tenant.audit.scope.label"] }).selectOption("include");
   const entries = page.locator(".audit-row");
+  await expect(entries).toContainText(actions.map(([, key]) => copy[`tenant.audit.action.${key}`]));
   await expect(entries).toHaveCount(rows.length);
-  for (const [index, [, key]] of actions.entries()) {
-    await expect(entries.nth(index)).toContainText(copy[`tenant.audit.action.${key}`]);
+  for (const [index, row] of rows.entries()) {
     await expect(entries.nth(index)).toContainText(index % 6 === 2 ? "Maya Al-Salem" : copy[`tenant.audit.actor.${["member", "agent", "member", "automation", "support", "automation"][index % 6]}`]);
-    if (role === "auditor") await expect(entries.nth(index)).toContainText(rows[index].actor_id);
-    else await expect(entries.nth(index)).not.toContainText(rows[index].actor_id);
+    if (role === "auditor") await expect(entries.nth(index)).toContainText(row.actor_id);
+    else await expect(entries.nth(index)).not.toContainText(row.actor_id);
   }
   await expect(page.locator(".timeline")).not.toContainText(/zammad|group_workspace\.|workspace_email\.|connection\.meta_number_released/iu);
   const search = page.getByPlaceholder(copy["tenant.audit.search"], { exact: true });
