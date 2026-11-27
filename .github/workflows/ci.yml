@@ -446,7 +446,7 @@ jobs:
           package-manager-cache: false
       - name: Test DEV Compose preflight
         if: matrix.mode == 'unit' && matrix.shard == 1
-        run: python3 scripts/trace-dev-compose-preflight.py node --test --test-reporter=tap tests/installer-dev-recreatability.test.mjs
+        run: node --test tests/installer-dev-recreatability.test.mjs
       - name: Check image publication contracts
         if: matrix.mode == 'lint'
         run: |

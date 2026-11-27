@@ -29,9 +29,6 @@ function runsFile(text, file, option) {
   return commands(text).some(command => {
     let w = words(command);
     if (w[0] === "sudo") w = w.slice(1);
-    if (w[0] === "python3" && w[1] === "scripts/trace-dev-compose-preflight.py") {
-      w = w.slice(2);
-    }
     const [exe, ...args] = w;
     if (!["node", "python", "python3", "ruby", "bash"].includes(exe) || (option && !args.includes(option))) return false;
     const paths = args.map(arg => arg.replace(/^\.\//u, ""));
@@ -935,10 +932,6 @@ test("CI gates integration and infrastructure and runs portal integration files 
   const devPreflightSteps = jobs.checks.steps.filter(step => runsFile(step.run ?? "", devPreflightFile));
   assert.equal(devPreflightSteps.length, 1);
   assert.equal(devPreflightSteps[0].if, "matrix.mode == 'unit' && matrix.shard == 1");
-  assert.equal(
-    devPreflightSteps[0].run,
-    `python3 scripts/trace-dev-compose-preflight.py node --test --test-reporter=tap ${devPreflightFile}`,
-  );
   assert(!unitFiles.includes(devPreflightFile));
   assert(!portal.steps.some(step => runsFile(step.run ?? "", devPreflightFile)));
   const shardStep = jobs.checks.steps.find(step => runsFile(step.run ?? "", "scripts/hosted-ci.mjs", "unit"));
