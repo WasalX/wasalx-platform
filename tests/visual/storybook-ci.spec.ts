@@ -13,6 +13,16 @@ const { entries } = JSON.parse(readFileSync("storybook-static/index.json", "utf8
 const stories = Object.entries(entries).filter(([, entry]) => entry.type === "story");
 assert(stories.length > 0, "Storybook's static index contains no stories");
 
+const rtlBaselineStories = new Set([
+  "design-system-foundation--light-tokens",
+  "design-system-foundation--theme-parity",
+  "product-platform-operations--arabic",
+  "product-privacy-targets--arabic",
+]);
+for (const storyId of rtlBaselineStories) {
+  assert(entries[storyId]?.type === "story", `Missing RTL baseline story: ${storyId}`);
+}
+
 const wcagTags = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"];
 
 async function expectMetaSignupLayout(signup: Locator, viewport: "desktop" | "phone", readinessCount = 0) {
@@ -211,13 +221,13 @@ for (const theme of ["light", "dark"] as const) {
             }
           }
 
-          await page.screenshot({
-            path: testInfo.outputPath(storyId + ".png"),
+          const screenshotOptions = {
             fullPage: true,
             animations: "disabled",
             caret: "hide",
             scale: "css",
-          });
+          } as const;
+          await page.screenshot({ ...screenshotOptions, path: testInfo.outputPath(storyId + ".png") });
 
           const { violations } = await new AxeBuilder({ page }).include("#storybook-root").withTags(wcagTags).analyze();
           const findings = violations.flatMap(violation =>
@@ -226,6 +236,12 @@ for (const theme of ["light", "dark"] as const) {
           await expect(page.locator("body"), "Storybook reports a render failure").not.toHaveClass(/sb-show-(errordisplay|noproject|nopreview)/u);
           expect.soft(errors, "Uncaught errors during story render").toEqual([]);
           expect(findings, "Automated WCAG 2.2 AA violations").toEqual([]);
+          if (locale === "ar" && rtlBaselineStories.has(storyId)) {
+            await expect(page).toHaveScreenshot(`${storyId}-ar-${theme}.png`, {
+              ...screenshotOptions,
+              maxDiffPixels: 2,
+            });
+          }
         });
       }
     });
