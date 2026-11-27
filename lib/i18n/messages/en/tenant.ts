@@ -2410,6 +2410,8 @@ export const englishTenantMessages = {
   "tenant.metaSignup.reason.META_SIGNUP_EXCHANGE_REJECTED": "Meta did not accept the authorization. Start a new setup when the Meta issue is resolved.",
   "tenant.metaSignup.reason.META_SIGNUP_EXCHANGE_UNKNOWN": "Authorization could not be confirmed. Contact your administrator before starting again.",
   "tenant.metaSignup.reason.META_SIGNUP_CREDENTIAL_UNAVAILABLE": "Secure access is unavailable. Contact your administrator.",
+  "tenant.metaSignup.recovery.checkNumbers": "Secure access is unavailable. Check available numbers first. If the check is interrupted, check saved status before trying again. If access is still unavailable after checking numbers, contact your administrator. Use Cancel this setup if it becomes available and you want to stop.",
+  "tenant.metaSignup.recovery.checkStatus": "Secure access is unavailable. Check saved status for the current outcome. If secure access is still unavailable, contact your administrator. Use Cancel this setup if it becomes available and you want to stop.",
   "tenant.metaSignup.reason.META_SIGNUP_PERMISSION_REQUIRED": "Grant the required business permissions in Meta before checking the numbers again.",
   "tenant.metaSignup.reason.META_SIGNUP_DISCOVERY_UNAVAILABLE": "Available numbers could not be verified. Complete Meta setup, then check again.",
   "tenant.metaSignup.reason.META_SIGNUP_NO_PHONE": "Add or verify a business number in Meta, then check available numbers.",

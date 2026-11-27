@@ -2411,6 +2411,8 @@ export const arabicTenantMessages = {
   "tenant.metaSignup.reason.META_SIGNUP_EXCHANGE_REJECTED": "لم تقبل Meta التفويض. ابدأ إعدادًا جديدًا بعد حل المشكلة لدى Meta.",
   "tenant.metaSignup.reason.META_SIGNUP_EXCHANGE_UNKNOWN": "تعذّر تأكيد التفويض. تواصل مع المسؤول قبل البدء مجددًا.",
   "tenant.metaSignup.reason.META_SIGNUP_CREDENTIAL_UNAVAILABLE": "الوصول الآمن غير متاح. تواصل مع المسؤول.",
+  "tenant.metaSignup.recovery.checkNumbers": "الوصول الآمن غير متاح. تحقّق من الأرقام المتاحة أولًا. إذا انقطع التحقق، فتحقّق من الحالة المحفوظة قبل المحاولة مجددًا. إذا ظل الوصول غير متاح بعد التحقق من الأرقام، فتواصل مع المسؤول. إذا ظهر خيار إلغاء هذا الإعداد وأردت التوقف، فاستخدمه.",
+  "tenant.metaSignup.recovery.checkStatus": "الوصول الآمن غير متاح. تحقّق من الحالة المحفوظة لمعرفة النتيجة الحالية. إذا ظل الوصول الآمن غير متاح، فتواصل مع المسؤول. إذا ظهر خيار إلغاء هذا الإعداد وأردت التوقف، فاستخدمه.",
   "tenant.metaSignup.reason.META_SIGNUP_PERMISSION_REQUIRED": "امنح صلاحيات النشاط التجاري المطلوبة لدى Meta قبل التحقق من الأرقام مجددًا.",
   "tenant.metaSignup.reason.META_SIGNUP_DISCOVERY_UNAVAILABLE": "تعذّر التحقق من الأرقام المتاحة. أكمل الإعداد لدى Meta، ثم تحقّق مجددًا.",
   "tenant.metaSignup.reason.META_SIGNUP_NO_PHONE": "أضف رقم النشاط التجاري أو تحقّق منه لدى Meta، ثم تحقّق من الأرقام المتاحة.",
