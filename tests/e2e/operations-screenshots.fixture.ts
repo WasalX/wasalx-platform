@@ -174,6 +174,38 @@ export function registerOperationsScreenshots(locale: "en" | "ar") {
                 }).length;
               });
             expect(clippedExcerpts).toBe(0);
+            // Filter tabs (label and count) and relative times stay on one line and inside their own box.
+            const wrapped = await page
+              .locator(".tabs button, .delivery-table time")
+              .evaluateAll((elements) =>
+                elements
+                  .filter((element) => {
+                    const range = document.createRange();
+                    range.selectNodeContents(element);
+                    const rects = [...range.getClientRects()].filter(
+                      (rect) => rect.width > 0,
+                    );
+                    const tops = rects.map((rect) => rect.top);
+                    const lineHeight = Math.min(
+                      ...rects.map((rect) => rect.height),
+                    );
+                    if (Math.max(...tops) - Math.min(...tops) > lineHeight / 2)
+                      return true;
+                    if (element.tagName === "BUTTON")
+                      return element.scrollWidth > element.clientWidth;
+                    const cell = element.closest("td")!;
+                    const style = getComputedStyle(cell);
+                    return (
+                      element.getBoundingClientRect().width >
+                      cell.clientWidth -
+                        parseFloat(style.paddingLeft) -
+                        parseFloat(style.paddingRight) +
+                        1
+                    );
+                  })
+                  .map((element) => (element as HTMLElement).innerText),
+              );
+            expect(wrapped).toEqual([]);
           }
           const fullPage = state !== "detail";
           if (fullPage) {
