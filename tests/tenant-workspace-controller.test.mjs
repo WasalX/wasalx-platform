@@ -166,10 +166,15 @@ test("controller configuration fails closed without private provider dependencie
   );
   assert.equal(loadControllerConfig(base).ingressNamespace, "ingress-system");
   assert.equal(loadControllerConfig(base).zammadDisplayTimeZone, wasalxTimeZone);
-  for (const timeZone of ["Asia/Tokyo", "UTC", "Etc/GMT+3"]) {
+  for (const timeZone of [
+    "Asia/Tokyo", "UTC", "Etc/GMT+3", "Europe/Kyiv", "Asia/Kolkata", "America/Argentina/Buenos_Aires",
+  ]) {
     assert.equal(loadControllerConfig({ ...base, WASALX_ZAMMAD_DISPLAY_TIMEZONE: timeZone }).zammadDisplayTimeZone, timeZone);
   }
-  for (const invalid of ["", "+03:00", "Not/AZone", "asia/riyadh", "Asia/RIYADH", "utc"]) {
+  for (const invalid of [
+    "", "+03:00", "Not/AZone", "asia/riyadh", "Asia/RIYADH", "utc", "Europe/kYiv",
+    "Asia/KOLKATA", "America/Argentina/Buenos_aires",
+  ]) {
     assert.throws(() => loadControllerConfig({ ...base, WASALX_ZAMMAD_DISPLAY_TIMEZONE: invalid }), /WASALX_ZAMMAD_DISPLAY_TIMEZONE is invalid/u);
   }
   assert.deepEqual(loadControllerConfig(base).backupEncryption, { mode: "SSE_KMS" });

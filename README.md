@@ -19,6 +19,14 @@ connection provider's customer-service window. Past instants indicate a closed
 window. The field is `null` for group tickets, providers without a window, or
 when the inbound timestamp is unavailable.
 
+## Zammad display time zone
+
+Set `WASALX_FULL_ZAMMAD_DISPLAY_TIMEZONE` for full Compose or
+`provisioner.controller.zammadDisplayTimeZone` in your Helm values file. Use a
+case-sensitive IANA identifier such as `Europe/Kyiv`. Compose validates the
+setting when initializing a fresh Zammad database. The controller validates
+its setting at startup.
+
 ## Bot delivery retry limits
 
 Set these optional variables in the service environment. For the Compose stack,

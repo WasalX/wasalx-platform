@@ -291,6 +291,7 @@ test("controller has separate image, leader lease, label enforcement, and no Sec
   assert.match(template, /serviceAccountToken:/);
   assert.match(template, /fsGroup: 1000/);
   assert.match(template, /WORKSPACE_PROVIDER_TOKEN_FILE/);
+  assert.match(template, /\{\{- with \.Values\.provisioner\.controller\.zammadDisplayTimeZone \}\}\s*- \{ name: WASALX_ZAMMAD_DISPLAY_TIMEZONE, value: \{\{ \. \| quote \}\} \}\s*\{\{- end \}\}/u);
   assert.doesNotMatch(template, /ZAMMAD_(?:IMAGE_BY_VERSION_JSON|CONFIGURATOR_IMAGE|NGINX_IMAGE|REDIS_IMAGE|MEMCACHED_IMAGE)/u);
   assert.doesNotMatch(template, /resources: \[secrets\]/);
   assert.doesNotMatch(template, /pods\/exec|kind: ClusterRole|verbs: \["?\*"?\]/);

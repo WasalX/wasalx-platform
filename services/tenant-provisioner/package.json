@@ -12,7 +12,8 @@
   "dependencies": {
     "@wasalx/core": "workspace:*",
     "@wasalx/observability": "workspace:*",
-    "jose": "^6.2.18"
+    "jose": "^6.2.18",
+    "tzdata": "1.0.54"
   },
   "devDependencies": {
     "@types/node": "22.20.5",
