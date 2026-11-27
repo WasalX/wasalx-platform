@@ -2,6 +2,18 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 import { getMessages } from "../../lib/i18n/messages";
 import { journeyCapturePath } from "./journey-captures.mjs";
 
+// Status badges keep their dot on the label's line in every slot.
+async function expectInlineBadgeDots(page: Page) {
+  const dropped = await page.locator(".status").evaluateAll((badges) =>
+    badges.filter((badge) => {
+      const dot = badge.querySelector("i")?.getBoundingClientRect();
+      const box = badge.getBoundingClientRect();
+      return dot && Math.abs(dot.top + dot.height / 2 - (box.top + box.height / 2)) > 2;
+    }).length,
+  );
+  expect(dropped).toBe(0);
+}
+
 export function registerOperationsScreenshots(locale: "en" | "ar") {
   const messages = getMessages(locale);
   const deliveryRow = (page: Page) =>
@@ -112,6 +124,56 @@ export function registerOperationsScreenshots(locale: "en" | "ar") {
                 (element) => element.scrollWidth - element.clientWidth,
               ),
             ).toBeLessThanOrEqual(0);
+            // On phone cards each status badge ends at the inline end of its row, in both directions.
+            const badgeGaps = await table
+              .locator("tbody tr")
+              .evaluateAll((rows) =>
+                rows
+                  .filter((row) => getComputedStyle(row).display === "grid")
+                  .map((row) => {
+                    const style = getComputedStyle(row);
+                    const box = row.getBoundingClientRect();
+                    const badge = row
+                      .querySelector("td:nth-child(4) .status")!
+                      .getBoundingClientRect();
+                    return style.direction === "rtl"
+                      ? badge.left - box.left - parseFloat(style.paddingLeft)
+                      : box.right - parseFloat(style.paddingRight) - badge.right;
+                  }),
+              );
+            if (testInfo.project.name === "mobile-390") {
+              expect(badgeGaps.length).toBeGreaterThan(0);
+            }
+            for (const gap of badgeGaps) {
+              expect(Math.abs(gap)).toBeLessThanOrEqual(1);
+            }
+            // The italic redacted excerpt keeps its slanted last glyph unless the text really overflows.
+            const clippedExcerpts = await table
+              .locator(".redacted-message .excerpt")
+              .evaluateAll((excerpts) => {
+                const context = document
+                  .createElement("canvas")
+                  .getContext("2d")!;
+                return excerpts.filter((excerpt) => {
+                  const style = getComputedStyle(excerpt);
+                  if (
+                    style.fontStyle !== "italic" ||
+                    style.direction === "rtl" ||
+                    excerpt.scrollWidth > excerpt.clientWidth
+                  ) {
+                    return false;
+                  }
+                  context.font = style.font;
+                  const ink = context.measureText(
+                    excerpt.textContent ?? "",
+                  ).actualBoundingBoxRight;
+                  return (
+                    parseFloat(style.paddingLeft) + ink >
+                    excerpt.getBoundingClientRect().width
+                  );
+                }).length;
+              });
+            expect(clippedExcerpts).toBe(0);
           }
           const fullPage = state !== "detail";
           if (fullPage) {
@@ -136,6 +198,39 @@ export function registerOperationsScreenshots(locale: "en" | "ar") {
           });
         };
         await capture("list", screen.listReady(page));
+        if (screen.area === "client-routing") {
+          await expectInlineBadgeDots(page);
+          const table = page.getByRole("region", { name: messages["routing.clients.tableLabel"], exact: true });
+          const fit = await table.evaluate((region) => ({
+            overflows: region.scrollWidth > region.clientWidth + 1,
+            cue: [...region.querySelectorAll(".table-scroll-cue")].some((cue) => cue.getBoundingClientRect().height > 0),
+          }));
+          // Desktop fits all four columns; a narrower table scrolls behind a visible cue.
+          if (testInfo.project.name === "desktop") expect(fit.overflows).toBe(false);
+          if (fit.overflows) expect(fit.cue).toBe(true);
+          // Identifiers break only between their <wbr>-separated pieces, never inside one.
+          const splitPieces = await table.locator("code").evaluateAll((codes) =>
+            codes.flatMap((code) => [...code.childNodes]).filter((node) => {
+              if (node.nodeType !== Node.TEXT_NODE) return false;
+              const range = document.createRange();
+              range.selectNodeContents(node);
+              return new Set([...range.getClientRects()].map((rect) => Math.round(rect.top))).size > 1;
+            }).length,
+          );
+          expect(splitPieces).toBe(0);
+          const newDraft = page.getByRole("button", { name: messages["routing.versions.new"], exact: true });
+          const newDraftLines = await newDraft.evaluate((button) => {
+            const range = document.createRange();
+            range.selectNodeContents(button);
+            return new Set([...range.getClientRects()].map((rect) => Math.round(rect.top))).size;
+          });
+          expect(newDraftLines).toBe(1);
+          const versionLines = await page.locator(".bot-version-list button[aria-pressed]").evaluateAll((buttons) => buttons.flatMap((button) => (button as HTMLElement).innerText.split("\n").map((line) => line.trim())));
+          expect(versionLines).not.toContain("·");
+          await expect(page.locator(".routing-detail h2").first()).toContainText(messages["routing.starter.name"]);
+          await expect(page.getByText(messages["routing.starter.source"], { exact: true }).first()).toBeVisible();
+          await expect(page.getByText(messages["routing.sample.notionSource"], { exact: true }).first()).toBeVisible();
+        }
         await screen.open(page).click();
         // Wait for the editor's autofocus and scroll before resetting the page position.
         if (screen.editorHeading)
@@ -146,6 +241,19 @@ export function registerOperationsScreenshots(locale: "en" | "ar") {
           ).toHaveCount(0);
         }
         await capture(screen.state, screen.detailReady(page));
+        if (screen.area === "message-delivery") {
+          await expectInlineBadgeDots(page);
+          // Count and scope chips share the status badge's text size and shape.
+          const chips = await page.getByRole("dialog", { name: messages["tenant.deliveries.detail.title"], exact: true }).evaluate((dialog) => {
+            const look = (selector: string) => {
+              const style = getComputedStyle(dialog.querySelector(selector)!);
+              return [style.fontSize, style.fontWeight, style.borderStartStartRadius, style.paddingInlineStart].join(" ");
+            };
+            return { status: look(".receipt-event .status"), scope: look(".receipt-event .tag"), count: look(".connection-detail-section-head > .tag") };
+          });
+          expect(chips.scope).toBe(chips.status);
+          expect(chips.count).toBe(chips.status);
+        }
       });
     }
   }

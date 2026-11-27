@@ -38,6 +38,12 @@ const artifactSuite = process.env.WASALX_E2E_LOCALES === "en" ? "application-en"
 const artifactRoot = resolve("output", "playwright", artifactSuite, language);
 
 const tabletOnly = /(?:^|\s)@tablet-only(?:\s|$)/u;
+const ownerPart = process.env.WASALX_E2E_OWNER_PART;
+if (ownerPart && (role !== "tenant_owner" || platformUrl || !["desktop", "mobile-tablet"].includes(ownerPart))) {
+  throw new Error("WASALX_E2E_OWNER_PART must select desktop or mobile-tablet for the tenant_owner fixtures.");
+}
+// The timed split puts this desktop spec with mobile and tablet to balance the English halves.
+const desktopTransitionSpec = "meta-account-transition-execution.spec.ts";
 
 export default defineConfig({
   testDir: "./tests/e2e",
@@ -82,6 +88,8 @@ export default defineConfig({
   projects: [
     {
       name: "desktop",
+      testIgnore: ownerPart === "desktop" ? desktopTransitionSpec : undefined,
+      testMatch: ownerPart === "mobile-tablet" ? desktopTransitionSpec : undefined,
       grepInvert: tabletOnly,
       use: {
         ...devices["Desktop Chrome"],
@@ -92,7 +100,7 @@ export default defineConfig({
       name: "mobile-390",
       grepInvert: /(?:^|\s)@(?:tablet|desktop)-only(?:\s|$)/u,
       use: {
-        browserName: "chromium",
+        browserName: "chromium" as const,
         deviceScaleFactor: 1,
         hasTouch: true,
         isMobile: true,
@@ -104,14 +112,14 @@ export default defineConfig({
       // Cover shell and inbox layouts, the audit table, group drawer, and Arabic RTL.
       grep: /(?:^|\s)@tablet(?:\s|$)/u,
       use: {
-        browserName: "chromium",
+        browserName: "chromium" as const,
         deviceScaleFactor: 1,
         hasTouch: true,
         isMobile: true,
         viewport: { width: 820, height: 1_180 },
       },
     },
-  ],
+  ].filter(project => ownerPart !== "desktop" || project.name === "desktop"),
   webServer: platformUrl ? undefined : {
     command: `"${process.execPath}" node_modules/vinext/dist/cli.js start -p ${port} -H localhost`,
     stdout: "pipe",
