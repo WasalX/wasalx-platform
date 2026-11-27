@@ -20,8 +20,10 @@ The [registry retry policy](../../scripts/release/image_registry_retry.py)
 allows at most three attempts for recognized transient HTTP and network
 failures or a registry command deadline. The immutable image push also retries
 the exact Docker error "unknown blob" within that same limit, logging each
-failed push attempt and its output. Build, authorization, signature,
-provenance and digest errors fail on the first attempt. Unclassified failures
+failed push attempt and its output. The first read-back after the push also
+retries Docker's missing-manifest error for the exact published digest with the
+same 10 and 20 second backoff. Build, authorization, signature, provenance and
+digest errors fail on the first attempt. Unclassified failures
 also fail immediately. Release tool and infrastructure downloads use curl's
 standard transient retry set with a time budget. Verification failures stop
 before the downloaded bytes are used.

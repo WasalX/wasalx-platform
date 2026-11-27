@@ -222,6 +222,8 @@ test("Arabic mobile and tablet layouts remain bounded with tenant context visibl
   await open(page, role === "agent" ? "deliveries" : "settings");
   await expect(page.locator(".workspace-switcher")).toBeVisible();
   await expect(page.locator(".environment")).toBeVisible();
+  // The badge is a status label, not code: Arabic letters must join in the interface font.
+  await expect(page.locator(".environment")).toHaveCSS("font-family", /Noto Sans Arabic/u);
   const width = await page.evaluate(() => ({ viewport: innerWidth, document: document.documentElement.scrollWidth }));
   expect(width.document).toBeLessThanOrEqual(width.viewport);
   await expectAxeClean(page);

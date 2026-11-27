@@ -1252,7 +1252,7 @@ function FlowDetail({
             <details className="routing-raw">
               <summary>{t("bot.flow.schema.title")}</summary>
               <p>{t("bot.flow.schema.help")}</p>
-              <pre aria-label={t("bot.flow.schema.label")}><code>{JSON.stringify(definition, null, 2)}</code></pre>
+              <pre dir="ltr" aria-label={t("bot.flow.schema.label")}><code>{JSON.stringify(definition, null, 2)}</code></pre>
             </details>
           ) : null}
           <FlowSimulator key={String(row.flow_version_id)} definition={definition} actions={actions} supportTeams={supportTeams} />

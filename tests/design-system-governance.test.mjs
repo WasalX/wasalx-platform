@@ -377,3 +377,22 @@ test("workspace settings keep the mailbox spacing fixes from issue 571", async (
     assert.ok(globals.includes(`.settings-grid.settings-grid-privacy,.settings-grid-privacy+.settings-grid{grid-template-columns:${columns}`), `the mailbox card follows the Privacy columns ${columns}`);
   }
 });
+
+test("ticket routing sync keeps its body on the card inset at body size (issue 596)", async () => {
+  const [panel, css] = await Promise.all(["app/NativeRoutingSync.tsx", "app/NativeRoutingSync.module.css"].map(read));
+  const body = panel.slice(panel.indexOf("<div className={styles.body}>"), panel.lastIndexOf("</section>"));
+  assert.match(panel, /<\/div>\s*<div className=\{styles\.body\}>\s*<div role="status">/u, "the status, actions, policy text and editor sit in the padded body right after the heading");
+  for (const part of ['role="status"', "styles.actions", "nativeRouting.defaults.description", "nativeRouting.defaults.count", "styles.editor"]) assert.ok(body.includes(part), `${part} is inside the padded body`);
+  assert.match(css, /\.body \{[^}]*padding: var\(--wx-space-4\);[^}]*font-size: var\(--wx-font-size-2\);/u, "the body uses the card inset and the card text size");
+});
+
+test("Workflows and Client routing fields share one field style at body size (issue 597)", async () => {
+  const [globals, routing, bot] = await Promise.all(["app/globals.css", "app/ClientRouting.tsx", "app/BotAutomation.tsx"].map(read));
+  const shared = globals.match(/\.bot-automation :where\(input,select,textarea\),\.routing-workspace :where\(input,select,textarea\)\{([^}]*)\}/u);
+  assert.ok(shared, "Client routing fields join the Workflows field rule");
+  assert.match(shared[1], /border:1px solid var\(--border-strong\);[^}]*background:var\(--surface-2\);[^}]*padding:var\(--wx-space-2\) var\(--wx-space-3\);font-size:var\(--wx-font-size-3\)$/u);
+  for (const state of ["focus-visible", "user-invalid", "disabled"]) assert.ok(globals.includes(`.routing-workspace :where(input,select,textarea):${state}{`), `Client routing fields share the ${state} state`);
+  assert.doesNotMatch(globals, /:where\(input,select(?:,textarea)?\)\{[^}]*font-size:var\(--wx-font-size-4\)/u, "no shared field rule uses the 16 px size");
+  assert.ok(routing.indexOf('<div className="routing-workspace"') < routing.indexOf("<RoutingSimulator"), "the simulator renders inside the routing workspace");
+  assert.match(bot, /<div className="bot-automation" dir=\{direction\}>/u);
+});

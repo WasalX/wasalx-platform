@@ -188,7 +188,7 @@ The target set is the primitives in `app/design-system/primitives.tsx` and `prim
 - **Dialog** (`ModalDialog.tsx`): at most 520 px, dialog radius, dialog shadow, scroll inside, focus trapped, Escape closes. Header, body and footer share one 16 px inline inset, and the header and footer dividers run edge to edge.
 - **Scroll region** (`ScrollRegion` in `app/tenant-ui.tsx`): any area that scrolls on its own (wide table, drawer body, transcript) uses it; it requires a name (`aria-label` or `aria-labelledby`) and sets `role="region"` and `tabIndex={0}` so keyboard users can scroll it. `WideTable` wraps it.
 - **Toast**: bottom, inline-end, inverted colors, at most 520 px.
-- **Inputs**: 34-38 px, raised background, `border-strong`; focus = violet border, a 3 px `accent-wash` ring and the shared 2 px violet outline (`Highlight` in forced colors). A field inside a container with its own focus ring (the search box) hides its outline except in forced colors; a danger field uses a danger-colored outline.
+- **Inputs**: 34-38 px, raised background, `border-strong`, body text size (14 px); a screen's fields share one field rule (Workflows and Client routing: the `.bot-automation`/`.routing-workspace` rule in `app/globals.css`); focus = violet border, a 3 px `accent-wash` ring and the shared 2 px violet outline (`Highlight` in forced colors). A field inside a container with its own focus ring (the search box) hides its outline except in forced colors; a danger field uses a danger-colored outline.
 
 ## Do's and Don'ts
 
