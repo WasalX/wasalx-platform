@@ -54,7 +54,7 @@ main { grid-column:2; min-width:0; }
 .button:hover { background:var(--surface-3); border-color:color-mix(in srgb,var(--border-strong),var(--text) 15%); }
 .button.primary { background:var(--text); color:var(--bg); border-color:var(--text); }
 .button.primary:hover { opacity:.88; }.button.secondary{background:transparent}.button.small{min-height:29px;padding:0 var(--wx-space-2);font-size:var(--wx-font-size-1)}
-.connect-number-action{display:inline-flex;align-items:center;justify-content:center;gap:var(--wx-space-1);white-space:nowrap}.connect-number-action-mark{flex:none}
+.connect-number-action,.icon-action{display:inline-flex;align-items:center;justify-content:center;gap:var(--wx-space-1)}.connect-number-action{white-space:nowrap}:is(.connect-number-action,.icon-action)>.marketing-icon{inline-size:var(--wx-icon-size-inline);block-size:var(--wx-icon-size-inline);flex:none}
 .accessible-danger-button{border-color:var(--wx-color-danger-solid)!important;background:var(--wx-color-danger-solid)!important;color:var(--wx-color-on-solid)!important}
 .content { width:100%; min-width:0; max-width:var(--wx-content-max); margin:0 auto; overflow-x:clip; padding:var(--wx-space-8) clamp(var(--wx-space-6),4vw,var(--wx-space-12)) var(--wx-space-16); }
 .content>* { min-width:0; max-width:100%; }
