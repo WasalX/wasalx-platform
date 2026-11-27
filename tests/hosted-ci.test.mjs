@@ -315,9 +315,10 @@ test("CI job timeouts are covered by the measured limits", async () => {
       if (Number.isInteger(timeout)) {
         for (const limit of Object.values(limits)) assert.equal(timeout, limit, id);
       } else {
-        const expression = /^\$\{\{ fromJSON\('\s*(\{.*\})\s*'\)\[matrix\.(\w+)\] \}\}$/u.exec(timeout);
+        const expression = /^\$\{\{ fromJSON\('\s*(\{.*\})\s*'\)\[(.+)\] \}\}$/u.exec(timeout);
         assert(expression, id);
-        assert.equal(expression[2], axis, id);
+        const lookup = axis === "shard" ? "format('{0}', matrix.shard)" : `matrix.${axis}`;
+        assert.equal(expression[2], lookup, id);
         assert.deepEqual(JSON.parse(expression[1]), limits, id);
       }
       continue;
