@@ -291,8 +291,8 @@ The content contract admits one publicly distributed demo private key in Cloudfl
 built-in hello-world TLS service, only in `usr/local/bin/cloudflared` for the
 `production-cloudflared` image. Its entire PEM content SHA256 is
 `17ac4c2ca3deb87202cd2c101d4da9d4f4c0ec3d51a0381729329102b28e61a4`, verified
-against `tlsconfig/hello_ca.go` in the Dockerfile's checksum-pinned public
-2026.9.1 source archive. Other keys, changed content or a changed archive pin
+against `tlsconfig/hello_ca.go` at the public commit pinned in the Dockerfile
+for Cloudflared 2026.9.1. Other keys, changed content or a changed source pin
 fail closed. No runtime deployment credential is exempted.
 
 Zammad copies `/usr/local` and `/opt/zammad` from its approved public upstream

@@ -53,7 +53,7 @@
   { "path": "scripts/release/images-by-digest.py", "literal": "https://github.com/", "reason": "Canonical registry or source URL used to resolve or verify publication inputs." },
   { "path": "scripts/release/images-by-digest.py", "literal": "https://ghcr.io/v2/zammad/zammad/", "reason": "Canonical registry or source URL used to resolve or verify publication inputs." },
   { "path": "scripts/release/images-by-digest.py", "literal": "https://ghcr.io/token?service=ghcr.io&scope=repository:zammad/zammad:pull", "reason": "Canonical registry or source URL used to resolve or verify publication inputs." },
-  { "path": "scripts/release/images-by-digest.py", "literal": "https://github.com/cloudflare/cloudflared/archive/refs/tags/2026.9.1.tar.gz", "reason": "Canonical registry or source URL used to resolve or verify publication inputs." },
+  { "path": "scripts/release/images-by-digest.py", "literal": "https://github.com/cloudflare/cloudflared.git#f11dea9cb7079e90a982c1a2d5548ab40847fdcf", "reason": "Reviewed Cloudflared source commit required by the image content check." },
   { "path": "scripts/release/images-by-digest.py", "literal": "https://token.actions.githubusercontent.com", "reason": "Canonical registry or source URL used to resolve or verify publication inputs." },
   { "path": "scripts/release/installer-hosted-bundles.py", "literal": "https://ghcr.io/token?scope=repository:", "reason": "Canonical registry or source URL used to resolve or verify publication inputs." },
   { "path": "scripts/release/installer-hosted-bundles.py", "literal": "https://ghcr.io/v2/", "reason": "Canonical registry or source URL used to resolve or verify publication inputs." },
