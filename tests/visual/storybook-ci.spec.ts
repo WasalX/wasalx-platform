@@ -188,9 +188,12 @@ for (const theme of ["light", "dark"] as const) {
 }
 
 // Synthetic browser fixtures only; never live Meta acceptance.
+const arabicBrowser = test.extend({ locale: languageTag("ar") });
 for (const theme of ["light", "dark"] as const) {
-  for (const viewport of ["desktop", "phone"] as const) {
-    test(`a locale change keeps the Meta signup authorization running (${viewport}, ${theme})`, async ({ page }, testInfo) => {
+  for (const [viewport, initialLocale] of [["desktop", "en"], ["phone", "en"], ["desktop", "ar"], ["phone", "ar"]] as const) {
+    const authorizationTest = initialLocale === "en" ? arabicBrowser : test;
+    const fromArabic = initialLocale === "ar" ? " from Arabic" : "";
+    authorizationTest(`a locale change keeps the Meta signup authorization running (${viewport}, ${theme})${fromArabic}`, async ({ page }, testInfo) => {
       const errors: string[] = [];
       page.on("pageerror", error => errors.push(error.message));
       if (viewport === "phone") await page.setViewportSize({ width: 390, height: 844 });
@@ -213,7 +216,7 @@ for (const theme of ["light", "dark"] as const) {
         if (path === "attempts") { started = true; return route.fulfill({ json: { ...view, challenge: "S".repeat(43), sdk } }); }
         return route.fulfill({ json: view });
       });
-      const globals = `a11y.manual:!true;auditTheme:${theme};auditLocale:en`;
+      const globals = `a11y.manual:!true;auditTheme:${theme};auditLocale:${initialLocale}`;
       await page.goto(`/iframe.html?${new URLSearchParams({ id: "product-meta-signup--english", viewMode: "story", globals })}`);
       const canvas = page.locator("#storybook-root > .wx-story-canvas");
       await expect(canvas).toHaveClass(new RegExp(`\\btheme-${theme}\\b`));
@@ -221,6 +224,13 @@ for (const theme of ["light", "dark"] as const) {
         const content = canvas.getByRole("main");
         await expect(content).toHaveAttribute("lang", locale);
         await expect(content).toHaveAttribute("dir", textDirection(locale));
+        const messages = locale === "ar" ? ar : en;
+        await expect(content.getByRole("status")).toHaveText(messages["tenant.metaSignup.waiting"]);
+        await expect(content.getByText(messages["tenant.metaSignup.status.AWAITING_AUTHORIZATION"], { exact: true })).toHaveCount(0);
+        const continueInMeta = content.getByRole("button", { name: messages["tenant.metaSignup.connect"], exact: true });
+        await expect(continueInMeta).toBeDisabled();
+        await expect(continueInMeta).toHaveClass(/\bsecondary\b/u);
+        await expect(content.getByRole("button", { name: messages["tenant.metaSignup.cancel"], exact: true })).toBeEnabled();
         await page.screenshot({
           path: testInfo.outputPath(`meta-signup-authorization-${viewport}-${theme}-${locale}.png`),
           fullPage: true,
@@ -230,17 +240,36 @@ for (const theme of ["light", "dark"] as const) {
         });
       };
 
-      await page.getByRole("button", { name: en["tenant.metaSignup.prepare"], exact: true }).click();
-      await page.getByRole("button", { name: en["tenant.metaSignup.connect"], exact: true }).click();
-      await expect(page.getByText(en["tenant.metaSignup.waiting"], { exact: true })).toBeVisible();
-      await capturePending("en");
+      const initial = initialLocale === "ar" ? ar : en;
+      const otherLocale = initialLocale === "ar" ? "en" : "ar";
+      expect(await page.evaluate(() => navigator.language.split("-")[0])).toBe(otherLocale);
+      const content = canvas.getByRole("main");
+      await expect(content).toHaveAttribute("lang", initialLocale);
+      await content.getByRole("button", { name: initial["tenant.metaSignup.prepare"], exact: true }).click();
+      const continueInMeta = content.getByRole("button", { name: initial["tenant.metaSignup.connect"], exact: true });
+      const cancel = content.getByRole("button", { name: initial["tenant.metaSignup.cancel"], exact: true });
+      await expect(content.getByRole("status")).toHaveText(initial["tenant.metaSignup.status.AWAITING_AUTHORIZATION"]);
+      await expect(continueInMeta).toBeEnabled();
+      await expect(continueInMeta).toHaveClass(/\bprimary\b/u);
+      await expect(cancel).toBeEnabled();
+      await page.screenshot({
+        path: testInfo.outputPath(`meta-signup-authorization-ready-${viewport}-${theme}-${initialLocale}.png`),
+        fullPage: true, animations: "disabled", caret: "hide", scale: "css",
+      });
+
+      await continueInMeta.focus();
+      await page.keyboard.press("Enter");
+      await capturePending(initialLocale);
+      await expect(continueInMeta).toBeFocused();
+      await page.keyboard.press("Enter");
+      await page.keyboard.press("Tab");
+      await expect(cancel).toBeFocused();
 
       await page.getByRole("button", { name: "Synthetic locale change", exact: true }).click();
-      await expect(page.getByText(ar["tenant.metaSignup.waiting"], { exact: true })).toBeVisible();
       // A restarted session would cancel the attempt, load again and fence the open popup callback.
       expect([...calls].sort()).toEqual(["GET attempts", "GET capabilities", "POST attempts"]);
       expect(await page.evaluate(() => (window as unknown as { metaSignupCallbacks: unknown[] }).metaSignupCallbacks.length)).toBe(1);
-      await capturePending("ar");
+      await capturePending(otherLocale);
 
       await page.evaluate(() => (window as unknown as { metaSignupCallbacks: ((value: unknown) => void)[] }).metaSignupCallbacks[0]!({ authResponse: { code: "synthetic-code-once" } }));
       await expect.poll(() => calls.filter(call => call.endsWith("/exchange"))).toEqual([`POST attempts/${view.attemptId}/exchange`]);

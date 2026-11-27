@@ -73,7 +73,7 @@ jobs:
         with:
           version: v0.30.1
           driver-opts: image=moby/buildkit:v0.26.3
-          cache-binary: false
+          cache-binary: true
       - if: steps.image.outputs.pending == 'false'
         uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
@@ -142,4 +142,4 @@ jobs:
         run: |
           complete=$(jq -er --arg commit "$GITHUB_SHA" 'select(.commit == $commit) | .publicationComplete | booleans | tostring' images-manifest.json)
           echo "complete=$complete" >> "$GITHUB_OUTPUT"
-          printf 'Immutable image publication complete for `%s`: %s\n' "$GITHUB_SHA" "$complete" >> "$GITHUB_STEP_SUMMARY"
+          printf "Immutable image publication complete for \`%s\`: %s\n" "$GITHUB_SHA" "$complete" >> "$GITHUB_STEP_SUMMARY"

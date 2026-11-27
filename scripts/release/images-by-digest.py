@@ -34,7 +34,7 @@ RERUN_ALL = {
     "zammad-addon.json",  # Pins the public add-on source passed to image builds.
 }
 CACHED_IMAGES = {
-    "production-prometheus", "zammad", "production-otel", "control-api", "connector-worker", "portal",
+    "production-alertmanager", "production-prometheus", "zammad", "production-otel", "control-api", "connector-worker", "portal",
     "tenant-provisioner", "tenant-workspace-controller", "workspace-provider", "identity-policy-activator",
     "invitation-mailer",
 }
@@ -573,7 +573,7 @@ def publish(receipt_path):
         contact_digest = receipt.get("contactEmailSha256")
         require(isinstance(contact_digest, str) and DIGEST.fullmatch(contact_digest), "Invalid portal contact email digest")
         contact_input["contactEmailSha256"] = contact_digest
-    result = registry_output("docker", "push", receipt["reference"]).decode("utf-8")
+    result = registry_output("docker", "push", receipt["reference"], retry_unknown_blob=True).decode("utf-8")
     matches = re.findall(r"digest: (sha256:[0-9a-f]{64})", result)
     require(len(set(matches)) == 1, "Missing unique published digest")
     digest = matches[0]

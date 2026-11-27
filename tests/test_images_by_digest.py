@@ -292,6 +292,7 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
                          ["portal", "control-api", "connector-worker", "foundation-postgres"])
         self.assertEqual(images.matrix(["docs/guide/intro.md", "unmapped/new-file"], pull_request=True),
                          {"include": []})
+        self.assertIn("A PR path that matches no image input selects no image.", (ROOT / "DELIVERY.md").read_text(encoding="utf-8"))
 
     def test_pull_request_matrix_selects_addon_staging_inputs(self):
         addon_images = {"zammad", "workspace-configurator"}
@@ -492,27 +493,34 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
             with self.subTest(key=key), self.assertRaises(ValueError):
                 images.assemble(bad)
 
-    def test_collector_module_transport_is_scoped_to_the_build(self):
-        dockerfile = (ROOT / "Dockerfile.production-otel").read_text(encoding="utf-8")
-        build, runtime = dockerfile.rsplit("\nFROM ", 1)
-        self.assertIn("ENV GODEBUG=http2client=0", build.splitlines())
-        self.assertNotIn("GOSUMDB=off", build)
-        self.assertNotIn("GODEBUG", runtime)
+    def test_go_module_transport_is_scoped_to_the_build(self):
+        for image in ("alertmanager", "cloudflared", "otel", "prometheus"):
+            with self.subTest(image=image):
+                dockerfile = (ROOT / f"Dockerfile.production-{image}").read_text(encoding="utf-8")
+                build, runtime = dockerfile.rsplit("\nFROM ", 1)
+                if image == "prometheus":
+                    self.assertNotIn("GODEBUG", build)
+                else:
+                    self.assertIn("ENV GODEBUG=http2client=0", build.splitlines())
+                self.assertNotIn("GOSUMDB=off", build)
+                self.assertNotIn("GODEBUG", runtime)
 
     def test_registry_cache_roles_are_disjoint(self):
-        self.assertEqual(len(images.CACHED_IMAGES), 11)
+        self.assertEqual(len(images.CACHED_IMAGES), 12)
         self.assertLessEqual(images.CACHED_IMAGES, {row["image"] for row in images.catalog()})
         main = {"GITHUB_EVENT_NAME": "push", "GITHUB_REF": "refs/heads/main", "GITHUB_REPOSITORY": images.REPOSITORY}
-        ref = "type=registry,ref=ghcr.io/wasalx/buildcache:production-prometheus"
+        ref = "type=registry,ref=ghcr.io/wasalx/buildcache:"
         with mock.patch.dict(os.environ, main, clear=True):
-            self.assertEqual(images.cache_options("production-prometheus", "write"), ["--cache-to", ref + ",mode=max,ignore-error=true"])
+            for image in ("production-prometheus", "production-alertmanager"):
+                self.assertEqual(images.cache_options(image, "write"), ["--cache-to", ref + image + ",mode=max,ignore-error=true"])
             self.assertEqual(images.cache_options("portal", "off"), [])
             self.assertEqual(images.cache_options("postgres", "write"), [])
             with self.assertRaises(ValueError):
                 images.cache_options("portal", "read")
         for event in ["pull_request", "merge_group"]:
             with mock.patch.dict(os.environ, {"GITHUB_EVENT_NAME": event}, clear=True):
-                self.assertEqual(images.cache_options("production-prometheus", "read"), ["--cache-from", ref])
+                for image in ("production-prometheus", "production-alertmanager"):
+                    self.assertEqual(images.cache_options(image, "read"), ["--cache-from", ref + image])
                 with self.assertRaises(ValueError):
                     images.cache_options("portal", "write")
 
@@ -550,6 +558,7 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
             (("cosign", "verify"), b"error: no matching signatures"),
             (("cosign", "attest"), b"error: invalid provenance"),
             (("cosign", "verify-attestation"), b"error: no matching attestations"),
+            (("docker", "pull"), b"unknown blob"),
             (("docker", "pull"), b"error: digest mismatch"),
             (("docker", "pull"), b"x509: certificate signed by unknown authority"),
             (("docker", "pull"), b""),
@@ -561,6 +570,52 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
                 images.registry_output(*command)
             run.assert_called_once()
             sleep.assert_not_called()
+
+    def test_publication_retries_unknown_blob_and_fails_closed(self):
+        commit, tree, digest = "a" * 40, "b" * 40, "sha256:" + "1" * 64
+        inspection = {"configDigest": "sha256:" + "2" * 64, "addonLicenses": {}}
+        manifest = json.dumps({"mediaType": "application/vnd.oci.image.manifest.v1+json",
+                               "config": {"digest": inspection["configDigest"]}}).encode()
+        env = {"GITHUB_EVENT_NAME": "push", "GITHUB_REF": "refs/heads/main", "GITHUB_WORKFLOW_SHA": commit,
+               "GITHUB_RUN_ID": "1", "GITHUB_RUN_ATTEMPT": "1"}
+        reference = f"ghcr.io/wasalx/zammad-nginx:{commit}"
+        receipt = {"image": "zammad-nginx", "reference": reference, "commit": commit, "tree": tree,
+                   "status": "built", "inspection": inspection, "sourceArchiveDigest": "",
+                   "addonSource": None, "dockerfileDigest": ""}
+        command = ("docker", "push", reference)
+        diagnostic = b"sha256:" + b"3" * 64 + b" HTTP/1.1 404 Not Found"
+        failure = subprocess.CalledProcessError(1, command, output=diagnostic + b"\n", stderr=b"unknown blob\n")
+        successful_outputs = [f"digest: {digest}".encode(), manifest, b"", b"", b"", b""]
+        for failures, published in [(1, True), (3, False)]:
+            results = [failure] * failures
+            if published:
+                results.extend(subprocess.CompletedProcess((), 0, stdout=output) for output in successful_outputs)
+            with (self.subTest(published=published), tempfile.TemporaryDirectory() as directory,
+                  patch.dict(os.environ, env, clear=True), patch.object(images, "coordinates", return_value=(commit, tree)),
+                  patch.object(images, "pull"), patch.object(images, "inspect_image", return_value=inspection),
+                  patch.object(subprocess, "run", side_effect=results) as run,
+                  patch("time.sleep") as sleep, redirect_stderr(io.StringIO()) as logs):
+                path = Path(directory) / "receipt.json"
+                images.write(path, receipt)
+                if published:
+                    images.publish(path)
+                    record = json.loads(path.read_text())
+                    self.assertEqual((record["digest"], record["status"]), (digest, "published"))
+                    self.assertTrue(record["verified"])
+                else:
+                    with self.assertRaises(subprocess.CalledProcessError) as raised:
+                        images.publish(path)
+                    self.assertEqual(raised.exception.returncode, 1)
+                    self.assertEqual(json.loads(path.read_text()), receipt)
+                    self.assertFalse(path.with_suffix(".json.predicate.json").exists())
+                    self.assertEqual(run.call_count, 3)
+            pushes = [call.args[0] for call in run.call_args_list if call.args[0][:2] == ("docker", "push")]
+            self.assertEqual(pushes, [command] * (2 if published else 3))
+            self.assertEqual(sleep.call_args_list, [mock.call(10)] if published else [mock.call(10), mock.call(20)])
+            for attempt in range(1, failures + 1):
+                self.assertIn(f"Image push attempt {attempt}/3 failed.", logs.getvalue())
+            self.assertEqual(logs.getvalue().count(diagnostic.decode()), failures)
+            self.assertEqual(logs.getvalue().count("unknown blob\n"), failures)
 
     def test_publication_pushes_only_the_commit_tag_and_uses_the_signing_identity(self):
         commit, tree, digest = "a" * 40, "b" * 40, "sha256:" + "1" * 64
@@ -605,7 +660,7 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
                 run.assert_any_call("cosign", "verify", "--certificate-identity", identity,
                                     "--certificate-oidc-issuer", "https://token.actions.githubusercontent.com", reference)
                 self.assertEqual([call for call in run.call_args_list if call.args[:2] == ("docker", "push")],
-                                 [mock.call("docker", "push", receipt["reference"])])
+                                 [mock.call("docker", "push", receipt["reference"], retry_unknown_blob=True)])
 
         for event, ref in (("push", "refs/heads/dev"), ("push", "refs/heads/feature"), ("pull_request", "refs/heads/main")):
             with self.subTest(event=event, ref=ref), patch.dict(os.environ, {"GITHUB_EVENT_NAME": event, "GITHUB_REF": ref}):

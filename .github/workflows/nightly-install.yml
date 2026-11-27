@@ -4,9 +4,11 @@ on:
   schedule:
     - cron: '17 2 * * *'
   workflow_dispatch:
-  pull_request:
-    branches: [main]
-    types: [opened, synchronize, reopened]
+    inputs:
+      commit:
+        description: Exact published main commit SHA (optional)
+        type: string
+        required: false
   push:
     tags: ['v*-rc.*']
 
@@ -56,7 +58,8 @@ jobs:
   nightly-install:
     if: >-
       github.repository == 'WasalX/wasalx-platform' &&
-      (github.event_name == 'pull_request' || github.ref == 'refs/heads/main' ||
+      (github.event_name == 'pull_request' || github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'push' && github.ref_type == 'tag'))
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -103,11 +106,12 @@ jobs:
         if: steps.changes.outputs.needed != 'false'
         env:
           GH_TOKEN: ${{ github.token }}
+          DISPATCH_COMMIT: ${{ inputs.commit }}
         run: |
           work="$RUNNER_TEMP/wasalx-nightly"
           install -d -m 0700 "$work/diagnostics"
           source scripts/release/image-manifest.sh
-          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+          if [[ "$GITHUB_EVENT_NAME" == push && "$GITHUB_REF_TYPE" == tag ]]; then
             commit=$(git rev-parse HEAD)
             require_tag_commit "$GITHUB_REF" "$commit"
             download_main_image_manifest "$commit" "$work"
@@ -115,7 +119,12 @@ jobs:
             base=$(git rev-parse HEAD^1)
             commit=$(download_nightly_image_manifest "$base" "$work" pr-fixture)
           else
-            commit=$(download_nightly_image_manifest "$GITHUB_SHA" "$work")
+            if [[ -n "$DISPATCH_COMMIT" ]]; then
+              commit=$(download_nightly_image_manifest "$DISPATCH_COMMIT" "$work")
+            else
+              commit=$(download_nightly_image_manifest main "$work" latest)
+            fi
+            git checkout --detach "$commit"
           fi
           echo "commit=$commit" >> "$GITHUB_OUTPUT"
       - name: Check whether the publication represents the PR migrations
@@ -127,7 +136,7 @@ jobs:
           changed=$(git -c core.quotePath=true diff --name-only --no-ext-diff --no-renames \
             "$PUBLICATION_COMMIT" HEAD -- services/control-api/migrations/)
           if [[ -n "$changed" ]]; then
-            printf 'Installer rehearsal skipped: PR changes migrations; main publication cannot represent them\n\n```\n%s\n```\n' \
+            printf "Installer rehearsal skipped: PR changes migrations; main publication cannot represent them\n\n\`\`\`\n%s\n\`\`\`\n" \
               "$changed" | tee -a "$GITHUB_STEP_SUMMARY"
             echo 'skip=true' >> "$GITHUB_OUTPUT"
           fi
@@ -184,9 +193,11 @@ jobs:
           TRUSTED_ROOT: ${{ steps.trust.outputs.root }}
         run: bash scripts/release/installer-nightly.sh
       - name: Confirm census PASS
-        if: steps.changes.outputs.needed != 'false' && steps.publication.outputs.commit == github.sha
+        if: >-
+          steps.changes.outputs.needed != 'false' &&
+          (github.event_name != 'pull_request' || steps.publication.outputs.commit == github.sha)
         env:
-          COMMIT: ${{ github.sha }}
+          COMMIT: ${{ steps.publication.outputs.commit }}
         run: |
           log="$RUNNER_TEMP/wasalx-nightly/diagnostics/phases.log"
           grep -Fxq "installer=$COMMIT tree=$(git rev-parse 'HEAD^{tree}') images=$COMMIT" "$log"

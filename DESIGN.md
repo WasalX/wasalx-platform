@@ -150,6 +150,7 @@ One neutral zinc ramp, one violet accent, three status colors and two provider m
 - **Title** (650, 14-16 px, -0.015em): panel and section heads.
 - **Body** (400, 13-14 px, line height 1.43; 1.6 for prose, max 45-65ch).
 - **Label / table** (550, 12 px): table headers, badges, field labels, buttons.
+- **Right-to-left:** no letter-spacing on any text except codes; Arabic letters join.
 - **Display** (750, `--wx-font-size-display` 60 px, -0.04em): the public-page hero only, fluid from 32 px.
 - **Mono** (12 px): only for values an operator may copy (codes, references). Never for raw ids or internal names.
 
@@ -182,7 +183,7 @@ The target set is the primitives in `app/design-system/primitives.tsx` and `prim
 - **Status badge** (`StatusBadge` / `.wx-status`): pill, dot plus label, tones neutral/success/warning/danger.
 - **Operational state** (`OperationalState`): one panel for loading (skeleton), empty, partial, fatal and recovery states, with a title, one plain sentence and at most one action. Every data view must have all of these states. While a lazy part of a panel, drawer or dialog loads, it shows the compact `SectionLoading` state ("Loading this section…"); `WorkspaceLoading` is only for whole views. Both are a plain `role="status"` region without `aria-busy`, and a slot that always loads beside another uses `quiet` so the text is announced once, unless the other slot's code is already loaded. A skeleton loader puts `aria-busy="true"` on the skeleton and announces through one plain `role="status"` text inside it, never a busy live region.
 - **Data panel** (`DataPanel`): bordered panel with a header row and a table; sparse or dense density.
-- **Dialog** (`ModalDialog.tsx`): at most 520 px, dialog radius, dialog shadow, scroll inside, focus trapped, Escape closes.
+- **Dialog** (`ModalDialog.tsx`): at most 520 px, dialog radius, dialog shadow, scroll inside, focus trapped, Escape closes. Header, body and footer share one 16 px inline inset, and the header and footer dividers run edge to edge.
 - **Scroll region** (`ScrollRegion` in `app/tenant-ui.tsx`): any area that scrolls on its own (wide table, drawer body, transcript) uses it; it requires a name (`aria-label` or `aria-labelledby`) and sets `role="region"` and `tabIndex={0}` so keyboard users can scroll it. `WideTable` wraps it.
 - **Toast**: bottom, inline-end, inverted colors, at most 520 px.
 - **Inputs**: 34-38 px, raised background, `border-strong`; focus = violet border, a 3 px `accent-wash` ring and the shared 2 px violet outline (`Highlight` in forced colors). A field inside a container with its own focus ring (the search box) hides its outline except in forced colors; a danger field uses a danger-colored outline.

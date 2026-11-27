@@ -2,6 +2,7 @@ import type { Locale } from "./i18n/locales.ts";
 import { localizedUiError, type UiErrorCode } from "./ui-error.ts";
 
 export type CodedOperatorError = Error & { code: UiErrorCode };
+export type OperatorFailure = { code: UiErrorCode; message: string };
 
 // Only errors created from local translations may retain their message at the UI boundary.
 const localOperatorFailures = new WeakSet<Error>();
@@ -12,10 +13,14 @@ export function operatorLocalFailure(message: string): Error {
   return error;
 }
 
-export function operatorFailureMessage(error: unknown, fallback: string, locale: Locale = documentLocale()): string {
-  if (error instanceof Error && localOperatorFailures.has(error)) return error.message;
-  const localized = localizedUiError(locale, error);
-  return localized.code === "UNKNOWN" ? fallback : localized.message;
+export function operatorFailure(error: unknown, fallback: string, locale: Locale = documentLocale()): OperatorFailure {
+  const { code, message } = localizedUiError(locale, error);
+  if (error instanceof Error && localOperatorFailures.has(error)) return { code, message: error.message };
+  return { code, message: code === "UNKNOWN" ? fallback : message };
+}
+
+export function operatorFailureMessage(error: unknown, fallback: string, locale?: Locale): string {
+  return operatorFailure(error, fallback, locale).message;
 }
 
 export async function operatorResponseFailure(

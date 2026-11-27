@@ -20,7 +20,9 @@ package and seeds the cache. Check the anonymous access before claiming a
 warm-cache timing. Cosign produces the signature and SLSA attestation.
 The [registry retry policy](../../scripts/release/image_registry_retry.py)
 allows at most three attempts for recognized transient HTTP and network
-failures or a registry command deadline. Build, authorization, signature,
+failures or a registry command deadline. The immutable image push also retries
+the exact Docker error "unknown blob" within that same limit, logging each
+failed push attempt and its output. Build, authorization, signature,
 provenance and digest errors fail on the first attempt. Unclassified failures
 also fail immediately. Release tool and infrastructure downloads use curl's
 standard transient retry set with a time budget. Verification failures stop
@@ -220,8 +222,8 @@ The full installer nightly stages the signed product images and pinned dependenc
 the registry read-only, blocks public registry access for Docker, and checks the
 loaded registry digests and container identity through the existing admission
 and smoke stages. It copies the Linux AMD64 manifests plus their original
-multi-platform indexes. In PR rehearsals, smoke checks the running Zammad
-package against the catalog at the signed image publication's source commit.
+multi-platform indexes. The smoke stage checks the running Zammad package
+against the catalog at the signed image publication's source commit.
 Failed smoke checks report a check name or verifier line and a redacted reason.
 
 ## Public build inputs and inspection

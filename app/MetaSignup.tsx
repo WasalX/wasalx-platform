@@ -336,11 +336,10 @@ function MetaSignupSession({ name, mutationHeaders, busyChanged, created, back, 
     {error ? <p className={styles.error} role="alert">{error}</p> : null}
     {uncertain ? <p role="status">{t("tenant.metaSignup.checking")}</p> : null}
     {attempt && !scopeMismatch ? <>
-      <p role="status" aria-live="polite">{t(statusKey)}</p>
+      <p role="status" aria-live="polite">{t(waitingForMeta ? "tenant.metaSignup.waiting" : statusKey)}</p>
       {attempt.reasonCode ? <p id={recoveringCredential ? recoveryGuidanceId : undefined}>{t(recoveringCredential ? credentialRecoveryGuidance : `tenant.metaSignup.reason.${attempt.reasonCode}`)}</p> : null}
       {attempt.status === "AWAITING_AUTHORIZATION" && !authorizationPrepared && !pending && !waitingForMeta
         ? <p>{t("tenant.metaSignup.resumeAuthorization")}</p> : null}
-      {waitingForMeta ? <p role="status">{t("tenant.metaSignup.waiting")}</p> : null}
       {attempt.choices.length ? <fieldset className={styles.choices} disabled={pending || target?.canContinue === false || attempt.nextAction !== "SELECT_NUMBER"}>
         <legend>{t(legacy ? "tenant.metaSignup.legacy.choose" : readback ? "tenant.metaSignup.readback.choose" : reconnect ? "tenant.metaSignup.reconnect.choose" : addingAccess ? "tenant.metaSignup.addAccess.choose" : "tenant.metaSignup.choose")}</legend>
         {attempt.choices.map(choice => <label key={choice.choiceId} className={styles.choice}>
@@ -373,8 +372,8 @@ function MetaSignupSession({ name, mutationHeaders, busyChanged, created, back, 
     </> : null}
     <div className={styles.actions}>
       {!recoveringCredential ? prepareAction : null}
-      {!scopeMismatch && attempt?.status === "AWAITING_AUTHORIZATION" && authorizationPrepared ? <button type="button" className="button primary"
-        disabled={pending || waitingForMeta || !sdkReady || uncertain || target?.canContinue === false} onClick={connect}>{t("tenant.metaSignup.connect")}</button> : null}
+      {!scopeMismatch && attempt?.status === "AWAITING_AUTHORIZATION" && authorizationPrepared ? <button type="button" className={waitingForMeta ? "button secondary" : "button primary"}
+        aria-disabled={waitingForMeta || undefined} disabled={pending || !sdkReady || uncertain || target?.canContinue === false} onClick={connect}>{t("tenant.metaSignup.connect")}</button> : null}
       {selected ? <button type="button" className="button primary" disabled={pending || uncertain || !pinValid || target?.canContinue === false}
         onClick={select}>{t(legacy ? "tenant.metaSignup.legacy.select" : readback ? "tenant.metaSignup.readback.select" : reconnect ? "tenant.metaSignup.reconnect.select" : addingAccess ? "tenant.metaSignup.addAccess.select" : resumingSelection ? "tenant.metaSignup.resumeSelect" : "tenant.metaSignup.select")}</button> : null}
       {!scopeMismatch && attempt?.connectionId && ((!reconnect && !addingAccess) || renewed || added || (addingAccess && attempt.status !== "COMPLETED")) ? <button type="button" className="button primary" disabled={pending} onClick={() => created(attempt.connectionId!)}>{t(legacy ? "tenant.metaSignup.legacy.back" : readback ? "tenant.metaSignup.readback.back" : "tenant.metaSignup.view")}</button> : null}

@@ -191,7 +191,7 @@ await mkdir(output, { recursive: true });
 try {
   for (const locale of ["en", "ar"]) {
     const t = await translations(locale);
-    const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+    const context = await browser.newContext({ locale: locale === "ar" ? "en-US" : "ar-SA", viewport: { width: 1440, height: 1000 } });
     await instrumentation(context);
     const page = await context.newPage(), state = await fixture(page), pageErrors = [];
     await page.clock.install();
@@ -227,14 +227,24 @@ try {
     await expect(button("groups.cancelQuote")).toBeVisible();
 
     // A later upload failure must keep the file already acknowledged by the server.
-    state.failUploadAt = state.uploadAttempts + 2;
-    await page.locator("#wx-group-files").setInputFiles([
+    state.failUploadAt = state.uploadAttempts + 3;
+    await expect(page.locator("#wx-group-files")).toBeHidden();
+    await expect(button("attachments.choose")).toHaveAccessibleDescription(t("attachments.none"));
+    const [chooser] = await Promise.all([page.waitForEvent("filechooser"), button("attachments.choose").press("Space")]);
+    assert.equal(chooser.isMultiple(), true);
+    await chooser.setFiles([
       { name: "kept.txt", mimeType: "text/plain", buffer: Buffer.from("keep") },
+      { name: "remove.txt", mimeType: "text/plain", buffer: Buffer.from("drop") },
       { name: "failed.txt", mimeType: "text/plain", buffer: Buffer.from("fail") },
     ]);
     await expect(group().getByRole("button", { name: t("groups.removeAttachment", { filename: "kept.txt" }), exact: true })).toBeVisible();
     await expect(group().getByRole("button", { name: t("groups.removeAttachment", { filename: "failed.txt" }), exact: true })).toHaveCount(0);
-    assert.equal(state.uploads.length, 1);
+    await expect(button("attachments.choose")).not.toHaveAccessibleDescription(t("attachments.none"));
+    assert.equal(state.uploads.length, 2);
+    const removeFile = group().getByRole("button", { name: t("groups.removeAttachment", { filename: "remove.txt" }), exact: true });
+    await removeFile.click();
+    await expect(removeFile).toHaveCount(0);
+    await expect(group().getByRole("button", { name: t("groups.removeAttachment", { filename: "kept.txt" }), exact: true })).toBeVisible();
     await button("groups.mention").click();
     await group().getByRole("button", { name: /Resolved phone/u }).click();
     await expect(page.locator("#wx-group-message")).toHaveValue("Draft A @12025550142 ");
@@ -541,11 +551,33 @@ try {
 
     // Both themes/locale layouts, mobile chooser focus and keyboard controls.
     for (const theme of ["light", "dark"]) {
-      if (theme === "dark") { await page.goto(`${story}&globals=theme:dark`, { waitUntil: "networkidle" }); await choose("Operations B"); }
+      if (theme === "dark") {
+        await page.goto(`${story}&globals=theme:dark`, { waitUntil: "networkidle" });
+        // A group that finishes loading after the operator moved focus must not take focus back.
+        const lateShow = state.hold("GROUP_SHOW", input => input.group_id === B), showsBefore = state.count("GROUP_SHOW");
+        if (await group().locator(".wx-group-back").isVisible()) await button("groups.back").click();
+        await group().getByRole("button", { name: /Operations B/u }).click();
+        await expect.poll(() => state.count("GROUP_SHOW")).toBe(showsBefore + 1);
+        await groupsMode.focus();
+        lateShow.resolve();
+        await expect(group().getByRole("heading", { name: "Operations B" })).toBeVisible();
+        await expect(page.locator("#wx-group-message")).toBeEnabled();
+        await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+        await expect(groupsMode).toBeFocused();
+      }
       await page.evaluate(() => document.fonts.ready);
       for (const [name, width, height] of [["desktop", 1440, 1000], ["mobile", 390, 844], ["zoom-equivalent", 720, 500]]) {
         await page.setViewportSize({ width, height });
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false, `${locale}:${theme}:${name}: overflow`);
+        const ticketsMode = page.getByRole("button", { name: t("inbox.conversations"), exact: true });
+        await ticketsMode.focus();
+        await page.keyboard.press("Tab");
+        await expect(groupsMode).toBeFocused();
+        await expect(groupsMode).toHaveAttribute("aria-pressed", "true");
+        await expect(groupsMode).toHaveCSS("display", "flex");
+        await expect(groupsMode).toHaveCSS("align-items", "center");
+        await expect(groupsMode).toHaveCSS("outline-width", "2px");
+        await expect(groupsMode).toHaveCSS("outline-style", "solid");
         await page.screenshot({ path: `${output}/group-${locale}-${theme}-${name}.png`, fullPage: true });
         const accessibility = await new AxeBuilder({ page }).include(".wx-group").withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze();
         assert.deepEqual(accessibility.violations.map(item => ({ id: item.id, impact: item.impact })), [], `${locale}:${theme}:${name}: axe`);
@@ -586,9 +618,16 @@ try {
     await expect(page.locator(".wx-group")).toHaveCount(0);
     await context.close();
   }
-  const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+  const context = await browser.newContext({ hasTouch: true, viewport: { width: 1440, height: 1000 } });
   const page = await context.newPage(), state = await fixture(page);
   await page.goto(`${base}/iframe.html?id=product-group-inbox--read-only`, { waitUntil: "networkidle" });
+  assert.equal(await page.evaluate(() => matchMedia("(any-pointer: coarse)").matches), true);
+  const switchButtons = page.locator(".wx-inbox-switch").getByRole("button");
+  await expect(switchButtons).toHaveCount(2);
+  for (const button of await switchButtons.all()) {
+    await expect(button).toHaveCSS("min-inline-size", "44px");
+    await expect(button).toHaveCSS("min-block-size", "44px");
+  }
   await page.locator(".wx-group-choice").filter({ hasText: "Customers A" }).click();
   await expect(page.locator(".wx-group-header h2")).toHaveText("Customers A");
   await expect(page.locator("#wx-group-message")).toHaveCount(0);

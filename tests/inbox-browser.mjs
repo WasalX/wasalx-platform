@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import { chromium, expect } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
+import { formatNumber } from "../lib/i18n/format.ts";
 
 async function assertMobileAssignment(page, locale) {
   const result = await page.locator("#inbox-team").evaluate(team => {
@@ -28,7 +29,10 @@ await mkdir(output, { recursive: true });
 const browser = await chromium.launch({ ...(process.env.WASALX_VISUAL_BROWSER_PATH ? { executablePath: process.env.WASALX_VISUAL_BROWSER_PATH } : {}), headless: true });
 try {
   for (const locale of ["en", "ar"]) {
-    const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+    const context = await browser.newContext({ locale: locale === "ar" ? "en-US" : "ar-SA", viewport: { width: 1440, height: 1000 } });
+    const attachmentName = locale === "ar" ? "إرفاق ملفات" : "Attach files";
+    const noAttachments = locale === "ar" ? "لا توجد ملفات مرفقة" : "No files attached";
+    const attachFiles = page => page.getByRole("button", { name: attachmentName, exact: true });
     const page = await context.newPage();
     await page.clock.install();
     const tickets = [
@@ -62,7 +66,9 @@ try {
       status: 200, contentType: "application/octet-stream", body: "Synthetic customer attachment",
     }));
     await page.route("**/api/inbox/upload", route => {
-      const id = String(70 + uploads.size), file = { id, filename: "outgoing.txt", mime_type: "text/plain", size: 12 };
+      const filename = /filename="([^"]+)"/u.exec(route.request().postData() ?? "")?.[1];
+      assert.ok(filename, "expected a staged file");
+      const id = String(70 + uploads.size), file = { id, filename, mime_type: "text/plain", size: 12 };
       uploads.set(id, file); return route.fulfill({ status: 200, json: { items: [file] } });
     });
     await page.route("**/api/inbox", async route => {
@@ -281,9 +287,22 @@ try {
     await page.getByRole("button", { name: locale === "ar" ? "حفظ التغييرات" : "Save changes", exact: true }).click();
     await expect(page.locator("#inbox-team")).toHaveValue("3");
     await expect(page.locator("#inbox-owner")).toHaveValue("13");
-    await expect(page.locator("#inbox-files")).toBeEnabled();
-    await page.locator("#inbox-files").setInputFiles({ name: "outgoing.txt", mimeType: "text/plain", buffer: Buffer.from("Synthetic UI") });
-    await expect(page.getByRole("button", { name: locale === "ar" ? "إزالة outgoing.txt" : "Remove outgoing.txt" })).toBeVisible();
+    await expect(page.locator("#inbox-files")).toBeHidden();
+    await expect(attachFiles(page)).toBeEnabled();
+    await expect(attachFiles(page)).toHaveAccessibleDescription(noAttachments);
+    const [chooser] = await Promise.all([page.waitForEvent("filechooser"), attachFiles(page).press("Enter")]);
+    assert.equal(chooser.isMultiple(), true);
+    await chooser.setFiles([
+      { name: "outgoing.txt", mimeType: "text/plain", buffer: Buffer.from("Synthetic UI") },
+      { name: "remove.txt", mimeType: "text/plain", buffer: Buffer.from("Remove this") },
+    ]);
+    const keepFile = page.getByRole("button", { name: locale === "ar" ? "إزالة outgoing.txt" : "Remove outgoing.txt" });
+    const removeFile = page.getByRole("button", { name: locale === "ar" ? "إزالة remove.txt" : "Remove remove.txt" });
+    await expect(keepFile).toBeVisible();
+    await expect(attachFiles(page)).not.toHaveAccessibleDescription(noAttachments);
+    await removeFile.click();
+    await expect(removeFile).toHaveCount(0);
+    await expect(keepFile).toBeVisible();
     await page.locator("#inbox-message").fill("");
     await expect(page.locator('form').last().locator(".wx-button-primary")).toBeDisabled();
     await page.getByRole("button", { name: locale === "ar" ? "معاينة الرد" : "Preview reply", exact: true }).click();
@@ -293,14 +312,15 @@ try {
     await page.locator("#inbox-message").fill("");
     await page.getByRole("button", { name: locale === "ar" ? "معاينة الرد" : "Preview reply", exact: true }).click();
     await page.locator('form').last().locator(".wx-button-primary").click();
-    await expect(page.locator("#inbox-files")).toBeVisible();
+    await expect(attachFiles(page)).toBeVisible();
+    await expect(attachFiles(page)).toHaveAccessibleDescription(noAttachments);
     await expect(page.getByRole("button", { name: locale === "ar" ? "إزالة outgoing.txt" : "Remove outgoing.txt" })).toHaveCount(0);
     const longBody = "أ😀".repeat(25001); history.get("42").push({ id: "99", body: longBody, internal: false, author: "Ahmed", sender: "Customer", created_at: tickets[0].updated_at, attachments: [] });
     await page.getByRole("button").filter({ hasText: "#1043" }).click(); await page.getByRole("button").filter({ hasText: "#1042" }).click();
     const fullArticle = page.locator(".wx-ticket-full-article").last();
     const previewBody = Array.from(longBody).slice(0, 50_000).join("");
     await expect(fullArticle.locator('p[dir="auto"]')).toHaveText(previewBody);
-    const format = new Intl.NumberFormat(locale);
+    const format = { format: value => formatNumber(value, locale) };
     await expect(fullArticle.locator("p").nth(1)).toHaveText(locale === "ar"
       ? `يُعرض ${format.format(50_000)} من أصل ${format.format(50_002)} حرفًا.`
       : `Showing ${format.format(50_000)} of ${format.format(50_002)} characters.`);
@@ -316,6 +336,7 @@ try {
     await page.locator("#wx-ticket-customer").selectOption("20");
     await page.locator("#wx-ticket-title").fill("Synthetic attachment-only email");
     await page.locator("#wx-ticket-mode").selectOption("email");
+    await expect(attachFiles(page.getByRole("dialog"))).toHaveAccessibleDescription(noAttachments);
     await page.locator("#inbox-create-files").setInputFiles({ name: "outgoing.txt", mimeType: "text/plain", buffer: Buffer.from("Synthetic UI") });
     await expect(page.locator("#wx-ticket-create-body")).not.toHaveAttribute("required", "");
     loseCreate = true;
