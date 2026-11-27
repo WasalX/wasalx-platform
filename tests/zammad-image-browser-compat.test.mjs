@@ -1379,8 +1379,11 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
         if (frame.command === "unsubscribe") resetRequests.delete(frame.identifier);
         if (frame.command !== "message") return;
         const { operationName, variables } = JSON.parse(frame.data);
-        if (operationName === "formUpdater" && variables?.meta?.reset === true) {
-          resetRequests.set(frame.identifier, variables.meta.formId);
+        const formId = variables?.meta?.formId;
+        const article = variables?.data?.article;
+        // The form updater can coalesce the reset with a ticket refresh in the same tick.
+        if (operationName === "formUpdater" && formId && !article?.articleType && !article?.body) {
+          resetRequests.set(frame.identifier, formId);
         }
       });
       socket.on("framereceived", ({ payload }) => {
@@ -1608,10 +1611,20 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
       ]);
     };
     const assertReplyReset = async (marker = replyMarker) => {
-      await page.waitForFunction(marker => ![...document.querySelectorAll('[contenteditable="true"]')]
-        .some(node => node.textContent.includes(marker)), marker, { timeout: 30_000 });
-      await page.getByRole('button', { name: 'Discard unsaved reply', exact: true }).waitFor({ state: 'hidden', timeout: 30_000 });
-      await page.getByText('Discard your unsaved changes', { exact: true }).waitFor({ state: 'hidden', timeout: 30_000 });
+      await withNativeDiagnostic(t, "desktop reply reset", () => readNativeDiagnostic(page.evaluate((text) => ({
+        panelOpen: Boolean(document.getElementById("ticketArticleReplyForm")),
+        remainingDrafts: [...document.querySelectorAll("[contenteditable]")]
+          .filter(node => node.textContent.includes(text))
+          .map(node => ({
+            inReplyPanel: Boolean(node.closest("#ticketArticleReplyForm")),
+            inHiddenForm: Boolean(node.closest("#wrapper-form-ticket-edit")),
+          })),
+      }), marker)), async () => {
+        await page.waitForFunction(marker => ![...document.querySelectorAll('[contenteditable="true"]')]
+          .some(node => node.textContent.includes(marker)), marker, { timeout: 30_000 });
+        await page.getByRole('button', { name: 'Discard unsaved reply', exact: true }).waitFor({ state: 'hidden', timeout: 30_000 });
+        await page.getByText('Discard your unsaved changes', { exact: true }).waitFor({ state: 'hidden', timeout: 30_000 });
+      }, false);
     };
     // The plugin screenshot selected WasalX operations; native fields are rendered
     // only while the Ticket sidebar is selected. This changes no persisted state.
