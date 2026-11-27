@@ -54,7 +54,7 @@ def lease_receipt(phase, duration, steps="", lease_start=LEASE_START_NS):
         "commit": "COMMIT_PASS 2023-11-14T22:13:21Z overlay_retained=fixture.qcow2",
     }
     start, end = timing(phase, "lease", duration, start=lease_start).splitlines(keepends=True)
-    return start + steps + end + terminal[phase]
+    return start + steps + end + terminal[phase] + "\n"
 
 
 class HostPacketTest(unittest.TestCase):
@@ -191,7 +191,7 @@ class HostPacketTest(unittest.TestCase):
             parent = Path(directory)
             receipt = parent / "legacy.raw"
             receipt.write_text(lease_receipt("install", 24 * SECOND,
-                               timing("install", "full-top-hash", SECOND, SECOND)) + "\n"
+                               timing("install", "full-top-hash", SECOND, SECOND))
                                + lease_receipt("rollback", 7 * SECOND), encoding="utf-8")
             identity = parent / "identity.json"
             identity.write_text(json.dumps({**json.loads(self.example.read_bytes()),
