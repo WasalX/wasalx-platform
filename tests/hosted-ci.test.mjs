@@ -268,30 +268,69 @@ test("tracked tests belong to a named CI runner or the test allowlist", async ()
 });
 
 test("CI job timeouts are covered by the measured limits", async () => {
-  const { jobs } = parse(await read(".github/workflows/ci.yml"));
+  const workflow = ".github/workflows/ci.yml";
+  const { jobs } = parse(await read(workflow));
   const timing = JSON.parse(await read(".github/ci-timings.json"));
-  const configured = Object.entries(jobs).filter(([, job]) => Object.hasOwn(job, "timeout-minutes"));
-  // These jobs landed after the timing sample and still need measurements.
-  const unmeasured = ["installer-portal", "keycloak-identity", "platform-operator-e2e", "portal-browser-build", "seed-caches"];
-  const { publish, ...ciJobs } = timing.jobs;
-  assert.deepEqual(configured.map(([id]) => id).sort(), [...Object.keys(ciJobs), ...unmeasured].sort());
-  for (const [id, { p95_minutes: p95, owner_parts: ownerParts }] of Object.entries(ciJobs)) {
+  assert.equal(timing.workflow, workflow);
+  assert.deepEqual(Object.keys(timing.jobs).sort(), Object.keys(jobs).sort());
+  const images = JSON.parse(await read("scripts/release/product-images.json")).map(({ image }) => image);
+  const matrixAxes = {
+    checks: ["name", jobs.checks.strategy.matrix.include.map(({ name }) => name)],
+    "full-unit": ["name", jobs["full-unit"].strategy.matrix.include.map(({ name }) => name)],
+    integration: ["shard", jobs.integration.strategy.matrix.shard.map(String)],
+    "platform-operator-e2e": ["locale", jobs["platform-operator-e2e"].strategy.matrix.locale],
+    images: ["image", images],
+    "pr-images": ["image", images],
+  };
+  const cap = ({ p95_minutes: p95, runs }, id, minimum = 5) => {
+    assert(Number.isFinite(p95) && p95 > 0, id);
+    assert(Number.isInteger(runs) && runs >= minimum, id);
+    return Math.ceil(p95 * 1.25);
+  };
+  for (const [id, job] of Object.entries(jobs)) {
+    const record = timing.jobs[id];
+    const timeout = job["timeout-minutes"];
+    // The combined TypeScript comparison landed with four eligible runs.
+    const jobCap = cap(record, id, id === "typescript-comparison" ? 4 : 5);
+    if (job.uses) {
+      assert.equal(job.uses, "./" + record.workflow, id);
+      continue;
+    }
     if (id === "application-e2e") {
-      const ownerSuites = jobs[id].strategy.matrix.suite.filter(suite => suite.roles === "tenant_owner");
-      assert.deepEqual(ownerSuites.map(suite => suite.owner_part).sort(), Object.keys(ownerParts).sort());
-      for (const { owner_part, timeout } of ownerSuites) {
-        const partP95 = ownerParts[owner_part].p95_minutes;
-        assert(Number.isFinite(partP95) && partP95 > 0, owner_part);
-        assert.equal(timeout, Math.ceil(partP95 * 1.25), owner_part);
+      const { locale, suite } = job.strategy.matrix;
+      const limits = Object.fromEntries(suite.flatMap(({ roles, owner_part, timeout }) => {
+        assert.deepEqual(Object.keys(timeout).sort(), [...locale].sort());
+        return locale.map(language => [
+          [language, roles, owner_part].filter(Boolean).join(", "), timeout[language],
+        ]);
+      }));
+      assert.deepEqual(limits, Object.fromEntries(Object.entries(record.legs).map(([leg, sample]) => [leg, cap(sample, leg)])));
+      continue;
+    }
+    if (Object.hasOwn(matrixAxes, id)) {
+      const [axis, legs] = matrixAxes[id];
+      assert.deepEqual(Object.keys(record.legs).sort(), [...legs].sort(), id);
+      const limits = Object.fromEntries(legs.map(leg => [leg, cap(record.legs[leg], id + "/" + leg)]));
+      assert.equal(jobCap, Math.max(...Object.values(limits)), id);
+      if (Number.isInteger(timeout)) {
+        for (const limit of Object.values(limits)) assert.equal(timeout, limit, id);
+      } else {
+        const expression = /^\$\{\{ fromJSON\('\s*(\{.*\})\s*'\)\[matrix\.(\w+)\] \}\}$/u.exec(timeout);
+        assert(expression, id);
+        assert.equal(expression[2], axis, id);
+        assert.deepEqual(JSON.parse(expression[1]), limits, id);
       }
       continue;
     }
-    const timeout = jobs[id]["timeout-minutes"];
-    assert(Number.isInteger(timeout) && timeout > 0 && timeout <= Math.ceil(p95 * 1.25), id);
+    assert.equal(job.strategy?.matrix, undefined, id);
+    assert.equal(timeout, jobCap, id);
   }
 
+  const { publish } = timing.jobs;
   assert.equal(publish.workflow, ".github/workflows/branch-image.yml");
   const release = parse(await read(publish.workflow)).jobs.publish;
+  assert.deepEqual(Object.keys(publish.image_legs).sort(), [...release.strategy.matrix.image].sort());
+  for (const [leg, sample] of Object.entries(publish.image_legs)) cap(sample, "publish/" + leg);
   const image = "connector-worker";
   const p95 = publish.image_legs[image].p95_minutes;
   const matrixP95 = publish.p95_minutes;
@@ -1024,7 +1063,7 @@ test("Application browser CI shards roles and locales and reuses the portal buil
   assert.match(application.if, /needs\.changes\.outputs\.application-e2e != 'false'/u);
   assert.deepEqual(application.needs, ["changes", "portal-browser-build"]);
   assert.deepEqual(application.strategy.matrix.locale, ["en", "ar"]);
-  assert.equal(application["timeout-minutes"], "${{ matrix.suite.timeout }}");
+  assert.equal(application["timeout-minutes"], "${{ matrix.suite.timeout[matrix.locale] }}");
   assert.deepEqual(application.strategy.matrix.suite.map(({ roles, owner_part }) => [roles, owner_part]), [
     ["tenant_owner", "desktop"], ["tenant_owner", "mobile-tablet"],
     ["tenant_admin,supervisor", undefined], ["agent,auditor", undefined],
