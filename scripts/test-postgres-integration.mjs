@@ -69,6 +69,7 @@ import { verifyNativeMembership } from "../tests/native-membership-postgres.mjs"
 import { verifyNativeRouting } from "../tests/native-routing-postgres.mjs";
 import {verifyWahaRenewal} from '../tests/waha-renewal-postgres.mjs';
 import {verifyNotionOAuthRecovery,verifyRoutingReconnect} from '../tests/routing-reconnect-postgres.mjs';
+import {seedNotionOAuthUpgrade,verifyNotionOAuthUpgrade} from "../tests/notion-oauth-upgrade-postgres.mjs";
 
 const { shard, report } = parsePostgresShardArgs(process.argv.slice(2));
 const executed = [];
@@ -482,8 +483,12 @@ try{
       await admin.query("ROLLBACK");
     }
     assert.equal((await admin.query("SELECT to_regclass('public.whatsapp_marketing_preferences') AS relation")).rows[0].relation,null);
+    await writeFile(resolve(protectedPrefix,marketingMigration),await readFile(new URL(marketingMigration,controlMigrationsUrl)));
+    await migrate(protectedPrefix);
+    const notionOAuthUpgrade=await seedNotionOAuthUpgrade(admin);
     await migrate(controlMigrationsPath);
     assert.deepEqual(await legacyContacts(),previousContacts);
+    await timeScenario("notionOAuthUpgrade",()=>verifyNotionOAuthUpgrade(admin,notionOAuthUpgrade,appUrl,cleanupUrl));
     // These identities reuse the existing tenant/connection/session parent key.
     const sessionForeignKeys=(await admin.query(`SELECT relation.relname AS relation,c.convalidated AS validated,
       ARRAY(SELECT a.attname::text FROM unnest(c.conkey) WITH ORDINALITY k(attnum,n)
