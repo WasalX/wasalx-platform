@@ -222,7 +222,21 @@ try {
     await row(M).getByRole("button", { name: t("groups.quoteReply"), exact: true }).click();
     await choose("Operations B");
     await page.locator("#wx-group-message").fill("Draft B");
-    await choose("Customers A");
+    const lateLoad = state.hold("GROUP_SHOW", (input) => input.group_id === A);
+    const showsBefore = state.count("GROUP_SHOW");
+    await group().getByRole("button", { name: /Customers A/u }).click();
+    await expect.poll(() => state.count("GROUP_SHOW")).toBe(showsBefore + 1);
+    // The button mounts after the load. Hold its queued focus frame until the operator moves focus.
+    await page.clock.pauseAt(new Date((await page.evaluate(() => Date.now())) + 1000));
+    lateLoad.resolve();
+    const attachmentButton = button("attachments.choose");
+    await expect(attachmentButton).toBeEnabled();
+    await attachmentButton.focus();
+    await page.clock.resume();
+    await page.evaluate(
+      () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
+    );
+    await expect(attachmentButton).toBeFocused();
     await expect(page.locator("#wx-group-message")).toHaveValue("Draft A");
     await expect(button("groups.cancelQuote")).toBeVisible();
 
@@ -230,7 +244,7 @@ try {
     state.failUploadAt = state.uploadAttempts + 3;
     await expect(page.locator("#wx-group-files")).toBeHidden();
     await expect(button("attachments.choose")).toHaveAccessibleDescription(t("attachments.none"));
-    const [chooser] = await Promise.all([page.waitForEvent("filechooser"), button("attachments.choose").press("Space")]);
+    const [chooser] = await Promise.all([page.waitForEvent("filechooser"), page.keyboard.press("Space")]);
     assert.equal(chooser.isMultiple(), true);
     await chooser.setFiles([
       { name: "kept.txt", mimeType: "text/plain", buffer: Buffer.from("keep") },
