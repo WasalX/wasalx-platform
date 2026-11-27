@@ -354,3 +354,12 @@ test("tenant screens keep the URL, icon, name and mailbox fixes from issue 565",
     assert.match(mailbox, new RegExp(String.raw`<p className="workspace-access-state"[^>]*>\{t\("mailboxes\.${key}"\)\}`, "u"), `mailboxes.${key} sits in the padded muted body`);
   }
 });
+
+test("workspace settings keep the mailbox spacing fixes from issue 571", async () => {
+  const [mailbox, globals] = await Promise.all(["app/MailboxSettings.tsx", "app/globals.css"].map(read));
+  assert.match(mailbox, /\{rows\.length \? <ul className="mailbox-list"/u, "an empty padded list leaves a blank band above the empty state");
+  assert.match(globals, /\.settings-grid\+\.settings-grid\{margin-block-start:var\(--wx-space-4\)\}/u, "the settings and mailbox grids are siblings in a block container, so the grid gap does not separate them");
+  for (const columns of ["210px minmax(0,1fr)", "11.25rem minmax(0,1fr)", "minmax(0,1fr)"]) {
+    assert.ok(globals.includes(`.settings-grid.settings-grid-privacy,.settings-grid-privacy+.settings-grid{grid-template-columns:${columns}`), `the mailbox card follows the Privacy columns ${columns}`);
+  }
+});

@@ -11,6 +11,7 @@ const captures = {
   "tenant-inbox": themes,
   "tenant-cases": themes,
   "tenant-settings": themes,
+  "tenant-settings-privacy": themes,
   "tenant-groups": themes,
   "invitation-incomplete": ["light", "dark-preview"],
   "workflow-automation-list": themes,
