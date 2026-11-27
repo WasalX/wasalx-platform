@@ -340,7 +340,7 @@ jobs:
     needs: changes
     if: ${{ !cancelled() && github.event_name == 'pull_request' && needs.changes.outputs.dev-install != 'false' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 1
+    timeout-minutes: 2
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -554,7 +554,7 @@ jobs:
     # A cache seed failure must leave a successful publication usable.
     continue-on-error: true
     runs-on: ubuntu-24.04
-    timeout-minutes: 4
+    timeout-minutes: 3
     env: *actionlint-release
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -681,7 +681,7 @@ jobs:
       needs.changes.result != 'success' || needs.changes.outputs.integration != 'false' ||
       needs.changes.outputs.application-e2e != 'false') }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 2
     env: &portal-browser-env
       PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.wrangler/ci-chromium
     steps:
@@ -763,7 +763,7 @@ jobs:
       needs.changes.outputs.application-e2e != 'false') }}
     name: Application E2E (${{ matrix.locale }}, ${{ matrix.suite.roles }}${{ matrix.suite.owner_part && format(', {0}', matrix.suite.owner_part) || '' }})
     runs-on: ubuntu-24.04
-    timeout-minutes: ${{ matrix.suite.timeout }}
+    timeout-minutes: 13
     env: *portal-browser-env
     strategy:
       fail-fast: false
@@ -772,14 +772,10 @@ jobs:
         suite:
           - roles: tenant_owner
             owner_part: desktop
-            timeout: 10
           - roles: tenant_owner
             owner_part: mobile-tablet
-            timeout: 9
           - roles: 'tenant_admin,supervisor'
-            timeout: 15
           - roles: 'agent,auditor'
-            timeout: 15
     steps:
       - *integration-checkout
       - *integration-node
@@ -822,7 +818,7 @@ jobs:
     if: *application-e2e-needed
     name: Platform Operator E2E (${{ matrix.locale }})
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 4
     env: *portal-browser-env
     strategy:
       fail-fast: false
@@ -848,7 +844,7 @@ jobs:
       ${{ !cancelled() && github.event_name != 'push' && (github.event_name != 'pull_request' ||
       needs.changes.result != 'success' || needs.changes.outputs.keycloak-identity != 'false') }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 5
     steps:
       - *integration-checkout
       - *integration-node
@@ -870,7 +866,7 @@ jobs:
     needs: integration
     if: ${{ !cancelled() && needs.integration.result != 'skipped' }}
     runs-on: ubuntu-slim
-    timeout-minutes: 2
+    timeout-minutes: 1
     steps:
       - *integration-checkout
       - *integration-node
@@ -910,7 +906,7 @@ jobs:
     if: ${{ !cancelled() && github.event_name == 'merge_group' && needs.changes.outputs.images == 'true' }}
     name: Build ${{ matrix.image }}${{ matrix.pending && ' (pending add-on source)' || '' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 4
     strategy:
       fail-fast: false
       max-parallel: 21
@@ -960,7 +956,7 @@ jobs:
     if: ${{ !cancelled() && github.event_name == 'pull_request' && needs.changes.outputs.images == 'true' }}
     name: Build ${{ matrix.image }}${{ matrix.pending && ' (pending add-on source)' || '' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 4
+    timeout-minutes: 5
     strategy:
       fail-fast: false
       max-parallel: 8
@@ -990,7 +986,7 @@ jobs:
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.installer-portal == 'true' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 2
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

@@ -130,7 +130,7 @@ Open an issue and follow the [merge rules](#branching-and-merging) for the PR to
 
 Measure the latest 150 first-attempt PR runs from GitHub Actions timestamps. Split job time into waiting, setup before the first lint or test step, and execution. Track time to mergeable across all required checks, including code scanning. Record trends and misses on the private project board.
 
-For job timeout samples, use first-attempt green runs on main pushes, the main merge queue, and PRs. Record the longest successful leg per matrix and run, and use the highest p95 across applicable events. A matrix leg with its own timing sample uses that sample's p95 for its limit.
+For job timeout samples, use successful first attempts from main pushes, merge groups, pull requests, and manual CI runs where the job applies. Calculate the nearest-rank p95 from job start and completion timestamps. Use the higher of the pooled p95 and the p95 of any event with at least five observations. For a matrix job, calculate the p95 for each leg and use the highest to set one timeout for all legs.
 
 | Measure | Target and response |
 | --- | --- |
@@ -153,7 +153,7 @@ WasalX Delivery records deviations. A deviation that relaxes a rule protecting s
 | Rule | Reason | Review date |
 | --- | --- | --- |
 | §4 CI privacy check on every push and in the queue | Hosted CI uses generic public patterns. The full deny list and commit identity checks stay in the private pre-push check. | 2026-12-14 |
-| §4/§8 Measure job durations and cap timeouts from p95 | The [timing sample](.github/ci-timings.json) includes the checks matrix and ci-gate, the Application E2E owner parts, and the main image publication matrix. The other application role groups, signed-in operator, Keycloak identity, installer gates, main-push cache job, and other workflows still need measured limits. Refresh durations for changed jobs. | 2026-12-14 |
+| §4/§8 Measure job durations and cap timeouts from p95 | The [timing sample](.github/ci-timings.json) covers CI jobs and their matrix legs, including the main image publication matrix. Reusable workflows declare their own limits. The privacy, publication, and Zammad compatibility timeout coverage remains tracked in [#647](https://github.com/WasalX/wasalx-platform/issues/647). | 2026-12-14 |
 | §4 Local pre-commit and pre-push hooks | Agents run the checks in their push workflow. Repository hooks are pending. | 2026-12-14 |
 | §4 Runner pickup under 5 s | Pickup measured p50 3 s and p95 354 s across 3,629 jobs. Hosted scheduling and matrix limits contribute to waits. The 60 s working target still applies. Tracked in [#511](https://github.com/WasalX/wasalx-platform/issues/511). | 2026-12-10 |
 | §4 Job setup under 15 s | Setup measured p50 2 s and p95 12 s overall. PostgreSQL shards reached p95 15–16 s, mostly in service container startup. Tracked in [#511](https://github.com/WasalX/wasalx-platform/issues/511). | 2026-12-10 |

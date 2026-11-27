@@ -1,105 +1,265 @@
 {
-  "measured_at": "2026-11-24",
+  "measured_at": "2026-11-27",
   "workflow": ".github/workflows/ci.yml",
-  "runs": 58,
-  "first_run": 45424559667,
-  "last_run": 45469519734,
+  "runs": 223,
+  "first_run": 45857111511,
+  "last_run": 46072226979,
+  "window_start": "2026-11-26T16:15:52Z",
+  "window_end": "2026-11-27T21:44:24Z",
+  "p95_basis": "Successful first attempts of CI runs, using job start and completion timestamps. Nearest-rank p95 across all samples or the highest event p95 with at least five observations, whichever is higher. Matrix job p95 is its highest leg p95.",
   "jobs": {
     "changes": {
-      "p95_minutes": 0.1833
+      "runs": 152,
+      "first_run": 45920172165,
+      "last_run": 46072226979,
+      "p95_minutes": 0.1667
     },
     "workflow-lint": {
-      "p95_minutes": 0.2
+      "runs": 173,
+      "first_run": 45920172165,
+      "last_run": 46072226979,
+      "p95_minutes": 0.2333
     },
     "storybook": {
-      "measured_at": "2026-11-27",
-      "runs": 45,
-      "first_run": 45930690469,
-      "last_run": 45958996400,
-      "p95_minutes": 6.1
+      "runs": 75,
+      "first_run": 45968669459,
+      "last_run": 46071940182,
+      "p95_minutes": 6.15
+    },
+    "privacy": {
+      "workflow": ".github/workflows/privacy.yml",
+      "runs": 152,
+      "first_run": 45920172165,
+      "last_run": 46072226979,
+      "p95_minutes": 0.15
     },
     "dependency-review": {
-      "p95_minutes": 0.25
+      "runs": 74,
+      "first_run": 45920568370,
+      "last_run": 46072226979,
+      "p95_minutes": 0.1
     },
     "dev-install-dryrun": {
-      "p95_minutes": 0.6333
-    },
-    "checks": {
-      "measured_at": "2026-11-27",
-      "runs": 49,
-      "first_run": 45942901736,
-      "last_run": 46025465196,
-      "p95_minutes": 2.2833,
-      "p95_basis": "highest pull request or merge-group p95 of the longest successful matrix leg per run"
-    },
-    "full-unit": {
-      "p95_minutes": 2.2167
-    },
-    "integration": {
-      "p95_minutes": 3.05
-    },
-    "application-e2e": {
-      "measured_at": "2026-11-27",
-      "runs": 1,
-      "first_run": 45985555757,
-      "last_run": 45985555757,
-      "p95_minutes": 7.2667,
-      "owner_parts": {
-        "desktop": {
-          "p95_minutes": 7.2667
-        },
-        "mobile-tablet": {
-          "p95_minutes": 6.8667
-        }
-      }
-    },
-    "portal-integration": {
-      "p95_minutes": 2.75
-    },
-    "integration-coverage": {
-      "p95_minutes": 0.9833
-    },
-    "infra-validate": {
-      "p95_minutes": 0.6667
-    },
-    "images": {
-      "p95_minutes": 3.4667
-    },
-    "pr-images": {
-      "p95_minutes": 3.15
-    },
-    "pr-image-results": {
-      "p95_minutes": 0.1333
-    },
-    "publish": {
-      "measured_at": "2026-11-27",
-      "workflow": ".github/workflows/branch-image.yml",
-      "runs": 24,
-      "first_run": 45937633406,
-      "last_run": 46003340146,
-      "p95_minutes": 8.4833,
-      "p95_basis": "longest successful matrix leg per run",
-      "image_legs": {
-        "connector-worker": {
-          "p95_minutes": 4.6167
-        }
-      }
-    },
-    "ci-gate": {
-      "measured_at": "2026-11-27",
-      "runs": 49,
-      "first_run": 45942901736,
-      "last_run": 46025465196,
-      "p95_minutes": 0.1167,
-      "p95_basis": "highest pull request or merge-group job p95"
+      "runs": 15,
+      "first_run": 45920978266,
+      "last_run": 46054988383,
+      "p95_minutes": 0.8333
     },
     "typescript-comparison": {
-      "measured_at": "2026-11-27",
-      "runs": 3,
+      "runs": 7,
       "first_run": 45857111511,
-      "last_run": 45923623338,
-      "p95_minutes": 4.7667,
-      "p95_basis": "nearest-rank p95 across first-attempt green pull request runs"
+      "last_run": 46072206928,
+      "p95_minutes": 4.7667
+    },
+    "checks": {
+      "runs": 152,
+      "first_run": 45920172165,
+      "last_run": 46072226979,
+      "p95_minutes": 2.2333,
+      "legs": {
+        "Collection": { "runs": 152, "p95_minutes": 0.95 },
+        "Lint": { "runs": 23, "p95_minutes": 1.8333 },
+        "Typecheck": { "runs": 152, "p95_minutes": 1.2167 },
+        "Unit 1/2": { "runs": 152, "p95_minutes": 1.8167 },
+        "Unit 2/2": { "runs": 152, "p95_minutes": 2.2333 }
+      }
+    },
+    "full-unit": {
+      "runs": 21,
+      "first_run": 45939686590,
+      "last_run": 46031512524,
+      "p95_minutes": 2.35,
+      "legs": {
+        "Unit 1/2": { "runs": 21, "p95_minutes": 1.8667 },
+        "Unit 2/2": { "runs": 21, "p95_minutes": 2.35 }
+      }
+    },
+    "seed-caches": {
+      "runs": 9,
+      "first_run": 46039608988,
+      "last_run": 46070369749,
+      "p95_minutes": 1.8833
+    },
+    "integration": {
+      "runs": 127,
+      "first_run": 45920172165,
+      "last_run": 46071940182,
+      "p95_minutes": 2.6333,
+      "legs": {
+        "1": { "runs": 127, "p95_minutes": 2.6333 },
+        "2": { "runs": 127, "p95_minutes": 2.0167 },
+        "3": { "runs": 127, "p95_minutes": 2.5167 },
+        "4": { "runs": 127, "p95_minutes": 2.6167 }
+      }
+    },
+    "portal-browser-build": {
+      "runs": 152,
+      "first_run": 45920172165,
+      "last_run": 46072206928,
+      "p95_minutes": 1.3167
+    },
+    "portal-integration": {
+      "runs": 127,
+      "first_run": 45920172165,
+      "last_run": 46071940182,
+      "p95_minutes": 2.6167
+    },
+    "application-e2e": {
+      "runs": 149,
+      "first_run": 45920172165,
+      "last_run": 46072206928,
+      "p95_minutes": 10.05,
+      "legs": {
+        "ar, agent,auditor": { "runs": 149, "p95_minutes": 3.2333 },
+        "ar, tenant_admin,supervisor": { "runs": 149, "p95_minutes": 9.3667 },
+        "ar, tenant_owner, desktop": { "runs": 53, "p95_minutes": 6.2333 },
+        "ar, tenant_owner, mobile-tablet": { "runs": 53, "p95_minutes": 6.75 },
+        "en, agent,auditor": { "runs": 149, "p95_minutes": 3.5833 },
+        "en, tenant_admin,supervisor": { "runs": 149, "p95_minutes": 10.05 },
+        "en, tenant_owner, desktop": { "runs": 53, "p95_minutes": 7.5333 },
+        "en, tenant_owner, mobile-tablet": { "runs": 53, "p95_minutes": 7.2333 }
+      }
+    },
+    "platform-operator-e2e": {
+      "runs": 149,
+      "first_run": 45920172165,
+      "last_run": 46072206928,
+      "p95_minutes": 2.8333,
+      "legs": {
+        "ar": { "runs": 149, "p95_minutes": 2.8333 },
+        "en": { "runs": 149, "p95_minutes": 2.7833 }
+      }
+    },
+    "keycloak-identity": {
+      "runs": 115,
+      "first_run": 45920172165,
+      "last_run": 46071940182,
+      "p95_minutes": 3.5
+    },
+    "integration-coverage": {
+      "runs": 127,
+      "first_run": 45920172165,
+      "last_run": 46071940182,
+      "p95_minutes": 0.5833
+    },
+    "infra-validate": {
+      "runs": 52,
+      "first_run": 45920325867,
+      "last_run": 46072226979,
+      "p95_minutes": 0.5833
+    },
+    "images": {
+      "runs": 78,
+      "first_run": 45920172165,
+      "last_run": 46071940182,
+      "p95_minutes": 2.6,
+      "legs": {
+        "connector-worker": { "runs": 78, "p95_minutes": 2.3 },
+        "control-api": { "runs": 78, "p95_minutes": 2.4167 },
+        "foundation-keycloak": { "runs": 78, "p95_minutes": 2.0167 },
+        "foundation-postgres": { "runs": 78, "p95_minutes": 0.7333 },
+        "identity-policy-activator": { "runs": 78, "p95_minutes": 1.9833 },
+        "invitation-mailer": { "runs": 78, "p95_minutes": 2.0833 },
+        "portal": { "runs": 78, "p95_minutes": 2.0667 },
+        "production-alertmanager": { "runs": 78, "p95_minutes": 0.6667 },
+        "production-cloudflared": { "runs": 78, "p95_minutes": 1.4333 },
+        "production-ingress": { "runs": 78, "p95_minutes": 0.8833 },
+        "production-otel": { "runs": 78, "p95_minutes": 0.7 },
+        "production-prometheus": { "runs": 78, "p95_minutes": 0.9167 },
+        "secret-sidecar": { "runs": 78, "p95_minutes": 0.8833 },
+        "tenant-provisioner": { "runs": 78, "p95_minutes": 2.0 },
+        "tenant-workspace-controller": { "runs": 78, "p95_minutes": 1.9667 },
+        "workspace-configurator": { "runs": 78, "p95_minutes": 1.0333 },
+        "workspace-provider": { "runs": 78, "p95_minutes": 1.2167 },
+        "zammad": { "runs": 78, "p95_minutes": 2.6 },
+        "zammad-memcached": { "runs": 78, "p95_minutes": 0.75 },
+        "zammad-nginx": { "runs": 78, "p95_minutes": 0.5833 },
+        "zammad-redis": { "runs": 78, "p95_minutes": 0.6333 }
+      }
+    },
+    "pr-images": {
+      "runs": 48,
+      "first_run": 45920616077,
+      "last_run": 46072220318,
+      "p95_minutes": 3.9333,
+      "legs": {
+        "connector-worker": { "runs": 29, "p95_minutes": 2.2833 },
+        "control-api": { "runs": 25, "p95_minutes": 2.3 },
+        "foundation-keycloak": { "runs": 16, "p95_minutes": 2.4333 },
+        "foundation-postgres": { "runs": 19, "p95_minutes": 0.7667 },
+        "identity-policy-activator": { "runs": 23, "p95_minutes": 2.0833 },
+        "invitation-mailer": { "runs": 23, "p95_minutes": 2.1833 },
+        "portal": { "runs": 43, "p95_minutes": 2.0 },
+        "production-alertmanager": { "runs": 19, "p95_minutes": 1.4333 },
+        "production-cloudflared": { "runs": 19, "p95_minutes": 1.4333 },
+        "production-ingress": { "runs": 19, "p95_minutes": 0.8833 },
+        "production-otel": { "runs": 19, "p95_minutes": 1.5333 },
+        "production-prometheus": { "runs": 19, "p95_minutes": 3.45 },
+        "secret-sidecar": { "runs": 19, "p95_minutes": 0.9 },
+        "tenant-provisioner": { "runs": 23, "p95_minutes": 2.1 },
+        "tenant-workspace-controller": { "runs": 23, "p95_minutes": 2.1167 },
+        "workspace-configurator": { "runs": 20, "p95_minutes": 1.0167 },
+        "workspace-provider": { "runs": 21, "p95_minutes": 1.8667 },
+        "zammad": { "runs": 18, "p95_minutes": 3.9333 },
+        "zammad-memcached": { "runs": 19, "p95_minutes": 0.9167 },
+        "zammad-nginx": { "runs": 19, "p95_minutes": 0.5667 },
+        "zammad-redis": { "runs": 19, "p95_minutes": 0.65 }
+      }
+    },
+    "pr-image-results": {
+      "runs": 74,
+      "first_run": 45920568370,
+      "last_run": 46072226979,
+      "p95_minutes": 0.1
+    },
+    "installer-portal": {
+      "runs": 121,
+      "first_run": 45920172165,
+      "last_run": 46072220318,
+      "p95_minutes": 1.4833
+    },
+    "publish": {
+      "workflow": ".github/workflows/branch-image.yml",
+      "runs": 47,
+      "first_run": 45921792302,
+      "last_run": 46070369749,
+      "p95_minutes": 8.75,
+      "image_legs": {
+        "connector-worker": { "runs": 47, "p95_minutes": 4.6667 },
+        "control-api": { "runs": 47, "p95_minutes": 5.45 },
+        "foundation-keycloak": { "runs": 47, "p95_minutes": 2.8833 },
+        "foundation-postgres": { "runs": 47, "p95_minutes": 1.4833 },
+        "identity-policy-activator": { "runs": 47, "p95_minutes": 4.8167 },
+        "invitation-mailer": { "runs": 47, "p95_minutes": 5.0 },
+        "portal": { "runs": 47, "p95_minutes": 4.8833 },
+        "production-alertmanager": { "runs": 47, "p95_minutes": 2.9167 },
+        "production-cloudflared": { "runs": 47, "p95_minutes": 1.9 },
+        "production-ingress": { "runs": 47, "p95_minutes": 1.3833 },
+        "production-otel": { "runs": 47, "p95_minutes": 5.1167 },
+        "production-prometheus": { "runs": 47, "p95_minutes": 7.2167 },
+        "secret-sidecar": { "runs": 47, "p95_minutes": 1.55 },
+        "tenant-provisioner": { "runs": 47, "p95_minutes": 4.7333 },
+        "tenant-workspace-controller": { "runs": 47, "p95_minutes": 4.6667 },
+        "workspace-configurator": { "runs": 47, "p95_minutes": 1.7 },
+        "workspace-provider": { "runs": 47, "p95_minutes": 4.45 },
+        "zammad": { "runs": 47, "p95_minutes": 8.75 },
+        "zammad-memcached": { "runs": 47, "p95_minutes": 1.2167 },
+        "zammad-nginx": { "runs": 47, "p95_minutes": 1.05 },
+        "zammad-redis": { "runs": 47, "p95_minutes": 1.0667 }
+      }
+    },
+    "zammad-compatibility": {
+      "workflow": ".github/workflows/zammad-compatibility.yml",
+      "runs": 92,
+      "first_run": 45920568370,
+      "last_run": 46072226979,
+      "p95_minutes": 21.7167
+    },
+    "ci-gate": {
+      "runs": 173,
+      "first_run": 45920172165,
+      "last_run": 46072226979,
+      "p95_minutes": 0.1167
     }
   }
 }
