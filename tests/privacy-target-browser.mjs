@@ -4,16 +4,18 @@ import { mkdir } from "node:fs/promises";
 import { chromium, expect } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 import { getMessages } from "../lib/i18n/messages/index.ts";
+import { syntheticBrowserTrace } from "./helpers/synthetic-browser-trace.mjs";
 
 const base = process.env.WASALX_STORYBOOK_URL ?? "http://127.0.0.1:6227";
 const output = process.env.WASALX_SYNTHETIC_UI_OUTPUT ?? "output/playwright/inbox";
 await mkdir(output, { recursive: true });
 const browser = await chromium.launch({ ...(process.env.WASALX_VISUAL_BROWSER_PATH ? { executablePath: process.env.WASALX_VISUAL_BROWSER_PATH } : {}), headless: true });
+const trace = syntheticBrowserTrace(browser, base, output);
 try {
   for (const [locale, width] of [["en", 1440], ["ar", 390]]) {
     const t = key => getMessages(locale)[key];
     for (const kind of ["export", "hold", "delete"]) {
-      const context = await browser.newContext({ viewport: { width, height: 1000 } }), page = await context.newPage();
+      const context = await trace.newContext({ viewport: { width, height: 1000 } }), page = await context.newPage();
       let stale = false, holdBlocked = false, deny = false, malformed = false, releaseOld, enteredOld, finishOld;
       const oldFinished = new Promise(resolve => { finishOld = resolve; });
       const mutations = [];
@@ -101,8 +103,11 @@ try {
       const body = mutations.at(-1);
       assert.equal(body.scopeType, "ZAMMAD_USER"); assert.equal(body.scopeValue, "customer@example.invalid"); assert.equal(body.selection_sha256, "c".repeat(64));
       assert.ok(!("internal_id" in body));
-      await context.close();
+      await trace.closeContext(context);
     }
   }
   console.log("Synthetic privacy dialogs: EN desktop / AR mobile; stale lookup, denial, readback/hash, submit, keyboard and Axe checks passed.");
+} catch (error) {
+  await trace.retainFailure();
+  throw error;
 } finally { await browser.close(); }

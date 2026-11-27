@@ -1856,6 +1856,11 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
     };
     let nativeMobileStorageState;
     let mobilePhase = "navigation";
+    const channelChooser = mobilePage.getByRole("dialog", {
+      name: "Dialog window with selections",
+      exact: true,
+    });
+    const whatsAppChannel = channelChooser.getByRole("option", { name: "WhatsApp", exact: true });
     mobilePage.on("request", (request) => {
       if (request.method() !== "POST" || !new URL(request.url()).pathname.endsWith("/graphql")) return;
       const payload = request.postDataJSON();
@@ -2044,17 +2049,14 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
       await mobilePage.waitForURL((url) => url.pathname === "/mobile/wasalx/groups" && url.searchParams.get("message") === existingMessageId);
       await mobilePage.locator(`[data-message-id="${existingMessageId}"]`).waitFor();
       await mobilePage.goto(`${zammadOrigin}/mobile/tickets/${state.ticketId}`, { waitUntil: "domcontentloaded" });
-      mobilePhase = "reply-draft-attachment-discard";
+      mobilePhase = "reply-channel-chooser";
       await mobilePage.getByRole("button", { name: "Add reply", exact: true }).click();
       const reply = mobilePage.getByRole("dialog", { name: "Add reply", exact: true });
       await reply.getByRole("combobox", { name: "Channel", exact: true }).click();
-      const channelChooser = mobilePage.getByRole("dialog", {
-        name: "Dialog window with selections",
-        exact: true,
-      });
-      await channelChooser.getByRole("option", { name: "WhatsApp", exact: true }).click();
+      await whatsAppChannel.click();
       await channelChooser.waitFor({ state: "hidden" });
       assert.ok((await reply.getByRole("combobox", { name: "Channel", exact: true }).innerText()).includes("WhatsApp"));
+      mobilePhase = "reply-draft-attachment-discard";
       const mobileDraft = "Mobile draft \u2014 do not send.";
       const collectEditor = await observeNativeDom(mobilePage, draft => {
         const listener = new AbortController();
@@ -2161,6 +2163,16 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
       mobilePhase = "collected-failure-union";
       assert.deepEqual(mobileFailures, [], "native mobile collected failure union");
     } catch (error) {
+      const chooser = mobilePhase === "reply-channel-chooser"
+        ? await readNativeDiagnostic(Promise.all([channelChooser.count(), whatsAppChannel.count(), whatsAppChannel.isVisible()])
+          .then(([dialogs, options, optionVisible]) => ({ dialogs, options, optionVisible })))
+        : null;
+      await writeFile(join(evidenceDirectory, "native-mobile-public-failure.json"), JSON.stringify({
+        phase: mobilePhase,
+        kind: error?.name === "TimeoutError" ? "timeout" : error instanceof assert.AssertionError ? "assertion" : "error",
+        chooser,
+        checks: mobileFailures.map(({ surface, check }) => ({ surface, check })),
+      }, null, 2)).catch(() => t.diagnostic("Unable to retain the public native mobile failure diagnostics."));
       const failureStateBeforeCapture = await mobileState().catch((stateError) => ({ error: String(stateError) }));
       const screenshotError = await mobilePage.screenshot({ path: join(evidenceDirectory, "native-mobile-failure.png"), fullPage: false })
         .then(() => null, (captureError) => String(captureError));

@@ -276,22 +276,22 @@ jobs:
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '0'
         run: pnpm exec playwright install --no-shell chromium
       - name: Audit stories and compare design system screenshots
+        env:
+          TMPDIR: /dev/shm
+          WASALX_SYNTHETIC_UI_TRACE: '1'
         run: >-
           node scripts/storybook-visual-regression.mjs --require-browser tests/visual/storybook-ci.spec.ts
           tests/visual/inbox-synthetic.spec.ts tests/visual/design-system.spec.ts
           --fully-parallel --workers=4 --update-snapshots=none
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: failure() || cancelled()
-        with: &storybook-audit-artifact
+        if: failure()
+        with:
           name: storybook-audit
           path: |
             test-results/storybook
             output/playwright/design-system
             output/playwright/inbox/synthetic
           retention-days: 7
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: success()
-        with: *storybook-audit-artifact
 
   privacy:
     if: github.event_name == 'pull_request' || github.event_name == 'merge_group'

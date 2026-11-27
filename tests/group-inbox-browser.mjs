@@ -4,6 +4,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { chromium, expect } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 import { languageTag } from "../lib/i18n/locales.ts";
+import { syntheticBrowserTrace } from "./helpers/synthetic-browser-trace.mjs";
 
 const base = process.env.WASALX_STORYBOOK_URL ?? "http://127.0.0.1:6227";
 const output = process.env.WASALX_SYNTHETIC_UI_OUTPUT ?? "output/playwright/inbox";
@@ -189,11 +190,12 @@ async function instrumentation(context) {
 }
 
 const browser = await chromium.launch({ ...(process.env.WASALX_VISUAL_BROWSER_PATH ? { executablePath: process.env.WASALX_VISUAL_BROWSER_PATH } : {}), headless: true });
+const trace = syntheticBrowserTrace(browser, base, output);
 await mkdir(output, { recursive: true });
 try {
   for (const locale of ["en", "ar"]) {
     const t = await translations(locale);
-    const context = await browser.newContext({ locale: locale === "ar" ? "en-US" : "ar-SA", viewport: { width: 1440, height: 1000 } });
+    const context = await trace.newContext({ locale: locale === "ar" ? "en-US" : "ar-SA", viewport: { width: 1440, height: 1000 } });
     await instrumentation(context);
     const page = await context.newPage(), state = await fixture(page), pageErrors = [];
     // Enable Playwright's asynchronous chooser interception before navigation.
@@ -651,10 +653,10 @@ try {
     summary.push({ locale, mode: "synthetic-component-ui", writes: state.writes.map(write => ({ operation: write.operation,
       request_token: write.input.request_token })), checks: state.calls.length, themes: ["light", "dark"], screenshots: ["desktop", "mobile", "zoom-equivalent"],
       untested: ["actual provider", "actual native gateway", "real microphone hardware", "human screen reader", "physical touch"] });
-    await context.close();
+    await trace.closeContext(context);
   }
   for (const locale of ["en", "ar"]) {
-    const t = await translations(locale), context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+    const t = await translations(locale), context = await trace.newContext({ viewport: { width: 1440, height: 1000 } });
     const page = await context.newPage(), state = await fixture(page);
     await page.goto(`${base}/iframe.html?id=product-group-inbox--source-lifecycle-${locale === "ar" ? "arabic" : "english"}`, { waitUntil: "networkidle" });
     const group = page.locator(".wx-group");
@@ -674,9 +676,9 @@ try {
     await expect(page.locator('[data-source-harness="navigation"]')).toHaveText("0");
     await expect(page.locator('[data-source-harness="outside"]')).toBeVisible();
     await expect(page.locator(".wx-group")).toHaveCount(0);
-    await context.close();
+    await trace.closeContext(context);
   }
-  const context = await browser.newContext({ hasTouch: true, viewport: { width: 1440, height: 1000 } });
+  const context = await trace.newContext({ hasTouch: true, viewport: { width: 1440, height: 1000 } });
   const page = await context.newPage(), state = await fixture(page);
   await page.goto(`${base}/iframe.html?id=product-group-inbox--read-only`, { waitUntil: "networkidle" });
   assert.equal(await page.evaluate(() => matchMedia("(any-pointer: coarse)").matches), true);
@@ -692,7 +694,10 @@ try {
   await expect(page.locator(".wx-group-messages .wx-card-actions")).toHaveCount(0);
   assert.equal(state.writes.length, 0);
   assert.equal(state.count("GROUP_READ"), 0, "read-only view does not advance team read markers");
-  await context.close();
+  await trace.closeContext(context);
+} catch (error) {
+  await trace.retainFailure();
+  throw error;
 } finally { await browser.close(); }
 await writeFile(`${output}/group-browser-proof.json`, `${JSON.stringify(summary, null, 2)}\n`);
 console.log("Group component EN/AR draft, quote, mention, upload, recovery, navigation, cleanup and accessibility checks passed.");
