@@ -2359,7 +2359,11 @@ test("duplicate cleanup reconciles the connection list immediately on close", as
   await page.getByRole("tab", { name: "Privacy & retention" }).click();
   const panel = page.getByRole("tabpanel");
   for (const language of ["English", "العربية"]) {
-    if (language !== "English") await page.getByRole("button", { name: language }).click();
+    if (language !== "English") {
+      await page.getByRole("button", { name: language }).click();
+      // #569: the switch reloads the document; wait for the Arabic one before reading the panel.
+      await expect(page.locator("html")).toHaveAttribute("lang", "ar");
+    }
     await expect(panel.getByRole("table")).toHaveCount(2);
     for (const width of [390, 320]) {
       await page.setViewportSize({ width, height: 844 });
