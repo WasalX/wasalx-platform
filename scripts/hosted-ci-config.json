@@ -36,10 +36,6 @@
       "runner": "portal-integration",
       "reason": "Starts the built portal to check server-rendered HTML."
     },
-    "tests/zammad-sidebar-component-harness.test.mjs": {
-      "runner": "test:unit",
-      "reason": "not run in CI: needs the add-on checkout and its separately installed component harness dependencies."
-    },
     "scripts/test-docker-stack.sh": {
       "runner": "docker:smoke",
       "reason": "not run in CI: requires a full Docker Compose stack and local image builds."
