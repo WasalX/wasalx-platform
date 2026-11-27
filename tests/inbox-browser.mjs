@@ -327,9 +327,16 @@ try {
     await expect(attachFiles(page)).toBeVisible();
     await expect(attachFiles(page)).toHaveAccessibleDescription(noAttachments);
     await expect(page.getByRole("button", { name: locale === "ar" ? "إزالة outgoing.txt" : "Remove outgoing.txt" })).toHaveCount(0);
-    const longBody = "أ😀".repeat(25001); history.get("42").push({ id: "99", body: longBody, internal: false, author: "Ahmed", sender: "Customer", created_at: tickets[0].updated_at, attachments: [] });
-    await page.getByRole("button").filter({ hasText: "#1043" }).click(); await page.getByRole("button").filter({ hasText: "#1042" }).click();
-    const fullArticle = page.locator(".wx-ticket-full-article").last();
+    const longBody = "أ😀".repeat(25001);
+    const longArticle = { ...history.get("42")[0], id: "99", body: longBody, attachments: [] };
+    const trailingBody = "Synthetic article after the long message";
+    history.get("42").push(longArticle, { ...longArticle, id: "100", body: trailingBody });
+    await ticket43.click();
+    await expect(page.getByRole("heading", { name: "Invoice question", exact: true })).toBeVisible();
+    await ticket42.click();
+    await expect(page.getByRole("heading", { name: "Delivery update", exact: true })).toBeVisible();
+    await expect(page.locator('[data-article-id="100"]')).toContainText(trailingBody);
+    const fullArticle = page.locator('[data-article-id="99"] .wx-ticket-full-article');
     const previewBody = Array.from(longBody).slice(0, 50_000).join("");
     await expect(fullArticle.locator('p[dir="auto"]')).toHaveText(previewBody);
     const format = { format: value => formatNumber(value, locale) };
@@ -337,7 +344,9 @@ try {
       ? `يُعرض ${format.format(50_000)} من أصل ${format.format(50_002)} حرفًا.`
       : `Showing ${format.format(50_000)} of ${format.format(50_002)} characters.`);
     assert.equal(Array.from(previewBody).at(-1), "😀");
-    await page.getByRole("button", { name: locale === "ar" ? "قراءة بقية الرسالة" : "Read more of this message" }).click();
+    await fullArticle
+      .getByRole("button", { name: locale === "ar" ? "قراءة بقية الرسالة" : "Read more of this message" })
+      .click();
     await expect(fullArticle.locator('p[dir="auto"]')).toHaveText(longBody);
     await expect(fullArticle.getByRole("button")).toHaveCount(0);
     await expect(fullArticle.locator("p")).toHaveCount(1);
