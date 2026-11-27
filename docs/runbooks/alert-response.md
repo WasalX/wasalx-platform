@@ -83,6 +83,8 @@ For `WasalXAuthorizationAnomaly`, correlate denied requests with audit events by
 
 For `WasalXProvisioningTerminalFailure`, identify the failed operation and stage from the provisioner and workspace controller. Check workspace-provider readiness and the relevant operator or dependency. Retain partial resources and send the recorded stage to the provisioning owner for recovery through the normal reconciliation path.
 
+For `NOTION_OAUTH_RECOVERY_PENDING`, refresh the tenant's Connections view and use the integration ID to check its audit and secret cleanup task. A committed activation remains connected. If the callback could not abort an incomplete setup, the scheduled secret cleanup worker retires the aged stage after one hour and retries eligible deletions through its outbox. Keep OAuth codes, state values and secret references out of support records. Reconnect a working connection to the same workspace. Reconnecting a revoked connection creates a fresh binding, which an administrator can select when qualifying its routing source.
+
 ## Privacy failure
 
 For `WasalXPrivacyTerminalFailure`, inspect the authorized job and audit history by ID for the failed scope, dependency, and any legal hold. Route to the privacy owner before further action. Preserve job evidence and verify the resulting state through the supported workflow.
