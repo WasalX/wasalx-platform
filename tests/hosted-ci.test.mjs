@@ -747,7 +747,9 @@ test("workflow lint requires verified tools, both embedded diagnostics, and clea
     "restore-keys": "actionlint-${{ env.ACTIONLINT_SHA256 }}",
   });
   assert.deepEqual(seed.env, job.env);
-  assert.deepEqual(seed.steps.slice(-2), [cache, prepare]);
+  const seedCache = seed.steps.findIndex(step => step.with?.path === cache.with.path);
+  assert(seedCache >= 0);
+  assert.deepEqual(seed.steps.slice(seedCache, seedCache + 2), [cache, prepare]);
   assert(job.steps.indexOf(cache) < job.steps.indexOf(prepare));
   assert(job.steps.indexOf(prepare) < job.steps.indexOf(step));
   assert.equal(prepare.if, undefined);
