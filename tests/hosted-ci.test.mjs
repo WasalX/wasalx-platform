@@ -273,8 +273,9 @@ test("CI job timeouts are covered by the measured limits", async () => {
   const configured = Object.entries(jobs).filter(([, job]) => Object.hasOwn(job, "timeout-minutes"));
   // These jobs landed after the timing sample and still need measurements.
   const unmeasured = ["installer-portal", "keycloak-identity", "platform-operator-e2e", "portal-browser-build", "seed-caches"];
-  assert.deepEqual(configured.map(([id]) => id).sort(), [...Object.keys(timing.jobs), ...unmeasured].sort());
-  for (const [id, { p95_minutes: p95, owner_parts: ownerParts }] of Object.entries(timing.jobs)) {
+  const { publish, ...ciJobs } = timing.jobs;
+  assert.deepEqual(configured.map(([id]) => id).sort(), [...Object.keys(ciJobs), ...unmeasured].sort());
+  for (const [id, { p95_minutes: p95, owner_parts: ownerParts }] of Object.entries(ciJobs)) {
     if (id === "application-e2e") {
       const ownerSuites = jobs[id].strategy.matrix.suite.filter(suite => suite.roles === "tenant_owner");
       assert.deepEqual(ownerSuites.map(suite => suite.owner_part).sort(), Object.keys(ownerParts).sort());
@@ -288,6 +289,18 @@ test("CI job timeouts are covered by the measured limits", async () => {
     const timeout = jobs[id]["timeout-minutes"];
     assert(Number.isInteger(timeout) && timeout > 0 && timeout <= Math.ceil(p95 * 1.25), id);
   }
+
+  assert.equal(publish.workflow, ".github/workflows/branch-image.yml");
+  const release = parse(await read(publish.workflow)).jobs.publish;
+  const image = "connector-worker";
+  const p95 = publish.image_legs[image].p95_minutes;
+  assert(Number.isFinite(p95) && p95 > 0 && p95 <= publish.p95_minutes);
+  assert(release.strategy.matrix.image.includes(image));
+  assert.equal(
+    release["timeout-minutes"],
+    "${{ matrix.image == '" + image + "' && " + Math.ceil(p95 * 1.25) + " || 20 }}",
+  );
+  assert.match((await read("DELIVERY.md")).split("\n").find(line => line.startsWith("| §4/§8 ")), /connector-worker publication leg/u);
 });
 
 test("Storybook selects UI changes and unknown diffs", async (t) => {
@@ -717,11 +730,25 @@ ${copy.run}`], {
 test("workflow lint requires verified tools, both embedded diagnostics, and clean workflows", async t => {
   const { jobs } = parse(await read(".github/workflows/ci.yml"));
   const job = jobs["workflow-lint"];
-  const step = job.steps.find(step => step.run);
+  const seed = jobs["seed-caches"];
+  const cache = job.steps.find(step => step.uses?.startsWith("actions/cache@"));
+  const prepare = job.steps.find(step => step.name === "Prepare pinned actionlint");
+  const step = job.steps.find(step => step.name === "Lint workflows with actionlint");
   assert.equal(job.if, "github.event_name != 'push'");
   assert.equal(job["continue-on-error"], undefined);
   assert.equal(step.if, undefined);
   assert.equal(step["continue-on-error"], undefined);
+  assert.deepEqual(cache.with, {
+    path: "${{ runner.temp }}/actionlint-release.tar.gz",
+    key: "actionlint-${{ env.ACTIONLINT_SHA256 }}-${{ env.ACTIONLINT_URL }}",
+    "restore-keys": "actionlint-${{ env.ACTIONLINT_SHA256 }}",
+  });
+  assert.deepEqual(seed.env, job.env);
+  assert.deepEqual(seed.steps.slice(-2), [cache, prepare]);
+  assert(job.steps.indexOf(cache) < job.steps.indexOf(prepare));
+  assert(job.steps.indexOf(prepare) < job.steps.indexOf(step));
+  assert.equal(prepare.if, undefined);
+  assert.equal(prepare["continue-on-error"], undefined);
 
   const directory = await mkdtemp(join(tmpdir(), "ci-workflow-lint-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
@@ -783,7 +810,7 @@ python3() {
   ]) {
     await rm(archivePath, { force: true });
     if (cachedArchive !== undefined) await writeFile(archivePath, cachedArchive);
-    const result = runWorkflowScript(mocks + step.run, {
+    const result = runWorkflowScript(mocks + prepare.run + "\n" + step.run, {
       ...pinnedTools,
       RUNNER_TEMP: directory.replaceAll("\\", "/"),
       TMPDIR: directory,
@@ -1273,7 +1300,7 @@ test("main pushes only publish and seed caches", async () => {
     { task: "save-build", "dependency-key": dependencyKey },
   ]);
   const lint = "pnpm run lint --cache --cache-strategy content --cache-location .git/hosted-eslint-cache";
-  assert.deepEqual(seed.steps.flatMap(step => step.run ?? []), [lint]);
+  assert.deepEqual(seed.steps.filter(step => step.run).map(step => step.name), ["Populate ESLint cache", "Prepare pinned actionlint"]);
   const eslintSave = seed.steps.find(step => step.uses?.startsWith("actions/cache/save@"));
   assert.equal(eslintSave.if, "steps.eslint-cache.outputs.cache-hit != 'true'");
   assert.deepEqual(eslintSave.with, {

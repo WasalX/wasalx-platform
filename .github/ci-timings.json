@@ -66,6 +66,19 @@
     "pr-image-results": {
       "p95_minutes": 0.1333
     },
+    "publish": {
+      "measured_at": "2026-11-27",
+      "workflow": ".github/workflows/branch-image.yml",
+      "runs": 24,
+      "first_run": 45937633406,
+      "last_run": 46003340146,
+      "p95_minutes": 8.4833,
+      "image_legs": {
+        "connector-worker": {
+          "p95_minutes": 4.6167
+        }
+      }
+    },
     "ci-gate": {
       "p95_minutes": 0.2833
     }
