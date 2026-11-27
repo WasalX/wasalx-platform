@@ -448,6 +448,50 @@ jobs:
         include: [*unit-one, *unit-two]
     steps: *check-steps
 
+  seed-caches:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'WasalX/wasalx-platform'
+    # A cache seed failure must leave a successful publication usable.
+    continue-on-error: true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.13.1'
+          package-manager-cache: false
+      - name: Seed pnpm dependency caches
+        id: pnpm
+        uses: ./.github/actions/ci-pnpm
+        with:
+          seed-dependencies: 'true'
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: eslint-cache
+        with:
+          path: .git/hosted-eslint-cache
+          key: eslint-${{ runner.os }}-${{ hashFiles('eslint.config.*', 'pnpm-lock.yaml') }}-${{ github.sha }}
+          restore-keys: eslint-${{ runner.os }}-${{ hashFiles('eslint.config.*', 'pnpm-lock.yaml') }}-
+      - name: Populate ESLint cache
+        run: pnpm run lint --cache --cache-strategy content --cache-location .git/hosted-eslint-cache
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: steps.eslint-cache.outputs.cache-hit != 'true'
+        with:
+          path: .git/hosted-eslint-cache
+          key: ${{ steps.eslint-cache.outputs.cache-primary-key }}
+      - name: Build service cache outputs
+        uses: ./.github/actions/ci-pnpm
+        with:
+          task: build
+          dependency-key: ${{ steps.pnpm.outputs.dependency-key }}
+          force-build: 'true'
+      - name: Save service build cache
+        uses: ./.github/actions/ci-pnpm
+        with:
+          task: save-build
+          dependency-key: ${{ steps.pnpm.outputs.dependency-key }}
+
   integration:
     needs: changes
     if: >-
@@ -761,13 +805,7 @@ jobs:
           IMAGE: ${{ matrix.image }}
           PUBLIC_ADDON_SOURCE: ${{ toJSON(matrix.addonSource) }}
           PUBLIC_CONTACT_EMAIL: ${{ matrix.image == 'portal' && vars.PUBLIC_CONTACT_EMAIL || '' }}
-        run: |
-          args=(--cache read)
-          if [[ "$GITHUB_EVENT_NAME" == merge_group ]]; then
-            mkdir -p records
-            args=(--archive "records/$IMAGE.tar")
-          fi
-          python3 scripts/release/images-by-digest.py build "${args[@]}" --image "$IMAGE" --output "records/$IMAGE.json"
+        run: python3 scripts/release/images-by-digest.py build --cache read --image "$IMAGE" --output "records/$IMAGE.json"
       - name: Record pending add-on source
         if: matrix.pending
         env:
@@ -780,17 +818,6 @@ jobs:
           name: image-build-${{ matrix.image }}
           path: records/${{ matrix.image }}.json
           if-no-files-found: error
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: github.event_name == 'merge_group' && !matrix.pending
-        with:
-          name: image-queue-${{ github.run_attempt }}-${{ matrix.image }}
-          path: |
-            records/${{ matrix.image }}.json
-            records/${{ matrix.image }}.tar
-          overwrite: true
-          if-no-files-found: error
-          compression-level: 0
-          retention-days: 7
 
   pr-images:
     needs: [changes]

@@ -371,7 +371,7 @@ def inspect_layers(archive, layers, base_layers, public_keys=None, licenses=None
     return count
 
 
-def inspect_image(reference, row, commit, tree, directory, licenses=None, *, export_path=None):
+def inspect_image(reference, row, commit, tree, directory, licenses=None):
     text = (ROOT / row["dockerfile"]).read_text()
     if row["image"] in PUBLIC_KEYS:
         require("ADD --checksum=sha256:" + CLOUDFLARED_SOURCE in text and
@@ -393,7 +393,7 @@ def inspect_image(reference, row, commit, tree, directory, licenses=None, *, exp
     history = run("docker", "history", "--no-trunc", "--format", "{{json .CreatedBy}}", reference)
     require(not CREDENTIAL.search(history.encode()),
             "Credential material in image history")
-    exported = Path(directory) / "image.tar" if export_path is None else Path(export_path)
+    exported = Path(directory) / "image.tar"
     subprocess.run(["docker", "save", "--output", str(exported), reference], check=True)
     try:
         with tarfile.open(exported) as archive:
@@ -418,8 +418,7 @@ def inspect_image(reference, row, commit, tree, directory, licenses=None, *, exp
                         "members": public_members}, sort_keys=True).encode()),
                     "historySha256": sha256(history.encode())}
     finally:
-        if export_path is None:
-            exported.unlink(missing_ok=True)
+        exported.unlink(missing_ok=True)
 
 
 def pull(reference):
@@ -440,14 +439,7 @@ def cache_options(image, mode):
     return ["--cache-from", cache_ref] if mode == "read" else ["--cache-to", cache_ref + ",mode=max,ignore-error=true"]
 
 
-def archive_digest(path):
-    with Path(path).open("rb") as archive:
-        return "sha256:" + hashlib.file_digest(archive, "sha256").hexdigest()
-
-
-def build(image, output, cache="off", *, archive=None):
-    require(archive is None or (os.environ.get("GITHUB_EVENT_NAME") == "merge_group" and cache == "off"),
-            "Only cache-free merge queue builds may export a publication archive")
+def build(image, output, cache="off"):
     row = next(r for r in catalog() if r["image"] == image)
     cache_args = cache_options(image, cache)
     portal_args = ["--build-arg", "PUBLIC_CONTACT_EMAIL"] if image == "portal" else []
@@ -465,9 +457,9 @@ def build(image, output, cache="off", *, archive=None):
             ["git", "-c", "core.autocrlf=false", "archive", "--format=tar", "--output=" + str(archive_path), commit],
             cwd=ROOT, check=True,
         )
-        source_archive_digest = archive_digest(archive_path)
-        with tarfile.open(archive_path) as source_archive:
-            source_archive.extractall(context, filter="data")
+        archive_digest = sha256(archive_path.read_bytes())
+        with tarfile.open(archive_path) as archive:
+            archive.extractall(context, filter="data")
         if addon:
             subprocess.run(["node", "scripts/fetch-zammad-addon.mjs"], cwd=context, check=True)
         if image == "zammad":
@@ -496,16 +488,12 @@ def build(image, output, cache="off", *, archive=None):
                         "--label", "org.opencontainers.image.source=" + SOURCE,
                         "--label", "org.opencontainers.image.revision=" + commit,
                         "--label", "io.wasalx.source.tree=" + tree, str(context), capture_stdout=False)
-        inspection = inspect_image(reference, row, commit, tree, directory, licenses,
-                                   **({"export_path": archive} if archive else {}))
+        inspection = inspect_image(reference, row, commit, tree, directory, licenses)
     receipt = {"image": image, "reference": reference, "commit": commit, "tree": tree, "status": "built",
-               "platform": "linux/amd64", "sourceArchiveDigest": source_archive_digest, "addonSource": addon,
+               "platform": "linux/amd64", "sourceArchiveDigest": archive_digest, "addonSource": addon,
                "dockerfileDigest": dockerfile_digest, "inspection": inspection}
     if image == "portal":
         receipt["contactEmailSha256"] = sha256(os.environ.get("PUBLIC_CONTACT_EMAIL", "").encode())
-    if archive is not None:
-        receipt["queue"] = {"runId": os.environ["GITHUB_RUN_ID"], "attempt": os.environ["GITHUB_RUN_ATTEMPT"],
-                            "archiveDigest": archive_digest(archive)}
     write(output, receipt)
 
 
@@ -571,7 +559,7 @@ def verify_signatures(reference, *, commit=None):
     registry_output("cosign", "verify-attestation", *common, "--type", "slsaprovenance", reference)
 
 
-def publish(receipt_path, *, archive=None):
+def publish(receipt_path):
     ref = os.environ.get("GITHUB_REF")
     require(os.environ.get("GITHUB_EVENT_NAME") == "push" and ref == "refs/heads/main",
             "Publication requires a main push")
@@ -585,19 +573,6 @@ def publish(receipt_path, *, archive=None):
         contact_digest = receipt.get("contactEmailSha256")
         require(isinstance(contact_digest, str) and DIGEST.fullmatch(contact_digest), "Invalid portal contact email digest")
         contact_input["contactEmailSha256"] = contact_digest
-    queue_source = {}
-    if archive is not None:
-        expected_queue = {"runId": os.environ["QUEUE_RUN_ID"], "attempt": os.environ["QUEUE_RUN_ATTEMPT"],
-                          "archiveDigest": archive_digest(archive)}
-        require(receipt["status"] == "built" and receipt.get("queue") == expected_queue,
-                "Merge queue archive or attempt differs from the build receipt")
-        if receipt["image"] == "portal":
-            require(contact_digest == sha256(os.environ.get("PUBLIC_CONTACT_EMAIL", "").encode()),
-                    "Portal contact email changed after the merge queue build")
-        with Path(archive).open("rb") as stream:
-            loaded_config(stream, receipt["inspection"]["configDigest"])
-        subprocess.run(["docker", "load", "--input", str(archive)], check=True)
-        queue_source["queue"] = expected_queue
     result = registry_output("docker", "push", receipt["reference"], retry_unknown_blob=True).decode("utf-8")
     matches = re.findall(r"digest: (sha256:[0-9a-f]{64})", result)
     require(len(set(matches)) == 1, "Missing unique published digest")
@@ -619,7 +594,7 @@ def publish(receipt_path, *, archive=None):
                                    "sourceArchiveDigest": receipt["sourceArchiveDigest"],
                                    "addonSource": receipt["addonSource"], "dockerfileDigest": receipt["dockerfileDigest"],
                                    "inspectionSha256": sha256(json.dumps(receipt["inspection"], sort_keys=True).encode()),
-                                   "workflowSha": receipt["workflowSha"], **contact_input, **queue_source}},
+                                   "workflowSha": receipt["workflowSha"], **contact_input}},
                  "metadata": {"buildInvocationId": SOURCE + "/actions/runs/" + receipt["runId"] +
                               "/attempts/" + receipt["runAttempt"]},
                  "materials": [{"uri": "git+" + SOURCE, "digest": {"sha1": commit, "gitTree": tree}}]}
@@ -690,7 +665,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=["matrix", "build", "pending", "publish", "assemble", "verify-publication", "loaded-config"])
     parser.add_argument("--image")
-    parser.add_argument("--archive")
     diff = parser.add_mutually_exclusive_group()
     diff.add_argument("--pull-request", action="store_true")
     diff.add_argument("--base-sha")
@@ -710,11 +684,9 @@ if __name__ == "__main__":
         paths = changed_paths(base) if base is not None else None
         print(json.dumps(matrix(paths, pull_request=args.pull_request), separators=(",", ":")))
     elif args.command == "build":
-        build(args.image, args.output, args.cache, archive=args.archive)
+        build(args.image, args.output, args.cache)
     elif args.command == "publish":
-        if args.archive is None:
-            parser.error("publish requires --archive from the merge queue")
-        publish(args.output, archive=args.archive)
+        publish(args.output)
     elif args.command == "verify-publication":
         verify_publication(args.manifest)
     elif args.command == "pending":

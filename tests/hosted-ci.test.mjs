@@ -260,7 +260,7 @@ test("CI job timeouts are covered by the measured limits", async () => {
   const timing = JSON.parse(await read(".github/ci-timings.json"));
   const configured = Object.entries(jobs).filter(([, job]) => Object.hasOwn(job, "timeout-minutes"));
   // These jobs landed after the timing sample and still need measurements.
-  const unmeasured = ["application-e2e", "installer-portal", "keycloak-identity", "platform-operator-e2e", "portal-browser-build"];
+  const unmeasured = ["application-e2e", "installer-portal", "keycloak-identity", "platform-operator-e2e", "portal-browser-build", "seed-caches"];
   assert.deepEqual(configured.map(([id]) => id).sort(), [...Object.keys(timing.jobs), ...unmeasured].sort());
   for (const [id, { p95_minutes: p95 }] of Object.entries(timing.jobs)) {
     const timeout = jobs[id]["timeout-minutes"];
@@ -1174,6 +1174,49 @@ ${lint.run}`, {});
   assert.match(await readFile(summary, "utf8"), /Event workflow_dispatch ran both full unit shards/u);
 });
 
+test("main pushes only publish and seed caches", async () => {
+  const { jobs } = parse(await read(".github/workflows/ci.yml"));
+  const mainPush = "github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'WasalX/wasalx-platform'";
+  const pushJobs = Object.keys(jobs).filter(id => jobs[id].if?.includes(mainPush));
+  assert.deepEqual(pushJobs.sort(), ["publish", "seed-caches"]);
+  const dependencyGuards = {
+    "portal-integration": "needs.portal-browser-build.result == 'success'",
+    "application-e2e": "needs.portal-browser-build.result == 'success'",
+    "platform-operator-e2e": "needs.portal-browser-build.result == 'success'",
+    "integration-coverage": "needs.integration.result != 'skipped'",
+    "installer-portal": "needs.changes.outputs.installer-portal == 'true'",
+  };
+  for (const [id, job] of Object.entries(jobs)) {
+    if (pushJobs.includes(id)) continue;
+    assert.doesNotMatch(job.if, /github\.event_name == 'push'/u, id);
+    if (dependencyGuards[id]) assert(job.if.includes(dependencyGuards[id]), id);
+    else assert.match(job.if, /github\.event_name (?:!= 'push'|== '(?:pull_request|merge_group|workflow_dispatch)')/u, id);
+  }
+
+  const seed = jobs["seed-caches"];
+  assert.equal(seed.if, mainPush);
+  assert.equal(seed["continue-on-error"], true);
+  assert.equal(seed.needs, undefined);
+  assert.equal(jobs.publish.needs, undefined);
+  assert(!jobs["ci-gate"].needs.includes("seed-caches"));
+  const pnpmActions = seed.steps.filter(step => step.uses === "./.github/actions/ci-pnpm");
+  const dependencyKey = "${{ steps.pnpm.outputs.dependency-key }}";
+  assert.equal(pnpmActions[0].id, "pnpm");
+  assert.deepEqual(pnpmActions.map(step => step.with), [
+    { "seed-dependencies": "true" },
+    { task: "build", "dependency-key": dependencyKey, "force-build": "true" },
+    { task: "save-build", "dependency-key": dependencyKey },
+  ]);
+  const lint = "pnpm run lint --cache --cache-strategy content --cache-location .git/hosted-eslint-cache";
+  assert.deepEqual(seed.steps.flatMap(step => step.run ?? []), [lint]);
+  const eslintSave = seed.steps.find(step => step.uses?.startsWith("actions/cache/save@"));
+  assert.equal(eslintSave.if, "steps.eslint-cache.outputs.cache-hit != 'true'");
+  assert.deepEqual(eslintSave.with, {
+    path: ".git/hosted-eslint-cache", key: "${{ steps.eslint-cache.outputs.cache-primary-key }}",
+  });
+  assert(seed.steps.findIndex(step => step.run === lint) < seed.steps.indexOf(eslintSave));
+});
+
 test("CI restores pnpm caches and builds cleanly in the merge queue", async t => {
   const { jobs } = parse(await read(".github/workflows/ci.yml"));
   const actionPath = "./.github/actions/ci-pnpm";
@@ -1333,13 +1376,8 @@ test("PR image results gate affected changes while the merge queue requires the 
   assert.equal(branch.publish.needs, "queue");
   assert.equal(branch.queue.permissions.actions, "read");
   assert.equal(publish.permissions.actions, "read");
-  const exportImage = images.steps.find(step => step.with?.name?.startsWith("image-queue-"));
-  assert.equal(exportImage.if, "github.event_name == 'merge_group' && !matrix.pending");
-  assert.equal(exportImage.with.name, "image-queue-${{ github.run_attempt }}-${{ matrix.image }}");
-  const restoreImage = branch.publish.steps.find(step => step.uses?.startsWith("actions/download-artifact@"));
-  assert.equal(restoreImage.with["run-id"], "${{ needs.queue.outputs.run }}");
-  assert.equal(restoreImage.with.name, "image-queue-${{ needs.queue.outputs.attempt }}-${{ matrix.image }}");
-  assert(!branch.publish.steps.some(step => /images-by-digest\.py build/u.test(step.run ?? "")));
+  const build = images.steps.find(step => step.name === "Build and inspect without publication");
+  assert.equal(build.run, 'python3 scripts/release/images-by-digest.py build --cache read --image "$IMAGE" --output "records/$IMAGE.json"');
   assert.equal(publish.if, "${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'WasalX/wasalx-platform' }}");
   assert.equal(publish.uses, "./.github/workflows/branch-image.yml");
   for (const id of ["workflow-lint", "portal-browser-build", "keycloak-identity", "zammad-compatibility"]) {
@@ -1383,12 +1421,12 @@ test("PR image results gate affected changes while the merge queue requires the 
   assert((await readFile(summary, "utf8")).includes(report.name));
 });
 
-test("main publication resolves the exact successful queue attempt", async t => {
+test("main publication requires a successful queue gate for the exact commit", async t => {
   const { jobs } = parse(await read(".github/workflows/branch-image.yml"));
   const script = jobs.queue.steps.find(step => step.id === "source").run;
   const directory = await mkdtemp(join(tmpdir(), "ci-queue-publication-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
-  const output = join(directory, "output").replaceAll("\\", "/");
+  const summary = join(directory, "summary.md").replaceAll("\\", "/");
   const sha = "a".repeat(40);
   const repo = "WasalX/wasalx-platform";
   const row = { id: 123, run_attempt: 2, event: "merge_group", path: ".github/workflows/ci.yml",
@@ -1405,20 +1443,23 @@ gh() {
 `;
   for (const [candidate, job, expected] of [
     [row, gate, true],
+    [null, gate, false],
+    [row, null, false],
     [{ ...row, head_sha: "b".repeat(40) }, gate, false],
     [{ ...row, event: "pull_request" }, gate, false],
     [{ ...row, head_branch: "gh-readonly-queue/other/pr-1" }, gate, false],
     [row, { ...gate, conclusion: "failure" }, false],
     [row, { ...gate, status: "in_progress" }, false],
   ]) {
-    await writeFile(output, "");
+    await writeFile(summary, "");
     const result = runWorkflowScript(mock + script, {
-      GITHUB_SHA: sha, GITHUB_REPOSITORY: repo, GITHUB_OUTPUT: output,
-      RUNS: JSON.stringify({ total_count: 1, workflow_runs: [candidate] }), JOBS: JSON.stringify({ jobs: [job] }),
+      GITHUB_SHA: sha, GITHUB_REPOSITORY: repo, GITHUB_STEP_SUMMARY: summary,
+      RUNS: JSON.stringify({ total_count: candidate ? 1 : 0, workflow_runs: candidate ? [candidate] : [] }),
+      JOBS: JSON.stringify({ jobs: job ? [job] : [] }),
     });
     assert.ifError(result.error);
     assert.equal(result.status === 0, expected, result.stderr);
-    assert.equal(await readFile(output, "utf8"), expected ? "run=123\nattempt=2\n" : "");
+    assert.equal(await readFile(summary, "utf8"), expected ? `Queue ci-gate passed for ${sha} in run 123 (attempt 2).\n` : "");
   }
 });
 
