@@ -343,6 +343,25 @@ function observeNativeRequests(page, classify) {
   };
 }
 
+// Bounded browser errors for failure diagnostics. Console text is digested; a page error
+// keeps its name, message and top frame, which describe code rather than fixture data.
+const nativePageErrors = [];
+function capturePageErrors(page) {
+  const keep = (entry) => {
+    nativePageErrors.push(entry);
+    if (nativePageErrors.length > 20) nativePageErrors.shift();
+  };
+  page.on("console", (message) => {
+    if (message.type() !== "error") return;
+    let sourcePath = null;
+    try { sourcePath = new URL(message.location().url).pathname; } catch { /* Console location may be absent. */ }
+    keep({ kind: "console", sourcePath, messageSha256: createHash("sha256").update(message.text()).digest("hex") });
+  });
+  page.on("pageerror", (error) => keep({ kind: "pageerror", name: error?.name ?? null,
+    message: String(error?.message ?? error).slice(0, 200),
+    frame: String(error?.stack ?? "").split(/\r?\n/u).find((line) => line.trim().startsWith("at "))?.trim().slice(0, 200) ?? null }));
+}
+
 async function withNativeDiagnostic(t, label, collect, action, confirm = true) {
   let passed = false;
   try {
@@ -351,7 +370,8 @@ async function withNativeDiagnostic(t, label, collect, action, confirm = true) {
   } finally {
     try {
       const state = await collect();
-      if (!passed || confirm) t.diagnostic(`native ${label} ${JSON.stringify({ passed, ...state })}`);
+      const pageErrors = passed ? undefined : nativePageErrors.slice(-10);
+      if (!passed || confirm) t.diagnostic(`native ${label} ${JSON.stringify({ passed, ...state, pageErrors })}`);
     } catch { /* A diagnostic must never replace the journey result. */ }
   }
 }
@@ -1408,6 +1428,7 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
 
     const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, timezoneId: "Asia/Riyadh" });
     const page = await context.newPage();
+    capturePageErrors(page);
     const desktopFormResets = new EventEmitter();
     page.on("websocket", (socket) => {
       if (new URL(socket.url()).pathname !== "/cable") return;
@@ -1965,8 +1986,16 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
       templateReceipt = { status: response.status(), body: await response.json() };
       await route.abort();
     }, { times: 1 });
-    await templateDialog.getByRole('button', { name: 'Send template', exact: true }).click();
-    await templateDialog.getByText('Could not confirm the send. Retry this same template to check.', { exact: true }).waitFor();
+    await withNativeDiagnostic(t, 'template lost response', async () => ({
+      templateReceipt,
+      dialogStatus: (await templateDialog.getByRole('status').textContent({ timeout: 1_000 }))?.slice(0, 300) ?? null,
+    }), async () => {
+      await templateDialog.getByRole('button', { name: 'Send template', exact: true }).click();
+      // The add-on lets the agent change the template after a lost response; a 409 replays the earlier receipt.
+      await templateDialog.getByText(
+        'Could not confirm the send. You can change the template or its values and try again.', { exact: true },
+      ).waitFor();
+    }, false);
     assert.deepEqual(templateReceipt, { status: 202, body: { id: templateDeliveryId, state: 'QUEUED' } });
     await templateDialog.getByRole('button', { name: 'Close', exact: true }).click();
     await page.reload({ waitUntil: 'domcontentloaded' });
@@ -2009,6 +2038,7 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
       isMobile: true, hasTouch: true, storageState: await context.storageState(),
     });
     const mobilePage = await mobileContext.newPage();
+    capturePageErrors(mobilePage);
     const mobileStart = state.requests.length;
     const mobileMutations = [];
     const mobileFailures = [];
