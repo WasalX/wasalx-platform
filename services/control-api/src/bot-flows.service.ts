@@ -42,6 +42,13 @@ const LEGACY_CONVERSATION_LIMIT=200;
 const CATALOG_PAGE_MAX=100;
 type CatalogKind="FLOW"|"ROUTING"|"ACTION";
 type CatalogCursor={v:1;tenant:string;kind:CatalogKind;sort:string;id:string};
+type NotionOAuthReadback = {
+  integration_id: string;
+  status: "PENDING" | "CLAIMED" | "EXPIRED" | "COMMITTED" | "ABORTED" | "UNRESOLVED";
+  display_name: string;
+  external_account_id: string | null;
+  revision: string | number;
+};
 
 @Injectable()
 export class BotFlowsService {
@@ -587,16 +594,119 @@ export class BotFlowsService {
     const authorization=new URL("https://api.notion.com/v1/oauth/authorize");authorization.search=new URLSearchParams({client_id:config.notionOAuthClientId,response_type:"code",owner:"user",redirect_uri:config.notionOAuthRedirectUri,state}).toString();return{authorizationUrl:authorization.toString(),integrationId:row.integration_id};
   }
 
-  async completeNotionRoutingOAuth(principal:Principal,requestId:string,body:unknown){const config=this.routingConnectors;if(!config?.notionOAuthEnabled||!this.webhookSecrets||!this.secretProvisioning)throw new ServiceUnavailableException("Notion connection is not configured in this deployment");const input=routingOAuthCallback(body);const stateHash=createHash("sha256").update(input.state).digest("hex");const claim=await this.database.withTenant(principal.tenantId,async client=>{await requirePrivilegedAuthentication(client,principal,"connecting a Notion workspace");return(await client.query<{integration_id:string;secret_reference:string;redirect_uri:string}>("SELECT * FROM app.claim_client_routing_notion_oauth($1,$2)",[stateHash,principal.userId])).rows[0]});if(!claim)throw new ConflictException("Notion authorization expired or was already used. Connect again.");
-    let stored=false;
-    try{
-      if(claim.redirect_uri!==config.notionOAuthRedirectUri)throw new ConflictException("Notion authorization configuration changed. Connect again.");
-      const clientSecret=await this.webhookSecrets.resolveHmac(config.notionOAuthClientSecretReference,{kind:"exact",expectedReference:config.notionOAuthClientSecretReference});const token=await exchangeNotionCode(input.code,claim.redirect_uri,config.notionOAuthClientId,clientSecret);
-      await this.secretProvisioning.storeRoutingCredential(claim.secret_reference,{accessToken:token.accessToken,hmacKey:Buffer.from(randomBytes(32)).toString("base64url"),...(token.refreshToken?{refreshToken:token.refreshToken}:{})});stored=true;const connected=await this.database.withTenant(principal.tenantId,async client=>{const row=(await client.query<{integration_id:string;display_name:string;external_account_id:string;revision:string|number}>("SELECT * FROM app.complete_client_routing_notion_oauth($1,$2,$3,$4)",[claim.integration_id,principal.userId,token.workspaceName,token.workspaceId])).rows[0];if(!row)throw new ConflictException("Notion connection changed. Connect again.");await appendAudit(client,principal,{action:"client_routing.integration_connected",targetType:"client_routing_integration",targetId:row.integration_id,requestId,newValue:{provider:"NOTION",display_name:row.display_name,revision:Number(row.revision)}});return row});return{integrationId:connected.integration_id,provider:"NOTION",displayName:connected.display_name,revision:Number(connected.revision)}
-    }catch(error){if(stored)await this.secretProvisioning.deleteSecret(claim.secret_reference).catch(()=>undefined);await this.abortNotionRoutingOAuth(principal,requestId,{state:input.state,reason:"FAILED"}).catch(()=>undefined);if(postgresCode(error)==="23505")throw new ConflictException("This Notion workspace is already connected");throw error}
+  async completeNotionRoutingOAuth(principal: Principal, requestId: string, body: unknown) {
+    const config = this.routingConnectors;
+    const secrets = this.secretProvisioning;
+    if (!config?.notionOAuthEnabled || !this.webhookSecrets || !secrets) {
+      throw new ServiceUnavailableException("Notion connection is not configured in this deployment");
+    }
+    const input = routingOAuthCallback(body);
+    const stateHash = createHash("sha256").update(input.state).digest("hex");
+    const claim = await this.database.withTenant(principal.tenantId, async (client) => {
+      await requirePrivilegedAuthentication(client, principal, "connecting a Notion workspace");
+      return (await client.query<{ integration_id: string; secret_reference: string; redirect_uri: string }>(
+        "SELECT * FROM app.claim_current_client_routing_notion_oauth($1,$2)", [stateHash, principal.userId],
+      )).rows[0];
+    });
+    if (!claim) throw new ConflictException("Notion authorization expired or was already used. Connect again.");
+
+    let connected: Pick<NotionOAuthReadback, "integration_id" | "display_name" | "revision">;
+    try {
+      if (claim.redirect_uri !== config.notionOAuthRedirectUri) {
+        throw new ConflictException("Notion authorization configuration changed. Connect again.");
+      }
+      const clientSecret = await this.webhookSecrets.resolveHmac(config.notionOAuthClientSecretReference, {
+        kind: "exact", expectedReference: config.notionOAuthClientSecretReference,
+      });
+      const token = await exchangeNotionCode(input.code, claim.redirect_uri, config.notionOAuthClientId, clientSecret);
+
+      connected = await this.database.withTenant(principal.tenantId, async (client) => {
+        const attempt = await this.readNotionOAuth(client, principal, stateHash);
+        if (attempt?.integration_id !== claim.integration_id || attempt.status !== "CLAIMED") {
+          throw new ConflictException("Notion connection changed. Connect again.");
+        }
+        if (attempt.external_account_id !== null && attempt.external_account_id !== token.workspaceId) {
+          throw new ConflictException("Reconnect using the same Notion workspace.");
+        }
+        await secrets.storeRoutingCredential(claim.secret_reference, {
+          accessToken: token.accessToken,
+          hmacKey: Buffer.from(randomBytes(32)).toString("base64url"),
+          ...(token.refreshToken ? { refreshToken: token.refreshToken } : {}),
+        });
+        const row = (await client.query<typeof connected>(
+          "SELECT * FROM app.complete_claimed_client_routing_notion_oauth($1,$2,$3,$4)",
+          [stateHash, principal.userId, token.workspaceName, token.workspaceId],
+        )).rows[0];
+        if (!row) throw new ConflictException("Notion connection changed. Connect again.");
+        await appendAudit(client, principal, {
+          action: "client_routing.integration_connected", targetType: "client_routing_integration",
+          targetId: row.integration_id, requestId,
+          newValue: { provider: "NOTION", display_name: row.display_name, revision: Number(row.revision) },
+        });
+        return row;
+      });
+    } catch (error) {
+      let reconciled;
+      try {
+        reconciled = await this.database.withTenant<NotionOAuthReadback | "aborted" | undefined>(principal.tenantId, async (client) => {
+          const attempt = await this.readNotionOAuth(client, principal, stateHash);
+          if (attempt?.integration_id !== claim.integration_id) return;
+          if (attempt.status === "COMMITTED") return attempt;
+          if (attempt.status === "ABORTED") return "aborted";
+          if (attempt.status === "CLAIMED") {
+            const aborted = await this.abortNotionOAuth(client, principal, stateHash, "FAILED", requestId);
+            if (aborted === claim.integration_id) return "aborted";
+          }
+        });
+      } catch {
+        // A new connection's staged cleanup record survives a failed readback or abort.
+      }
+      if (!reconciled) {
+        throw new ServiceUnavailableException({
+          code: "NOTION_OAUTH_RECOVERY_PENDING",
+          message: "Notion connection status could not be confirmed. Refresh before trying again.",
+        });
+      }
+      if (reconciled === "aborted") {
+        if (postgresCode(error) === "23505") throw new ConflictException("This Notion workspace is already connected");
+        if (error instanceof ConflictException) throw error;
+        throw new ServiceUnavailableException("Notion connection could not be completed. Connect again.");
+      }
+      connected = reconciled;
+    }
+    return {
+      integrationId: connected.integration_id, provider: "NOTION",
+      displayName: connected.display_name, revision: Number(connected.revision),
+    };
   }
 
-  async abortNotionRoutingOAuth(principal:Principal,requestId:string,body:unknown){const input=routingOAuthAbort(body);const stateHash=createHash("sha256").update(input.state).digest("hex");const integrationId=await this.database.withTenant(principal.tenantId,async client=>{const row=(await client.query<{integration_id:string|null}>("SELECT app.abort_client_routing_notion_oauth($1,$2) AS integration_id",[stateHash,principal.userId])).rows[0];const id=row?.integration_id??null;if(id)await appendAudit(client,principal,{action:"client_routing.integration_aborted",targetType:"client_routing_integration",targetId:id,requestId,newValue:{provider:"NOTION",reason:input.reason}});return id});return{aborted:integrationId!==null,integrationId}}
+  private async readNotionOAuth(client: PoolClient, principal: Principal, stateHash: string) {
+    return (await client.query<NotionOAuthReadback>(
+      "SELECT * FROM app.read_client_routing_notion_oauth($1,$2)", [stateHash, principal.userId],
+    )).rows[0];
+  }
+
+  async abortNotionRoutingOAuth(principal: Principal, requestId: string, body: unknown) {
+    const input = routingOAuthAbort(body);
+    const stateHash = createHash("sha256").update(input.state).digest("hex");
+    const integrationId = await this.database.withTenant(principal.tenantId, (client) =>
+      this.abortNotionOAuth(client, principal, stateHash, input.reason, requestId));
+    return { aborted: integrationId !== null, integrationId };
+  }
+
+  private async abortNotionOAuth(
+    client: PoolClient, principal: Principal, stateHash: string, reason: "FAILED" | "DENIED", requestId: string,
+  ) {
+    const row = (await client.query<{ integration_id: string | null }>(
+      "SELECT app.abort_client_routing_notion_oauth($1,$2) AS integration_id", [stateHash, principal.userId],
+    )).rows[0];
+    const id = row?.integration_id ?? null;
+    if (id) await appendAudit(client, principal, {
+      action: "client_routing.integration_aborted", targetType: "client_routing_integration",
+      targetId: id, requestId, newValue: { provider: "NOTION", reason },
+    });
+    return id;
+  }
 
   async listRoutingSources(principal:Principal){const rows=await this.database.rows<Record<string,unknown>&{source_id:string;secret_reference:string;sync_mode:string}>(principal.tenantId,`SELECT source.source_id,source.kind,source.sync_mode,source.state,source.snapshot_revision,source.snapshot_sha256,
       source.last_success_at,source.next_due_at,source.safe_error,source.secret_reference,
@@ -1243,7 +1353,7 @@ function routingOAuthStart(value:unknown){const body=object(value??{},"Notion au
 
 function routingOAuthCallback(value:unknown){const body=object(value,"Notion authorization callback");const state=boundedText(body.state,"OAuth state",128);const code=boundedText(body.code,"Notion authorization code",2048);if(!/^[A-Za-z0-9_-]{43}$/u.test(state))throw new BadRequestException("Notion authorization state is invalid");if(Array.from(code).some(character=>{const value=character.codePointAt(0)??0;return value<32||value===127}))throw new BadRequestException("Notion authorization code is invalid");return{state,code}}
 
-function routingOAuthAbort(value:unknown){const body=object(value,"Notion authorization cancellation");const state=boundedText(body.state,"OAuth state",128);if(!/^[A-Za-z0-9_-]{43}$/u.test(state))throw new BadRequestException("Notion authorization state is invalid");if(body.reason!=="DENIED"&&body.reason!=="FAILED")throw new BadRequestException("Notion authorization cancellation reason is invalid");return{state,reason:body.reason}}
+function routingOAuthAbort(value:unknown):{state:string;reason:"DENIED"|"FAILED"}{const body=object(value,"Notion authorization cancellation");const state=boundedText(body.state,"OAuth state",128);if(!/^[A-Za-z0-9_-]{43}$/u.test(state))throw new BadRequestException("Notion authorization state is invalid");if(body.reason!=="DENIED"&&body.reason!=="FAILED")throw new BadRequestException("Notion authorization cancellation reason is invalid");return{state,reason:body.reason}}
 
 function routingCredential(value:unknown){
   const body=object(value,"Routing credential");
