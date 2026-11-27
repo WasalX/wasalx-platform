@@ -9,7 +9,8 @@ criteria below.
    Cosign, and records their digests.
    [`release.yml`](../.github/workflows/release.yml) calls
    [`promote-tag.sh`](../scripts/release/promote-tag.sh) to verify and retag
-   those digests without rebuilding them.
+   those digests without rebuilding them. Promotion hashes each alias's raw
+   registry manifest and checks it against the verified digest before publishing.
 2. **Fully tested.** The merge queue passes `ci-gate` for the exact commit
    admitted to `main`, and `ci.yml` succeeds on that main push. The CI checks
    include unit tests, type checking, lint, PostgreSQL and browser integration,

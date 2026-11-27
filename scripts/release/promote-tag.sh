@@ -22,8 +22,13 @@ jq -er '.images[].pullReference' "$manifest" | while IFS= read -r ref; do
   alias="${ref%@*}:$GITHUB_REF_NAME"
   # Wrapping a single manifest in an index changes the digest.
   docker buildx imagetools create --prefer-index=false --tag "$alias" "$ref"
-  actual=$(docker buildx imagetools inspect --format '{{.Manifest.Digest}}' "$alias")
-  [[ "$actual" == "${ref#*@}" ]] || { echo "::error::Digest mismatch for $alias"; exit 1; }
+  # Buildx can print a summary for .Manifest templates. Hash the original bytes.
+  actual=$(docker buildx imagetools inspect --raw "$alias" | sha256sum)
+  actual="sha256:${actual%% *}"
+  [[ "$actual" == "${ref#*@}" ]] || {
+    printf '::error::Digest mismatch for %s (expected %s, got %s)\n' "$alias" "${ref#*@}" "$actual"
+    exit 1
+  }
 done
 
 if release=$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json tagName 2>&1); then
