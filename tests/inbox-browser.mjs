@@ -342,7 +342,8 @@ try {
     await expect(attachFiles(page)).toBeVisible();
     await expect(attachFiles(page)).toHaveAccessibleDescription(noAttachments);
     await expect(page.getByRole("button", { name: locale === "ar" ? "إزالة outgoing.txt" : "Remove outgoing.txt" })).toHaveCount(0);
-    const longBody = "أ😀".repeat(25001);
+    // Keep the surrogate pair at the preview boundary without shaping one enormous bidi word.
+    const longBody = `${"Synthetic article body. ".repeat(2_174).slice(0, 49_997)} أ😀أ😀`;
     const longArticle = { ...history.get("42")[0], id: "99", body: longBody, attachments: [] };
     const trailingBody = "Synthetic article after the long message";
     history.get("42").push(longArticle, { ...longArticle, id: "100", body: trailingBody });
