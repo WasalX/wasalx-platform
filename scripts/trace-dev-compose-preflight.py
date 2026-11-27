@@ -32,11 +32,12 @@ def main(command):
     except OSError:
         observer = None
 
-    ready = False
+    first_line = b""
     try:
         if observer:
             readable, _, _ = select.select([observer.stdout], [], [], 2)
-            ready = bool(readable) and observer.stdout.readline() == b"ready\n"
+            if readable:
+                first_line = observer.stdout.readline()
         status = subprocess.call(command)
     finally:
         if observer:
@@ -48,7 +49,7 @@ def main(command):
             ["git", "show", "--no-patch", "--format=Checkout %H, tree %T", "HEAD"]
         )
         if (
-            ready
+            first_line == b"ready\n"
             and observer.returncode != 124
             and events.endswith(b"finished\n")
             and not warnings
