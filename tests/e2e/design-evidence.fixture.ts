@@ -64,6 +64,10 @@ export async function captureTenantDesign(
         expect(
           Math.abs(card.x + card.width - profile.x - profile.width),
         ).toBeLessThanOrEqual(1);
+        // The profile panel and the mailbox card sit one --wx-space-4 apart.
+        expect(
+          Math.abs(card.y - profile.y - profile.height - 16),
+        ).toBeLessThanOrEqual(1);
         expect(note.x - card.x).toBeGreaterThanOrEqual(12);
         expect(
           card.x + card.width - note.x - note.width,
@@ -84,6 +88,46 @@ export async function captureTenantDesign(
         ),
         animations: "disabled",
       });
+      if (view === "settings") {
+        const tab = (name: keyof typeof messages) =>
+          page.getByRole("tab", { name: messages[name], exact: true });
+        await tab("tenant.settings.sections.privacy").click();
+        const privacy = page.getByRole("tabpanel", {
+          name: messages["tenant.settings.sections.privacy"],
+          exact: true,
+        });
+        await expect(
+          privacy.getByRole("heading", {
+            name: messages["tenant.privacy.requests.title"],
+            exact: true,
+          }),
+        ).toBeVisible();
+        const [panel, card] = await Promise.all(
+          [
+            privacy,
+            page.locator('section[aria-labelledby="mailboxes-heading"]'),
+          ].map(async (target) => (await target.boundingBox())!),
+        );
+        expect(Math.abs(card.x - panel.x)).toBeLessThanOrEqual(1);
+        expect(
+          Math.abs(card.x + card.width - panel.x - panel.width),
+        ).toBeLessThanOrEqual(1);
+        expect(
+          Math.abs(card.y - panel.y - panel.height - 16),
+        ).toBeLessThanOrEqual(1);
+        await page.screenshot({
+          path: journeyCapturePath(
+            "tenant-settings-privacy",
+            testInfo.project.name,
+            theme,
+            locale,
+          ),
+          animations: "disabled",
+        });
+        // The selected tab persists in session storage; the next theme starts on General.
+        await tab("tenant.settings.sections.general").click();
+        await expect(ready.settings).toBeVisible();
+      }
     }
   }
 }
