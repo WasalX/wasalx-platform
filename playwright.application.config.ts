@@ -1,5 +1,5 @@
 import { delimiter, dirname, resolve } from "node:path";
-import { defineConfig, devices } from "@playwright/test";
+import { defineConfig, devices, type Project } from "@playwright/test";
 
 const tenantRoles = [
   "tenant_owner",
@@ -38,6 +38,12 @@ const artifactSuite = process.env.WASALX_E2E_LOCALES === "en" ? "application-en"
 const artifactRoot = resolve("output", "playwright", artifactSuite, language);
 
 const tabletOnly = /(?:^|\s)@tablet-only(?:\s|$)/u;
+const ownerPart = process.env.WASALX_E2E_OWNER_PART;
+if (ownerPart && (role !== "tenant_owner" || platformUrl || !["desktop", "mobile-tablet"].includes(ownerPart))) {
+  throw new Error("WASALX_E2E_OWNER_PART must select desktop or mobile-tablet for the tenant_owner fixtures.");
+}
+// The timed split puts this desktop spec with mobile and tablet to balance the English halves.
+const desktopTransitionSpec = "meta-account-transition-execution.spec.ts";
 
 export default defineConfig({
   testDir: "./tests/e2e",
@@ -79,9 +85,11 @@ export default defineConfig({
     timezoneId: "Asia/Riyadh",
     trace: "retain-on-failure",
   },
-  projects: [
+  projects: ([
     {
       name: "desktop",
+      testIgnore: ownerPart === "desktop" ? desktopTransitionSpec : undefined,
+      testMatch: ownerPart === "mobile-tablet" ? desktopTransitionSpec : undefined,
       grepInvert: tabletOnly,
       use: {
         ...devices["Desktop Chrome"],
@@ -111,7 +119,7 @@ export default defineConfig({
         viewport: { width: 820, height: 1_180 },
       },
     },
-  ],
+  ] satisfies Project[]).filter(project => ownerPart !== "desktop" || project.name === "desktop"),
   webServer: platformUrl ? undefined : {
     command: `"${process.execPath}" node_modules/vinext/dist/cli.js start -p ${port} -H localhost`,
     stdout: "pipe",

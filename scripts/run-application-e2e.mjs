@@ -48,6 +48,10 @@ if (!locales.length || new Set(locales).size !== locales.length || locales.some(
 const explicitPath = process.env.WASALX_E2E_BROWSER_PATH;
 const basePort = Number(process.env.WASALX_E2E_PORT ?? 3191);
 const isolatedFixtures = !process.env.WASALX_E2E_PLATFORM_URL;
+const ownerPart = process.env.WASALX_E2E_OWNER_PART;
+if (ownerPart && (!isolatedFixtures || roles.join(",") !== "tenant_owner" || process.env.WASALX_E2E_SHARD)) {
+  throw new Error("WASALX_E2E_OWNER_PART requires an isolated tenant_owner suite without release sharding.");
+}
 validateRoleSuites(locales, roles, basePort, isolatedFixtures);
 const candidates = [
   explicitPath,

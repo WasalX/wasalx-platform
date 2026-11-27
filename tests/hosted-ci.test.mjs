@@ -173,10 +173,18 @@ test("tracked tests belong to a named CI runner or the test allowlist", async ()
       "tests/visual/inbox-synthetic.spec.ts", "scripts/storybook-visual-regression.mjs", "scripts/run-application-e2e.mjs"].map(read));
   const operatorRunner = await read("tests/hosted-platform-operator.mjs");
   const identityRunner = await read("tests/hosted-keycloak-identity.mjs");
-  const fixtureSpecs = new Map(jobs["application-e2e"].strategy.matrix.locale.map(locale => {
-    const cases = discoverBrowserCases({ argv: ["pnpm", "test:e2e"], env: {
-      WASALX_E2E_LOCALES: locale, WASALX_E2E_ROLES: "tenant_owner", WASALX_E2E_PLATFORM_URL: "",
-    } });
+  const applicationMatrix = jobs["application-e2e"].strategy.matrix;
+  const ownerSuites = applicationMatrix.suite.filter(suite => suite.roles === "tenant_owner");
+  const fixtureSpecs = new Map(applicationMatrix.locale.map(locale => {
+    const argv = ["pnpm", "test:e2e"];
+    const env = { WASALX_E2E_LOCALES: locale, WASALX_E2E_ROLES: "tenant_owner",
+      WASALX_E2E_PLATFORM_URL: "", WASALX_E2E_OWNER_PART: "" };
+    const cases = discoverBrowserCases({ argv, env });
+    const splitCases = ownerSuites.flatMap(suite => discoverBrowserCases({
+      argv, env: { ...env, WASALX_E2E_OWNER_PART: suite.owner_part },
+    }));
+    assert.deepEqual(splitCases.sort((a, b) => a.id.localeCompare(b.id, "en")), cases,
+      `Owner shards must run every ${locale} case exactly once`);
     return [locale, new Set(cases.filter(row => row.expectedStatus !== "skipped").map(row => posix.join("tests/e2e", row.file)))];
   }));
   const runsTofu = /^\s+"\$\{TOFU\[@\]\}" -chdir=infra\/terraform test -no-color$/mu.test(validation)
@@ -892,14 +900,18 @@ test("Application browser CI shards roles and locales and reuses the portal buil
   assert.match(application.if, /needs\.changes\.outputs\.application-e2e != 'false'/u);
   assert.deepEqual(application.needs, ["changes", "portal-browser-build"]);
   assert.deepEqual(application.strategy.matrix.locale, ["en", "ar"]);
-  assert.deepEqual(application.strategy.matrix.roles.flatMap(roles => roles.split(",")),
-    ["tenant_owner", "tenant_admin", "supervisor", "agent", "auditor"]);
+  assert.equal(application["timeout-minutes"], "${{ matrix.suite.timeout }}");
+  assert.deepEqual(application.strategy.matrix.suite.map(({ roles, owner_part }) => [roles, owner_part]), [
+    ["tenant_owner", "desktop"], ["tenant_owner", "mobile-tablet"],
+    ["tenant_admin,supervisor", undefined], ["agent,auditor", undefined],
+  ]);
   assert(build.steps.some(step => step.run === "pnpm run build"));
   const run = application.steps.find(step => runsFile(step.run ?? "", "scripts/run-application-e2e.mjs"));
   assert.deepEqual(run.env, {
     WASALX_E2E_SKIP_BUILD: "1",
     WASALX_E2E_LOCALES: "${{ matrix.locale }}",
-    WASALX_E2E_ROLES: "${{ matrix.roles }}",
+    WASALX_E2E_ROLES: "${{ matrix.suite.roles }}",
+    WASALX_E2E_OWNER_PART: "${{ matrix.suite.owner_part }}",
   });
   const artifact = build.steps.find(step => step.uses?.startsWith("actions/upload-artifact@")).with.name;
   for (const job of [portal, application]) {
@@ -1006,7 +1018,7 @@ test("Hosted browser jobs retain Playwright diagnostics on failure or cancellati
   const { jobs } = parse(await read(".github/workflows/ci.yml"));
   const diagnostics = {
     "application-e2e": {
-      name: "application-e2e-${{ matrix.locale }}-${{ matrix.roles }}",
+      name: "application-e2e-${{ matrix.locale }}-${{ matrix.suite.roles }}${{ matrix.suite.owner_part && format('-{0}', matrix.suite.owner_part) || '' }}",
       paths: ["output/playwright/application*/*/report/**", "output/playwright/application*/*/results/**"],
     },
     storybook: {
@@ -1033,18 +1045,21 @@ test("Successful owner fixture shards retain every named journey PNG", async t =
     step.uses?.startsWith("actions/upload-artifact@") && step.if !== "failure() || cancelled()");
   assert.equal(uploads.length, 1);
   const [upload] = uploads;
-  const ownerSuccess = "success() && matrix.roles == 'tenant_owner'";
+  const ownerSuccess = "success() && matrix.suite.roles == 'tenant_owner'";
   assert(journeys);
   assert(verify);
   assert.equal(verify.if, ownerSuccess);
   assert.equal(upload.if, ownerSuccess);
   assert(steps.indexOf(verify) > steps.indexOf(journeys));
   assert(steps.indexOf(upload) > steps.indexOf(verify));
-  assert.equal(upload.with.name, "application-journey-captures-${{ matrix.locale }}");
+  assert.equal(upload.with.name, "application-journey-captures-${{ matrix.locale }}-${{ matrix.suite.owner_part }}");
   assert.equal(upload.with.path, "${{ steps.journey-captures.outputs.paths }}");
   assert.equal(upload.with["if-no-files-found"], "error");
   assert.equal(upload.with["retention-days"], 7);
-  assert.equal(verify.env.CAPTURE_LOCALE, "${{ matrix.locale }}");
+  assert.deepEqual(verify.env, {
+    CAPTURE_LOCALE: "${{ matrix.locale }}",
+    CAPTURE_VIEWPORT: "${{ matrix.suite.owner_part == 'desktop' && 'desktop' || 'mobile-390' }}",
+  });
 
   const directory = await mkdtemp(join(tmpdir(), "journey-captures-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
@@ -1053,27 +1068,32 @@ test("Successful owner fixture shards retain every named journey PNG", async t =
   await writeFile(join(directory, script), await read(script));
 
   for (const locale of ["en", "ar"]) {
-    const paths = journeyCapturePaths(locale);
-    assert(paths.length > 1);
-    assert.equal(new Set(paths).size, paths.length);
-    for (const path of paths) {
-      await mkdir(join(directory, posix.dirname(path)), { recursive: true });
-      await writeFile(join(directory, path), "synthetic capture");
+    const viewports = ["desktop", "mobile-390"];
+    const allPaths = journeyCapturePaths(locale);
+    assert.deepEqual(viewports.flatMap(viewport => journeyCapturePaths(locale, viewport)).sort(), allPaths.sort());
+    assert.equal(new Set(allPaths).size, allPaths.length);
+    for (const viewport of viewports) {
+      const paths = journeyCapturePaths(locale, viewport);
+      assert(paths.length > 1);
+      for (const path of paths) {
+        await mkdir(join(directory, posix.dirname(path)), { recursive: true });
+        await writeFile(join(directory, path), "synthetic capture");
+      }
+
+      const output = join(directory, "outputs");
+      const env = { CAPTURE_LOCALE: locale, CAPTURE_VIEWPORT: viewport, GITHUB_OUTPUT: output };
+      const complete = runWorkflowScript(verify.run, env, directory);
+      assert.equal(complete.status, 0, complete.stderr);
+      assert.equal(await readFile(output, "utf8"), `paths<<CAPTURES\n${paths.join("\n")}\nCAPTURES\n`);
+
+      const [first] = paths;
+      await rename(join(directory, first), join(directory, first.replace(/\.png$/u, "-renamed.png")));
+      await rm(output);
+      const partial = runWorkflowScript(verify.run, env, directory);
+      assert.equal(partial.status, 1, partial.stderr);
+      assert(partial.stderr.includes(first), partial.stderr);
+      await assert.rejects(readFile(output), { code: "ENOENT" });
     }
-
-    const output = join(directory, "outputs");
-    const env = { CAPTURE_LOCALE: locale, GITHUB_OUTPUT: output };
-    const complete = runWorkflowScript(verify.run, env, directory);
-    assert.equal(complete.status, 0, complete.stderr);
-    assert.equal(await readFile(output, "utf8"), `paths<<CAPTURES\n${paths.join("\n")}\nCAPTURES\n`);
-
-    const [first] = paths;
-    await rename(join(directory, first), join(directory, first.replace(/\.png$/u, "-renamed.png")));
-    await rm(output);
-    const partial = runWorkflowScript(verify.run, env, directory);
-    assert.equal(partial.status, 1, partial.stderr);
-    assert(partial.stderr.includes(first), partial.stderr);
-    await assert.rejects(readFile(output), { code: "ENOENT" });
   }
 });
 

@@ -636,15 +636,25 @@ jobs:
       ${{ !cancelled() && needs.portal-browser-build.result == 'success' &&
       (github.event_name != 'pull_request' || needs.changes.result != 'success' ||
       needs.changes.outputs.application-e2e != 'false') }}
-    name: Application E2E (${{ matrix.locale }}, ${{ matrix.roles }})
+    name: Application E2E (${{ matrix.locale }}, ${{ matrix.suite.roles }}${{ matrix.suite.owner_part && format(', {0}', matrix.suite.owner_part) || '' }})
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: ${{ matrix.suite.timeout }}
     env: *portal-browser-env
     strategy:
       fail-fast: false
       matrix:
         locale: [en, ar]
-        roles: [tenant_owner, 'tenant_admin,supervisor', 'agent,auditor']
+        suite:
+          - roles: tenant_owner
+            owner_part: desktop
+            timeout: 10
+          - roles: tenant_owner
+            owner_part: mobile-tablet
+            timeout: 9
+          - roles: 'tenant_admin,supervisor'
+            timeout: 15
+          - roles: 'agent,auditor'
+            timeout: 15
     steps:
       - *integration-checkout
       - *integration-node
@@ -655,26 +665,28 @@ jobs:
         env:
           WASALX_E2E_SKIP_BUILD: '1'
           WASALX_E2E_LOCALES: ${{ matrix.locale }}
-          WASALX_E2E_ROLES: ${{ matrix.roles }}
+          WASALX_E2E_ROLES: ${{ matrix.suite.roles }}
+          WASALX_E2E_OWNER_PART: ${{ matrix.suite.owner_part }}
         run: node scripts/run-application-e2e.mjs
       - name: Verify every synthetic journey screenshot
         id: journey-captures
-        if: success() && matrix.roles == 'tenant_owner'
+        if: success() && matrix.suite.roles == 'tenant_owner'
         env:
           CAPTURE_LOCALE: ${{ matrix.locale }}
-        run: node tests/e2e/journey-captures.mjs "$CAPTURE_LOCALE"
+          CAPTURE_VIEWPORT: ${{ matrix.suite.owner_part == 'desktop' && 'desktop' || 'mobile-390' }}
+        run: node tests/e2e/journey-captures.mjs "$CAPTURE_LOCALE" "$CAPTURE_VIEWPORT"
       - name: Upload synthetic journey screenshots
-        if: success() && matrix.roles == 'tenant_owner'
+        if: success() && matrix.suite.roles == 'tenant_owner'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: application-journey-captures-${{ matrix.locale }}
+          name: application-journey-captures-${{ matrix.locale }}-${{ matrix.suite.owner_part }}
           path: ${{ steps.journey-captures.outputs.paths }}
           if-no-files-found: error
           retention-days: 7
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure() || cancelled()
         with:
-          name: application-e2e-${{ matrix.locale }}-${{ matrix.roles }}
+          name: application-e2e-${{ matrix.locale }}-${{ matrix.suite.roles }}${{ matrix.suite.owner_part && format('-{0}', matrix.suite.owner_part) || '' }}
           path: |
             output/playwright/application*/*/report/**
             output/playwright/application*/*/results/**
