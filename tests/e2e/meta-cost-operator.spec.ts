@@ -197,7 +197,7 @@ test('operator cost drafts, accepted activation and every bounded reassessment p
 });
 
 test('statement file replacements invalidate all four imported actions and stale read completions',async({page},info)=>{
- test.skip(!ready,'Requires root-supplied authenticated platform session and reused control-plane server');test.setTimeout(90_000);
+ test.skip(!ready,'Requires root-supplied authenticated platform session and reused control-plane server');
  await page.addInitScript(()=>{const original=File.prototype.text;const controls={release:undefined as undefined|(()=>void),finished:false};Object.assign(window,{costFileRead:controls});File.prototype.text=function(){if(this.name!=='delayed.json')return original.call(this);return new Promise(resolve=>{controls.finished=false;controls.release=()=>{void original.call(this).then(value=>{resolve(value);controls.finished=true;});};});};});
  const h=await setup(page);
  await test.step('Select statement version',()=>h.statement.getByRole('combobox',{name:t('cost.statement.version'),exact:true}).selectOption(statementId));
@@ -245,7 +245,7 @@ for(const kind of ['tariff','statement'] as const)test(`operator ${kind} uncerta
 });
 
 test('operator tariff and selector replacement reads never submit stale imported input',async({page})=>{
- test.skip(!ready,'Requires root-supplied authenticated platform session and reused control-plane server');test.setTimeout(90_000);
+ test.skip(!ready,'Requires root-supplied authenticated platform session and reused control-plane server');
  await page.addInitScript(()=>{const original=File.prototype.text;const controls={release:undefined as undefined|(()=>void),finished:false};Object.assign(window,{costImportRead:controls});
   File.prototype.text=function(){if(this.name!=='delayed.json')return original.call(this);return new Promise(resolve=>{controls.finished=false;controls.release=()=>{void original.call(this).then(value=>{resolve(value);controls.finished=true;});};});};});
  const h=await setup(page),reassess=h.management.getByRole('group',{name:t('cost.manage.reassess'),exact:true});
