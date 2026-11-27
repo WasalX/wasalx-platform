@@ -62,7 +62,7 @@ main { grid-column:2; min-width:0; }
 .page-heading { display:flex; align-items:flex-start; justify-content:space-between; margin-bottom:var(--wx-space-6); }
 .page-heading h1 { margin:0 0 var(--wx-space-2); font-size:var(--wx-font-size-6); line-height:1.15; letter-spacing:-.04em; font-weight:650; }
 .page-heading p,.panel-heading p { margin:0; color:var(--muted); font-size:var(--wx-font-size-2); }
-.environment { display:flex; align-items:center; gap:var(--wx-space-2); color:var(--muted); font:500 var(--wx-font-size-1) var(--font-mono); border:1px solid var(--border); border-radius:var(--wx-radius-control); padding:var(--wx-space-1) var(--wx-space-2); }
+.environment { display:flex; align-items:center; gap:var(--wx-space-2); color:var(--muted); font:500 var(--wx-font-size-1) var(--font-sans); border:1px solid var(--border); border-radius:var(--wx-radius-control); padding:var(--wx-space-1) var(--wx-space-2); }
 .environment i { width:6px; height:6px; border-radius:50%; background:var(--success); }
 .metrics { display:grid; grid-template-columns:repeat(4,1fr); border:1px solid var(--border); border-radius:var(--wx-radius-panel); background:var(--surface); overflow:hidden; margin-bottom:var(--wx-space-4); }
 .metric { border:0; border-inline-end:1px solid var(--border); background:transparent; color:var(--text); padding:var(--wx-space-4); text-align:start; min-width:0; }

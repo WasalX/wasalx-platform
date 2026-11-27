@@ -11,7 +11,7 @@ const read = (path) => readFile(new URL(`../${path}`, import.meta.url), "utf8");
 test("workflow schema inspection is read-only and restricted to flow administrators", async () => {
   const source = await read("app/BotAutomation.tsx");
   assert.match(source, /\{canWrite \? \(\s*<details className="routing-raw">/u);
-  assert.match(source, /<pre aria-label=\{t\("bot\.flow\.schema\.label"\)\}><code>\{JSON\.stringify\(definition, null, 2\)\}<\/code><\/pre>/u);
+  assert.match(source, /<pre dir="ltr" aria-label=\{t\("bot\.flow\.schema\.label"\)\}><code>\{JSON\.stringify\(definition, null, 2\)\}<\/code><\/pre>/u);
   assert.doesNotMatch(source, /bot\.flow\.schema\.[^\n]+<textarea/u);
 });
 
@@ -26,7 +26,7 @@ test("automation and tenant screens show no raw flow definition or developer ter
   const source = await read("app/BotAutomation.tsx");
   // The only raw definition sits in a disclosure that starts closed.
   assert.equal(source.match(/JSON\.stringify\(definition/gu)?.length, 1);
-  assert.match(source, /<details className="routing-raw">\s*<summary>\{t\("bot\.flow\.schema\.title"\)\}<\/summary>\s*<p>\{t\("bot\.flow\.schema\.help"\)\}<\/p>\s*<pre aria-label=\{t\("bot\.flow\.schema\.label"\)\}><code>\{JSON\.stringify\(definition/u);
+  assert.match(source, /<details className="routing-raw">\s*<summary>\{t\("bot\.flow\.schema\.title"\)\}<\/summary>\s*<p>\{t\("bot\.flow\.schema\.help"\)\}<\/p>\s*<pre dir="ltr" aria-label=\{t\("bot\.flow\.schema\.label"\)\}><code>\{JSON\.stringify\(definition/u);
   assert.doesNotMatch(source, /<details className="routing-raw"[^>]*\sopen/u);
   // Example input values come from the catalogues, never a literal in code.
   for (const file of [...tenantPortalFiles, "app/ClientRouting.tsx", "app/BotAutomation.tsx", "app/CaseLifecycle.tsx", "app/platform/PlatformConsole.tsx"]) {
