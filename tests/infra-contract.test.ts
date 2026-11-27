@@ -422,6 +422,7 @@ test("Compose connection hosts resolve in the base file, full override and merge
 
 test("full Compose exposes bootstrap identity overrides with the public fixture defaults", async () => {
   const [full, example] = await Promise.all([readComposeEnvironments("compose.full.yaml"), read(".env.example")]);
+  assert.equal(full["keycloak-bootstrap"].WASALX_KEYCLOAK_BOOTSTRAP_MODE, "${WASALX_KEYCLOAK_BOOTSTRAP_MODE-reconcile}");
   const defaults = {
     "keycloak-bootstrap": {
       QUALIFICATION_OWNER_USERNAME: "example.owner",
@@ -453,20 +454,39 @@ test("Keycloak bootstrap preserves existing state in read-only mode and reconcil
   const isolationPath = `${tenantUsers}/${isolationId}`;
   const operatorPath = `${platformUsers}/${operatorId}`;
   const preserve = "preserve-existing";
+  const invalidMode = /WASALX_KEYCLOAK_BOOTSTRAP_MODE must be reconcile or preserve-existing/u;
   const scenarios = [
     { name: "the default owner matches and the missing isolation user is created" },
     { name: "all three overrides are trimmed, lowercased, and used", overrides: true, existingIsolation: "custom.isolation" },
     { name: "a seeded owner mismatch prevents every write", existingOwner: "custom.owner", error: "QUALIFICATION_OWNER" },
     { name: "an isolation email match with a different username prevents every write", existingIsolation: "custom.isolation", error: "ISOLATION_OWNER" },
     { name: "platform mismatch prevents every write", existingOperator: "custom.platform", error: "PLATFORM_OPERATOR" },
+    { name: "invalid reconcile configuration fails before login", smtpHost: "example.test",
+      configError: /Keycloak SMTP configuration must be complete/u },
+    { name: "invalid reconcile origin fails before login", portalOrigin: "malformed-origin",
+      configError: /^Error: WASALX_PORTAL_PUBLIC_ORIGIN is invalid$/u },
+    { name: "unsupported bootstrap mode fails before login", mode: "unknown", configError: invalidMode },
+    { name: "empty bootstrap mode fails before login", mode: "", configError: invalidMode },
+    { name: "preserve requires the administrator username", mode: preserve, missingAdmin: "KEYCLOAK_ADMIN",
+      configError: /KEYCLOAK_ADMIN is required/u },
+    { name: "preserve requires the administrator password", mode: preserve, missingAdmin: "KEYCLOAK_ADMIN_PASSWORD",
+      configError: /KEYCLOAK_ADMIN_PASSWORD is required/u },
     { name: "preserve verifies both realms, configured users and all clients", mode: preserve, existingIsolation: "example.isolation" },
     { name: "preserve fails closed on a lookup error", mode: preserve, realmStatus: 503, preserveError: /wasalx realm lookup/u },
     { name: "preserve refuses a missing required isolation owner", mode: preserve, preserveError: /seeded isolation user is missing/u },
     { name: "preserve refuses an ambiguous user lookup", mode: preserve, ambiguousUser: true, preserveError: /user lookup was ambiguous/u },
+    { name: "preserve refuses a missing seeded owner", mode: preserve, missingSeed: ownerPath,
+      preserveError: /seeded user is missing for wasalx(?:\n|$)/u },
+    { name: "preserve refuses a missing seeded operator", mode: preserve, missingSeed: operatorPath,
+      existingIsolation: "example.isolation", preserveError: /seeded user is missing for wasalx-platform/u },
+    { name: "preserve refuses a mismatched seeded username", mode: preserve, existingOwner: "custom.owner",
+      preserveError: /existing user has a different username.*WASALX_QUALIFICATION_OWNER_USERNAME/u },
     { name: "preserve refuses an ambiguous client lookup", mode: preserve, existingIsolation: "example.isolation",
       clientCount: 2, preserveError: /client lookup was ambiguous/u },
     { name: "preserve refuses a missing client", mode: preserve, existingIsolation: "example.isolation",
       clientCount: 0, preserveError: /seeded client is missing/u },
+    { name: "preserve refuses an unexpected client ID", mode: preserve, existingIsolation: "example.isolation",
+      wrongClient: true, preserveError: /client lookup returned an unexpected client/u },
   ];
   for (const scenario of scenarios) {
     await t.test(scenario.name, async (subtest) => {
@@ -474,8 +494,8 @@ test("Keycloak bootstrap preserves existing state in read-only mode and reconcil
       const isolation = scenario.overrides ? "custom.isolation" : "example.isolation";
       const operator = scenario.overrides ? "custom.platform" : "example.platform";
       const env = {
-        KEYCLOAK_ADMIN: "synthetic-admin",
-        KEYCLOAK_ADMIN_PASSWORD: "synthetic-admin-password",
+        KEYCLOAK_ADMIN: scenario.missingAdmin === "KEYCLOAK_ADMIN" ? undefined : "synthetic-admin",
+        KEYCLOAK_ADMIN_PASSWORD: scenario.missingAdmin === "KEYCLOAK_ADMIN_PASSWORD" ? undefined : "synthetic-admin-password",
         KEYCLOAK_BASE_URL: "http://127.0.0.1:8080",
         WASALX_KEYCLOAK_BOOTSTRAP_MODE: scenario.mode,
         WASALX_QUALIFICATION_OWNER_PASSWORD: scenario.mode ? undefined : "synthetic-owner-password",
@@ -483,12 +503,12 @@ test("Keycloak bootstrap preserves existing state in read-only mode and reconcil
         WASALX_PLATFORM_OPERATOR_PASSWORD: scenario.mode ? undefined : "synthetic-operator-password",
         WASALX_QUALIFICATION_OWNER_EMAIL: "",
         WASALX_ISOLATION_OWNER_EMAIL: isolationEmail,
-        WASALX_KEYCLOAK_SMTP_HOST: "",
+        WASALX_KEYCLOAK_SMTP_HOST: scenario.smtpHost ?? "",
         WASALX_KEYCLOAK_SMTP_PORT: "",
         WASALX_KEYCLOAK_SMTP_FROM: "",
         WASALX_KEYCLOAK_SMTP_USER: "",
         WASALX_KEYCLOAK_SMTP_PASSWORD: "",
-        WASALX_PORTAL_PUBLIC_ORIGIN: undefined,
+        WASALX_PORTAL_PUBLIC_ORIGIN: scenario.portalOrigin,
         WASALX_ZAMMAD_PUBLIC_ORIGIN: undefined,
         WASALX_QUALIFICATION_OWNER_USERNAME: scenario.overrides ? ` ${owner.toUpperCase()} ` : undefined,
         WASALX_ISOLATION_OWNER_USERNAME: scenario.overrides ? ` ${isolation.toUpperCase()} ` : undefined,
@@ -510,10 +530,11 @@ test("Keycloak bootstrap preserves existing state in read-only mode and reconcil
       if (scenario.existingIsolation) {
         users.set(isolationPath, { id: isolationId, username: scenario.existingIsolation, email: isolationEmail });
       }
+      if (scenario.missingSeed) users.delete(scenario.missingSeed);
       const writes: { method: string; path: string; body: Record<string, unknown> }[] = [];
       const adminRequests: { method: string; path: string; clientId: string | null }[] = [];
       const lookedUpUsernames = new Set<string>();
-      subtest.mock.method(globalThis, "fetch", (input: string, init?: RequestInit) => {
+      const mockFetch = subtest.mock.method(globalThis, "fetch", (input: string, init?: RequestInit) => {
         const { pathname: path, searchParams } = new URL(input);
         const method = init?.method ?? "GET";
         if (path === "/realms/master/protocol/openid-connect/token") {
@@ -534,7 +555,7 @@ test("Keycloak bootstrap preserves existing state in read-only mode and reconcil
             : Response.json({ realm: path.split("/").at(-1) });
         }
         if (path.endsWith("/clients")) {
-          const clientId = searchParams.get("clientId");
+          const clientId = scenario.wrongClient ? "unrelated-client" : searchParams.get("clientId");
           return Response.json(Array.from({ length: scenario.clientCount ?? (scenario.mode ? 1 : 0) },
             (_, index) => ({ id: `client-${index}`, clientId })));
         }
@@ -560,6 +581,11 @@ test("Keycloak bootstrap preserves existing state in read-only mode and reconcil
       const previousExitCode = process.exitCode;
       let exitCode;
       try {
+        if (scenario.configError) {
+          await assert.rejects(import(script.href), scenario.configError);
+          assert.equal(mockFetch.mock.callCount(), 0);
+          return;
+        }
         await import(script.href);
         exitCode = process.exitCode;
       } finally {

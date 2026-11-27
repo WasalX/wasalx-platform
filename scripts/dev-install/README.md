@@ -177,13 +177,21 @@ registering the authorized rollback with `register.sh rollback "$STATE"`.
 
 ### Existing DEV Keycloak
 
-The existing-DEV wrapper passes `WASALX_KEYCLOAK_BOOTSTRAP_MODE=preserve-existing`
-to the signed guest runner. The runner must forward it to Compose and use the
-project's running Keycloak container as the network target. In the install phase
-it must also match `WASALX_KEYCLOAK_EXPECTED_CONTAINER_ID`, carried from the
-pre-arm check. Before starting a recreated one-shot, the runner must inspect its
-network mode and require `container:<current-keycloak-id>`. It must propagate
-the actual one-shot exit status.
+Keep `WASALX_KEYCLOAK_BOOTSTRAP_MODE=preserve-existing` in the existing DEV
+project's private Compose environment for every later Compose run. Portal and
+Zammad can start the bootstrap as a dependency. The wrapper also passes the
+mode to the signed guest runner, which must forward it to Compose.
+
+Use a finite time limit for creation and execution. Create only the replacement
+one-shot with `--no-start --no-deps --no-build --pull never`. Never force-recreate
+Keycloak or its database. Resolve the project's running Keycloak container and
+run [the pre-start guard](keycloak-bootstrap-prestart.sh) with Bash, passing the
+current Keycloak ID and the newly created bootstrap ID. The guard matches the
+Keycloak ID to `WASALX_KEYCLOAK_EXPECTED_CONTAINER_ID` and inspects the exact
+replacement for `container:<current-keycloak-id>` and preserve mode. If the ID,
+network inspection or mode check fails, the runner must exit nonzero before
+starting the one-shot and emit no network PASS line. Start only the checked ID
+and propagate its actual exit status.
 
 Pre-arm and successful install each emit exactly one
 `KEYCLOAK_BOOTSTRAP_NETWORK=PASS keycloak=<id> bootstrap=<id>` line with full
@@ -191,11 +199,11 @@ Docker container IDs. On install that line attests the replacement checked
 before start or the unchanged one-shot when it was reused. Reuse must leave
 the one-shot stopped. The wrapper checks the existing binding before installation
 and reads back the final binding and exit code. It also checks that reuse kept
-the original start time or that recreation used preserve mode. A stale target
-stops the install before cutover.
+the original start time or that recreation used preserve mode.
+`BOOTSTRAP_NON_EFFECTS` also checks Keycloak's start time, so a restart that
+keeps the same container ID fails. A stale target stops the install before cutover.
 
 ## DEV step lock
-
 
 Set `DEV_STEP_LOCK` in the private host identity to the absolute path of the
 host-provided marker. WasalX holds an exclusive, nonblocking `flock` on that

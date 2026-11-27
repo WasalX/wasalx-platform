@@ -214,8 +214,7 @@ async function reconcilePublicClient(token, realm, desired) {
   if (response.status !== (existingId ? 204 : 201)) throw new Error(`Keycloak client reconciliation failed for ${realm}`);
 }
 
-async function reconcile(token, qualificationOwner, qualificationOwnerId, isolationOwner, isolationOwnerId) {
-  stage = "reconciliation configuration";
+function readReconciliationConfig() {
   const qualificationOwnerPassword = required("WASALX_QUALIFICATION_OWNER_PASSWORD");
   const isolationOwnerPassword = required("WASALX_ISOLATION_OWNER_PASSWORD");
   const platformPassword = required("WASALX_PLATFORM_OPERATOR_PASSWORD");
@@ -228,7 +227,12 @@ async function reconcile(token, qualificationOwner, qualificationOwnerId, isolat
   };
   const publicOrigin = (name, fallback) => {
     const value = (process.env[name] ?? fallback).replace(/\/$/u, "");
-    const url = new URL(value);
+    let url;
+    try {
+      url = new URL(value);
+    } catch {
+      throw new Error(`${name} is invalid`);
+    }
     if (url.username || url.password || url.pathname !== "/" || url.search || url.hash ||
         (url.protocol !== "https:" && url.hostname !== "127.0.0.1")) throw new Error(`${name} is invalid`);
     return value;
@@ -271,7 +275,18 @@ async function reconcile(token, qualificationOwner, qualificationOwnerId, isolat
     }
   }
 
-  const presentation = { smtp, smtpConfigured, passwordResetEnabled };
+  return {
+    qualificationOwnerPassword, isolationOwnerPassword, platformPassword,
+    portalOrigin, portalBackchannelOrigin, zammadBackchannelOrigin,
+    presentation: { smtp, smtpConfigured, passwordResetEnabled },
+  };
+}
+
+async function reconcile(token, qualificationOwner, qualificationOwnerId, isolationOwner, isolationOwnerId, config) {
+  const {
+    qualificationOwnerPassword, isolationOwnerPassword, platformPassword,
+    portalOrigin, portalBackchannelOrigin, zammadBackchannelOrigin, presentation,
+  } = config;
   await reconcileRealmPresentation(token, "wasalx", presentation);
   await reconcileRealmPresentation(token, "wasalx-platform", presentation);
   await reconcileUser(token, "wasalx", qualificationOwner, qualificationOwnerId);
@@ -407,6 +422,7 @@ async function reconcile(token, qualificationOwner, qualificationOwnerId, isolat
   process.stdout.write("Keycloak local users initialized.\n");
 }
 
+const reconciliationConfig = mode === "reconcile" ? readReconciliationConfig() : undefined;
 let stage = "administrator authentication";
 try {
   const token = await login(baseUrl, { username: adminUsername, password: adminPassword }, mode === "preserve-existing" ? 1 : 12);
@@ -461,7 +477,7 @@ try {
     }
     process.stdout.write("Keycloak existing realms, users and clients verified.\n");
   } else {
-    await reconcile(token, qualificationOwner, qualificationOwnerId, isolationOwner, isolationOwnerId);
+    await reconcile(token, qualificationOwner, qualificationOwnerId, isolationOwner, isolationOwnerId, reconciliationConfig);
   }
 } catch (error) {
   process.stderr.write(error instanceof UsernameMismatchError || error instanceof BootstrapLookupError
