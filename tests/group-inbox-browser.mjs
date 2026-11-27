@@ -194,6 +194,8 @@ try {
     const context = await browser.newContext({ locale: locale === "ar" ? "en-US" : "ar-SA", viewport: { width: 1440, height: 1000 } });
     await instrumentation(context);
     const page = await context.newPage(), state = await fixture(page), pageErrors = [];
+    // Enable Playwright's asynchronous chooser interception before navigation.
+    page.on("filechooser", () => undefined);
     await page.clock.install();
     page.on("pageerror", error => pageErrors.push(error.message));
     const story = `${base}/iframe.html?id=product-group-inbox--${locale === "ar" ? "arabic" : "english"}`;

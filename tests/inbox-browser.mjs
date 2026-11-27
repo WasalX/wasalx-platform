@@ -34,6 +34,8 @@ try {
     const noAttachments = locale === "ar" ? "لا توجد ملفات مرفقة" : "No files attached";
     const attachFiles = page => page.getByRole("button", { name: attachmentName, exact: true });
     const page = await context.newPage();
+    // Enable Playwright's asynchronous chooser interception before navigation.
+    page.on("filechooser", () => undefined);
     await page.clock.install();
     const tickets = [
       { id: "42", number: "1042", title: "Delivery update", customer: "Ahmed", team: "Customer support",
