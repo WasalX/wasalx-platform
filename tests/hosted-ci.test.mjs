@@ -394,6 +394,47 @@ python3() {
   }
 });
 
+test("TypeScript comparison runs as an advisory job on affected PRs", async t => {
+  const { jobs } = parse(await read(".github/workflows/ci.yml"));
+  const job = jobs["typescript-comparison"];
+  const selection = jobs.changes.steps.find(step => step.id === "typescript-comparison");
+  assert.equal(jobs.changes.outputs["typescript-comparison"], "${{ steps.typescript-comparison.outputs.needed }}");
+  assert.equal(selection.if, "github.event_name == 'pull_request'");
+  assert.equal(selection.env.BASE, "${{ steps.selector-base.outputs.sha }}");
+  assert.equal(job.needs, "changes");
+  assert.equal(job.if, "${{ !cancelled() && github.event_name == 'pull_request' && needs.changes.outputs.typescript-comparison != 'false' }}");
+  assert.equal(job.strategy, undefined);
+  assert(!jobs["ci-gate"].needs.includes("typescript-comparison"));
+  const checkouts = job.steps.filter(step => step.uses?.startsWith("actions/checkout@"));
+  assert.deepEqual(checkouts.map(step => step.with.path), ["candidate", "baseline"]);
+  assert.equal(checkouts[1].with.ref, "${{ github.event.pull_request.base.sha }}");
+  const unit = job.steps.find(step => step.name === "Run the unit suite on TypeScript 7 output");
+  assert.equal(unit.if, "${{ !cancelled() && steps.compare.outputs.emit == 'different' }}");
+  assert.equal(unit["working-directory"], "candidate");
+  assert(unit.run.includes("node scripts/test-unit.mjs"));
+
+  const directory = await mkdtemp(join(tmpdir(), "typescript-selection-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const git = (...args) => execFileSync("git", args, { cwd: directory, windowsHide: true });
+  git("init", "--quiet", "--template=");
+  git("config", "user.name", "Fixture");
+  git("config", "user.email", "fixture@example.invalid");
+  git("commit", "--quiet", "--allow-empty", "-m", "Base");
+  const output = join(directory, "selection").replaceAll("\\", "/");
+  for (const [file, needed] of [[null, true], ["README.md", false], ["compiler.ts", true], ["pnpm-lock.yaml", true]]) {
+    if (file) {
+      await writeFile(join(directory, file), "fixture\n");
+      git("add", "--", file);
+      git("commit", "--quiet", "-m", "Change one input");
+    }
+    await writeFile(output, "");
+    const base = file ? git("rev-parse", "HEAD^1").toString().trim() : "";
+    const result = runWorkflowScript(selection.run, { BASE: base, GITHUB_OUTPUT: output }, directory);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal((await readFile(output, "utf8")).trim(), `needed=${needed}`, file ?? "unavailable base");
+  }
+});
+
 test("nightly install is report-only, read-only and runs on schedule, dispatch and RC tags", async () => {
   const path = ".github/workflows/nightly-install.yml";
   const { on, permissions, jobs } = parse(await read(path));
