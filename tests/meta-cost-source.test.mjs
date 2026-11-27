@@ -35,6 +35,29 @@ test('only a definitive nonretryable storage rejection is NOT_WRITTEN',async()=>
  const f=fixture();f.storage.put=async()=>{throw new MediaRuntimeError('denied','MEDIA_STORAGE_HTTP',false);};
  await assert.rejects(()=>f.service().upload(tenant,id,bytes,'application/json'),e=>e.code==='SOURCE_STORAGE_REJECTED');assert.equal(f.calls.at(-1).outcome,'NOT_WRITTEN');
 });
+test('a rejected settlement keeps the original attempt behind the upload fence', async () => {
+  const f = fixture();
+  f.storage.put = async () => {
+    f.calls.push({ step: 'put' });
+    throw new MediaRuntimeError('Synthetic storage rejection', 'MEDIA_STORAGE_HTTP', false);
+  };
+  f.repository.settle = async (tenantId, sourceId, attempt, outcome, scan) => {
+    assert.equal(tenantId, tenant);
+    assert.equal(sourceId, id);
+    f.calls.push({ step: 'settle', attempt, outcome, scan });
+    throw new Error('Synthetic settlement failure');
+  };
+  const upload = () => f.service().upload(tenant, id, bytes, 'application/json');
+  const unresolved = (error) => error instanceof MetaCostSourceError && error.code === 'SOURCE_WRITE_UNRESOLVED'
+    && error.message === 'Cost source is unavailable' && !error.retryable && error.cause === undefined;
+  await assert.rejects(upload, unresolved);
+  const admitted = f.calls[1];
+  assert.equal(f.reserved.sourceState, 'UPLOADING');
+  assert.equal(f.reserved.writeAttemptId, admitted.attempt);
+  assert.deepEqual(f.calls.at(-1), { ...admitted, step: 'settle', outcome: 'NOT_WRITTEN' });
+  await assert.rejects(upload, unresolved);
+  assert.deepEqual(f.calls.map(({ step }) => step), ['scan', 'admit', 'put', 'settle']);
+});
 test('original retrieval checks full bytes and rechecks the persisted version before returning',async()=>{
  const good=fixture();assert.deepEqual((await good.service().original(tenant,id)).bytes,bytes);
  const wrong=fixture();wrong.storage.get=async()=>new Uint8Array(bytes.length);await assert.rejects(()=>wrong.service().original(tenant,id),e=>e.code==='SOURCE_INTEGRITY_MISMATCH');

@@ -2,6 +2,8 @@ import type { TriggerRule } from "./domain";
 import { BOT_CONVERSATION_PAGE_SIZE, type BotConversationPageQuery } from "./bot-conversations.ts";
 import { portalFixturePersona } from "./fixture-role.ts";
 import { describeRuleChange } from "./rule-version-diff.ts";
+import { getMessages } from "./i18n/messages/index.ts";
+import type { Locale } from "./i18n/locales.ts";
 import { botActionCapabilities } from "../packages/core/src/bot-action-capabilities.ts";
 import { clientRoutingApplies,parseClientRouting,resolveClientRoute } from "../packages/core/src/client-routing.ts";
 import { parseNativeRoutingSyncCommand, type NativeRoutingSyncStatus } from "../packages/core/src/native-routing-contract.ts";
@@ -180,7 +182,20 @@ export async function getBotConversationEvents(conversationId:string,input:BotCo
   const overlayEvents=timeline.filter(row=>["ACTION_SUCCEEDED","ACTION_FAILED","ACTION_OUTCOME_UNKNOWN","ACTION_RETRY_REQUESTED","HANDOFF_REQUESTED","HANDOFF_COMPLETED","HANDOFF_SUCCEEDED"].includes(row.kind)).map(({kind,from,to,at})=>({kind,from,to,at}));
   return{items:structuredClone(items),next_cursor:eligible.length>limit?encodeFixtureConversationEventCursor(conversationId,items.at(-1)!):null,overlay_events:structuredClone(overlayEvents)};
 }
-export async function getClientRouting(){return structuredClone(clientRoutingVersions)}
+// The sample version's names are product copy, so they follow the viewer's language; saved tenant names never do.
+const sampleRoutingId="86000000-0000-4000-8000-000000000001";
+const sampleSourceNameKeys:Record<string,"routing.starter.source"|"routing.sample.notionSource">={manual:"routing.starter.source",notion:"routing.sample.notionSource"};
+async function viewerLocale():Promise<Locale>{try{return await(await import("./i18n/request-locale.ts")).getRequestLocale()}catch{return "en"}}
+export async function getClientRouting(locale?:Locale){
+  const messages=getMessages(locale??await viewerLocale());
+  return structuredClone(clientRoutingVersions).map(row=>{
+    if(row.id!==sampleRoutingId)return row;
+    const definition=row.definition as {name:string;sources:Array<{id:string;name:string}>};
+    definition.name=messages["routing.starter.name"];
+    for(const source of definition.sources){const key=sampleSourceNameKeys[source.id];if(key)source.name=messages[key]}
+    return row;
+  });
+}
 export async function getClientRoutingCapabilities(){return{externalConnectorsEnabled:true,notionOAuthEnabled:true}}
 export async function getClientRoutingSources(){return[{source_id:"notion",kind:"NOTION",sync_mode:"HYBRID",state:"ACTIVE",snapshot_revision:8,snapshot_sha256:"fixture-routing-source",last_success_at:ago(4),next_due_at:ago(-11),safe_error:null,latest_job_state:"SUCCEEDED",latest_trigger_kind:"SCHEDULED",latest_job_attempts:1,latest_job_safe_error:null,latest_job_at:ago(4),webhook_path:`/webhooks/routing/${"r".repeat(43)}`}]}
 export async function getClientRoutingIntegrations(){return structuredClone(clientRoutingIntegrations)}
@@ -377,7 +392,7 @@ export async function createPrivacyRequest(input:Record<string,unknown>,idempote
   fixturePrivacyKey(idempotencyKey);const admissionDigest=JSON.stringify({requestType,intent});const recovered=fixturePrivacyReplay(requestType,idempotencyKey,admissionDigest);if(recovered)return recovered;
   const digest=JSON.stringify({requestType,intent});const prior=privacyRequestKeys.get(idempotencyKey);if(prior){if(prior.digest!==digest)throw Object.assign(new Error("The idempotency key was already used for another privacy request"),{status:409});const existing=privacyRequests.find(item=>item.id===prior.id);return{id:prior.id,state:existing?.state??"QUEUED",duplicate:true}}
   const scope=await fixturePrivacyAdmission(input,false);
-  if(requestType==="DELETE"&&privacyLegalHolds.some(hold=>hold.state==="ACTIVE"&&(scope.type==="TENANT"||(hold.scope_type===scope.type&&hold.scope_value===scope.value))))throw Object.assign(new Error("An active legal hold blocks this deletion scope"),{status:409});
+  if(requestType==="DELETE"&&privacyLegalHolds.some(hold=>hold.state==="ACTIVE"&&(scope.type==="TENANT"||(hold.scope_type===scope.type&&hold.scope_value===scope.value))))throw Object.assign(new Error("An active legal hold blocks this deletion scope"),{status:409,code:"LEGAL_HOLD_ACTIVE"});
   const request={id:crypto.randomUUID(),request_type:requestType,scope_type:scope.type,scope_value:scope.value,scope_display:scope.display,scope_sha256:crypto.randomUUID().replaceAll("-","").slice(0,16),disposition:requestType==="EXPORT"?"EXPORT_ONLY":scope.type==="ZAMMAD_USER"?"ZAMMAD_USER_DATA_PRIVACY":"DELETE_TICKETS",state:"QUEUED",error_code:null,safe_error:null,completed_at:null,created_at:now(),updated_at:now(),stage:"DISCOVERY",attempts:0,max_attempts:8,summary:{targets_discovered:0},artifact_id:null,artifact_byte_size:null,artifact_expires_at:null};
   privacyRequests.unshift(request);fixturePrivacyAdmissions.set(idempotencyKey,{kind:requestType,requestedBy:fixturePrivacyActor(),digest:admissionDigest,result:{id:request.id,state:request.state}});privacyRequestKeys.set(idempotencyKey,{digest,id:request.id});record(actor,requestType==="EXPORT"?"privacy.export_requested":"privacy.deletion_requested",request.id,`Queued ${requestType.toLowerCase()} for ${scope.type.toLowerCase()} scope`);return{id:request.id,state:"QUEUED",duplicate:false};
 }

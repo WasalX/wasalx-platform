@@ -48,6 +48,7 @@ def timing_origin(path):
     machine_id = Path("/etc/machine-id").read_text(encoding="ascii").strip()
     if not re.fullmatch(r"[0-9a-f]{32}", machine_id) or int(machine_id, 16) == 0:
         raise ValueError("invalid machine ID for lease timing")
+    # Receipt v1 uses the WasalX label as the HMAC key and the machine ID as the message.
     host = hmac.digest(b"WasalX DEV timing receipt v1", bytes.fromhex(machine_id), "sha256").hex()
     top = sizing_top(path)
     return (f"LEASE_RECEIPT_ORIGIN host_sha256={host} disk_device={top.st_dev}"
@@ -70,6 +71,7 @@ def lease_receipts_match(receipts, policy):
     max_age = policy["max_age_seconds"] * 10**9
     for receipt in receipts:
         captured_ns = None
+        previous_was_origin = False
         for line in receipt.splitlines():
             if line.startswith("LEASE_RECEIPT_ORIGIN"):
                 origin = ORIGIN.fullmatch(line)
@@ -80,12 +82,18 @@ def lease_receipts_match(receipts, policy):
                 if (host != policy["host_sha256"] or int(device) != policy["disk_device"]
                         or int(inode) != policy["disk_inode"] or not 0 <= now - captured_ns <= max_age):
                     return False
-            elif timing := TIMING.fullmatch(line):
+                previous_was_origin = True
+                continue
+            if timing := TIMING.fullmatch(line):
                 tick = int(timing[4])
+                lease_start = (timing[2], timing[3]) == ("lease", "start")
+                if lease_start and not previous_was_origin:
+                    return False
                 # The lease clock includes the preflight that verifies the packet before origin capture.
-                earliest = now - max_age if (timing[2], timing[3]) == ("lease", "start") else captured_ns
+                earliest = now - max_age if lease_start else captured_ns
                 if captured_ns is None or not earliest <= tick <= now:
                     return False
+            previous_was_origin = False
         if captured_ns is None:
             return False
     return True

@@ -8,8 +8,6 @@
 }
 .marketing-shell:lang(ar) { --wx-font-sans: "Noto Sans Arabic", sans-serif; --font-sans: var(--wx-font-sans); font-family: var(--wx-font-sans); }
 .marketing-brand, .inbox-wordmark { font-family: var(--font-geist-sans), sans-serif; }
-html:has(.marketing-shell.theme-light) { color-scheme: light; }
-html:has(.marketing-shell.theme-dark) { color-scheme: dark; }
 html:has(.marketing-shell) { scroll-padding-block-start: 5.5rem; }
 .marketing-shell.theme-dark { background: var(--bg); }
 .marketing-shell a { color: inherit; text-decoration: none; }

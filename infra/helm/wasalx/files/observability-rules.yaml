@@ -133,6 +133,13 @@
           annotations:
             summary: A privacy or retention job failed terminally.
             runbook_url: "__RUNBOOK_BASE_URL__#privacy-failure"
+        - alert: WasalXPrivacyFailurePersistenceFailed
+          expr: sum(increase(wasalx_privacy_job_total{result="persistence_failed"}[15m])) > 0
+          for: 1m
+          labels: { severity: critical, owner: privacy }
+          annotations:
+            summary: A privacy or retention job failure could not be saved.
+            runbook_url: "__RUNBOOK_BASE_URL__#privacy-failure-persistence"
         - alert: WasalXDatabasePoolSaturated
           expr: max(wasalx_database_pool_connections{state="waiting"}) > 0
           for: 5m

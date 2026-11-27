@@ -68,7 +68,8 @@ import { verifyGroupDesignation } from "../tests/group-designation-postgres.mjs"
 import { verifyNativeMembership } from "../tests/native-membership-postgres.mjs";
 import { verifyNativeRouting } from "../tests/native-routing-postgres.mjs";
 import {verifyWahaRenewal} from '../tests/waha-renewal-postgres.mjs';
-import {verifyRoutingReconnect} from '../tests/routing-reconnect-postgres.mjs';
+import {verifyNotionOAuthRecovery,verifyRoutingReconnect} from '../tests/routing-reconnect-postgres.mjs';
+import {seedNotionOAuthUpgrade,verifyNotionOAuthUpgrade} from "../tests/notion-oauth-upgrade-postgres.mjs";
 
 const { shard, report } = parsePostgresShardArgs(process.argv.slice(2));
 const executed = [];
@@ -482,8 +483,12 @@ try{
       await admin.query("ROLLBACK");
     }
     assert.equal((await admin.query("SELECT to_regclass('public.whatsapp_marketing_preferences') AS relation")).rows[0].relation,null);
+    await writeFile(resolve(protectedPrefix,marketingMigration),await readFile(new URL(marketingMigration,controlMigrationsUrl)));
+    await migrate(protectedPrefix);
+    const notionOAuthUpgrade=await seedNotionOAuthUpgrade(admin);
     await migrate(controlMigrationsPath);
     assert.deepEqual(await legacyContacts(),previousContacts);
+    await timeScenario("notionOAuthUpgrade",()=>verifyNotionOAuthUpgrade(admin,notionOAuthUpgrade,appUrl,cleanupUrl));
     // These identities reuse the existing tenant/connection/session parent key.
     const sessionForeignKeys=(await admin.query(`SELECT relation.relname AS relation,c.convalidated AS validated,
       ARRAY(SELECT a.attname::text FROM unnest(c.conkey) WITH ORDINALITY k(attnum,n)
@@ -5982,6 +5987,8 @@ try{
       finalizeRetryJob.id,
     ]))).rows,[{state:"SUCCEEDED",stage:"DONE"}]);
   }finally{await retryHoldRepository.close()}
+
+  await timeScenario("notionOAuthRecovery",()=>verifyNotionOAuthRecovery({app,admin:fixtureAdmin,cleanupUrl}));
 
   sharedCoreSummary=JSON.stringify({migrations:migrationFiles.length,postgres_rls:"passed",cross_tenant:"blocked",tenant_administration_cross_tenant:"blocked",invitation_mailer_role_isolation:"passed",invitation_mailer_shared_discovery:"passed",invitation_mailer_delivery_fencing:"passed",identity_policy_activation_role_isolation:"passed",identity_policy_activation_fencing:"passed",metering_ingest_role_isolation:"passed",metering_hourly_capture:"passed",platform_operations_role_isolation:"passed",metering_exact_replay:"passed",metering_changed_replay:"blocked",support_role_isolation:"passed",tenant_resume_role_isolation:"passed",tenant_resume_idempotency:"passed",tenant_resume_stale_fence:"blocked",tenant_resume_evidence_gate:"passed",tenant_resume_atomic_materialization:"passed",waha_registry_role_isolation:"passed",waha_operator_role_isolation:"passed",waha_rollout_gate_role_isolation:"passed",waha_rollout_active_assignment_removal:"blocked",waha_rollout_empty_disabled_removal:"passed",waha_rollout_identity_change:"blocked",waha_rollout_out_of_set_registration:"blocked",waha_rollout_out_of_set_reactivation:"blocked",waha_assignment_fencing:"passed",duplicate_waha_identity:"blocked",onboarding_scan_acknowledgement:"passed",webhook_route_lookup:"passed",oidc_membership_discovery:"passed",durable_scheduler:"passed",operational_metrics:"passed",delivery_claims:claimed.rowCount,duplicate_claims:0,recovered_expired_leases:1,connection_operation_claims:1,recovered_connection_operation_leases:1,stale_operation_fence:"blocked",lifecycle_public_execute:"revoked",provider_status_generation_fence:"passed",provider_status_timestamp_fence:"passed",provider_status_lifecycle_fence:"passed",lifecycle_route_pause_transaction:"passed",secret_cleanup_role_isolation:"passed",secret_cleanup_claims:1,recovered_secret_cleanup_leases:1,secret_cleanup_tenant_delete_order:"passed",inbound_claims:1,recovered_inbound_leases:1,inbound_e2e:"passed",privacy_group_uuid_canonicalization:"passed",privacy_finalize_atomic_completion:"passed",retention_retry_hold_fresh_sweep:"passed",retention_shared_reference_hold:"passed",retention_shared_live_reference:"passed",status_claims:status.rowCount,audit_append_only:"passed"});
 }catch(error){

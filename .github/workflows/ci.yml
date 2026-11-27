@@ -21,6 +21,7 @@ defaults:
 
 env:
   PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+  PRE_COMMIT_VERSION: '4.6.2'
 
 jobs:
   changes:
@@ -135,11 +136,10 @@ jobs:
           echo "needed=$needed" >> "$GITHUB_OUTPUT"
       - id: zammad
         env:
-          BASE: ${{ github.event_name == 'pull_request' && 'HEAD^1' || github.event.merge_group.base_sha }}
+          BASE: ${{ steps.selector-base.outputs.sha }}
         run: |
           needed=true
-          if [[ -n "$BASE" ]] && git merge-base --is-ancestor "$BASE" HEAD &&
-            git diff --quiet --no-ext-diff --no-renames "$BASE" HEAD -- \
+          if [[ -n "$BASE" ]] && git diff --quiet --no-ext-diff --no-renames "$BASE" HEAD -- \
             compose.full.yaml .dockerignore infra/docker/Dockerfile.zammad infra/docker/full/zammad/ \
             zammad-addon.json zammad-package/ build/zammad/ release/installer-images.json \
             ':(glob)scripts/*zammad*' ':(glob)scripts/contracts/*mailbox*' scripts/release/operator-input.mjs \
@@ -148,6 +148,7 @@ jobs:
             services/control-api/ services/connector-worker/ packages/ lib/domain.ts lib/literal-matcher.ts \
             scripts/build-services.mjs tsconfig.json ':(glob)services/*/tsconfig*.json' .gitattributes \
             tests/outbound-media.test.mjs tests/simulation-portal-reply-browser.test.mjs \
+            tests/zammad-sidebar-component-harness.test.mjs \
             scripts/release/simulation-portal-reply-browser.mjs \
             ':(glob)**/package.json' pnpm-lock.yaml pnpm-workspace.yaml .npmrc patches/ \
             .github/actions/ci-pnpm/ .github/workflows/ci.yml .github/workflows/zammad-compatibility.yml; then
@@ -156,9 +157,11 @@ jobs:
           echo "needed=$needed" >> "$GITHUB_OUTPUT"
       - id: typescript-comparison
         if: github.event_name == 'pull_request'
+        env:
+          BASE: ${{ steps.selector-base.outputs.sha }}
         run: |
           needed=true
-          if git diff --quiet --no-ext-diff --no-renames HEAD^1 HEAD -- \
+          if [[ -n "$BASE" ]] && git diff --quiet --no-ext-diff --no-renames "$BASE" HEAD -- \
             ':(glob)**/*.ts' ':(glob)**/*.tsx' ':(glob)**/*.[cm]ts' \
             ':(glob)**/*.js' ':(glob)**/*.jsx' ':(glob)**/*.[cm]js' ':(glob)**/*.json' \
             scripts/ tests/ build/ packages/ services/ zammad-package/ \
@@ -189,20 +192,45 @@ jobs:
           printf 'matrix=%s\nimages=%s\ninstaller-portal=%s\n' \
             "$matrix" "$images" "$installer_portal" >> "$GITHUB_OUTPUT"
 
+      - name: Verify active installer object-storage mirrors
+        env:
+          BASE: ${{ steps.selector-base.outputs.sha }}
+          DOCKER_CONFIG: ${{ runner.temp }}/public-mirror-docker
+        run: |
+          if [[ -z "$BASE" ]] || ! git diff --quiet --no-ext-diff --no-renames "$BASE" HEAD -- \
+            compose.full.yaml .github/workflows/ci.yml .github/workflows/mirror-images.yml \
+            scripts/release/installer-mirror-images.py scripts/release/image_registry_retry.py \
+            scripts/release/installer-nightly.sh scripts/release/installer-nightly.compose.yaml; then
+            base_sha=$(git rev-parse --verify "$BASE^{commit}")
+            # Leave time in the one-minute changes job for checkout and selection.
+            timeout 40s python3 -B scripts/release/installer-mirror-images.py verify --base "$base_sha"
+          fi
+
   workflow-lint:
+    if: github.event_name != 'push'
     runs-on: ubuntu-24.04
     timeout-minutes: 1
-    env:
+    env: &actionlint-release
       ACTIONLINT_URL: https://github.com/kjanat/actionlint/releases/download/v1.17.1/actionlint_1.17.1_linux_amd64.tar.gz
       ACTIONLINT_SHA256: 6bfe0f49f0e108b9b23732baf7de63bfa4d89174fa40f9cb98feb9676df3318f
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - &actionlint-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/actionlint-release.tar.gz
-          key: actionlint-${{ env.ACTIONLINT_SHA256 }}
+          key: actionlint-${{ env.ACTIONLINT_SHA256 }}-${{ env.ACTIONLINT_URL }}
+          restore-keys: actionlint-${{ env.ACTIONLINT_SHA256 }}
+      - &prepare-actionlint
+        name: Prepare pinned actionlint
+        run: |
+          archive="$RUNNER_TEMP/actionlint-release.tar.gz"
+          if [[ ! -f "$archive" ]]; then
+            bash scripts/release/fetch-verified-asset.sh "$ACTIONLINT_URL" "$archive" "$ACTIONLINT_SHA256"
+          fi
+          printf '%s  %s\n' "$ACTIONLINT_SHA256" "$archive" | sha256sum --check --strict
       - name: Lint workflows with actionlint
         env:
           SHELLCHECK_URL: https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.gz
@@ -210,17 +238,12 @@ jobs:
           PYFLAKES_URL: https://files.pythonhosted.org/packages/c2/2f/81d580a0fb83baeb066698975cb14a618bdbed7720678566f1b046a95fe8/pyflakes-3.4.0-py2.py3-none-any.whl
           PYFLAKES_SHA256: f742a7dbd0d9cb9ea41e9a24a918996e8170c799fa528688d40dd582c8265f4f
         run: |
-          archive="$RUNNER_TEMP/actionlint-release.tar.gz"
-          if [[ ! -f "$archive" ]]; then
-            bash scripts/release/fetch-verified-asset.sh "$ACTIONLINT_URL" "$archive" "$ACTIONLINT_SHA256"
-          fi
-          printf '%s  %s\n' "$ACTIONLINT_SHA256" "$archive" | sha256sum --check --strict
           scratch=$(mktemp -d)
           trap 'rm -rf "$scratch"' EXIT
           wheel="$scratch/${PYFLAKES_URL##*/}"
           bash scripts/release/fetch-verified-asset.sh "$SHELLCHECK_URL" "$scratch/shellcheck.tar.gz" "$SHELLCHECK_SHA256"
           bash scripts/release/fetch-verified-asset.sh "$PYFLAKES_URL" "$wheel" "$PYFLAKES_SHA256"
-          tar -xzf "$archive" -C "$scratch" actionlint
+          tar -xzf "$RUNNER_TEMP/actionlint-release.tar.gz" -C "$scratch" actionlint
           tar -xzf "$scratch/shellcheck.tar.gz" -C "$scratch" shellcheck-v0.11.0/shellcheck
           python3 -m venv "$scratch/pyflakes-env"
           "$scratch/pyflakes-env/bin/python" -m pip --isolated install --disable-pip-version-check --no-index --no-deps "$wheel"
@@ -261,10 +284,10 @@ jobs:
   storybook:
     needs: changes
     if: >-
-      ${{ !cancelled() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch' ||
+      ${{ !cancelled() && github.event_name != 'push' && (github.event_name == 'workflow_dispatch' ||
       needs.changes.result != 'success' || needs.changes.outputs.storybook != 'false') }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 6
+    timeout-minutes: 8
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -282,25 +305,26 @@ jobs:
         env:
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '0'
         run: pnpm exec playwright install --no-shell chromium
-      - name: Audit and capture every story
+      - name: Audit stories and compare design system screenshots
+        env:
+          TMPDIR: /dev/shm
+          WASALX_SYNTHETIC_UI_TRACE: '1'
         run: >-
           node scripts/storybook-visual-regression.mjs --require-browser tests/visual/storybook-ci.spec.ts
-          tests/visual/inbox-synthetic.spec.ts --fully-parallel --workers=4
+          tests/visual/inbox-synthetic.spec.ts tests/visual/design-system.spec.ts
+          --fully-parallel --workers=4 --update-snapshots=none
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: failure() || cancelled()
-        with: &storybook-audit-artifact
+        if: failure()
+        with:
           name: storybook-audit
           path: |
             test-results/storybook
             output/playwright/design-system
             output/playwright/inbox/synthetic
           retention-days: 7
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: success()
-        with: *storybook-audit-artifact
 
   privacy:
-    if: github.event_name != 'workflow_dispatch'
+    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
     uses: ./.github/workflows/privacy.yml
 
   dependency-review:
@@ -321,6 +345,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Test disk proof and lease inputs
+        run: &test-frozen-disk python3 -I -B scripts/dev-install/test_frozen_disk.py -v
       - name: dev-install-dryrun
         run: python3 -I -B scripts/dev-install/test_dryrun.py --container
 
@@ -398,9 +424,7 @@ jobs:
     if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
     name: ${{ matrix.name }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 9
-    env:
-      PRE_COMMIT_VERSION: '4.6.2'
+    timeout-minutes: 3
     strategy:
       fail-fast: false
       max-parallel: 5
@@ -476,12 +500,22 @@ jobs:
       - name: Lint
         if: matrix.mode == 'lint'
         run: pnpm run lint --cache --cache-strategy content --cache-location .git/hosted-eslint-cache
-      - name: Cache source hook environments
+      - name: Resolve source hook runtime versions
+        id: source-hook-runtime
         if: matrix.mode == 'lint'
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
+        run: &source-hook-runtime-versions |
+          node_version=$(node --version)
+          python_version=$(python3 -c 'import platform; print(platform.python_version())')
+          ruby_version=$(ruby -e 'print RUBY_VERSION')
+          printf 'versions=node-%s-python-%s-ruby-%s\n' \
+            "$node_version" "$python_version" "$ruby_version" >> "$GITHUB_OUTPUT"
+      - name: Restore source hook environments
+        id: source-hooks-cache
+        if: matrix.mode == 'lint'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with: &source-hook-cache-inputs
           path: ~/.cache/pre-commit
-          key: pre-commit-${{ runner.os }}-${{ runner.arch }}-${{ env.PRE_COMMIT_VERSION }}-${{ hashFiles('.pre-commit-config.yaml', '.rubocop.yml') }}
+          key: pre-commit-${{ runner.os }}-${{ runner.arch }}-${{ steps.source-hook-runtime.outputs.versions }}-${{ env.PRE_COMMIT_VERSION }}-${{ hashFiles('.pre-commit-config.yaml', '.rubocop.yml') }}
       - name: Check added source style
         if: matrix.mode == 'lint'
         shell: bash
@@ -489,23 +523,9 @@ jobs:
           STYLE_BASE: ${{ github.event_name == 'pull_request' && 'HEAD^1' || github.event.merge_group.base_sha }}
         run: |
           # Pre-commit installs environments before applying its file filters.
-          git diff --name-only --diff-filter=A -z "$STYLE_BASE" HEAD |
-            ruby -ryaml -e '
-              omit = Regexp.new(YAML.safe_load_file(".pre-commit-config.yaml").fetch("exclude"))
-              web = /\.(?:[cm]?[jt]sx?|css)\z/
-              other = /\.(?:gypi?|py[itw]?|ipynb|tac|wsgi|rb|rake|gemspec|jbuilder|bash|bats|csh|sh|zsh|sql)\z/i
-              names = /\A(?:\.bash_(?:aliases|profile)|\.bashrc|\.envrc|\.pdbrc|\.profile|\.z(?:login|logout|profile|shrc|shenv)|Brewfile|config\.ru|direnvrc|Fastfile|Gemfile|PKGBUILD|Rakefile|Vagrantfile|wscript)\z/
-              shebang = /\A#![^\n]*\b(?:a?sh|bash|bats|cbsd|t?csh|dash|ksh|zsh|python[23]?(?:\.\d+)*|ruby(?:\.\d+)*)(?:\s|\z)/
-              STDIN.each_line("\0") do |entry|
-                path = entry.delete_suffix("\0")
-                next if omit.match?(path) || !File.file?(path) || File.symlink?(path)
-                name = File.basename(path)
-                if web.match?(name) || other.match?(name) || names.match?(name) || (File.executable?(path) && shebang.match?(File.binread(path, 256)))
-                  print entry
-                end
-              end
-            ' |
-            xargs -0 -r pipx run --spec "pre-commit==$PRE_COMMIT_VERSION" pre-commit run --show-diff-on-failure --files
+          git diff --name-only --no-renames --diff-filter=A -z "$STYLE_BASE" HEAD |
+            ruby scripts/filter-source-files.rb |
+            xargs -0 -r pipx run --python python3 --spec "pre-commit==$PRE_COMMIT_VERSION" pre-commit run --show-diff-on-failure --files
       - name: Typecheck
         if: matrix.mode == 'typecheck'
         run: pnpm exec tsc --noEmit
@@ -519,7 +539,7 @@ jobs:
         run: node scripts/hosted-ci.mjs unit "$SHARD" 2
 
   full-unit:
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch'
     name: Full ${{ matrix.name }}
     runs-on: ubuntu-24.04
     timeout-minutes: 3
@@ -529,13 +549,13 @@ jobs:
         include: [*unit-one, *unit-two]
     steps: *check-steps
 
-  lint-on-push:
-    name: Lint on push
-    if: github.event_name == 'push'
-    # Cache warm-up only; PRs and the queue gate lint, so a failure here must not make a published trunk commit unusable.
+  seed-caches:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'WasalX/wasalx-platform'
+    # A cache seed failure must leave a successful publication usable.
     continue-on-error: true
     runs-on: ubuntu-24.04
-    timeout-minutes: 1
+    timeout-minutes: 4
+    env: *actionlint-release
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -544,7 +564,7 @@ jobs:
         with:
           node-version: '24.13.1'
           package-manager-cache: false
-      - name: Set up pnpm dependencies
+      - name: Seed pnpm dependency caches
         id: pnpm
         uses: ./.github/actions/ci-pnpm
         with:
@@ -555,19 +575,48 @@ jobs:
           path: .git/hosted-eslint-cache
           key: eslint-${{ runner.os }}-${{ hashFiles('eslint.config.*', 'pnpm-lock.yaml') }}-${{ github.sha }}
           restore-keys: eslint-${{ runner.os }}-${{ hashFiles('eslint.config.*', 'pnpm-lock.yaml') }}-
-      - name: Lint
+      - name: Populate ESLint cache
         run: pnpm run lint --cache --cache-strategy content --cache-location .git/hosted-eslint-cache
       - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         if: steps.eslint-cache.outputs.cache-hit != 'true'
         with:
           path: .git/hosted-eslint-cache
           key: ${{ steps.eslint-cache.outputs.cache-primary-key }}
+      - name: Build service cache outputs
+        uses: ./.github/actions/ci-pnpm
+        with:
+          task: build
+          dependency-key: ${{ steps.pnpm.outputs.dependency-key }}
+          force-build: 'true'
+      - name: Save service build cache
+        uses: ./.github/actions/ci-pnpm
+        with:
+          task: save-build
+          dependency-key: ${{ steps.pnpm.outputs.dependency-key }}
+      # PR and merge-queue caches can both restore the archive from main.
+      - *actionlint-cache
+      - *prepare-actionlint
+      - name: Resolve source hook runtime versions
+        id: source-hook-runtime
+        run: *source-hook-runtime-versions
+      - name: Restore source hook environments
+        id: source-hooks-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with: *source-hook-cache-inputs
+      - name: Install source hook environments
+        if: steps.source-hooks-cache.outputs.cache-hit != 'true'
+        run: pipx run --python python3 --spec "pre-commit==$PRE_COMMIT_VERSION" pre-commit install-hooks
+      - name: Save source hook environments
+        if: steps.source-hooks-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/pre-commit
+          key: ${{ steps.source-hooks-cache.outputs.cache-primary-key }}
 
   integration:
     needs: changes
     if: >-
       ${{ !cancelled() && (github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
       (github.event_name == 'pull_request' && (needs.changes.result != 'success' || needs.changes.outputs.integration != 'false'))) }}
     name: PostgreSQL ${{ matrix.shard }}/4
     runs-on: ubuntu-24.04
@@ -624,18 +673,11 @@ jobs:
           path: postgres-shard-${{ matrix.shard }}.json
           if-no-files-found: error
           retention-days: 7
-      # Save after shard 1 passes without waiting for shards 2-4 because the cache holds only build outputs.
-      - name: Save service build cache
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && matrix.shard == 1
-        uses: ./.github/actions/ci-pnpm
-        with:
-          task: save-build
-          dependency-key: ${{ steps.pnpm.outputs.dependency-key }}
 
   portal-browser-build:
     needs: changes
     if: >-
-      ${{ !cancelled() && (github.event_name != 'pull_request' ||
+      ${{ !cancelled() && github.event_name != 'push' && (github.event_name != 'pull_request' ||
       needs.changes.result != 'success' || needs.changes.outputs.integration != 'false' ||
       needs.changes.outputs.application-e2e != 'false') }}
     runs-on: ubuntu-24.04
@@ -672,6 +714,9 @@ jobs:
     timeout-minutes: 4
     steps:
       - *integration-checkout
+      - name: Test disk proof and lease inputs
+        if: github.event_name != 'pull_request'
+        run: *test-frozen-disk
       - name: dev-install-dryrun
         if: github.event_name != 'pull_request'
         run: python3 -I -B scripts/dev-install/test_dryrun.py --container
@@ -716,15 +761,25 @@ jobs:
       ${{ !cancelled() && needs.portal-browser-build.result == 'success' &&
       (github.event_name != 'pull_request' || needs.changes.result != 'success' ||
       needs.changes.outputs.application-e2e != 'false') }}
-    name: Application E2E (${{ matrix.locale }}, ${{ matrix.roles }})
+    name: Application E2E (${{ matrix.locale }}, ${{ matrix.suite.roles }}${{ matrix.suite.owner_part && format(', {0}', matrix.suite.owner_part) || '' }})
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: ${{ matrix.suite.timeout }}
     env: *portal-browser-env
     strategy:
       fail-fast: false
       matrix:
         locale: [en, ar]
-        roles: [tenant_owner, 'tenant_admin,supervisor', 'agent,auditor']
+        suite:
+          - roles: tenant_owner
+            owner_part: desktop
+            timeout: 10
+          - roles: tenant_owner
+            owner_part: mobile-tablet
+            timeout: 9
+          - roles: 'tenant_admin,supervisor'
+            timeout: 15
+          - roles: 'agent,auditor'
+            timeout: 15
     steps:
       - *integration-checkout
       - *integration-node
@@ -735,26 +790,28 @@ jobs:
         env:
           WASALX_E2E_SKIP_BUILD: '1'
           WASALX_E2E_LOCALES: ${{ matrix.locale }}
-          WASALX_E2E_ROLES: ${{ matrix.roles }}
+          WASALX_E2E_ROLES: ${{ matrix.suite.roles }}
+          WASALX_E2E_OWNER_PART: ${{ matrix.suite.owner_part }}
         run: node scripts/run-application-e2e.mjs
       - name: Verify every synthetic journey screenshot
         id: journey-captures
-        if: success() && matrix.roles == 'tenant_owner'
+        if: success() && matrix.suite.roles == 'tenant_owner'
         env:
           CAPTURE_LOCALE: ${{ matrix.locale }}
-        run: node tests/e2e/journey-captures.mjs "$CAPTURE_LOCALE"
+          CAPTURE_VIEWPORT: ${{ matrix.suite.owner_part == 'desktop' && 'desktop' || 'mobile-390' }}
+        run: node tests/e2e/journey-captures.mjs "$CAPTURE_LOCALE" "$CAPTURE_VIEWPORT"
       - name: Upload synthetic journey screenshots
-        if: success() && matrix.roles == 'tenant_owner'
+        if: success() && matrix.suite.roles == 'tenant_owner'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: application-journey-captures-${{ matrix.locale }}
+          name: application-journey-captures-${{ matrix.locale }}-${{ matrix.suite.owner_part }}
           path: ${{ steps.journey-captures.outputs.paths }}
           if-no-files-found: error
           retention-days: 7
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure() || cancelled()
         with:
-          name: application-e2e-${{ matrix.locale }}-${{ matrix.roles }}
+          name: application-e2e-${{ matrix.locale }}-${{ matrix.suite.roles }}${{ matrix.suite.owner_part && format('-{0}', matrix.suite.owner_part) || '' }}
           path: |
             output/playwright/application*/*/report/**
             output/playwright/application*/*/results/**
@@ -788,7 +845,7 @@ jobs:
   keycloak-identity:
     needs: changes
     if: >-
-      ${{ !cancelled() && (github.event_name != 'pull_request' ||
+      ${{ !cancelled() && github.event_name != 'push' && (github.event_name != 'pull_request' ||
       needs.changes.result != 'success' || needs.changes.outputs.keycloak-identity != 'false') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -828,9 +885,8 @@ jobs:
   infra-validate:
     needs: changes
     if: >-
-      ${{ !cancelled() && (github.event_name == 'push' && github.ref == 'refs/heads/main' ||
-      ((github.event_name == 'pull_request' || github.event_name == 'merge_group') &&
-      (needs.changes.result != 'success' || needs.changes.outputs.infra != 'false'))) }}
+      ${{ !cancelled() && (github.event_name == 'pull_request' || github.event_name == 'merge_group') &&
+      (needs.changes.result != 'success' || needs.changes.outputs.infra != 'false') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 1
     permissions:
@@ -962,12 +1018,12 @@ jobs:
           NODE
 
   publish:
-    needs: lint-on-push
     if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'WasalX/wasalx-platform' }}
     concurrency:
       group: release-${{ github.sha }}
       cancel-in-progress: false
     permissions:
+      actions: read
       contents: read
       packages: write
       id-token: write
@@ -976,12 +1032,12 @@ jobs:
   zammad-compatibility:
     needs: changes
     if: >-
-      ${{ !cancelled() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch' ||
+      ${{ !cancelled() && github.event_name != 'push' && (github.event_name == 'workflow_dispatch' ||
       needs.changes.result != 'success' || needs.changes.outputs.zammad != 'false') }}
     uses: ./.github/workflows/zammad-compatibility.yml
 
   ci-gate:
-    if: always()
+    if: always() && github.event_name != 'push'
     needs: [changes, workflow-lint, storybook, privacy, dependency-review, checks, full-unit, images, pr-images, installer-portal, integration, portal-integration, application-e2e, platform-operator-e2e, keycloak-identity, integration-coverage, infra-validate, dev-install-dryrun, zammad-compatibility]
     runs-on: ubuntu-slim
     timeout-minutes: 1
@@ -1032,7 +1088,7 @@ jobs:
             *) echo 'Keycloak identity browser tests did not pass.'; exit 1 ;;
           esac
           case "$EVENT:$PRIVACY" in
-            pull_request:success|merge_group:success|push:success|workflow_dispatch:skipped) ;;
+            pull_request:success|merge_group:success|workflow_dispatch:skipped) ;;
             *) echo 'Privacy scan did not pass.'; exit 1 ;;
           esac
           case "$EVENT:$ZAMMAD_NEEDED:$ZAMMAD_COMPATIBILITY" in
@@ -1041,11 +1097,11 @@ jobs:
               echo 'Zammad compatibility skipped because its inputs did not change.' >> "$GITHUB_STEP_SUMMARY" ;;
             *) echo "::error::Zammad compatibility result: $ZAMMAD_COMPATIBILITY"; exit 1 ;;
           esac
-          if [[ "$EVENT" == push || "$EVENT" == workflow_dispatch ]]; then
+          if [[ "$EVENT" == workflow_dispatch ]]; then
             test "$CHANGES:$CHECKS:$REVIEW:$IMAGES:$DEV_INSTALL:$INSTALLER_PORTAL" = skipped:skipped:skipped:skipped:skipped:skipped || exit 1
             test "$FULL_UNIT" = success || exit 1
             test "$INTEGRATION:$PORTAL_INTEGRATION:$INTEGRATION_COVERAGE" = success:success:success || exit 1
-            case "$EVENT:$INFRA" in push:success|workflow_dispatch:skipped) ;; *) exit 1 ;; esac
+            test "$INFRA" = skipped || exit 1
             echo "Event $EVENT ran both full unit shards. Infrastructure validation: $INFRA (skipped on manual dispatch)." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi

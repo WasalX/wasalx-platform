@@ -2,7 +2,7 @@
 
 import { draftSupportQueues, type SupportQueueOrigin } from "../lib/client-routing-draft";
 import { clientRoutingQueueWarnings } from "../lib/client-routing-availability";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { formatDateTime as formatLocalizedDateTime, formatNumber } from "../lib/i18n/format";
 import { createLatestRequestFence, operatorResponseFailure } from "../lib/operator-ui";
 import { localizedUiError, normalizeUiErrorCode, type UiErrorCode } from "../lib/ui-error";
@@ -12,7 +12,7 @@ import {
 } from "../packages/core/src/client-routing";
 import { ModalDialog } from "./ModalDialog";
 import { useI18n } from "./I18nProvider";
-import { ScrollRegion } from "./tenant-ui";
+import { WideTable } from "./tenant-ui";
 import { useVisibleRefresh } from "./use-visible-refresh";
 import { NativeRoutingSync } from "./NativeRoutingSync";
 
@@ -664,7 +664,6 @@ export function ClientRouting({
                 >
                   <span>
                     <b>{t("routing.versions.version", { version: formatNumber(Number(row.version), locale) })}</b>
-                    <span aria-hidden="true"> · </span>
                     <small>
                       <span className="sr-only">{t("routing.versions.createdAt")} </span>
                       <bdi>{formatTime(row.created_at, locale, t)}</bdi>
@@ -893,30 +892,32 @@ function SourceList({
                   {t("routing.sources.syncFailed")}
                 </p>
               ) : null}
-              {webhookPath ? (
-                <div className="routing-webhook">
-                  <button
-                    type="button"
-                    className="button secondary small"
-                    onClick={() => void copyWebhook(source.name, webhookPath)}
-                  >
-                    {t("routing.sources.copy")}
-                  </button>
+              {webhookPath || (canWrite && state) ? (
+                <div className="routing-source-actions wx-card-actions">
+                  {webhookPath ? (
+                    <button
+                      type="button"
+                      className="button secondary small"
+                      onClick={() => void copyWebhook(source.name, webhookPath)}
+                    >
+                      {t("routing.sources.copy")}
+                    </button>
+                  ) : null}
+                  {canWrite && state ? (
+                    <button
+                      type="button"
+                      className="button secondary small"
+                      disabled={syncingSource !== null || ["QUEUED", "RUNNING"].includes(String(state.latest_job_state))}
+                      onClick={() => void syncSource(source.id, Number(state.snapshot_revision))}
+                    >
+                      {syncingSource === source.id
+                        ? t("routing.sources.requesting")
+                        : String(state.state) === "CONFLICT" || String(state.latest_job_state) === "FAILED_TERMINAL"
+                          ? t("routing.sources.retry")
+                          : t("routing.sources.syncNow")}
+                    </button>
+                  ) : null}
                 </div>
-              ) : null}
-              {canWrite && state ? (
-                <button
-                  type="button"
-                  className="button secondary small"
-                  disabled={syncingSource !== null || ["QUEUED", "RUNNING"].includes(String(state.latest_job_state))}
-                  onClick={() => void syncSource(source.id, Number(state.snapshot_revision))}
-                >
-                  {syncingSource === source.id
-                    ? t("routing.sources.requesting")
-                    : String(state.state) === "CONFLICT" || String(state.latest_job_state) === "FAILED_TERMINAL"
-                      ? t("routing.sources.retry")
-                      : t("routing.sources.syncNow")}
-                </button>
               ) : null}
             </li>
           );
@@ -1000,10 +1001,7 @@ function ClientTable({
               placeholder={t("routing.clients.searchPlaceholder")}
             />
           </label>
-          <ScrollRegion
-            className="table-wrap routing-table-wrap"
-            aria-label={t("routing.clients.tableLabel")}
-          >
+          <WideTable label={t("routing.clients.tableLabel")}>
             <table className="routing-table">
               <thead>
                 <tr>
@@ -1028,7 +1026,7 @@ function ClientTable({
                             {matcher.kind === "WHATSAPP_GROUP" ? (
                               <small>{t("routing.clients.whatsappConnection", { connection: connectionNames.get(matcher.connectionId ?? "") ?? t("routing.clients.unknownConnection") })}</small>
                             ) : (
-                              <code dir="ltr">{matcher.namespace ? `${matcher.namespace}:` : ""}{matcher.value}</code>
+                              <code dir="ltr">{breakAtSeparators(`${matcher.namespace ? `${matcher.namespace}:` : ""}${matcher.value}`)}</code>
                             )}
                           </li>
                         ))}
@@ -1060,7 +1058,7 @@ function ClientTable({
                 ))}
               </tbody>
             </table>
-          </ScrollRegion>
+          </WideTable>
           {!visible.length ? (
             <Empty
               title={t("routing.clients.noMatchTitle")}
@@ -2175,6 +2173,10 @@ function sourceKindLabel(kind: ClientRoutingDefinition["sources"][number]["kind"
 function matcherKindLabel(value: string, t: ReturnType<typeof useI18n>["t"]) {
   const key = ({ DOMAIN: "routing.editor.domain", EMAIL: "routing.editor.email", CLIENT_IDENTIFIER: "routing.editor.identifier", WHATSAPP_GROUP: "routing.editor.whatsappGroup" } as Record<string, string>)[value.toUpperCase()];
   return key ? t(key) : t("routing.clients.unknownMatcher");
+}
+// Long identifiers wrap after @ . : / _ - rather than mid-word.
+function breakAtSeparators(value: string) {
+  return value.split(/(?<=[@.:/_-])/u).map((part, index) => <Fragment key={index}>{index ? <wbr /> : null}{part}</Fragment>);
 }
 function groupLabel(catalog:RoutingCatalog,id:string,t:ReturnType<typeof useI18n>["t"]){return catalog.groups.find(group=>group.id===id)?.name??t("routing.clients.unavailableTeam")}
 function ownerLabel(catalog:RoutingCatalog,id:string,t:ReturnType<typeof useI18n>["t"]){return catalog.owners.find(owner=>owner.id===id)?.name??t("routing.clients.unavailableOwner")}

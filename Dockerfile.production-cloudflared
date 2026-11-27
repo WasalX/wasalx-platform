@@ -4,9 +4,7 @@ ARG TARGETOS=linux
 ARG TARGETARCH=amd64
 ENV GOPROXY=https://proxy.golang.org,direct
 ENV GODEBUG=http2client=0
-ADD --checksum=sha256:e75d9a314ae07ae42564c0d3115b9e33d8a7329d99771951ab7b67144461bd84 \
-  https://github.com/cloudflare/cloudflared/archive/refs/tags/2026.9.1.tar.gz /tmp/source.tar.gz
-RUN mkdir /src && tar -xzf /tmp/source.tar.gz -C /src --strip-components=1
+ADD https://github.com/cloudflare/cloudflared.git#f11dea9cb7079e90a982c1a2d5548ab40847fdcf /src
 WORKDIR /src
 RUN go get google.golang.org/grpc@v1.83.2 && \
     CGO_ENABLED=0 GOOS="$TARGETOS" GOARCH="$TARGETARCH" go build -mod=mod -trimpath \

@@ -69,3 +69,15 @@ test("routing fixture draft creation has no sync effect, activation publishes ne
   await fixture.activateClientRouting(draft.id, { expectedRevision: draft.revision });
   assert.equal((await fixture.getNativeRoutingSync()).state, "PENDING");
 });
+
+test("sample client routing names follow the viewer's language", async () => {
+  const { getMessages } = await import("../lib/i18n/messages/index.ts");
+  const fixture = await fresh();
+  for (const locale of ["en", "ar"]) {
+    const messages = getMessages(locale);
+    const sample = (await fixture.getClientRouting(locale)).find((row) => row.id === "86000000-0000-4000-8000-000000000001");
+    assert.equal(sample.definition.name, messages["routing.starter.name"]);
+    assert.deepEqual(sample.definition.sources.map((source) => source.name), [messages["routing.starter.source"], messages["routing.sample.notionSource"]]);
+  }
+  assert.match(getMessages("ar")["routing.sample.notionSource"], /Notion/u);
+});

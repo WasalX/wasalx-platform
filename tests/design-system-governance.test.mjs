@@ -162,6 +162,20 @@ test("every status badge's text meets 4.5:1 on its own tint over every surface i
   }
 });
 
+test("app source has no fullwidth plus, which has no glyph in the app fonts, and plus actions share one icon", async () => {
+  const found = [];
+  for (const file of await readdir(new URL("app/", root), { recursive: true })) {
+    const path = `app/${file.replaceAll("\\", "/")}`;
+    if (/\.(?:[cm]?[jt]sx?|css|json|md|html)$/u.test(path) && (await read(path)).includes("＋")) found.push(path);
+  }
+  assert.deepEqual(found, [], 'use <MarketingIcon name="plus" /> instead of U+FF0B');
+  const [icon, app, rules, team, settings, globals] = await Promise.all(["app/MarketingIcon.tsx", "app/WasalXApp.tsx", "app/Rules.tsx", "app/TeamAccess.tsx", "app/TenantSettings.tsx", "app/globals.css"].map(read));
+  assert.match(icon, /plus: "M12 5v14M5 12h14"/u);
+  assert.match(icon, /aria-hidden="true"/u);
+  for (const [name, source] of Object.entries({ app, rules, team, settings })) assert.match(source, /<MarketingIcon name="plus" ?\/>/u, `${name} uses the shared plus icon`);
+  assert.match(globals, /:is\(\.connect-number-action,\.icon-action\)>\.marketing-icon\{inline-size:var\(--wx-icon-size-inline\);block-size:var\(--wx-icon-size-inline\)/u);
+});
+
 test("every app stylesheet uses color, type, radius, elevation and spacing tokens", async () => {
   const tokens = await read("app/design-system/tokens.css");
   const sideTabs = [];
@@ -342,4 +356,43 @@ test("mobile header keeps one sidebar grid and a top bar that grows with its tex
   }
   for (const body of rules(".topbar")) assert.doesNotMatch(body, /(?:^|[;\s])height\s*:/u, "a fixed top bar height lets wrapped text overflow onto the menu toggle at 200% text");
   assert.match(rules(".topbar")[0], /min-height:57px/u);
+});
+
+test("tenant screens keep the URL, icon, name and mailbox fixes from issue 565", async () => {
+  const [app, settings, mailbox] = await Promise.all(["app/WasalXApp.tsx", "app/TenantSettings.tsx", "app/MailboxSettings.tsx"].map(read));
+  assert.doesNotMatch(app, /\uff0b/u, "the fullwidth plus has no glyph in the app fonts");
+  assert.match(app, /<MarketingIcon name="plus" \/>\s*<span className="connect-number-action-label">/u);
+  assert.match(app, /<b dir="auto">\{user\.displayName\}<\/b>/u, "the truncating name element takes its own direction");
+  assert.match(settings, /<div className="input-prefix" dir="ltr">/u, "the slug URL reads left to right in Arabic too");
+  for (const key of ["setupRequired", "templateReview", "loading", "empty"]) {
+    assert.match(mailbox, new RegExp(String.raw`<p className="workspace-access-state"[^>]*>\{t\("mailboxes\.${key}"\)\}`, "u"), `mailboxes.${key} sits in the padded muted body`);
+  }
+});
+
+test("workspace settings keep the mailbox spacing fixes from issue 571", async () => {
+  const [mailbox, globals] = await Promise.all(["app/MailboxSettings.tsx", "app/globals.css"].map(read));
+  assert.match(mailbox, /\{rows\.length \? <ul className="mailbox-list"/u, "an empty padded list leaves a blank band above the empty state");
+  assert.match(globals, /\.settings-grid\+\.settings-grid\{margin-block-start:var\(--wx-space-4\)\}/u, "the settings and mailbox grids are siblings in a block container, so the grid gap does not separate them");
+  for (const columns of ["210px minmax(0,1fr)", "11.25rem minmax(0,1fr)", "minmax(0,1fr)"]) {
+    assert.ok(globals.includes(`.settings-grid.settings-grid-privacy,.settings-grid-privacy+.settings-grid{grid-template-columns:${columns}`), `the mailbox card follows the Privacy columns ${columns}`);
+  }
+});
+
+test("ticket routing sync keeps its body on the card inset at body size (issue 596)", async () => {
+  const [panel, css] = await Promise.all(["app/NativeRoutingSync.tsx", "app/NativeRoutingSync.module.css"].map(read));
+  const body = panel.slice(panel.indexOf("<div className={styles.body}>"), panel.lastIndexOf("</section>"));
+  assert.match(panel, /<\/div>\s*<div className=\{styles\.body\}>\s*<div role="status">/u, "the status, actions, policy text and editor sit in the padded body right after the heading");
+  for (const part of ['role="status"', "styles.actions", "nativeRouting.defaults.description", "nativeRouting.defaults.count", "styles.editor"]) assert.ok(body.includes(part), `${part} is inside the padded body`);
+  assert.match(css, /\.body \{[^}]*padding: var\(--wx-space-4\);[^}]*font-size: var\(--wx-font-size-2\);/u, "the body uses the card inset and the card text size");
+});
+
+test("Workflows and Client routing fields share one field style at body size (issue 597)", async () => {
+  const [globals, routing, bot] = await Promise.all(["app/globals.css", "app/ClientRouting.tsx", "app/BotAutomation.tsx"].map(read));
+  const shared = globals.match(/\.bot-automation :where\(input,select,textarea\),\.routing-workspace :where\(input,select,textarea\)\{([^}]*)\}/u);
+  assert.ok(shared, "Client routing fields join the Workflows field rule");
+  assert.match(shared[1], /border:1px solid var\(--border-strong\);[^}]*background:var\(--surface-2\);[^}]*padding:var\(--wx-space-2\) var\(--wx-space-3\);font-size:var\(--wx-font-size-3\)$/u);
+  for (const state of ["focus-visible", "user-invalid", "disabled"]) assert.ok(globals.includes(`.routing-workspace :where(input,select,textarea):${state}{`), `Client routing fields share the ${state} state`);
+  assert.doesNotMatch(globals, /:where\(input,select(?:,textarea)?\)\{[^}]*font-size:var\(--wx-font-size-4\)/u, "no shared field rule uses the 16 px size");
+  assert.ok(routing.indexOf('<div className="routing-workspace"') < routing.indexOf("<RoutingSimulator"), "the simulator renders inside the routing workspace");
+  assert.match(bot, /<div className="bot-automation" dir=\{direction\}>/u);
 });

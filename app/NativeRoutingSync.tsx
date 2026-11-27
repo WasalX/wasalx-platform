@@ -94,6 +94,7 @@ export function NativeRoutingSync({ canWrite, mutationHeaders, refreshKey, catal
       <div><h2 id={titleId}>{t("nativeRouting.title")}</h2><p>{t("nativeRouting.description")}</p></div>
       <button type="button" className="button secondary small" disabled={busy} onClick={() => void load()}>{t("nativeRouting.refresh")}</button>
     </div>
+    <div className={styles.body}>
     <div role="status">
       <b>{t(displayState ? `nativeRouting.state.${displayState}` : loading || busy ? "nativeRouting.loading" : "nativeRouting.unavailable")}</b>
       {status?.lastCheckedAt ? <p>{t("nativeRouting.checked", { time: formatDateTime(status.lastCheckedAt, locale) })}</p> : null}
@@ -152,5 +153,6 @@ export function NativeRoutingSync({ canWrite, mutationHeaders, refreshKey, catal
         <button type="submit" className="button primary small" disabled={busy || !status || editor.revision !== status.desiredRevision || !nativeRoutingDefaultsValid(editor.policies, catalog)}>{t(busy ? "nativeRouting.defaults.saving" : "nativeRouting.defaults.save")}</button>
       </div>
     </form> : null}
+    </div>
   </section>;
 }

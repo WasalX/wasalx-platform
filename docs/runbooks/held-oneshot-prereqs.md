@@ -72,6 +72,20 @@ does not describe its new running state. Source-input equivalence does not
 relax exact SHA, tree, Dockerfile, build-context or package identity checks.
 Runtime install/release and provider acceptance require separate evidence.
 
+## Verify an existing Keycloak installation
+
+Select `WASALX_KEYCLOAK_BOOTSTRAP_MODE=preserve-existing` when rerunning
+`keycloak-bootstrap` against a populated identity service. After the normal
+administrator token request, the one-shot uses GET only on the Keycloak admin
+API. It checks both realms, the seeded owner and operator, the isolation owner
+when configured by email, and all three bootstrap clients. Failed, missing,
+ambiguous or unexpected lookups cause a nonzero exit.
+
+Fresh Compose installations use `WASALX_KEYCLOAK_BOOTSTRAP_MODE=reconcile` by
+default to initialize the identities imported with the realms. Reconciliation
+can reset passwords and change realm, client and user settings.
+See the [DEV guest runner contract](../../scripts/dev-install/README.md#existing-dev-keycloak).
+
 ## Provision a full-stack invitee
 
 Set `WASALX_TEST_EMAIL_RECIPIENT_ALLOWLIST` in the private Compose environment.
@@ -89,8 +103,6 @@ self-service password reset link.
 
 Upgrade the full Compose files and Keycloak image together. The Compose
 command requires the fenced providers, so an older image fails startup.
-The disposable hosted rehearsal checks the candidate Keycloak image and
-bootstrap separately when it installs a signed image set from an older commit.
 
 Before accepting an invitation, the invitee needs an email-verified account in the `wasalx` realm. Confirm control of the invitation address before provisioning.
 On the full-stack host, set `private_dir` to a directory outside the checkout owned by UID 1000 with mode `0700`. Set `email_file` to a private file containing the address on one line.

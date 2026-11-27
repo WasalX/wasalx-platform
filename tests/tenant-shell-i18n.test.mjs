@@ -235,7 +235,7 @@ test("owner-facing health, access and settings states stay truthful and consiste
   assert.match(source, /owner=\{role === "tenant_owner"\}/u);
   // Settings never label a retry as reloading conversations, nor show an empty state over a load failure.
   for (const file of [mailboxes, mailboxAdmin, serviceAccess]) assert.doesNotMatch(file, /"inbox\.reload"/u);
-  assert.match(mailboxes, /!rows\.length && !error \? <p>\{t\("mailboxes\.empty"\)\}/u);
+  assert.match(mailboxes, /!rows\.length && !error \? <p className="workspace-access-state">\{t\("mailboxes\.empty"\)\}/u);
   // Ticket routing shows one state without internal revision counters.
   assert.doesNotMatch(routing, /desiredRevision, locale|nativeRouting\.(?:revisions|notChecked)/u);
   for (const dictionary of [englishTenantMessages, arabicTenantMessages]) {

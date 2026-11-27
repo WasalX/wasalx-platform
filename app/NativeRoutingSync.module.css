@@ -1,6 +1,8 @@
 .panel { margin-block: var(--wx-space-4); }
+.body { display: grid; gap: var(--wx-space-3); padding: var(--wx-space-4); font-size: var(--wx-font-size-2); }
+.body :is(p, ul) { margin: 0; }
 .actions { display: flex; flex-wrap: wrap; gap: var(--wx-space-2); }
-.editor { display: grid; gap: var(--wx-space-4); margin-block-start: var(--wx-space-4); }
+.editor { display: grid; gap: var(--wx-space-4); }
 .policy { min-inline-size: 0; padding: var(--wx-space-4); border: 1px solid var(--wx-color-border); border-radius: var(--wx-radius-dialog); }
 .enabled { display: flex; align-items: center; gap: var(--wx-space-2); margin-block: var(--wx-space-3); }
 .editor select { inline-size: 100%; min-inline-size: 0; min-block-size: var(--wx-control-height); }

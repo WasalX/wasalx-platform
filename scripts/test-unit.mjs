@@ -92,6 +92,7 @@ const unitInventory = ["tests/operator-input.test.mjs","tests/no-agent-instructi
   "tests/simulation-stage-fixtures.test.mjs",
   "tests/smtp-simulation-server.test.mjs",
   "tests/smtp-simulation-tls.test.mjs",
+  "tests/synthetic-browser-trace.test.mjs",
   "tests/tenant-shell-i18n.test.mjs",
   "tests/waha-simulation-adapter.test.mjs",
   "tests/waha-simulation-control.test.mjs",

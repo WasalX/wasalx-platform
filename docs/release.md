@@ -4,16 +4,17 @@ A release candidate (RC) is a `vX.Y.Z-rc.N` tag used to qualify a commit from
 `main`. A stable release is a `vX.Y.Z` tag on that commit once it meets all six
 criteria below.
 
-1. **Built once by CI.** The successful `main` push builds all 21 images,
-   signs them with keyless Cosign, and records their digests.
+1. **Published by CI.** The successful `main` push builds and inspects the
+   21 catalog images from the queue-qualified commit, signs them with keyless
+   Cosign, and records their digests.
    [`release.yml`](../.github/workflows/release.yml) calls
    [`promote-tag.sh`](../scripts/release/promote-tag.sh) to verify and retag
    those digests without rebuilding them.
-2. **Fully tested.** The merge queue passes `ci-gate`, and `ci.yml` succeeds
-   on the exact `main` commit. The CI checks include unit tests, type checking,
-   lint, PostgreSQL and browser integration, and infrastructure validation
-   for Helm, promtool, OpenTofu, migrations, and the secret adapter. Dependency
-   review runs on the pull request.
+2. **Fully tested.** The merge queue passes `ci-gate` for the exact commit
+   admitted to `main`, and `ci.yml` succeeds on that main push. The CI checks
+   include unit tests, type checking, lint, PostgreSQL and browser integration,
+   and infrastructure validation for Helm, promtool, OpenTofu, migrations, and
+   the secret adapter. Dependency review runs on the pull request.
 3. **Clean security state.** This platform repository and its Zammad add-on
    repository each have zero open high or critical CodeQL and Dependabot alerts.
 4. **Proven as an RC.** `release.yml` publishes the RC in the `stg` GitHub

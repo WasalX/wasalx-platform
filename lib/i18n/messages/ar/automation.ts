@@ -605,6 +605,7 @@ export const arabicAutomationMessages = {
   "automation.status.needsAttention": "يحتاج إلى مراجعة",
   "routing.starter.name": "ملكية العملاء",
   "routing.starter.source": "التعديلات اليدوية",
+  "routing.sample.notionSource": "دليل عملاء Notion",
   "routing.errors.connectorStatus": "حالة الموصل غير متاحة.",
   "routing.errors.unavailable": "توجيه العملاء غير متاح.",
   "routing.errors.externalDisabled": "اتصالات مصادر البيانات غير مفعلة لمساحة العمل هذه.",

@@ -57,7 +57,11 @@ export class MetaCostSourceService {
       // Only an observed definitive HTTP rejection from the installed transport
       // can establish NOT_WRITTEN. Network timeout/abort/crash remains UNKNOWN.
       const outcome=error instanceof MediaRuntimeError&&error.code==="MEDIA_STORAGE_HTTP"&&!error.retryable?"NOT_WRITTEN":"UNKNOWN";
-      await this.repository.settle(tenantId,id,admitted.writeAttemptId,outcome,scanSha256).catch(()=>undefined);
+      try {
+        await this.repository.settle(tenantId,id,admitted.writeAttemptId,outcome,scanSha256);
+      } catch {
+        throw new MetaCostSourceError("SOURCE_WRITE_UNRESOLVED");
+      }
       throw new MetaCostSourceError(outcome==="UNKNOWN"?"SOURCE_WRITE_OUTCOME_UNKNOWN":"SOURCE_STORAGE_REJECTED");
     }
     // If this DB call fails after PUT, durable ADMITTED/UNKNOWN remains. Neither

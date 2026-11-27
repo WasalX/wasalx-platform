@@ -1,4 +1,5 @@
 import { ConflictException, Injectable, OnApplicationBootstrap, OnModuleDestroy } from "@nestjs/common";
+import { recordStructuredLog } from "@wasalx/observability";
 import { createHash, createHmac, randomUUID } from "node:crypto";
 import type { PoolClient } from "pg";
 import { nativeRoutingRevision, parseDepartmentDefaults, serializeNativeRoutingManifest, type NativeRoutingRequest, type NativeRoutingResponse, type NativeRoutingSyncStatus } from "@wasalx/core/native-routing-contract";
@@ -50,8 +51,28 @@ export class NativeRoutingSyncService implements OnApplicationBootstrap,OnModule
   constructor(private readonly database:DatabaseService,private readonly secrets:ZammadServiceSecretService){}
   onApplicationBootstrap(){this.timer=setInterval(()=>{void this.drain();},15_000);this.timer.unref();}
   onModuleDestroy(){if(this.timer)clearInterval(this.timer);}
-  wake(tenantId:string){void this.syncTenant(tenantId).catch(()=>undefined);}
-  async drain(){if(this.running)return;this.running=true;try{for(const tenantId of await this.database.pendingNativeRoutingTenants())await this.syncTenant(tenantId);}catch{/* Intent is durable; never log native credentials or response bodies. */}finally{this.running=false;}}
+  wake(tenantId: string) {
+    void this.syncTenant(tenantId).catch(() => {
+      recordStructuredLog("error", "native_projection.failed", { projection: "routing", phase: "wake" });
+    });
+  }
+  async drain() {
+    if (this.running) return;
+    this.running = true;
+    try {
+      const tenants = await this.database.pendingNativeRoutingTenants().catch(() => {
+        recordStructuredLog("error", "native_projection.failed", { projection: "routing", phase: "discovery" });
+        return [];
+      });
+      for (const tenantId of tenants) {
+        await this.syncTenant(tenantId).catch(() => {
+          recordStructuredLog("error", "native_projection.failed", { projection: "routing", phase: "tenant" });
+        });
+      }
+    } finally {
+      this.running = false;
+    }
+  }
   async status(tenantId:string){return this.database.withTenant(tenantId,async client=>{const row=await this.row(client,tenantId);return row?nativeRoutingStatus(row):nativeRoutingUnavailable();});}
   async syncTenant(tenantId:string){
     const intent=await this.prepare(tenantId);if(!intent)return;

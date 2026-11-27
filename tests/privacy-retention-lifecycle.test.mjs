@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import test from "node:test";
 import {
   PrivacyProcessor,
@@ -62,6 +63,68 @@ function job(overrides = {}) {
     ...overrides,
   };
 }
+
+test("privacy drain distinguishes rolled-back failure persistence from a checked lease mismatch", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: Date.parse("2026-10-16T10:00:00Z") });
+  const require = createRequire(new URL("../packages/observability/package.json", import.meta.url));
+  const { metrics } = require("@opentelemetry/api");
+  const { InMemoryMetricExporter, MeterProvider, PeriodicExportingMetricReader } = require("@opentelemetry/sdk-metrics");
+  const exporter = new InMemoryMetricExporter();
+  const provider = new MeterProvider({ readers: [new PeriodicExportingMetricReader({ exporter })] });
+  assert.equal(metrics.setGlobalMeterProvider(provider), true);
+  t.after(async () => { metrics.disable(); await provider.shutdown(); });
+
+  const first = job();
+  const second = job({ id: "30000000-0000-4000-8000-000000000002", fencingToken: 5 });
+  const statements = [];
+  const failureWrites = [];
+  const repository = new PrivacyRepository({ connect: async () => ({
+    query: async (sql, values) => {
+      statements.push(sql);
+      if (!sql.includes("app.fail_privacy_job")) return { rows: [] };
+      failureWrites.push(values.slice(0, 3));
+      if (values[0] === first.id) throw Object.assign(new Error("Synthetic database failure"), { code: "08006" });
+      return { rows: [{ failed: false }] };
+    },
+    release() {},
+  }) });
+  let leaseId;
+  repository.expireHolds = async () => 0;
+  repository.ensureMaintenanceJob = async () => null;
+  repository.claim = async (_, lease) => { leaseId = lease; return [first, second]; };
+  repository.discover = async () => { throw new Error("Synthetic discovery failure"); };
+  const unused = async () => assert.fail("No native or storage effects expected");
+  const processor = new PrivacyProcessor(repository, { resolve: unused }, { put: unused, delete: unused });
+  const stderr = t.mock.method(process.stderr, "write", () => true);
+
+  assert.deepEqual(await processor.drainTenant(tenantId), {
+    claimed: 2, succeeded: 0, deferred: 0, failedRetryable: 0, failedTerminal: 0,
+    legalHoldBlocked: 0, leaseLost: 1, persistenceFailed: 1,
+  });
+  const output = stderr.mock.calls.map(({ arguments: [line] }) => String(line));
+  stderr.mock.restore();
+  const logs = output.filter((line) => line.startsWith("{")).map((line) => JSON.parse(line));
+  assert.deepEqual(logs, [
+    {
+      timestamp: "2026-10-16T10:00:00.000Z",
+      level: "error",
+      event: "privacy.failure_persistence_failed",
+      tenant_id: tenantId,
+      privacy_job_id: first.id,
+      error_code: "08006",
+    },
+  ]);
+  assert.doesNotMatch(output.join(""), /Synthetic (?:database|discovery) failure/u);
+  assert.deepEqual(failureWrites, [[first.id, leaseId, first.fencingToken], [second.id, leaseId, second.fencingToken]]);
+  assert.deepEqual(statements.filter((sql) => ["BEGIN", "ROLLBACK", "COMMIT"].includes(sql)), ["BEGIN", "ROLLBACK", "BEGIN", "COMMIT"]);
+  await provider.forceFlush();
+  const outcomes = exporter.getMetrics().flatMap(({ scopeMetrics }) => scopeMetrics.flatMap(({ metrics }) => metrics))
+    .find(({ descriptor }) => descriptor.name === "wasalx_privacy_job_total").dataPoints;
+  assert.deepEqual(outcomes.map(({ attributes, value }) => ({ attributes, value })), [
+    { attributes: { job_type: "delete", result: "persistence_failed" }, value: 1 },
+    { attributes: { job_type: "delete", result: "lease_lost" }, value: 1 },
+  ]);
+});
 
 test("routine zero-work retention success stays out of the audit timeline", async () => {
   const empty = { zammadTickets: 0, botConversations: 0, normalizedMessages: 0, participantIdentities:0, groupWorkspaceParticipants:0, mediaObjects: 0, exportArtifacts: 0, unmatchedDiagnostics: 0 };
@@ -524,6 +587,7 @@ test("privacy processor checkpoints Zammad and object deletion before local comp
       failedTerminal: 0,
       legalHoldBlocked: 0,
       leaseLost: 0,
+      persistenceFailed: 0,
     });
   } finally {
     globalThis.fetch = originalFetch;
@@ -849,7 +913,7 @@ function privacySelectionHarness() {
   const statements = [], requests = new Map(), operations=new Map();
   let depth=0, resolveHook, targetReturnHook, lockHook, downloadHook;
   const authority={active:true,tenantActive:true,role:"tenant_owner",subject:"privacy-fixture-owner",email:"privacy-owner@example.test"};
-  let calls = 0, deny = false, mismatch = false, wakes = 0, failWake = false;
+  let calls = 0, deny = false, mismatch = false, wakes = 0, failWake = false, held = false;
   const request = { id: "privacy-selection", principal: { tenantId, userId: "11000000-0000-4000-8000-000000000001", role: "tenant_owner",
     subject:authority.subject,email:authority.email,
     authenticatedAt: Math.floor(Date.now() / 1000), authenticationMethods: ["mfa"] } };
@@ -866,7 +930,7 @@ function privacySelectionHarness() {
     if(sql.includes("FROM bot_flow_operations")) return {rows:operations.has(values[1])?[operations.get(values[1])]:[]};
     if(sql.includes("INSERT INTO bot_flow_operations")){operations.set(values[2],{action:values[1],request_sha256:values[3],result:values[4],requested_by:values[5]});return{rows:[]};}
     if (sql.includes("SELECT id,request_sha256,state")) return { rows: requests.has(values[1]) ? [requests.get(values[1])] : [] };
-    if (sql.includes("app.has_applicable_privacy_hold")) return { rows: [{ held: false }] };
+    if (sql.includes("app.has_applicable_privacy_hold")) return { rows: [{ held }] };
     if (sql.includes("INSERT INTO privacy_requests")) {
       const row = { id: requestId, state: "QUEUED", request_sha256: values[7] }; requests.set(values[6], row); return { rows: [row] };
     }
@@ -885,7 +949,7 @@ function privacySelectionHarness() {
   const controller = new PrivacyController(database, { wakePrivacy: async () => { wakes++; if (failWake) throw new Error("Synthetic wake response loss"); } }, {signedDownloadUrl:async()=>{if(downloadHook){const hook=downloadHook;downloadHook=undefined;await hook();}return"https://downloads.example.test/owned";}}, workspace);
   return { controller, request, statements, authority,
     onTargetReturn:hook=>{targetReturnHook=hook;},onLock:hook=>{lockHook=hook;},onDownload:hook=>{downloadHook=hook;}, input: { scopeType: "ZAMMAD_TICKET", scopeValue: "20261018123", selection_sha256: "a".repeat(64) },
-    onResolve: hook => {resolveHook=hook;}, calls: () => calls, wakes: () => wakes, failWake: value => { failWake = value; }, deny: () => { deny = true; }, mismatch: () => { mismatch = true; } };
+    onResolve: hook => {resolveHook=hook;}, calls: () => calls, wakes: () => wakes, failWake: value => { failWake = value; }, deny: () => { deny = true; }, hold: () => { held = true; }, mismatch: () => { mismatch = true; } };
 }
 
 test("privacy target lookup denies auditors before native identity access and hides native IDs", async () => {
@@ -932,6 +996,14 @@ test("privacy request jobs and holds persist only server-resolved native IDs and
     const auditor = { ...h.request, principal: { ...h.request.principal, role: "auditor" } };
     await h.controller.listRequests(auditor); assert.equal(h.statements.at(-1).values[1], false);
   }
+});
+
+test("privacy deletion under an active legal hold is refused with a stable code", async () => {
+  const h = privacySelectionHarness();
+  h.hold();
+  await assert.rejects(() => h.controller.createRequest(h.request, "privacy-held-deletion", { requestType: "DELETE", confirmation: "DELETE", ...h.input }),
+    error => error.getStatus() === 409 && error.getResponse().code === "LEGAL_HOLD_ACTIVE");
+  assert.equal(h.statements.filter(row => row.sql.includes("INSERT INTO privacy_requests")).length, 0);
 });
 
 test("privacy unknown-response replay recovers receipt after target deletion without another native lookup", async () => {

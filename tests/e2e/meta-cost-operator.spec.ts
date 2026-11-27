@@ -12,11 +12,12 @@ import type {MetaCostTariffInput,MetaCostSelectorEvidence} from '../../packages/
 // Only cost/metering responses below are mocked. Missing root-supplied platform
 // access is SKIP, never a tenant-fixture substitute or an authenticated PASS.
 const locale=process.env.WASALX_E2E_LOCALE==='ar'?'ar':'en';
+const browserLocale=locale==='ar'?'en-US':'ar-SA';
 const t=createTranslator<Readonly<Record<string,string>>>({...(locale==='ar'?arabicTenantMessages:englishTenantMessages),...(locale==='ar'?arabicPlatformMessages:englishPlatformMessages)});
 const state=process.env.WASALX_E2E_PLATFORM_STORAGE_STATE,platformUrl=process.env.WASALX_E2E_PLATFORM_URL;
 const tenant=process.env.WASALX_E2E_PLATFORM_TENANT_ID??'',tenantName=process.env.WASALX_E2E_PLATFORM_TENANT_NAME??'';
 const ready=Boolean(state&&platformUrl&&tenantName&&/^[0-9a-f-]{36}$/u.test(tenant)&&process.env.WASALX_E2E_REUSE_SERVER==='1');
-test.use({storageState:state??{cookies:[],origins:[]}});
+test.use({storageState:state??{cookies:[],origins:[]},locale:browserLocale});
 const uuid=(n:number)=>`31000000-0000-4000-8000-${String(n).padStart(12,'0')}`;
 const account=uuid(1),otherAccount=uuid(2),tariffId=uuid(3),statementId=uuid(4),policyA=uuid(5),policyB=uuid(6),terms=uuid(7);
 const from='2026-10-01T00:00:00.000Z',to='2026-11-01T00:00:00.000Z';
@@ -30,6 +31,8 @@ function row(n:number){return{id:uuid(1000+n),deliveryId:uuid(2000+n),accountId:
 const description=()=>({schemaVersion:1,basisKind:'CUSTOMER_TARIFF_DERIVATION',accountId:account,policyVersionId:policyA,commercialTermsVersionId:terms,periodFrom:from,periodTo:to,timezone:'UTC',currency:'USD',minorUnits:2,tariffVersionId:tariffId,upstreamStatementVersionIds:[uuid(8)]});
 function statementDetail(){return{id:statementId,version:3,state:'SOURCE_READY',purpose:'CUSTOMER_CHARGE',evidenceMode:'SIMULATED',currency:'USD',periodFrom:from,periodTo:to,sourceState:'NONE',description:description(),inputSha256:'f'.repeat(64),originalSha256:null,originalByteSize:null,originalMime:null,writeAttemptId:uuid(9),writeDisposition:'UNKNOWN',scanSha256:null,currentHeadId:null,priorAdjustments:[],verificationSha256:null,previewSha256:null,preview:null,publication:null,privacyReviews:[]};}
 async function setup(page:Page){
+ // The first filechooser listener enables interception asynchronously; subscribe before navigation so a keyboard-opened chooser is never missed.
+ page.on('filechooser',()=>undefined);
  const errors:string[]=[],expected:Array<{url:string;status:number}>=[];page.on('pageerror',error=>errors.push(error.message));
  page.on('console',message=>{if(message.type()!=='error')return;const i=expected.findIndex(x=>x.url===message.location().url&&message.text().includes(String(x.status)));if(i>=0)expected.splice(i,1);else errors.push(message.text());});
  const rows=Array.from({length:101},(_,i)=>row(i)),tariffs:Tariff[]=[],writes:Write[]=[];
@@ -61,10 +64,36 @@ async function setup(page:Page){
 async function enabled(locator:Locator){return await locator.count()>0&&await locator.isEnabled();}
 async function keyboardClick(page:Page,locator:Locator){await locator.focus();await page.keyboard.press('Enter');}
 
+async function chooseCostFile(page:Page,field:Locator,name:string,upload:ReturnType<typeof file>,direction:'ltr'|'rtl'){
+ const input=field.getByLabel(name,{exact:true});
+ const action=field.getByText(name,{exact:true}),status=field.getByRole('status');
+ await expect(input).toHaveAccessibleName(name);
+ await expect(input).toHaveAttribute('accept','.json,application/json');
+ await expect(action).toBeVisible();
+ await expect(status).toBeVisible();
+ await expect(status).toHaveText(t('cost.manage.noFile'));
+ await expect(input).toHaveAccessibleDescription(t('cost.manage.noFile'));
+ await input.focus();await page.keyboard.press('Shift+Tab');await expect(input).not.toBeFocused();
+ await page.keyboard.press('Tab');await expect(input).toBeFocused();
+ await expect(action).toHaveCSS('outline-style','solid');await expect(action).toHaveCSS('outline-width','2px');
+ const [chooser]=await Promise.all([page.waitForEvent('filechooser'),page.keyboard.press('Enter')]);
+ expect(chooser.isMultiple()).toBe(false);
+ await chooser.setFiles(upload);
+ const selected=`${t('cost.manage.selectedFile')} ${upload.name}`;
+ await expect(status).toHaveText(selected);
+ await expect(status.locator('bdi')).toHaveCSS('direction',direction);
+ await expect(input).toHaveAccessibleDescription(selected);
+ return input;
+}
+
 test('operator cost drafts, accepted activation and every bounded reassessment page remain reachable',async({page},info)=>{
  test.skip(!ready,'Requires root-supplied authenticated platform session and reused control-plane server');
  const h=await test.step("Open cost management",()=>setup(page));const reassess=h.management.getByRole('group',{name:t('cost.manage.reassess'),exact:true});
+ const ratePreview=h.management.getByRole('group',{name:t('cost.manage.tariff'),exact:true});
  await test.step("Check cost reassessment navigation",async()=>{
+  await expect(page.locator('html')).toHaveAttribute('lang',locale);
+  await expect(page.locator('html')).toHaveAttribute('dir',locale==='ar'?'rtl':'ltr');
+  expect(await page.evaluate(()=>navigator.language)).toBe(browserLocale);
   await expect(h.dialog.getByRole('navigation',{name:t('cost.pages'),exact:true})).toHaveCount(1);
   await expect(reassess.getByRole('navigation',{name:t('cost.manage.reassessPages'),exact:true})).toBeVisible();
  });
@@ -73,9 +102,10 @@ test('operator cost drafts, accepted activation and every bounded reassessment p
   else if(write.path.endsWith('/activate')){expect(write.body).toEqual({expectedDefinitionSha256:'2'.repeat(64),policyVersionId:policyB});h.tariffs[0]!.state='ACTIVE';}
   await route.fulfill({json:{ok:true}});
  });
- await test.step("Load cost tariff preview",async()=>{
-  await h.management.getByLabel(t('cost.manage.rateFile'),{exact:true}).setInputFiles(file(tariff()));
+ const rateInput=await test.step("Load cost tariff preview",async()=>{
+  const rateInput=await chooseCostFile(page,ratePreview,t('cost.manage.rateFile'),file(tariff(),'rates-نوفمبر.json'),'ltr');
   await expect(h.management.getByRole('table',{name:t('cost.manage.preview'),exact:true})).toContainText('USD 0.123456789012');
+  return rateInput;
  });
  await test.step("Check cost preview keyboard",async()=>{
   const tableScroll=h.management.getByRole("region",{name:t("cost.manage.preview"),exact:true});
@@ -95,6 +125,8 @@ test('operator cost drafts, accepted activation and every bounded reassessment p
  });
  await test.step("Save and activate cost tariff",async()=>{
   expect(h.writes).toHaveLength(0);await keyboardClick(page,h.management.getByRole('button',{name:t('cost.manage.saveDraft'),exact:true}));
+  await expect(rateInput).toHaveValue('');
+  await expect(rateInput).toHaveAccessibleDescription(t('cost.manage.noFile'));
   const activation=h.management.getByRole('button',{name:t('cost.manage.activate'),exact:true});await expect(activation).toBeDisabled();
   await h.management.getByRole('combobox',{name:t('cost.manage.acceptance'),exact:true}).selectOption(policyB);await keyboardClick(page,activation);await expect(activation).toHaveCount(0);
  });
@@ -123,16 +155,22 @@ test('operator cost drafts, accepted activation and every bounded reassessment p
   const firstItems=h.writes[2]!.body.items as Array<Record<string,unknown>>;expect(firstItems).toHaveLength(100);expect(firstItems.every(x=>!Object.hasOwn(x,'selectorEvidence'))).toBe(true);
   await waitForReassessment();
  });
- await test.step("Reassess final cost effect with selector",async()=>{
+ const selectorInput=await test.step("Reassess final cost effect with selector",async()=>{
   await keyboardClick(page,reassess.getByRole('button',{name:t('cost.next'),exact:true}));
   await expect(last).toHaveAccessibleName(new RegExp(t('cost.manage.message',{count:formatNumber(101,locale)})));
-  await last.focus();await page.keyboard.press('Space');await h.management.getByLabel(t('cost.manage.selectorFile'),{exact:true}).setInputFiles(file(selector));await selectedButton().click();await expect.poll(()=>h.writes.length).toBe(4);
+  await last.focus();await page.keyboard.press('Space');
+  const selectorInput=await chooseCostFile(page,reassess,t('cost.manage.selectorFile'),file(selector,'أدلة-2026.json'),'rtl');
+  await selectedButton().click();await expect.poll(()=>h.writes.length).toBe(4);
   expect(h.writes[3]!.body.items).toEqual([{deliveryId:h.rows[100]!.deliveryId,expectedHeadId:h.rows[100]!.id,selectorEvidence:selector}]);
   await waitForReassessment();
+  return selectorInput;
  });
  await test.step("Withdraw cost selector evidence",async()=>{
   await expect(last).not.toBeChecked();
-  await last.check();await clearSelector.check();await selectedButton().click();await expect.poll(()=>h.writes.length).toBe(5);
+  await last.check();await clearSelector.check();
+  await expect(selectorInput).toHaveValue('');
+  await expect(selectorInput).toHaveAccessibleDescription(t('cost.manage.noFile'));
+  await selectedButton().click();await expect.poll(()=>h.writes.length).toBe(5);
   expect(h.writes[4]!.body.items).toEqual([{deliveryId:h.rows[100]!.deliveryId,expectedHeadId:h.rows[100]!.id,selectorEvidence:null}]);
   await waitForReassessment();
  });
@@ -159,7 +197,7 @@ test('operator cost drafts, accepted activation and every bounded reassessment p
 });
 
 test('statement file replacements invalidate all four imported actions and stale read completions',async({page},info)=>{
- test.skip(!ready,'Requires root-supplied authenticated platform session and reused control-plane server');test.setTimeout(90_000);
+ test.skip(!ready,'Requires root-supplied authenticated platform session and reused control-plane server');
  await page.addInitScript(()=>{const original=File.prototype.text;const controls={release:undefined as undefined|(()=>void),finished:false};Object.assign(window,{costFileRead:controls});File.prototype.text=function(){if(this.name!=='delayed.json')return original.call(this);return new Promise(resolve=>{controls.finished=false;controls.release=()=>{void original.call(this).then(value=>{resolve(value);controls.finished=true;});};});};});
  const h=await setup(page);
  await test.step('Select statement version',()=>h.statement.getByRole('combobox',{name:t('cost.statement.version'),exact:true}).selectOption(statementId));
@@ -200,13 +238,14 @@ for(const kind of ['tariff','statement'] as const)test(`operator ${kind} uncerta
  else{await h.statement.getByLabel(t('cost.statement.descriptionFile'),{exact:true}).setInputFiles(file(description()));await h.statement.getByRole('button',{name:t('cost.statement.reserve'),exact:true}).click();}
  const reconcile=h.dialog.getByRole('button',{name:t('cost.manage.reconcile'),exact:true});await expect(reconcile).toBeVisible();expect(h.writes).toHaveLength(1);
  await h.dialog.getByRole('combobox',{name:t('cost.account'),exact:true}).selectOption(otherAccount);await h.dialog.getByLabel(t('cost.from'),{exact:true}).fill('2026-09-01T00:00');
- await expect(h.dialog.getByLabel(t('cost.manage.rateFile'),{exact:true})).toBeDisabled();expect(h.writes).toHaveLength(1);
+ await expect(h.dialog.getByLabel(t('cost.manage.rateFile'),{exact:true})).toBeDisabled();
+ await expect(h.dialog.getByLabel(t('cost.manage.selectorFile'),{exact:true})).toBeDisabled();expect(h.writes).toHaveLength(1);
  await keyboardClick(page,reconcile);await expect(reconcile).toHaveCount(0);expect(h.writes).toHaveLength(2);expect(h.writes[1]).toEqual(h.writes[0]);
  expect(original?.path).toBe(`${root()}/${kind==='tariff'?'tariffs':'statements'}`);expect(original?.body).toEqual(kind==='tariff'?{definition:tariff(),supersedesId:null}:description());expect(h.expected).toEqual([]);expect(h.errors).toEqual([]);
 });
 
 test('operator tariff and selector replacement reads never submit stale imported input',async({page})=>{
- test.skip(!ready,'Requires root-supplied authenticated platform session and reused control-plane server');test.setTimeout(90_000);
+ test.skip(!ready,'Requires root-supplied authenticated platform session and reused control-plane server');
  await page.addInitScript(()=>{const original=File.prototype.text;const controls={release:undefined as undefined|(()=>void),finished:false};Object.assign(window,{costImportRead:controls});
   File.prototype.text=function(){if(this.name!=='delayed.json')return original.call(this);return new Promise(resolve=>{controls.finished=false;controls.release=()=>{void original.call(this).then(value=>{resolve(value);controls.finished=true;});};});};});
  const h=await setup(page),reassess=h.management.getByRole('group',{name:t('cost.manage.reassess'),exact:true});

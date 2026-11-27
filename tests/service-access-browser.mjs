@@ -4,10 +4,13 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { chromium, expect } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 import { getMessages } from "../lib/i18n/messages/index.ts";
+import { syntheticBrowserTrace } from "./helpers/synthetic-browser-trace.mjs";
+
 const output = process.env.WASALX_SYNTHETIC_UI_OUTPUT ?? "output/playwright/service-access";
 const base = process.env.WASALX_STORYBOOK_URL ?? "http://127.0.0.1:6227";
 await mkdir(output, { recursive: true });
 const browser = await chromium.launch({ ...(process.env.WASALX_VISUAL_BROWSER_PATH ? { executablePath: process.env.WASALX_VISUAL_BROWSER_PATH } : {}), headless: true });
+const trace = syntheticBrowserTrace(browser, base, output);
 
 async function captureReview(page, dialog, locale, state, disabled = false, theme) {
   if (theme) await expect(page.locator("#storybook-root > .wx-story-canvas")).toHaveClass(new RegExp(`\\btheme-${theme}\\b`, "u"));
@@ -75,7 +78,7 @@ const results = [];
 const storageKey = "wasalx:identity-operation:storybook:synthetic-service-access";
 try {
   for (const locale of ["en", "ar"]) {
-    const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+    const context = await trace.newContext({ viewport: { width: 1440, height: 1000 } });
     const page = await context.newPage(), messages = getMessages(locale);
     const t = key => { assert.equal(typeof messages[key], "string"); return messages[key]; };
     const button = key => page.getByRole("button", { name: t(key), exact: true });
@@ -277,6 +280,23 @@ try {
       await protectedPage.close();
       results.push({ locale, status: "passed", writes: writes.length, reads: reads.length });
     } catch (failure) { results.push({ locale, status: "failed", error_class: failure.name }); throw failure; }
-    finally { await context.close(); }
+    await trace.closeContext(context);
   }
-} finally { await writeFile(`${output}/synthetic-ui-results.json`, JSON.stringify({ mode: "simulated_bridge", evidence_scope: "exploratory_ui", cases: results }, null, 2)); await browser.close(); }
+} catch (error) {
+  await trace.retainFailure();
+  throw error;
+} finally {
+  await writeFile(
+    `${output}/synthetic-ui-results.json`,
+    JSON.stringify(
+      {
+        mode: "simulated_bridge",
+        evidence_scope: "exploratory_ui",
+        cases: results,
+      },
+      null,
+      2,
+    ),
+  );
+  await browser.close();
+}

@@ -5,12 +5,10 @@ ARG TARGETARCH=amd64
 ENV GOPROXY=https://proxy.golang.org,direct \
     GOWORK=off
 RUN apk add --no-cache bash gzip
-ADD --checksum=sha256:9294e72722fe8f90e54994ce36f331ea6176cb0edc4149cbf1d023bc89536505 \
-  https://github.com/prometheus/prometheus/archive/refs/tags/v3.14.0.tar.gz /tmp/source.tar.gz
+ADD https://github.com/prometheus/prometheus.git#d7598b7141418fa35be2b5ec5d0fefb634199610 /src
 ADD --checksum=sha256:be18623c5891d32572998070de0d48522c966b737d9204aa41e0e88d6318e029 \
   https://github.com/prometheus/prometheus/releases/download/v3.14.0/prometheus-web-ui-3.14.0.tar.gz /tmp/ui.tar.gz
-RUN mkdir /src && tar -xzf /tmp/source.tar.gz -C /src --strip-components=1 && \
-    tar -xzf /tmp/ui.tar.gz -C /src/web/ui
+RUN tar -xzf /tmp/ui.tar.gz -C /src/web/ui
 WORKDIR /src
 RUN PREBUILT_ASSETS_STATIC_DIR=/src/web/ui/static ./scripts/compress_assets.sh && \
     go get google.golang.org/grpc@v1.83.2

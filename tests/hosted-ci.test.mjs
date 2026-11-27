@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, posix } from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -149,8 +149,12 @@ test("tracked tests belong to a named CI runner or the test allowlist", async ()
     return exe === "pnpm" && (action === "run" ? script : action);
   }).filter(script => script && Object.hasOwn(scripts, script)));
   const runnerNames = [...Object.keys(jobs), ...ciScripts];
-  const runnerText = runner => Object.hasOwn(jobs, runner) ? runText(jobs[runner])
-    : Object.hasOwn(scripts, runner) ? scripts[runner] : "";
+  const runnerText = runner => {
+    const job = jobs[runner];
+    if (!job) return scripts[runner] ?? "";
+    const calledJobs = workflowJobs.get(job.uses?.replace(/^\.\//u, ""));
+    return calledJobs ? Object.values(calledJobs).map(runText).join("\n") : runText(job);
+  };
   assert(runsFile(runnerText("checks"), "scripts/hosted-ci.mjs", "unit"), "The unit inventory must run in CI");
 
   const unitWrappers = await Promise.all(["tests/application-e2e-harness.test.mjs", "tests/ci-phase-admission.test.mjs",
@@ -173,10 +177,18 @@ test("tracked tests belong to a named CI runner or the test allowlist", async ()
       "tests/visual/inbox-synthetic.spec.ts", "scripts/storybook-visual-regression.mjs", "scripts/run-application-e2e.mjs"].map(read));
   const operatorRunner = await read("tests/hosted-platform-operator.mjs");
   const identityRunner = await read("tests/hosted-keycloak-identity.mjs");
-  const fixtureSpecs = new Map(jobs["application-e2e"].strategy.matrix.locale.map(locale => {
-    const cases = discoverBrowserCases({ argv: ["pnpm", "test:e2e"], env: {
-      WASALX_E2E_LOCALES: locale, WASALX_E2E_ROLES: "tenant_owner", WASALX_E2E_PLATFORM_URL: "",
-    } });
+  const applicationMatrix = jobs["application-e2e"].strategy.matrix;
+  const ownerSuites = applicationMatrix.suite.filter(suite => suite.roles === "tenant_owner");
+  const fixtureSpecs = new Map(applicationMatrix.locale.map(locale => {
+    const argv = ["pnpm", "test:e2e"];
+    const env = { WASALX_E2E_LOCALES: locale, WASALX_E2E_ROLES: "tenant_owner",
+      WASALX_E2E_PLATFORM_URL: "", WASALX_E2E_OWNER_PART: "" };
+    const cases = discoverBrowserCases({ argv, env });
+    const splitCases = ownerSuites.flatMap(suite => discoverBrowserCases({
+      argv, env: { ...env, WASALX_E2E_OWNER_PART: suite.owner_part },
+    }));
+    assert.deepEqual(splitCases.sort((a, b) => a.id.localeCompare(b.id, "en")), cases,
+      `Owner shards must run every ${locale} case exactly once`);
     return [locale, new Set(cases.filter(row => row.expectedStatus !== "skipped").map(row => posix.join("tests/e2e", row.file)))];
   }));
   const runsTofu = /^\s+"\$\{TOFU\[@\]\}" -chdir=infra\/terraform test -no-color$/mu.test(validation)
@@ -260,12 +272,38 @@ test("CI job timeouts are covered by the measured limits", async () => {
   const timing = JSON.parse(await read(".github/ci-timings.json"));
   const configured = Object.entries(jobs).filter(([, job]) => Object.hasOwn(job, "timeout-minutes"));
   // These jobs landed after the timing sample and still need measurements.
-  const unmeasured = ["application-e2e", "installer-portal", "keycloak-identity", "platform-operator-e2e", "portal-browser-build"];
-  assert.deepEqual(configured.map(([id]) => id).sort(), [...Object.keys(timing.jobs), ...unmeasured].sort());
-  for (const [id, { p95_minutes: p95 }] of Object.entries(timing.jobs)) {
+  const unmeasured = ["installer-portal", "keycloak-identity", "platform-operator-e2e", "portal-browser-build", "seed-caches"];
+  const { publish, ...ciJobs } = timing.jobs;
+  assert.deepEqual(configured.map(([id]) => id).sort(), [...Object.keys(ciJobs), ...unmeasured].sort());
+  for (const [id, { p95_minutes: p95, owner_parts: ownerParts }] of Object.entries(ciJobs)) {
+    if (id === "application-e2e") {
+      const ownerSuites = jobs[id].strategy.matrix.suite.filter(suite => suite.roles === "tenant_owner");
+      assert.deepEqual(ownerSuites.map(suite => suite.owner_part).sort(), Object.keys(ownerParts).sort());
+      for (const { owner_part, timeout } of ownerSuites) {
+        const partP95 = ownerParts[owner_part].p95_minutes;
+        assert(Number.isFinite(partP95) && partP95 > 0, owner_part);
+        assert.equal(timeout, Math.ceil(partP95 * 1.25), owner_part);
+      }
+      continue;
+    }
     const timeout = jobs[id]["timeout-minutes"];
     assert(Number.isInteger(timeout) && timeout > 0 && timeout <= Math.ceil(p95 * 1.25), id);
   }
+
+  assert.equal(publish.workflow, ".github/workflows/branch-image.yml");
+  const release = parse(await read(publish.workflow)).jobs.publish;
+  const image = "connector-worker";
+  const p95 = publish.image_legs[image].p95_minutes;
+  const matrixP95 = publish.p95_minutes;
+  assert(Number.isFinite(matrixP95) && Number.isFinite(p95) && p95 > 0 && p95 <= matrixP95);
+  assert(release.strategy.matrix.image.includes(image));
+  const connectorTimeout = Math.ceil(p95 * 1.25);
+  const matrixTimeout = Math.ceil(matrixP95 * 1.25);
+  assert.equal(
+    release["timeout-minutes"],
+    "${{ matrix.image == '" + image + "' && " + connectorTimeout + " || " + matrixTimeout + " }}",
+  );
+  assert.match((await read("DELIVERY.md")).split("\n").find(line => line.startsWith("| §4/§8 ")), /main image publication matrix/u);
 });
 
 test("Storybook selects UI changes and unknown diffs", async (t) => {
@@ -274,9 +312,13 @@ test("Storybook selects UI changes and unknown diffs", async (t) => {
   assert.equal(selection.if, undefined);
   assert.equal(selection.env.BASE, "${{ steps.selector-base.outputs.sha }}");
   assert.equal(jobs.storybook.needs, "changes");
-  assert.match(jobs.storybook.if, /github\.event_name == 'push'/u);
+  assert.match(jobs.storybook.if, /github\.event_name != 'push'/u);
   assert.match(jobs.storybook.if, /needs\.changes\.result != 'success' \|\| needs\.changes\.outputs\.storybook != 'false'/u);
   assert.match(jobs.storybook.if, /github\.event_name == 'workflow_dispatch'/u);
+  assert(jobs.storybook.steps.some(({ run }) =>
+    run && runsFile(run, "scripts/storybook-visual-regression.mjs", "--update-snapshots=none")
+    && words(run).includes("tests/visual/storybook-ci.spec.ts")
+    && words(run).includes("tests/visual/design-system.spec.ts")));
   assert(jobs["ci-gate"].needs.includes("storybook"));
   const [gateStep] = jobs["ci-gate"].steps;
   assert.equal(gateStep.env.STORYBOOK_NEEDED, "${{ needs.changes.outputs.storybook }}");
@@ -286,11 +328,12 @@ test("Storybook selects UI changes and unknown diffs", async (t) => {
   t.after(() => rm(directory, { recursive: true, force: true }));
   const output = join(directory, "output");
 
-  for (const [status, expected] of [[0, "false"], [1, "true"], [128, "true"]]) {
+  const base = "a".repeat(40);
+  for (const [baseRef, status, expected] of [[base, 0, "false"], [base, 1, "true"], [base, 128, "true"], ["", 0, "true"]]) {
     await writeFile(output, "");
     const result = runWorkflowScript(
       `git() { case " $* " in *" app/ "*) return "$DIFF_STATUS";; *) return 0;; esac; }\n${selection.run}`,
-      { BASE: "a".repeat(40), DIFF_STATUS: String(status), GITHUB_OUTPUT: output },
+      { BASE: baseRef, DIFF_STATUS: String(status), GITHUB_OUTPUT: output.replaceAll("\\", "/") },
     );
     assert.equal(result.status, 0, result.stderr);
     assert.equal((await readFile(output, "utf8")).trim(), `needed=${expected}`);
@@ -356,6 +399,8 @@ test("TypeScript comparison runs as an advisory job on affected PRs", async t =>
   const job = jobs["typescript-comparison"];
   const selection = jobs.changes.steps.find(step => step.id === "typescript-comparison");
   assert.equal(jobs.changes.outputs["typescript-comparison"], "${{ steps.typescript-comparison.outputs.needed }}");
+  assert.equal(selection.if, "github.event_name == 'pull_request'");
+  assert.equal(selection.env.BASE, "${{ steps.selector-base.outputs.sha }}");
   assert.equal(job.needs, "changes");
   assert.equal(job.if, "${{ !cancelled() && github.event_name == 'pull_request' && needs.changes.outputs.typescript-comparison != 'false' }}");
   assert.equal(job.strategy, undefined);
@@ -375,7 +420,7 @@ test("TypeScript comparison runs as an advisory job on affected PRs", async t =>
   git("config", "user.name", "Fixture");
   git("config", "user.email", "fixture@example.invalid");
   git("commit", "--quiet", "--allow-empty", "-m", "Base");
-  const output = join(directory, "selection");
+  const output = join(directory, "selection").replaceAll("\\", "/");
   for (const [file, needed] of [[null, true], ["README.md", false], ["compiler.ts", true], ["pnpm-lock.yaml", true]]) {
     if (file) {
       await writeFile(join(directory, file), "fixture\n");
@@ -383,7 +428,8 @@ test("TypeScript comparison runs as an advisory job on affected PRs", async t =>
       git("commit", "--quiet", "-m", "Change one input");
     }
     await writeFile(output, "");
-    const result = runWorkflowScript(selection.run, { GITHUB_OUTPUT: output }, directory);
+    const base = file ? git("rev-parse", "HEAD^1").toString().trim() : "";
+    const result = runWorkflowScript(selection.run, { BASE: base, GITHUB_OUTPUT: output }, directory);
     assert.equal(result.status, 0, result.stderr);
     assert.equal((await readFile(output, "utf8")).trim(), `needed=${needed}`, file ?? "unavailable base");
   }
@@ -391,7 +437,7 @@ test("TypeScript comparison runs as an advisory job on affected PRs", async t =>
 
 test("nightly install is report-only, read-only and runs on schedule, dispatch and RC tags", async () => {
   const path = ".github/workflows/nightly-install.yml";
-  const { on, permissions, concurrency, jobs } = parse(await read(path));
+  const { on, permissions, jobs } = parse(await read(path));
   const job = jobs["nightly-install"];
   assert.equal(job["continue-on-error"], undefined);
   assert.deepEqual(on, {
@@ -403,10 +449,6 @@ test("nightly install is report-only, read-only and runs on schedule, dispatch a
   });
   assert.match(job.if, /\(github\.event_name == 'push' && github\.ref_type == 'tag'\)/u);
   assert.match(job.if, /github\.event_name == 'workflow_dispatch'/u);
-  assert.deepEqual(concurrency, {
-    group: "nightly-${{ github.event.pull_request.number || github.run_id }}",
-    "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
-  });
   assert.deepEqual(permissions, { contents: "read" });
   assert.deepEqual(job.permissions, { contents: "read", actions: "read" });
   assert.equal(job["runs-on"], "ubuntu-24.04");
@@ -417,13 +459,6 @@ test("nightly install is report-only, read-only and runs on schedule, dispatch a
   assert(remoteActions.every(step => /@[0-9a-f]{40}$/u.test(step.uses)));
   assert.equal(actions.find(step => step.uses.startsWith("actions/checkout@")).with["persist-credentials"], false);
   assert(!JSON.stringify(job).includes("secrets."));
-  const changeSelection = job.steps.find(step => step.id === "changes");
-  assert.equal(changeSelection.if, "github.event_name == 'pull_request'");
-  const changes = changeSelection.run;
-  assert.match(changes, /needed=true\nif git diff --quiet[^]*; then\n {2}needed=false\nfi/u);
-  for (const input of ["scripts/release/installer-*", "scripts/dev-install/**", "compose*.yaml", path, "release/installer-images.json",
-    "scripts/release/compose-stage-lock.mjs", "scripts/release/compose-stage-config.json", "scripts/release/simulation-rails-json.mjs",
-    "scripts/installer-evidence.mjs", "infra/docker/full/**"]) assert(changes.includes(input));
   assert(job.steps.some(step => step.if?.startsWith("always()")));
   assert(!parse(await read(".github/workflows/ci.yml")).jobs["ci-gate"].needs.includes("nightly-install"));
   const rehearsal = await read("scripts/release/installer-nightly.sh");
@@ -439,7 +474,6 @@ test("nightly census confirmation accepts matching counts from the rehearsal", a
   const { jobs } = parse(await read(".github/workflows/nightly-install.yml"));
   const confirmation = jobs["nightly-install"].steps.find(step => step.name === "Confirm census PASS");
   assert.equal(confirmation.env.COMMIT, "${{ steps.publication.outputs.commit }}");
-  assert.match(confirmation.if, /github\.event_name != 'pull_request' \|\| /u);
   const directory = await mkdtemp(join(tmpdir(), "nightly-census-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const diagnostics = join(directory, "wasalx-nightly", "diagnostics");
@@ -507,76 +541,56 @@ phase fresh-smoke 3m node scripts/release/installer-stages.mjs smoke
   assert.equal((await readFile(join(directory, "installer.log"), "utf8")).trim(), diagnostic);
 });
 
-test("PR installer skips only when the publication migration tree differs", async t => {
-  const { jobs } = parse(await read(".github/workflows/nightly-install.yml"));
-  const steps = jobs["nightly-install"].steps;
-  const changes = steps.find(step => step.id === "changes");
-  const check = steps.find(step => step.id === "migration-check");
-  const rehearsal = steps.find(step => step.name === "Rehearse full installation and controlled recreation");
-  assert.equal(check.if, "github.event_name == 'pull_request' && steps.changes.outputs.needed != 'false'");
-  assert.equal(check.env.PUBLICATION_COMMIT, "${{ steps.publication.outputs.commit }}");
-  assert.equal(rehearsal.if, "steps.changes.outputs.needed != 'false' && steps.migration-check.outputs.skip != 'true'");
-  assert.equal(rehearsal["continue-on-error"], undefined);
+test("nightly installer uses the active full Compose mirror without a second digest pin", async () => {
+  const full = parse(await read("compose.full.yaml"), { logLevel: "silent" });
+  const nightly = parse(await read("scripts/release/installer-nightly.compose.yaml"), { logLevel: "silent" });
+  const rehearsal = await read("scripts/release/installer-nightly.sh");
+  assert.match(rehearsal, /mirrors=\$\(python3 -B scripts\/release\/installer-mirror-images\.py references\)/u);
 
-  const directory = await mkdtemp(join(tmpdir(), "nightly-migrations-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
-  const git = (...args) => execFileSync("git", args, { cwd: directory, encoding: "utf8", windowsHide: true }).trim();
-  git("init", "--quiet", "--template=");
-  git("config", "user.name", "Fixture");
-  git("config", "user.email", "fixture@example.invalid");
-  const migrations = "services/control-api/migrations";
-  const updated = `${migrations}/0001_updated.sql`;
-  const removed = `${migrations}/0002_removed.sql`;
-  const added = `${migrations}/0003_added.sql`;
-  await mkdir(join(directory, migrations), { recursive: true });
-  await writeFile(join(directory, updated), "SELECT 1;\n");
-  await writeFile(join(directory, removed), "SELECT 2;\n");
-  git("add", "--", migrations);
-  git("commit", "--quiet", "-m", "Published migrations");
-  const publication = git("rev-parse", "HEAD");
-  await writeFile(join(directory, updated), "SELECT 3;\n");
-  await writeFile(join(directory, added), "SELECT 4;\n");
-  git("rm", "--quiet", "--", removed);
-  git("add", "--", migrations);
-  git("commit", "--quiet", "-m", "Change migrations");
-  assert.equal(runWorkflowScript(changes.run, { GITHUB_OUTPUT: "selection" }, directory).status, 0);
-  assert.equal((await readFile(join(directory, "selection"), "utf8")).trim(), "needed=true");
-
-  const matching = git("rev-parse", "HEAD");
-  git("commit", "--quiet", "--allow-empty", "-m", "Unrelated candidate commit");
-  for (const [commit, status, skip] of [[publication, 0, true], [matching, 0, false], ["missing-commit", 128, false]]) {
-    const summaryFile = join(directory, "summary");
-    const outputFile = join(directory, "output");
-    await writeFile(summaryFile, "");
-    await writeFile(outputFile, "");
-    const result = runWorkflowScript(check.run, {
-      PUBLICATION_COMMIT: commit, GITHUB_OUTPUT: "output", GITHUB_STEP_SUMMARY: "summary",
-    }, directory);
-    assert.equal(result.status, status, result.error?.message ?? result.stderr);
-    assert.equal((await readFile(outputFile, "utf8")).trim(), skip ? "skip=true" : "");
-    const summary = await readFile(summaryFile, "utf8");
-    assert.equal(result.stdout, summary);
-    assert.equal(summary, skip
-      ? `Installer rehearsal skipped: PR changes migrations; main publication cannot represent them\n\n\`\`\`\n${[updated, removed, added].join("\n")}\n\`\`\`\n`
-      : "");
-  }
-});
-
-test("nightly MinIO mirrors retain the full installer content digests", async () => {
-  const loadServices = async file => parse(await read(file), { logLevel: "silent" }).services;
-  const [full, nightly] = await Promise.all([
-    loadServices("compose.full.yaml"),
-    loadServices("scripts/release/installer-nightly.compose.yaml"),
-  ]);
-  for (const [service, repositoryName] of [["minio", "minio"], ["minio-bootstrap", "mc"]]) {
-    const [repository, digest] = nightly[service].image.split("@");
-    assert.equal(repository, `ghcr.io/wasalx/${repositoryName}`);
+  const python = process.platform === "win32" ? "python" : "python3";
+  const references = execFileSync(python, ["-B", "scripts/release/installer-mirror-images.py", "references"], {
+    cwd: repository, encoding: "utf8", timeout: 10_000,
+  });
+  const rows = JSON.parse(references);
+  const inventory = full["x-object-storage-mirrors"];
+  assert.deepEqual(Object.keys(inventory).sort(), ["minio", "minio-bootstrap"]);
+  const sources = Object.entries(inventory).map(([service, row], index) => {
+    assert.equal(nightly.services[service], undefined);
+    const image = full.services[service].image;
+    const source = image.replace(/:[^/:]+(?=@)/u, "");
+    const digest = source.split("@")[1];
     assert.match(digest, /^sha256:[0-9a-f]{64}$/u);
-    assert.equal(digest, full[service].image.split("@")[1]);
-  }
+    assert.deepEqual(rows[index], { source, mirror: `${row.mirror}@${digest}` });
+    return image;
+  });
+  assert.equal(rows.length, sources.length);
+
+  const registry = "127.0.0.1:5007";
+  const ordinary = `docker.io/library/redis@sha256:${"d".repeat(64)}`;
+  const staging = rehearsal.match(/node --input-type=module -e '([^']+)' "\$registry" "\$mirrors"/u);
+  assert.ok(staging, "missing the nightly registry plan");
+  const plan = (catalog, input) => spawnSync(process.execPath, ["--input-type=module", "-e", staging[1], registry, catalog], {
+    cwd: repository, input: input.join("\n"), encoding: "utf8", timeout: 5_000,
+  });
+  const result = plan(references, [...sources, ordinary]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(result.stdout.trim().split(/\r?\n/u), [...rows.map(row => row.mirror), ordinary].map(reference => {
+    const digest = reference.split("@")[1];
+    return `${reference} ${registry}/staged/${digest.slice(7)}@${digest}`;
+  }));
+
+  const missing = plan(JSON.stringify([{ source: rows[0].source }, ...rows.slice(1)]), [...sources, ordinary]);
+  assert.equal(missing.status, 1, missing.stderr);
+  assert.match(missing.stderr, /Missing mirror for /u);
+  assert.equal(missing.stdout, "");
+
+  const absent = plan(references, [...sources.slice(1), ordinary]);
+  assert.equal(absent.status, 1, absent.stderr);
+  assert.match(absent.stderr, /Inventory source absent from resolved images/u);
+  assert.equal(absent.stdout, "");
 });
 
-test("nightly binds qualification to a complete main publication and labels PR image fixtures", async t => {
+test("nightly binds qualification to a complete main publication", async t => {
   const directory = await mkdtemp(join(tmpdir(), "nightly-publication-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const options = { cwd: directory, encoding: "utf8", windowsHide: true };
@@ -605,8 +619,7 @@ test("nightly binds qualification to a complete main publication and labels PR i
   gitAt(now, "commit", "--quiet", "-m", "unpublished catalog");
   const side = gitAt(now, "commit-tree", tree, "-p", parent, "-m", "side branch");
   const base = gitAt(now, "commit-tree", tree, "-p", parent, "-p", side, "-m", "base merge");
-  const prHead = git("rev-parse", "HEAD");
-  const prMerge = gitAt(now, "commit-tree", tree, "-p", base, "-p", prHead, "-m", "PR merge");
+  const dispatchHead = git("rev-parse", "HEAD");
   const commits = git("rev-list", "--first-parent", base).split(/\r?\n/u);
   const tag = "v0.0.0-rc.1";
   git("tag", "-a", tag, base, "-m", "fixture tag");
@@ -656,25 +669,18 @@ gh() {
   esac
 }
 `;
-  const fixture = commit => `PR signed-image fixture uses main publication ${commit} (run 101, PR base ${base}).`;
-  const fallback = `${fixture(commits[4])} The PR base has no complete green publication.`;
   const blocked = reason => `BLOCKED: Exact main publication for ${base} is unavailable (${reason}).`;
   const exact = `Exact main publication ${base} is complete (run 101).`;
   const latest = (commit, skipped) => `Selected main publication ${commit} (run 101), skipped ${skipped} newer commits.`;
   const noRecent = "BLOCKED: No complete green main publication from the last 24 hours (searched up to 50 first-parent main commits).";
   const cases = [
-    { ready: base, selected: base, lookups: [base], summary: fixture(base) },
-    { ready: commits[4], incomplete: commits[1], expired: commits[2], noJob: commits[3],
-      selected: commits[4], lookups: commits.slice(0, 5), summary: fallback, warning: fallback },
-    { ready: commits[5], lookups: commits.slice(0, 5), reason: "No complete green main publication" },
-    { ready: side, lookups: commits.slice(0, 5), reason: "No complete green main publication" },
-    { ready: commits[1], lookupError: base, lookups: commits.slice(0, 1), status: 17 },
-    { ready: commits[1], invalid: true, lookups: commits.slice(0, 2), status: 5, reason: "Invalid nightly publication manifest" },
     ...["schedule", "workflow_dispatch"].flatMap(event => [
       { event, ready: base, selected: base, lookups: [base], summary: latest(base, 0) },
       { event, ready: commits[1], selected: commits[1], lookups: commits.slice(0, 2), summary: latest(commits[1], 1) },
-      { event, ready: commits[2], incomplete: commits[1], selected: commits[2], lookups: commits.slice(0, 3),
-        summary: latest(commits[2], 2) },
+      { event, ready: commits[4], incomplete: commits[1], expired: commits[2], noJob: commits[3],
+        selected: commits[4], lookups: commits.slice(0, 5), summary: latest(commits[4], 4) },
+      { event, ready: side, lookups: commits.slice(0, 5), summary: noRecent },
+      { event, ready: commits[1], lookupError: base, lookups: [base], status: 17 },
       { event, ready: commits[5], lookups: commits.slice(0, 5), summary: noRecent },
     ]),
     ...[
@@ -690,8 +696,8 @@ gh() {
   ];
   const bash = process.platform === "win32" ? "C:/Program Files/Git/bin/bash.exe" : "bash";
   for (const { ready, selected, incomplete = "", expired = "", noJob = "", lookupError = "", invalid = false,
-    event = "pull_request", input = "", lookups, status = selected ? 0 : 1, reason, summary = "", warning } of cases) {
-    const head = { pull_request: prMerge, workflow_dispatch: prHead }[event] ?? base;
+    event, input = "", lookups, status = selected ? 0 : 1, reason, summary = "" } of cases) {
+    const head = event === "workflow_dispatch" ? dispatchHead : base;
     const tagPush = event === "push";
     git("checkout", "--quiet", "--detach", head);
     await rm(join(directory, "wasalx-nightly"), { recursive: true, force: true });
@@ -703,20 +709,17 @@ gh() {
         ...process.env, GITHUB_REPOSITORY: "fixture/nightly", BASE: base, SIDE: side, READY: ready, INCOMPLETE: incomplete,
         EXPIRED: expired, NO_JOB: noJob, LOOKUP_ERROR: lookupError, INVALID: String(invalid),
         GITHUB_EVENT_NAME: event, GITHUB_REF_TYPE: tagPush ? "tag" : "branch",
-        GITHUB_REF: tagPush ? `refs/tags/${tag}` : {
-          pull_request: "refs/pull/1/merge", workflow_dispatch: "refs/heads/candidate",
-        }[event] ?? "refs/heads/main",
+        GITHUB_REF: tagPush ? `refs/tags/${tag}`
+          : event === "workflow_dispatch" ? "refs/heads/candidate" : "refs/heads/main",
         DISPATCH_COMMIT: input, NOW: String(now / 1000),
-        GITHUB_SHA: head, GITHUB_OUTPUT: "publication-output", GITHUB_STEP_SUMMARY: "publication-summary", RUNNER_TEMP: ".",
+        GITHUB_OUTPUT: "publication-output", GITHUB_STEP_SUMMARY: "publication-summary", RUNNER_TEMP: ".",
       },
     });
     assert.ifError(result.error);
     assert.equal(result.status, status, `${event}\n${result.stdout}${result.stderr}`);
-    assert.equal(git("rev-parse", "HEAD"), event === "pull_request" ? head : selected ?? head);
+    assert.equal(git("rev-parse", "HEAD"), selected ?? head);
     assert.equal((await readFile(join(directory, "publication-output"), "utf8")).trim(), selected ? `commit=${selected}` : "");
     if (reason) assert.ok((result.stdout + result.stderr).includes(reason), result.stderr);
-    const annotations = result.stderr.split(/\r?\n/u).filter(line => line.startsWith("::warning::"));
-    assert.deepEqual(annotations, warning ? [`::warning::${warning}`] : []);
     assert.equal((await readFile(join(directory, "publication-summary"), "utf8")).trim(), summary);
     if (summary.startsWith("BLOCKED")) assert.ok(result.stderr.includes(`::error::${summary}`), result.stderr);
     if (selected) {
@@ -728,89 +731,107 @@ gh() {
   }
 });
 
-test("MinIO mirror is dispatch-only on main and verifies the raw manifest digest", async t => {
-  const { on, permissions, jobs } = parse(await read(".github/workflows/mirror-images.yml"));
-  const { mirror } = jobs;
-  assert.deepEqual(on, { workflow_dispatch: null });
-  assert.deepEqual(permissions, {});
-  assert.deepEqual(Object.keys(jobs), ["mirror"]);
+test("object-storage mirrors publish only on main and qualify through read-only CI", async () => {
+  const publisher = parse(await read(".github/workflows/mirror-images.yml"));
+  const { mirror } = publisher.jobs;
+  const inputs = [
+    "compose.full.yaml",
+    ".github/workflows/mirror-images.yml",
+    "scripts/release/installer-mirror-images.py",
+    "scripts/release/image_registry_retry.py",
+  ];
+  assert.deepEqual(publisher.on, { push: { branches: ["main"], paths: inputs } });
+  assert.deepEqual(publisher.permissions, {});
+  assert.deepEqual(Object.keys(publisher.jobs), ["mirror"]);
   assert.deepEqual(mirror.permissions, { contents: "read", packages: "write" });
-  assert.equal(mirror.if, "github.repository == 'WasalX/wasalx-platform' && github.ref == 'refs/heads/main'");
+  assert.equal(mirror.if,
+    "github.event_name == 'push' && github.repository == 'WasalX/wasalx-platform' && github.ref == 'refs/heads/main'");
   assert.equal(mirror["runs-on"], "ubuntu-24.04");
   const actions = mirror.steps.filter(step => step.uses);
   assert(actions.every(step => /@[0-9a-f]{40}$/u.test(step.uses)));
   assert.equal(actions.find(step => step.uses.startsWith("actions/checkout@")).with["persist-credentials"], false);
   assert.equal(actions.find(step => step.uses.startsWith("docker/login-action@")).with.password, "${{ github.token }}");
   assert(!JSON.stringify(mirror).includes("secrets."));
+  assert.match(mirror.steps.find(step => step.run).run, /^python3 -B scripts\/release\/installer-mirror-images\.py publish/u);
 
-  const copy = mirror.steps.find(step => step.run);
-  assert.equal(copy.shell, "bash");
-  const index = JSON.stringify({ schemaVersion: 2, mediaType: "application/vnd.oci.image.index.v1+json", manifests: [
-    { digest: `sha256:${"a".repeat(64)}`, platform: { architecture: "amd64", os: "linux" } },
-    { digest: `sha256:${"b".repeat(64)}`, platform: { architecture: "arm64", os: "linux" } },
-  ] }, null, 2);
-  const manifest = '{"schemaVersion":2, "mediaType":"application/vnd.oci.image.manifest.v1+json", "layers":[]}';
-  const digest = raw => `sha256:${createHash("sha256").update(raw).digest("hex")}`;
-  const directory = await mkdtemp(join(tmpdir(), "wasalx-minio-mirror-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
-  await writeFile(join(directory, "compose.full.yaml"), `services:
-  minio:
-    image: quay.io/minio/minio:release@${digest(index)}
-  minio-bootstrap:
-    image: quay.io/minio/mc:release@${digest(manifest)}
-`);
-
-  const bash = process.platform === "win32" ? "C:/Program Files/Git/bin/bash.exe" : "bash";
-  for (const [scenario, expectedStatus] of [
-    ["quay", 0], ["fallback", 0], ["source-mismatch", 1], ["mirror-mismatch", 1], ["inspect-failure", 7],
+  const ci = parse(await read(".github/workflows/ci.yml"));
+  const { changes, "ci-gate": gate } = ci.jobs;
+  assert.deepEqual(ci.permissions, { contents: "read" });
+  assert.equal(changes.if, "github.event_name == 'pull_request' || github.event_name == 'merge_group'");
+  assert(gate.needs.includes("changes"));
+  const step = changes.steps.find(row => row.name === "Verify active installer object-storage mirrors");
+  assert.equal(step.if, undefined);
+  assert.equal(step["continue-on-error"], undefined);
+  assert.deepEqual(step.env, {
+    BASE: "${{ steps.selector-base.outputs.sha }}",
+    DOCKER_CONFIG: "${{ runner.temp }}/public-mirror-docker",
+  });
+  for (const input of inputs) assert(step.run.includes(input));
+  assert.match(step.run, /timeout 40s python3/u);
+  const sha = "a".repeat(40);
+  for (const [base, diff, verify, called, status] of [
+    ["HEAD^1", 0, 0, false, 0],
+    ["HEAD^1", 1, 0, true, 0],
+    [sha, 1, 1, true, 1],
+    ["", 0, 0, false, 2],
   ]) {
-    const result = spawnSync(bash, ["--noprofile", "--norc", "-e", "-o", "pipefail", "-c", `docker() {
-  [[ "$1 $2" == 'buildx imagetools' ]] || exit 98
-  local reference="\${!#}"
-  case "$3:$reference" in
-    create:quay.io/minio/*@sha256:*|create:ghcr.io/netvark/*@sha256:*)
-      [[ "$4 $5" == '--prefer-index=false --tag' ]] || exit 98
-      echo "Copy $reference"
-      [[ "$SCENARIO" != fallback || "$reference" == ghcr.io/netvark/* ]]
+    const result = runWorkflowScript(`
+git() {
+  case "$1" in
+    diff) return "$DIFF" ;;
+    rev-parse)
+      [[ "$2" == --verify && "$3" == "$BASE^{commit}" && -n "$BASE" ]] || return 2
+      echo "$SHA"
       ;;
-    inspect:ghcr.io/wasalx/*:sha256-*|inspect:*@sha256:*)
-      [[ "$# $4" == '5 --raw' ]] || exit 98
-      case "$reference:$SCENARIO" in
-        ghcr.io/wasalx/*:mirror-mismatch|*@sha256:*:source-mismatch) printf '%s' wrong; return ;;
-      esac
-      case "$reference" in
-        */minio[@:]*) printf '%s' "$RAW_INDEX" ;;
-        */mc[@:]*) printf '%s' "$RAW_MANIFEST" ;;
-        *) exit 98 ;;
-      esac
-      if [[ "$SCENARIO" == inspect-failure ]]; then return 7; fi
-      ;;
-    *) exit 98 ;;
+    *) return 99 ;;
   esac
 }
-${copy.run}`], {
-      cwd: directory, env: { ...process.env, SCENARIO: scenario, RAW_INDEX: index, RAW_MANIFEST: manifest },
-      encoding: "utf8", timeout: 10_000, windowsHide: true,
-    });
-    assert.equal(result.status, expectedStatus, result.error?.message ?? result.stdout);
-    assert.equal(result.stdout.includes("Copy ghcr.io/netvark/"), scenario === "fallback");
-    if (expectedStatus === 0) {
-      assert(result.stdout.includes(`Verified ghcr.io/wasalx/minio@${digest(index)}`));
-      assert(result.stdout.includes(`Verified ghcr.io/wasalx/mc@${digest(manifest)}`));
-    } else if (expectedStatus === 1) {
-      assert.match(result.stdout, /::error::Digest mismatch/u);
-    }
+timeout() {
+  [[ "$1" == 40s ]] || return 98
+  shift
+  "$@"
+}
+python3() {
+  [[ "$1 $2 $3 $4" == '-B scripts/release/installer-mirror-images.py verify --base' && "$5" == "$SHA" ]]
+  echo verified
+  return "$VERIFY"
+}
+${step.run}`, { BASE: base, DIFF: diff, VERIFY: verify, SHA: sha });
+    assert.equal(result.status, status, result.error?.message ?? result.stderr);
+    assert.equal(result.stdout.includes("verified"), called);
   }
+
+  const delivery = await read("DELIVERY.md");
+  assert.match(delivery, /set(?:ting)? the service's `staged` reference in the \[full Compose inventory\]/u);
+  assert.doesNotMatch(delivery, /manual \[image mirror workflow\]/u);
+  const dependabot = await read(".github/dependabot.yml");
+  assert.doesNotMatch(dependabot, /manual ghcr\.io\/wasalx mirror dispatch/u);
 });
 
 test("workflow lint requires verified tools, both embedded diagnostics, and clean workflows", async t => {
   const { jobs } = parse(await read(".github/workflows/ci.yml"));
   const job = jobs["workflow-lint"];
-  const step = job.steps.find(step => step.run);
-  assert.equal(job.if, undefined);
+  const seed = jobs["seed-caches"];
+  const cache = job.steps.find(step => step.uses?.startsWith("actions/cache@"));
+  const prepare = job.steps.find(step => step.name === "Prepare pinned actionlint");
+  const step = job.steps.find(step => step.name === "Lint workflows with actionlint");
+  assert.equal(job.if, "github.event_name != 'push'");
   assert.equal(job["continue-on-error"], undefined);
   assert.equal(step.if, undefined);
   assert.equal(step["continue-on-error"], undefined);
+  assert.deepEqual(cache.with, {
+    path: "${{ runner.temp }}/actionlint-release.tar.gz",
+    key: "actionlint-${{ env.ACTIONLINT_SHA256 }}-${{ env.ACTIONLINT_URL }}",
+    "restore-keys": "actionlint-${{ env.ACTIONLINT_SHA256 }}",
+  });
+  assert.deepEqual(seed.env, job.env);
+  const seedCache = seed.steps.findIndex(step => step.with?.path === cache.with.path);
+  assert(seedCache >= 0);
+  assert.deepEqual(seed.steps.slice(seedCache, seedCache + 2), [cache, prepare]);
+  assert(job.steps.indexOf(cache) < job.steps.indexOf(prepare));
+  assert(job.steps.indexOf(prepare) < job.steps.indexOf(step));
+  assert.equal(prepare.if, undefined);
+  assert.equal(prepare["continue-on-error"], undefined);
 
   const directory = await mkdtemp(join(tmpdir(), "ci-workflow-lint-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
@@ -872,7 +893,7 @@ python3() {
   ]) {
     await rm(archivePath, { force: true });
     if (cachedArchive !== undefined) await writeFile(archivePath, cachedArchive);
-    const result = runWorkflowScript(mocks + step.run, {
+    const result = runWorkflowScript(mocks + prepare.run + "\n" + step.run, {
       ...pinnedTools,
       RUNNER_TEMP: directory.replaceAll("\\", "/"),
       TMPDIR: directory,
@@ -896,7 +917,7 @@ test("CI gates integration and infrastructure and runs portal integration files 
   assert(Object.hasOwn(on, "merge_group"));
   assert.deepEqual(on.push.branches, ["main"]);
   assert.equal(integration.needs, "changes");
-  assert.equal(integration.if, "${{ !cancelled() && (github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && (needs.changes.result != 'success' || needs.changes.outputs.integration != 'false'))) }}");
+  assert.equal(integration.if, "${{ !cancelled() && (github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && (needs.changes.result != 'success' || needs.changes.outputs.integration != 'false'))) }}");
   assert.deepEqual(portal.needs, ["changes", "portal-browser-build"]);
   assert.match(portal.if, /needs\.portal-browser-build\.result == 'success'/u);
   assert.match(portal.if, /needs\.changes\.outputs\.integration != 'false'/u);
@@ -955,6 +976,35 @@ test("CI gates integration and infrastructure and runs portal integration files 
   }
 });
 
+test("privacy CI enforces the PR opener rule with redacted output", async () => {
+  const metadata = parse(await read(".github/workflows/privacy.yml"));
+  assert(Object.hasOwn(metadata.on, "workflow_call"));
+  assert.deepEqual(metadata.on.pull_request.types, ["edited"]);
+  const { steps } = metadata.jobs["privacy-scan"];
+  const mask = steps.find(step => step.name === "Mask the pull request opener");
+  const check = steps.find(step => step.name === "Require an allowed pull request opener");
+  assert(mask && check && steps.indexOf(mask) < steps.indexOf(check));
+  assert.equal(mask.if, "github.event_name == 'pull_request'");
+  assert.equal(check.if, "github.event_name == 'pull_request'");
+  assert.equal(check.env.PR_OPENER, "${{ github.event.pull_request.user.login }}");
+  const defaultList = "tree-publisher[bot],dependabot[bot]";
+  assert.equal(check.env.PR_OPENER_ALLOWLIST, "${{ vars.PR_OPENER_ALLOWLIST || '" + defaultList + "' }}");
+  for (const [login, allowlist, status] of [
+    ["tree-publisher[bot]", defaultList, 0],
+    ["dependabot[bot]", defaultList, 0],
+    ["fixture-app[bot]", "another-app[bot], fixture-app[bot]\nexample-app[bot]", 0],
+    ["tree-publisherb", defaultList, 1],
+    ["tree-publisher[bot]", "fixture-app[bot]", 1],
+    ["", defaultList, 1],
+  ]) {
+    const result = runWorkflowScript(check.run, { PR_OPENER: login, PR_OPENER_ALLOWLIST: allowlist });
+    assert.ifError(result.error);
+    assert.equal(result.status, status);
+    assert.equal(result.stdout.trim(), status ? "::error::PR opener allowlist rule failed." : "");
+    assert.equal(result.stderr, "");
+  }
+});
+
 test("Application browser CI shards roles and locales and reuses the portal build", async (t) => {
   const { jobs } = parse(await read(".github/workflows/ci.yml"));
   const application = jobs["application-e2e"];
@@ -974,14 +1024,18 @@ test("Application browser CI shards roles and locales and reuses the portal buil
   assert.match(application.if, /needs\.changes\.outputs\.application-e2e != 'false'/u);
   assert.deepEqual(application.needs, ["changes", "portal-browser-build"]);
   assert.deepEqual(application.strategy.matrix.locale, ["en", "ar"]);
-  assert.deepEqual(application.strategy.matrix.roles.flatMap(roles => roles.split(",")),
-    ["tenant_owner", "tenant_admin", "supervisor", "agent", "auditor"]);
+  assert.equal(application["timeout-minutes"], "${{ matrix.suite.timeout }}");
+  assert.deepEqual(application.strategy.matrix.suite.map(({ roles, owner_part }) => [roles, owner_part]), [
+    ["tenant_owner", "desktop"], ["tenant_owner", "mobile-tablet"],
+    ["tenant_admin,supervisor", undefined], ["agent,auditor", undefined],
+  ]);
   assert(build.steps.some(step => step.run === "pnpm run build"));
   const run = application.steps.find(step => runsFile(step.run ?? "", "scripts/run-application-e2e.mjs"));
   assert.deepEqual(run.env, {
     WASALX_E2E_SKIP_BUILD: "1",
     WASALX_E2E_LOCALES: "${{ matrix.locale }}",
-    WASALX_E2E_ROLES: "${{ matrix.roles }}",
+    WASALX_E2E_ROLES: "${{ matrix.suite.roles }}",
+    WASALX_E2E_OWNER_PART: "${{ matrix.suite.owner_part }}",
   });
   const artifact = build.steps.find(step => step.uses?.startsWith("actions/upload-artifact@")).with.name;
   for (const job of [portal, application]) {
@@ -1088,12 +1142,8 @@ test("Hosted browser jobs retain Playwright diagnostics on failure or cancellati
   const { jobs } = parse(await read(".github/workflows/ci.yml"));
   const diagnostics = {
     "application-e2e": {
-      name: "application-e2e-${{ matrix.locale }}-${{ matrix.roles }}",
+      name: "application-e2e-${{ matrix.locale }}-${{ matrix.suite.roles }}${{ matrix.suite.owner_part && format('-{0}', matrix.suite.owner_part) || '' }}",
       paths: ["output/playwright/application*/*/report/**", "output/playwright/application*/*/results/**"],
-    },
-    storybook: {
-      name: "storybook-audit",
-      paths: ["test-results/storybook", "output/playwright/design-system", "output/playwright/inbox/synthetic"],
     },
   };
   for (const [job, { name, paths }] of Object.entries(diagnostics)) {
@@ -1106,6 +1156,56 @@ test("Hosted browser jobs retain Playwright diagnostics on failure or cancellati
   }
 });
 
+test("Storybook and Zammad publish failure evidence only", async () => {
+  const { jobs } = parse(await read(".github/workflows/ci.yml"));
+  const zammad = parse(await read(".github/workflows/zammad-compatibility.yml"));
+  for (const [job, name, paths] of [
+    [jobs.storybook, "storybook-audit", ["test-results/storybook", "output/playwright/design-system", "output/playwright/inbox/synthetic"]],
+    [zammad.jobs.compatibility, "zammad-compatibility-failure", ["output/zammad-compat/*/native-mobile-public-failure.json"]],
+  ]) {
+    const uploads = job.steps.filter(step => step.uses?.startsWith("actions/upload-artifact@"));
+    assert.equal(uploads.length, 1, name);
+    assert.equal(uploads[0].if, "failure()", name);
+    assert.equal(uploads[0].with.name, name);
+    assert.deepEqual(uploads[0].with.path.trim().split("\n"), paths);
+    assert.equal(uploads[0].with["retention-days"], 7);
+  }
+});
+
+test("Public child traces omit browser data and preserve failure locations", () => {
+  execFileSync(process.platform === "win32" ? "python" : "python3", ["-I", "-B", "-c", `
+import io, json, runpy
+from zipfile import ZipFile
+
+raw, output = io.BytesIO(), io.BytesIO()
+marker = "OMIT_PRIVATE_TRACE_DATA"
+with ZipFile(raw, "w") as archive:
+    events = [
+        {"type": "context-options", "options": {"storageState": marker}},
+        {"type": "before", "callId": "call@1", "method": "fill", "params": {"value": marker}},
+        {"type": "after", "callId": "call@1", "error": {"message": marker}},
+        {"type": "console", "text": marker},
+    ]
+    archive.writestr("trace.trace", "\\n".join(map(json.dumps, events)))
+    archive.writestr("trace.network", marker)
+    archive.writestr("resources/body", marker)
+    archive.writestr("trace.stacks", json.dumps({
+        "files": [f"/{marker}/tests/inbox-browser.mjs", f"/{marker}/elsewhere.js"],
+        "stacks": [[1, [[0, 23, 4, marker], [1, 10, 8, marker]]]],
+    }))
+runpy.run_path("tests/helpers/public-browser-trace.py")["public_trace"](raw, output)
+with ZipFile(output) as archive:
+    assert set(archive.namelist()) == {"trace.trace", "trace.stacks"}
+    assert not any(marker.encode() in archive.read(name) for name in archive.namelist())
+    events = [json.loads(line) for line in archive.read("trace.trace").splitlines()]
+    assert [event["type"] for event in events] == ["context-options", "before", "after"]
+    assert events[1]["method"] == "fill" and events[2]["error"]["name"] == "Error"
+    assert json.loads(archive.read("trace.stacks")) == {
+        "files": ["tests/inbox-browser.mjs", ""], "stacks": [[1, [[0, 23, 4, ""]]]],
+    }
+`], { cwd: repository, windowsHide: true });
+});
+
 test("Successful owner fixture shards retain every named journey PNG", async t => {
   const { jobs } = parse(await read(".github/workflows/ci.yml"));
   const steps = jobs["application-e2e"].steps;
@@ -1115,18 +1215,21 @@ test("Successful owner fixture shards retain every named journey PNG", async t =
     step.uses?.startsWith("actions/upload-artifact@") && step.if !== "failure() || cancelled()");
   assert.equal(uploads.length, 1);
   const [upload] = uploads;
-  const ownerSuccess = "success() && matrix.roles == 'tenant_owner'";
+  const ownerSuccess = "success() && matrix.suite.roles == 'tenant_owner'";
   assert(journeys);
   assert(verify);
   assert.equal(verify.if, ownerSuccess);
   assert.equal(upload.if, ownerSuccess);
   assert(steps.indexOf(verify) > steps.indexOf(journeys));
   assert(steps.indexOf(upload) > steps.indexOf(verify));
-  assert.equal(upload.with.name, "application-journey-captures-${{ matrix.locale }}");
+  assert.equal(upload.with.name, "application-journey-captures-${{ matrix.locale }}-${{ matrix.suite.owner_part }}");
   assert.equal(upload.with.path, "${{ steps.journey-captures.outputs.paths }}");
   assert.equal(upload.with["if-no-files-found"], "error");
   assert.equal(upload.with["retention-days"], 7);
-  assert.equal(verify.env.CAPTURE_LOCALE, "${{ matrix.locale }}");
+  assert.deepEqual(verify.env, {
+    CAPTURE_LOCALE: "${{ matrix.locale }}",
+    CAPTURE_VIEWPORT: "${{ matrix.suite.owner_part == 'desktop' && 'desktop' || 'mobile-390' }}",
+  });
 
   const directory = await mkdtemp(join(tmpdir(), "journey-captures-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
@@ -1135,33 +1238,56 @@ test("Successful owner fixture shards retain every named journey PNG", async t =
   await writeFile(join(directory, script), await read(script));
 
   for (const locale of ["en", "ar"]) {
-    const paths = journeyCapturePaths(locale);
-    assert(paths.length > 1);
-    assert.equal(new Set(paths).size, paths.length);
-    for (const path of paths) {
-      await mkdir(join(directory, posix.dirname(path)), { recursive: true });
-      await writeFile(join(directory, path), "synthetic capture");
+    const viewports = ["desktop", "mobile-390"];
+    const allPaths = journeyCapturePaths(locale);
+    assert.deepEqual(viewports.flatMap(viewport => journeyCapturePaths(locale, viewport)).sort(), allPaths.sort());
+    assert.equal(new Set(allPaths).size, allPaths.length);
+    for (const viewport of viewports) {
+      const paths = journeyCapturePaths(locale, viewport);
+      assert(paths.length > 1);
+      for (const path of paths) {
+        await mkdir(join(directory, posix.dirname(path)), { recursive: true });
+        await writeFile(join(directory, path), "synthetic capture");
+      }
+
+      const output = join(directory, "outputs");
+      const env = { CAPTURE_LOCALE: locale, CAPTURE_VIEWPORT: viewport, GITHUB_OUTPUT: output };
+      const complete = runWorkflowScript(verify.run, env, directory);
+      assert.equal(complete.status, 0, complete.stderr);
+      assert.equal(await readFile(output, "utf8"), `paths<<CAPTURES\n${paths.join("\n")}\nCAPTURES\n`);
+
+      const [first] = paths;
+      await rename(join(directory, first), join(directory, first.replace(/\.png$/u, "-renamed.png")));
+      await rm(output);
+      const partial = runWorkflowScript(verify.run, env, directory);
+      assert.equal(partial.status, 1, partial.stderr);
+      assert(partial.stderr.includes(first), partial.stderr);
+      await assert.rejects(readFile(output), { code: "ENOENT" });
     }
-
-    const output = join(directory, "outputs");
-    const env = { CAPTURE_LOCALE: locale, GITHUB_OUTPUT: output };
-    const complete = runWorkflowScript(verify.run, env, directory);
-    assert.equal(complete.status, 0, complete.stderr);
-    assert.equal(await readFile(output, "utf8"), `paths<<CAPTURES\n${paths.join("\n")}\nCAPTURES\n`);
-
-    const [first] = paths;
-    await rename(join(directory, first), join(directory, first.replace(/\.png$/u, "-renamed.png")));
-    await rm(output);
-    const partial = runWorkflowScript(verify.run, env, directory);
-    assert.equal(partial.status, 1, partial.stderr);
-    assert(partial.stderr.includes(first), partial.stderr);
-    await assert.rejects(readFile(output), { code: "ENOENT" });
   }
 });
 
 test("CI gate requires each event's jobs and rejects unplanned skips, failures, and cancellations", async t => {
   const { jobs } = parse(await read(".github/workflows/ci.yml"));
-  const [{ run }] = jobs["ci-gate"].steps;
+  const { "ci-gate": gate, checks } = jobs;
+  const [{ run, env }] = gate.steps;
+  const lint = checks.steps.find(step => step.name === "Lint");
+  assert(gate.needs.includes("checks"));
+  assert.equal(env.CHECKS, "${{ needs.checks.result }}");
+  assert.equal(checks.if, "github.event_name == 'pull_request' || github.event_name == 'merge_group'");
+  assert(checks.strategy.matrix.include.some(row => row.mode === "lint"));
+  assert.equal(checks["continue-on-error"], undefined);
+  assert.equal(lint.if, "matrix.mode == 'lint'");
+  assert.equal(lint["continue-on-error"], undefined);
+  const injectedLint = runWorkflowScript(`
+pnpm() {
+  [[ "$1 $2" == "run lint" ]] || return 99
+  return 17
+}
+${lint.run}`, {});
+  assert.ifError(injectedLint.error);
+  assert.equal(injectedLint.status, 17, injectedLint.stderr);
+
   const directory = await mkdtemp(join(tmpdir(), "ci-gate-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const summary = join(directory, "summary.md");
@@ -1187,9 +1313,8 @@ test("CI gate requires each event's jobs and rejects unplanned skips, failures, 
     INTEGRATION_NEEDED: "", INFRA_NEEDED: "", DEV_INSTALL_NEEDED: "", DEV_INSTALL: "skipped", STORYBOOK_NEEDED: "", APPLICATION_NEEDED: "",
     ZAMMAD_NEEDED: "",
   };
-  const push = { ...queue, EVENT: "push", CHANGES: "skipped", CHECKS: "skipped", FULL_UNIT: "success", IMAGES_NEEDED: "false", IMAGES: "skipped",
-    INSTALLER_PORTAL_NEEDED: "", INSTALLER_PORTAL: "skipped" };
-  const dispatch = { ...push, EVENT: "workflow_dispatch", INFRA: "skipped", PRIVACY: "skipped" };
+  const dispatch = { ...queue, EVENT: "workflow_dispatch", CHANGES: "skipped", CHECKS: "skipped", FULL_UNIT: "success",
+    IMAGES: "skipped", INSTALLER_PORTAL_NEEDED: "", INSTALLER_PORTAL: "skipped", INFRA: "skipped", PRIVACY: "skipped" };
 
   const operatorOnly = { ...pr, KEYCLOAK_IDENTITY_NEEDED: "false", KEYCLOAK_IDENTITY: "skipped" };
   const keycloakOnly = { ...unselected, KEYCLOAK_IDENTITY_NEEDED: "true", KEYCLOAK_IDENTITY: "success" };
@@ -1230,7 +1355,7 @@ test("CI gate requires each event's jobs and rejects unplanned skips, failures, 
     ["PR with a privacy finding", pr, { PRIVACY: "failure" }, 1],
     ["PR with a skipped privacy scan", pr, { PRIVACY: "skipped" }, 1],
     ["merge queue with a cancelled privacy scan", queue, { PRIVACY: "cancelled" }, 1],
-    ["main push with a failed privacy scan", push, { PRIVACY: "failure" }, 1],
+    ["merge queue with a failed privacy scan", queue, { PRIVACY: "failure" }, 1],
     ["PR with new workflow lint findings", pr, { WORKFLOW_LINT: "failure" }, 1],
     ["PR with workflow lint skipped", pr, { WORKFLOW_LINT: "skipped" }, 1],
     ["PR with installer portal build failing", pr, { INSTALLER_PORTAL: "failure" }, 1],
@@ -1239,6 +1364,16 @@ test("CI gate requires each event's jobs and rejects unplanned skips, failures, 
     ["merge queue", queue, {}, 0],
     ["merge queue with Storybook skipped", queue, { STORYBOOK: "skipped" }, 1],
     ["merge queue with failed images", queue, { IMAGES: "failure" }, 1],
+    ["merge queue with an injected lint failure", queue, { CHECKS: injectedLint.status === 0 ? "success" : "failure" }, 1],
+    ["merge queue with cancelled checks", queue, { CHECKS: "cancelled" }, 1],
+    ["merge queue with skipped checks", queue, { CHECKS: "skipped" }, 1],
+    ["merge queue with missing checks result", queue, { CHECKS: "" }, 1],
+    ["manual dispatch with failed units", dispatch, { FULL_UNIT: "failure" }, 1],
+    ["manual dispatch with cancelled units", dispatch, { FULL_UNIT: "cancelled" }, 1],
+    ["merge queue with failed integration", queue, { INTEGRATION: "failure" }, 1],
+    ["merge queue with failed Zammad compatibility", queue, { ZAMMAD_COMPATIBILITY: "failure" }, 1],
+    ["merge queue with skipped infrastructure", queue, { INFRA: "skipped" }, 1],
+    ["merge queue with cancelled selection", queue, { CHANGES: "cancelled" }, 1],
     ["merge queue with Zammad compatibility skipped without an applicable diff", queue, { ZAMMAD_COMPATIBILITY: "skipped" }, 1],
     ["merge queue with selected Zammad compatibility skipped", queue, { ZAMMAD_NEEDED: "true", ZAMMAD_COMPATIBILITY: "skipped" }, 1],
     ["merge queue without affected Zammad paths", queue, { ZAMMAD_NEEDED: "false", ZAMMAD_COMPATIBILITY: "skipped" }, 0],
@@ -1248,15 +1383,6 @@ test("CI gate requires each event's jobs and rejects unplanned skips, failures, 
       INSTALLER_PORTAL_NEEDED: "false", INSTALLER_PORTAL: "skipped",
       STORYBOOK_NEEDED: "false", STORYBOOK: "skipped", INFRA_NEEDED: "false", INFRA: "skipped",
     }, 0],
-    ["main push", push, {}, 0],
-    ["main push with Storybook skipped", push, { STORYBOOK: "skipped" }, 1],
-    ["main push with skipped units", push, { FULL_UNIT: "skipped" }, 1],
-    ["main push with failed units", push, { FULL_UNIT: "failure" }, 1],
-    ["main push with cancelled units", push, { FULL_UNIT: "cancelled" }, 1],
-    ["main push with failed integration", push, { INTEGRATION: "failure" }, 1],
-    ["main push with failed Zammad compatibility", push, { ZAMMAD_COMPATIBILITY: "failure" }, 1],
-    ["main push with skipped infrastructure", push, { INFRA: "skipped" }, 1],
-    ["main push with cancelled selection", push, { CHANGES: "cancelled" }, 1],
     ["manual dispatch", dispatch, {}, 0],
     ["manual dispatch with Storybook skipped", dispatch, { STORYBOOK: "skipped" }, 1],
     ["manual dispatch with skipped units", dispatch, { FULL_UNIT: "skipped" }, 1],
@@ -1266,17 +1392,69 @@ test("CI gate requires each event's jobs and rejects unplanned skips, failures, 
     assert.ifError(execution.error);
     assert.equal(execution.status, expected, `${lane}: ${execution.stderr}`);
   }
-  assert.match(await readFile(summary, "utf8"), /Event push ran both full unit shards/u);
+  assert.match(await readFile(summary, "utf8"), /Event workflow_dispatch ran both full unit shards/u);
 });
 
-test("CI seeds pnpm caches on main and builds cleanly in the merge queue", async t => {
+test("main pushes only publish and seed caches", async () => {
+  const { jobs } = parse(await read(".github/workflows/ci.yml"));
+  const mainPush = "github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'WasalX/wasalx-platform'";
+  const pushJobs = Object.keys(jobs).filter(id => jobs[id].if?.includes(mainPush));
+  assert.deepEqual(pushJobs.sort(), ["publish", "seed-caches"]);
+  const dependencyGuards = {
+    "portal-integration": "needs.portal-browser-build.result == 'success'",
+    "application-e2e": "needs.portal-browser-build.result == 'success'",
+    "platform-operator-e2e": "needs.portal-browser-build.result == 'success'",
+    "integration-coverage": "needs.integration.result != 'skipped'",
+    "installer-portal": "needs.changes.outputs.installer-portal == 'true'",
+  };
+  for (const [id, job] of Object.entries(jobs)) {
+    if (pushJobs.includes(id)) continue;
+    assert.doesNotMatch(job.if, /github\.event_name == 'push'/u, id);
+    if (dependencyGuards[id]) assert(job.if.includes(dependencyGuards[id]), id);
+    else assert.match(job.if, /github\.event_name (?:!= 'push'|== '(?:pull_request|merge_group|workflow_dispatch)')/u, id);
+  }
+
+  const seed = jobs["seed-caches"];
+  assert.equal(seed.if, mainPush);
+  assert.equal(seed["continue-on-error"], true);
+  assert.equal(seed.needs, undefined);
+  assert.equal(jobs.publish.needs, undefined);
+  assert(!jobs["ci-gate"].needs.includes("seed-caches"));
+  const pnpmActions = seed.steps.filter(step => step.uses === "./.github/actions/ci-pnpm");
+  const dependencyKey = "${{ steps.pnpm.outputs.dependency-key }}";
+  assert.equal(pnpmActions[0].id, "pnpm");
+  assert.deepEqual(pnpmActions.map(step => step.with), [
+    { "seed-dependencies": "true" },
+    { task: "build", "dependency-key": dependencyKey, "force-build": "true" },
+    { task: "save-build", "dependency-key": dependencyKey },
+  ]);
+  const lint = "pnpm run lint --cache --cache-strategy content --cache-location .git/hosted-eslint-cache";
+  const prepare = jobs["workflow-lint"].steps.find(step => step.name === "Prepare pinned actionlint");
+  const sourceRuntime = seed.steps.find(step => step.id === "source-hook-runtime");
+  const sourceInstall = seed.steps.find(step => step.name === "Install source hook environments");
+  assert.deepEqual(seed.steps.flatMap(step => step.run ?? []), [lint, prepare.run, sourceRuntime.run, sourceInstall.run]);
+  const eslintSave = seed.steps.find(step => step.uses?.startsWith("actions/cache/save@")
+    && step.with.path === ".git/hosted-eslint-cache");
+  assert.equal(eslintSave.if, "steps.eslint-cache.outputs.cache-hit != 'true'");
+  assert.deepEqual(eslintSave.with, {
+    path: ".git/hosted-eslint-cache", key: "${{ steps.eslint-cache.outputs.cache-primary-key }}",
+  });
+  const lintIndex = seed.steps.findIndex(step => step.run === lint);
+  assert(lintIndex >= 0);
+  assert(lintIndex < seed.steps.indexOf(eslintSave));
+});
+
+test("CI restores pnpm caches and builds cleanly in the merge queue", async t => {
   const { jobs } = parse(await read(".github/workflows/ci.yml"));
   const actionPath = "./.github/actions/ci-pnpm";
   const action = parse(await read(".github/actions/ci-pnpm/action.yml"));
 
-  for (const job of [jobs.checks, jobs["lint-on-push"], jobs.integration]) {
+  for (const job of [jobs.checks, jobs.integration]) {
     assert.equal(job.steps.find(step => step.id === "pnpm")?.uses, actionPath);
   }
+  const eslintRestore = jobs.checks.steps.find(step => step.id === "eslint-cache");
+  assert.match(eslintRestore.uses, /^actions\/cache\/restore@/u);
+  assert.equal(eslintRestore.with["fail-on-cache-miss"], undefined);
   const modules = action.runs.steps.find(step => step.id === "modules");
   const store = action.runs.steps.find(step => step.id === "store");
   assert(action.runs.steps.indexOf(modules) < action.runs.steps.indexOf(store));
@@ -1396,7 +1574,7 @@ test("PR image results gate affected changes while the merge queue requires the 
   const { jobs } = parse(await read(".github/workflows/ci.yml"));
   const branch = parse(await read(".github/workflows/branch-image.yml")).jobs;
   const { images, "pr-images": prImages, "pr-image-results": report, "ci-gate": gate, publish } = jobs;
-  assert.equal(gate.if, "always()");
+  assert.equal(gate.if, "always() && github.event_name != 'push'");
   assert(gate.needs.includes("images"));
   assert(gate.needs.includes("pr-images"));
   assert(!gate.needs.includes("pr-image-results"));
@@ -1412,7 +1590,7 @@ test("PR image results gate affected changes while the merge queue requires the 
   assert.equal(imageBuilder.uses, publisherBuilder.uses);
   assert.equal(imageBuilder.with.version, publisherBuilder.with.version);
   assert.equal(imageBuilder.with["cache-binary"], true);
-  assert.equal(publisherBuilder.with["cache-binary"], true);
+  assert.equal(publisherBuilder.with["cache-binary"], false);
   assert.equal(imageBuilder.with.cleanup, false);
   assert.equal(images["continue-on-error"], undefined);
   assert.equal(prImages["continue-on-error"], undefined);
@@ -1421,9 +1599,18 @@ test("PR image results gate affected changes while the merge queue requires the 
   assert.equal(report.steps[0].env.IMAGES, "${{ needs.pr-images.result }}");
   assert.equal(gate.steps[0].env.IMAGES, "${{ github.event_name == 'pull_request' && needs.pr-images.result || needs.images.result }}");
   assert.equal(gate.steps[0].env.IMAGES_NEEDED, "${{ needs.changes.outputs.images }}");
-  assert.equal(publish.needs, "lint-on-push");
+  assert.equal(publish.needs, undefined);
+  assert.equal(branch.publish.needs, "queue");
+  assert.equal(branch.queue.permissions.actions, "read");
+  assert.equal(publish.permissions.actions, "read");
+  const build = images.steps.find(step => step.name === "Build and inspect without publication");
+  assert.equal(build.run, 'python3 scripts/release/images-by-digest.py build --cache read --image "$IMAGE" --output "records/$IMAGE.json"');
   assert.equal(publish.if, "${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'WasalX/wasalx-platform' }}");
   assert.equal(publish.uses, "./.github/workflows/branch-image.yml");
+  for (const id of ["workflow-lint", "portal-browser-build", "keycloak-identity", "zammad-compatibility"]) {
+    assert.match(jobs[id].if, /github\.event_name != 'push'/u, id);
+  }
+  assert.equal(jobs.privacy.if, "github.event_name == 'pull_request' || github.event_name == 'merge_group'");
   assert.deepEqual(publish.concurrency, { group: "release-${{ github.sha }}", "cancel-in-progress": false });
   assert.equal(branch.publish.strategy["max-parallel"], 21);
   assert.equal(branch.manifest.needs, "publish");
@@ -1459,6 +1646,54 @@ test("PR image results gate affected changes while the merge queue requires the 
   });
   assert.equal(result.status, 0, result.stderr);
   assert((await readFile(summary, "utf8")).includes(report.name));
+});
+
+test("main publication requires a successful queue gate for the exact commit", async t => {
+  const { jobs } = parse(await read(".github/workflows/branch-image.yml"));
+  const script = jobs.queue.steps.find(step => step.id === "source").run;
+  const directory = await mkdtemp(join(tmpdir(), "ci-queue-publication-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const summary = join(directory, "summary.md").replaceAll("\\", "/");
+  const sha = "a".repeat(40);
+  const repo = "WasalX/wasalx-platform";
+  const row = { id: 123, run_attempt: 2, event: "merge_group", path: ".github/workflows/ci.yml",
+    head_sha: sha, head_repository: { full_name: repo }, head_branch: "gh-readonly-queue/main/pr-1" };
+  const gate = { name: "ci-gate", status: "completed", conclusion: "success" };
+  const mock = String.raw`
+gh() {
+  case "$*" in
+    *"/actions/workflows/ci.yml/runs -f event=merge_group -f head_sha=$GITHUB_SHA "*) printf '%s\n' "$RUNS" ;;
+    "api --paginate --slurp repos/$GITHUB_REPOSITORY/actions/runs/123/attempts/2/jobs?per_page=100")
+      printf '%s\n' "$JOB_PAGES" ;;
+    "api repos/$GITHUB_REPOSITORY/actions/runs/123/attempts/2/jobs?per_page=100")
+      jq '.[0]' <<< "$JOB_PAGES" ;;
+    *) return 99 ;;
+  esac
+}
+`;
+  const otherJobs = Array.from({ length: 100 }, (_, index) => ({ name: `Build image ${index}` }));
+  for (const [candidate, pages, expected] of [
+    [row, [[gate]], true],
+    [row, [otherJobs, [gate]], true],
+    [row, [[gate, ...otherJobs.slice(1)], [gate]], false],
+    [null, [[gate]], false],
+    [row, [[]], false],
+    [{ ...row, head_sha: "b".repeat(40) }, [[gate]], false],
+    [{ ...row, event: "pull_request" }, [[gate]], false],
+    [{ ...row, head_branch: "gh-readonly-queue/other/pr-1" }, [[gate]], false],
+    [row, [[{ ...gate, conclusion: "failure" }]], false],
+    [row, [[{ ...gate, status: "in_progress" }]], false],
+  ]) {
+    await writeFile(summary, "");
+    const result = runWorkflowScript(mock + script, {
+      GITHUB_SHA: sha, GITHUB_REPOSITORY: repo, GITHUB_STEP_SUMMARY: summary,
+      RUNS: JSON.stringify({ total_count: candidate ? 1 : 0, workflow_runs: candidate ? [candidate] : [] }),
+      JOB_PAGES: JSON.stringify(pages.map(jobs => ({ total_count: pages.flat().length, jobs }))),
+    });
+    assert.ifError(result.error);
+    assert.equal(result.status === 0, expected, result.stderr);
+    assert.equal(await readFile(summary, "utf8"), expected ? `Queue ci-gate passed for ${sha} in run 123 (attempt 2).\n` : "");
+  }
 });
 
 test("main alias updates report independently and use the exact successful CI attempt's manifest", async t => {
@@ -1551,7 +1786,7 @@ test("optional PR lanes run on diff errors and gate their applicable checks", as
   const [gateStep] = gate.steps;
   assert(!Object.hasOwn(jobs, "terraform-test"));
   assert.equal(job.needs, "changes");
-  assert.equal(job.if, "${{ !cancelled() && (github.event_name == 'push' && github.ref == 'refs/heads/main' || ((github.event_name == 'pull_request' || github.event_name == 'merge_group') && (needs.changes.result != 'success' || needs.changes.outputs.infra != 'false'))) }}");
+  assert.equal(job.if, "${{ !cancelled() && (github.event_name == 'pull_request' || github.event_name == 'merge_group') && (needs.changes.result != 'success' || needs.changes.outputs.infra != 'false') }}");
   assert.deepEqual(job.permissions, { contents: "read" });
   assert.deepEqual(job.steps.slice(-2).map(({ run, if: condition }) => [run, condition]), [
     ["bash scripts/validate-infra.sh", undefined],
@@ -1596,6 +1831,7 @@ test("optional PR lanes run on diff errors and gate their applicable checks", as
       "services/control-api/", "services/connector-worker/", "packages/", "lib/domain.ts", "lib/literal-matcher.ts",
       "scripts/build-services.mjs", "tsconfig.json", ":(glob)services/*/tsconfig*.json", ".gitattributes",
       "tests/outbound-media.test.mjs", "tests/simulation-portal-reply-browser.test.mjs",
+      "tests/zammad-sidebar-component-harness.test.mjs",
       "scripts/release/simulation-portal-reply-browser.mjs",
       ":(glob)**/package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", ".npmrc", "patches/",
       ".github/actions/ci-pnpm/", ".github/workflows/ci.yml", ".github/workflows/zammad-compatibility.yml",
@@ -1603,15 +1839,19 @@ test("optional PR lanes run on diff errors and gate their applicable checks", as
   ]) {
     const detector = changes.steps.find(step => step.id === id);
     assert.equal(detector.if, id === "infra" || id === "zammad" ? undefined : "github.event_name == 'pull_request'");
-    if (id === "infra") assert.equal(detector.env.BASE, "${{ steps.selector-base.outputs.sha }}");
-    for (const [status, needed] of [[0, false], [1, true], [128, true]]) {
-      const outputFile = join(directory, `${id}-${status}`);
+    const usesSharedBase = id === "infra" || id === "zammad";
+    if (usesSharedBase) assert.equal(detector.env.BASE, "${{ steps.selector-base.outputs.sha }}");
+    const cases = [["HEAD^1", 0, false], ["HEAD^1", 1, true], ["HEAD^1", 128, true]];
+    if (usesSharedBase) cases.push(["", 0, true]);
+    for (const [baseRef, status, needed] of cases) {
+      const outputFile = join(directory, `${id}-${baseRef ? status : "empty"}`);
       const result = runWorkflowScript(`git() {
-  if [[ "$*" == "merge-base --is-ancestor HEAD^1 HEAD" && "$LANE" == zammad ]]; then return 0; fi
   test "$*" = "diff --quiet --no-ext-diff --no-renames HEAD^1 HEAD -- $DIFF_PATHS" || exit 99
   return "$DIFF_STATUS"
 }
-${detector.run}`, { GITHUB_OUTPUT: outputFile.replaceAll("\\", "/"), DIFF_PATHS: diffPaths, DIFF_STATUS: String(status), BASE: "HEAD^1", LANE: id });
+${detector.run}`, {
+        GITHUB_OUTPUT: outputFile.replaceAll("\\", "/"), DIFF_PATHS: diffPaths, DIFF_STATUS: String(status), BASE: baseRef,
+      });
       assert.equal(result.status, 0, result.error?.message ?? result.stderr);
       assert.equal((await readFile(outputFile, "utf8")).trim(), `needed=${needed}`);
     }
@@ -1682,7 +1922,9 @@ ${detector.run}`, { GITHUB_OUTPUT: outputFile.replaceAll("\\", "/"), DIFF_PATHS:
 test("Zammad compatibility selects changes to outbound dependencies and service build inputs", async t => {
   const { jobs } = parse(await read(".github/workflows/ci.yml"));
   const { run, env } = jobs.changes.steps.find(step => step.id === "zammad");
-  assert.equal(env.BASE, "${{ github.event_name == 'pull_request' && 'HEAD^1' || github.event.merge_group.base_sha }}");
+  const selector = jobs.changes.steps.find(step => step.id === "selector-base");
+  assert.equal(env.BASE, "${{ steps.selector-base.outputs.sha }}");
+  assert.equal(selector.env.BASE, "${{ github.event_name == 'pull_request' && 'HEAD^1' || github.event.merge_group.base_sha }}");
   const directory = await mkdtemp(join(tmpdir(), "zammad-compatibility-selection-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const git = (...args) => execFileSync("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", ...args], {
@@ -1692,11 +1934,15 @@ test("Zammad compatibility selects changes to outbound dependencies and service 
   git("commit", "--quiet", "--allow-empty", "-m", "Base");
   const base = git("rev-parse", "HEAD").trim();
   const output = join(directory, "selection");
-  const selected = async baseRef => {
+  const runSelector = async (script, baseRef) => {
     await writeFile(output, "");
-    const result = runWorkflowScript(run, { BASE: baseRef, GITHUB_OUTPUT: output.replaceAll("\\", "/") }, directory);
+    const result = runWorkflowScript(script, { BASE: baseRef, GITHUB_OUTPUT: output.replaceAll("\\", "/") }, directory);
     assert.equal(result.status, 0, result.error?.message ?? result.stderr);
     return (await readFile(output, "utf8")).trim();
+  };
+  const selected = async baseRef => {
+    const resolved = await runSelector(selector.run, baseRef);
+    return runSelector(run, resolved.replace(/^sha=/u, ""));
   };
   for (const [path, expected] of [
     ["services/control-api/src/ticket-reply-target.ts", true],
@@ -1712,6 +1958,7 @@ test("Zammad compatibility selects changes to outbound dependencies and service 
     ["app/api/inbox/attachment/route.ts", true],
     ["lib/i18n/messages/ar/cases.ts", true],
     ["tests/simulation-portal-reply-browser.test.mjs", true],
+    ["tests/zammad-sidebar-component-harness.test.mjs", true],
     ["tests/support/ci-fixture-network.mjs", true],
     ["docs/release.md", false],
   ]) {
@@ -1725,6 +1972,9 @@ test("Zammad compatibility selects changes to outbound dependencies and service 
   assert.equal(await selected(git("rev-parse", "HEAD^1").trim()), "needed=false", "a docs-only group skips compatibility");
   assert.equal(await selected(""), "needed=true", "a missing base cannot skip compatibility");
   assert.equal(await selected("0".repeat(40)), "needed=true", "an unresolvable base cannot skip compatibility");
+  const nonAncestor = git("commit-tree", git("rev-parse", "HEAD^{tree}").trim(), "-p", base, "-m", "Other branch").trim();
+  git("diff", "--quiet", nonAncestor, "HEAD");
+  assert.equal(await selected(nonAncestor), "needed=true", "a clean diff against a non-ancestor cannot skip compatibility");
 });
 
 test("Zammad compatibility gates CI and reuses the same job on the nightly schedule", async () => {
@@ -1734,7 +1984,7 @@ test("Zammad compatibility gates CI and reuses the same job on the nightly sched
   const compatibility = parse(await read(workflow));
   const job = jobs["zammad-compatibility"];
   assert.equal(job.needs, "changes");
-  assert.equal(job.if, "${{ !cancelled() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch' || needs.changes.result != 'success' || needs.changes.outputs.zammad != 'false') }}");
+  assert.equal(job.if, "${{ !cancelled() && github.event_name != 'push' && (github.event_name == 'workflow_dispatch' || needs.changes.result != 'success' || needs.changes.outputs.zammad != 'false') }}");
   assert.equal(job.uses, `./${workflow}`);
   assert(jobs["ci-gate"].needs.includes("zammad-compatibility"));
   assert.equal(jobs["ci-gate"].steps[0].env.ZAMMAD_COMPATIBILITY, "${{ needs.zammad-compatibility.result }}");
@@ -1745,6 +1995,12 @@ test("Zammad compatibility gates CI and reuses the same job on the nightly sched
   assert(Object.hasOwn(compatibility.on, "workflow_call"));
   assert.deepEqual(compatibility.permissions, { contents: "read" });
   assert.equal(compatibility.jobs.compatibility["runs-on"], "ubuntu-24.04");
+  const steps = compatibility.jobs.compatibility.steps;
+  const fetch = steps.findIndex(step => /^pnpm run zammad:fetch$/mu.test(step.run ?? ""));
+  const install = steps.findIndex(step => step["working-directory"] === ".zammad-addon/tests/zammad-sidebar-component"
+    && step.run === "pnpm install --frozen-lockfile");
+  const harness = steps.findIndex(step => runsFile(step.run ?? "", "tests/zammad-sidebar-component-harness.test.mjs"));
+  assert(fetch >= 0 && fetch < install && install < harness);
   const manifest = JSON.parse(await read("infra/docker/full/zammad/typecheck-upstream.json"));
   const dockerfile = (await read("infra/docker/Dockerfile.zammad")).replaceAll("\r\n", "\n");
   assert.match(manifest.revision, /^[a-f0-9]{40}$/u);
@@ -1846,22 +2102,118 @@ test("PR unit selection catches a hidden transitive regression and falls back on
   const { jobs } = parse(await read(".github/workflows/ci.yml"));
   const fullUnit = jobs["full-unit"];
   assert.equal(fullUnit.name, "Full ${{ matrix.name }}");
-  assert.equal(fullUnit.if, "github.event_name == 'push' || github.event_name == 'workflow_dispatch'");
+  assert.equal(fullUnit.if, "github.event_name == 'workflow_dispatch'");
   assert.deepEqual(fullUnit.strategy.matrix.include, jobs.checks.strategy.matrix.include.filter(row => row.mode === "unit"));
   assert.deepEqual(fullUnit.steps, jobs.checks.steps);
   assert.match(jobs.checks.steps[0].with["fetch-depth"], /github\.event_name == 'pull_request' && matrix\.mode == 'unit' && '2'/u);
   assert(jobs["ci-gate"].needs.includes("full-unit"));
 });
 
-test("source style checks only files added by a pull request or merge group", async () => {
-  const { jobs } = parse(await read(".github/workflows/ci.yml"));
+test("source style checks added and renamed source files", async t => {
+  const { env, jobs } = parse(await read(".github/workflows/ci.yml"));
   const step = jobs.checks.steps.find(step => step.name === "Check added source style");
   assert.equal(step.if, "matrix.mode == 'lint'");
   assert.equal(step.env.STYLE_BASE, "${{ github.event_name == 'pull_request' && 'HEAD^1' || github.event.merge_group.base_sha }}");
-  assert.match(step.run, /git diff --name-only --diff-filter=A -z "\$STYLE_BASE" HEAD/u);
-  assert.match(step.run, /xargs -0 -r .*pre-commit run .*--files/u);
-  assert(!jobs["lint-on-push"].steps.some(step => step.name === "Check added source style"));
-  assert.equal(jobs["lint-on-push"].steps[0].with["fetch-depth"], undefined);
+  assert.equal(jobs.checks.if, "github.event_name == 'pull_request' || github.event_name == 'merge_group'");
+
+  const directory = await mkdtemp(join(tmpdir(), "source-style-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const git = (...args) => execFileSync("git", args, { cwd: directory, encoding: "utf8", windowsHide: true });
+  const write = async (path, content) => {
+    await mkdir(join(directory, posix.dirname(path)), { recursive: true });
+    await writeFile(join(directory, path), content);
+  };
+  const commit = () => {
+    git("add", "--all");
+    git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.com", "commit", "--quiet", "-m", "Fixture");
+  };
+  git("init", "--quiet");
+  git("config", "diff.renames", "true");
+  await write(".pre-commit-config.yaml", await read(".pre-commit-config.yaml"));
+  await write("scripts/filter-source-files.rb", await read("scripts/filter-source-files.rb"));
+  await write("existing.ts", "export const version = 1;\n");
+  await write("original.txt", "#!/bin/sh\nprintf 'renamed file with identical contents\\n'\n");
+  commit();
+
+  const selected = [
+    "button component.tsx", "style.css", "worker.py", "test.rb", "view.sql", "deploy.sh",
+    "deploy.ash", "deploy.dash", "deploy.ksh", "deploy.mksh", "deploy.cbsd", "deploy.TCSH", "Gemfile",
+    "scripts/hosted-ci-baseline.mjs",
+  ];
+  for (const path of [...selected, "README.md", "next-env.d.ts", "cloudflare-env.d.ts",
+    "services/control-api/migrations/000_fixture.SQL"]) {
+    await write(path, "fixture\n");
+  }
+  if (process.platform !== "win32") {
+    await write("entrypoint", "#!/bin/dash\nexit 0\n");
+    await chmod(join(directory, "entrypoint"), 0o755);
+    await symlink("view.sql", join(directory, "linked.sql"));
+    selected.push("entrypoint");
+  }
+  await write("existing.ts", "export const version = 2;\n");
+  await rename(join(directory, "original.txt"), join(directory, "renamed.sh"));
+  commit();
+  assert.match(git("diff", "--name-status", "HEAD^1", "HEAD"), /^R100\toriginal\.txt\trenamed\.sh$/mu);
+
+  await write(".git/bin/pipx", "#!/usr/bin/env bash\n"
+    + 'while [[ "$1" != --files && $# -gt 0 ]]; do shift; done\n'
+    + 'shift || exit 1\nprintf "%s\\0" "$@"\n');
+  await chmod(join(directory, ".git/bin/pipx"), 0o755);
+  const run = 'export PATH="$PWD/.git/bin:$PATH"\n' + step.run;
+  const execute = STYLE_BASE => runWorkflowScript(run, { PRE_COMMIT_VERSION: env.PRE_COMMIT_VERSION, STYLE_BASE }, directory);
+  const result = execute("HEAD^1");
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(result.stdout.split("\0").filter(Boolean).sort(), [...selected, "renamed.sh"].sort());
+  const empty = execute("HEAD");
+  assert.equal(empty.status, 0, empty.stderr);
+  assert.equal(empty.stdout, "");
+  assert.equal(execute("invalid-base").status, 128);
+});
+
+test("source hook environments use the same runtime-specific key and save only on main", async t => {
+  const { env, jobs } = parse(await read(".github/workflows/ci.yml"));
+  const seed = jobs["seed-caches"].steps;
+  const checks = jobs.checks.steps;
+  const runtime = steps => steps.find(step => step.id === "source-hook-runtime");
+  const restore = steps => steps.find(step => step.id === "source-hooks-cache");
+  const lintRestore = restore(checks);
+  const seedRestore = restore(seed);
+  assert.match(env.PRE_COMMIT_VERSION, /^\d+\.\d+\.\d+$/u);
+  assert.equal(runtime(checks).run, runtime(seed).run);
+  assert.equal(runtime(checks).if, "matrix.mode == 'lint'");
+  assert.equal(lintRestore.if, "matrix.mode == 'lint'");
+  assert.match(lintRestore.uses, /^actions\/cache\/restore@/u);
+  assert.equal(lintRestore.uses, seedRestore.uses);
+  assert.deepEqual(lintRestore.with, seedRestore.with);
+  assert.equal(lintRestore.with.key, "pre-commit-${{ runner.os }}-${{ runner.arch }}-${{ steps.source-hook-runtime.outputs.versions }}-${{ env.PRE_COMMIT_VERSION }}-${{ hashFiles('.pre-commit-config.yaml', '.rubocop.yml') }}");
+  assert.equal(lintRestore.with["restore-keys"], undefined);
+  assert(!checks.some(step => step.uses?.startsWith("actions/cache/save@") && step.with?.path === lintRestore.with.path));
+
+  const install = seed.find(step => step.name === "Install source hook environments");
+  const save = seed.find(step => step.with?.path === lintRestore.with.path && step.uses?.startsWith("actions/cache/save@"));
+  assert.equal(install.if, "steps.source-hooks-cache.outputs.cache-hit != 'true'");
+  assert.match(install.run, /pipx run --python python3 .* pre-commit install-hooks/u);
+  assert.equal(save.if, install.if);
+  assert(seed.indexOf(seedRestore) < seed.indexOf(install) && seed.indexOf(install) < seed.indexOf(save));
+  assert.equal(save.with.key, "${{ steps.source-hooks-cache.outputs.cache-primary-key }}");
+
+  const directory = await mkdtemp(join(tmpdir(), "source-hook-key-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const output = join(directory, "output").replaceAll("\\", "/");
+  const mocks = "node() { echo v24.13.1; }\npython3() { echo 3.12.3; }\nruby() { echo 3.2.3; }\n";
+  const result = runWorkflowScript(mocks + runtime(checks).run, { GITHUB_OUTPUT: output });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal((await readFile(output, "utf8")).trim(), "versions=node-v24.13.1-python-3.12.3-ruby-3.2.3");
+});
+
+test("source gate settings are critical and pending RuboCop cops are enabled", async () => {
+  const critical = (await read("AGENTS.md")).split("\n").find(line => line.startsWith("- **Repo settings,"));
+  for (const name of [".pre-commit-config.yaml", ".rubocop.yml", "eslint.config.mjs", ".gitignore",
+    "package.json", "prettier", "stylelint", ".prettierignore", ".stylelintignore"]) {
+    assert(critical.includes("`" + name + "`"), name);
+  }
+  assert.match(critical, /any added formatter or linter configuration or ignore file/u);
+  assert.equal(parse(await read(".rubocop.yml")).AllCops.NewCops, "enable");
 });
 
 test("shards cover each file once regardless of inventory order or duplicates", () => {
