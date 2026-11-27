@@ -5,6 +5,7 @@ import { mkdir } from "node:fs/promises";
 import { chromium, expect } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 import { formatNumber } from "../lib/i18n/format.ts";
+import { languageTag } from "../lib/i18n/locales.ts";
 
 async function assertMobileAssignment(page, locale) {
   const result = await page.locator("#inbox-team").evaluate(team => {
@@ -25,6 +26,7 @@ async function assertMobileAssignment(page, locale) {
 
 const base = process.env.WASALX_STORYBOOK_URL ?? "http://127.0.0.1:6227";
 const output = process.env.WASALX_SYNTHETIC_UI_OUTPUT ?? "output/playwright/inbox";
+const articleCreatedAt = "2026-10-17T22:30:00.000Z";
 await mkdir(output, { recursive: true });
 const browser = await chromium.launch({ ...(process.env.WASALX_VISUAL_BROWSER_PATH ? { executablePath: process.env.WASALX_VISUAL_BROWSER_PATH } : {}), headless: true });
 try {
@@ -45,7 +47,8 @@ try {
     ];
     const history = new Map(tickets.map(ticket => [ticket.id, [{
       id: "1", body: '<img src=x onerror="window.unsafeArticle=true"> Where is my order?',
-      internal: false, author: ticket.customer, sender: "Customer", created_at: ticket.updated_at,
+      internal: false, author: ticket.customer, sender: "Customer",
+      created_at: ticket.id === "42" ? articleCreatedAt : ticket.updated_at,
       attachments: [{ id: "5", filename: "request.txt", size: 28 }],
     }]]));
     const receipts = new Map(), createReceipts = new Map(), uploads = new Map();
@@ -167,6 +170,16 @@ try {
     await ticket42.click();
     await expect(page.locator("#inbox-message")).toBeVisible();
     await expect(page.locator("h2", { hasText: "Delivery update" })).toBeVisible();
+    const articleTime = page.locator('[data-article-id="1"] time');
+    const expectedArticleTime = await page.evaluate(
+      ({ tag, instant }) => new Intl.DateTimeFormat(tag, {
+        dateStyle: "medium", timeStyle: "short", timeZone: "Asia/Riyadh",
+      }).format(new Date(instant)),
+      { tag: languageTag(locale), instant: articleCreatedAt },
+    );
+    await expect(articleTime).toBeVisible();
+    await expect(articleTime).toHaveText(expectedArticleTime);
+    await expect(articleTime).toHaveAttribute("datetime", articleCreatedAt);
     assert.equal(await page.evaluate(() => window.unsafeArticle), undefined);
     const downloadEvent = page.waitForEvent("download");
     await page.getByRole("button", { name: locale === "ar" ? "تنزيل request.txt" : "Download request.txt" }).click();
