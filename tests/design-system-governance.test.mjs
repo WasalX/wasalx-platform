@@ -162,6 +162,20 @@ test("every status badge's text meets 4.5:1 on its own tint over every surface i
   }
 });
 
+test("app source has no fullwidth plus, which has no glyph in the app fonts, and plus actions share one icon", async () => {
+  const found = [];
+  for (const file of await readdir(new URL("app/", root), { recursive: true })) {
+    const path = `app/${file.replaceAll("\\", "/")}`;
+    if (/\.(?:[cm]?[jt]sx?|css|json|md|html)$/u.test(path) && (await read(path)).includes("＋")) found.push(path);
+  }
+  assert.deepEqual(found, [], 'use <MarketingIcon name="plus" /> instead of U+FF0B');
+  const [icon, app, rules, team, settings, globals] = await Promise.all(["app/MarketingIcon.tsx", "app/WasalXApp.tsx", "app/Rules.tsx", "app/TeamAccess.tsx", "app/TenantSettings.tsx", "app/globals.css"].map(read));
+  assert.match(icon, /plus: "M12 5v14M5 12h14"/u);
+  assert.match(icon, /aria-hidden="true"/u);
+  for (const [name, source] of Object.entries({ app, rules, team, settings })) assert.match(source, /<MarketingIcon name="plus" ?\/>/u, `${name} uses the shared plus icon`);
+  assert.match(globals, /:is\(\.connect-number-action,\.icon-action\)>\.marketing-icon\{inline-size:var\(--wx-icon-size-inline\);block-size:var\(--wx-icon-size-inline\)/u);
+});
+
 test("every app stylesheet uses color, type, radius, elevation and spacing tokens", async () => {
   const tokens = await read("app/design-system/tokens.css");
   const sideTabs = [];
@@ -347,7 +361,7 @@ test("mobile header keeps one sidebar grid and a top bar that grows with its tex
 test("tenant screens keep the URL, icon, name and mailbox fixes from issue 565", async () => {
   const [app, settings, mailbox] = await Promise.all(["app/WasalXApp.tsx", "app/TenantSettings.tsx", "app/MailboxSettings.tsx"].map(read));
   assert.doesNotMatch(app, /\uff0b/u, "the fullwidth plus has no glyph in the app fonts");
-  assert.match(app, /<svg className="connect-number-action-mark" aria-hidden="true"/u);
+  assert.match(app, /<MarketingIcon name="plus" \/>\s*<span className="connect-number-action-label">/u);
   assert.match(app, /<b dir="auto">\{user\.displayName\}<\/b>/u, "the truncating name element takes its own direction");
   assert.match(settings, /<div className="input-prefix" dir="ltr">/u, "the slug URL reads left to right in Arabic too");
   for (const key of ["setupRequired", "templateReview", "loading", "empty"]) {

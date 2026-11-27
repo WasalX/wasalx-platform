@@ -992,7 +992,7 @@ function TenantWasalXApp({
                   title={t("tenant.connections.connect")}
                   onClick={() => setConnectionModal(true)}
                 >
-                  <svg className="connect-number-action-mark" aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg>
+                  <MarketingIcon name="plus" />
                   <span className="connect-number-action-label">{t("tenant.connections.connect")}</span>
                 </button>
               ) : null}
