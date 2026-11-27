@@ -89,6 +89,10 @@ For `WasalXPrivacyTerminalFailure`, inspect the authorized job and audit history
 
 For `WasalXMediaQuarantineSpike`, compare quarantine reason codes with media traffic and scanner or object-storage readiness. Determine whether detection increased or a dependency is failing. Keep quarantined media isolated and confirm scanning and quarantine rates normalize after mitigation.
 
+## Unresolved statement source write
+
+If a statement source write remains unresolved, inspect the admitted attempt in the authorized statement view. Use the existing reconciliation action when terminal storage evidence confirms the outcome. The write fence prevents a second upload from starting while settlement is unresolved.
+
 ## Database saturation
 
 For `WasalXDatabasePoolSaturated`, compare waiting, active, and idle connections by pool. Check PostgreSQL readiness, lock and query timings, and recent worker concurrency changes. Restore the bottleneck with the database owner and confirm waiters and affected queues drain.
