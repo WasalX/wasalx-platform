@@ -6,17 +6,19 @@ import { chromium, expect } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 import { getMessages } from "../lib/i18n/messages/index.ts";
 import { adminFixture, syntheticCredentials } from "./helpers/admin-bridge-fixture.mjs";
+import { syntheticBrowserTrace } from "./helpers/synthetic-browser-trace.mjs";
 
 const base = process.env.WASALX_STORYBOOK_URL ?? "http://127.0.0.1:6227";
 const output = process.env.WASALX_SYNTHETIC_UI_OUTPUT ?? "output/playwright/admin";
 await mkdir(output, { recursive: true });
 const browser = await chromium.launch({ ...(process.env.WASALX_VISUAL_BROWSER_PATH ? { executablePath: process.env.WASALX_VISUAL_BROWSER_PATH } : {}), headless: true });
+const trace = syntheticBrowserTrace(browser, base, output);
 const results = [];
 const escaped = text => text.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 const story = (surface, locale) => `${base}/iframe.html?id=product-administration--${surface === "teams" ? "support-teams" : surface === "settings" ? "mailbox-settings" : "mailbox-administration"}-${locale === "ar" ? "arabic" : "english"}`;
 
 async function setup(surface, locale, configure, viewport = { width: 1440, height: 1000 }) {
-  const context = await browser.newContext({ viewport });
+  const context = await trace.newContext({ viewport });
   const page = await context.newPage(), fixture = adminFixture();
   configure?.(fixture);
   await fixture.install(page);
@@ -157,32 +159,31 @@ async function teamsListRecovery(locale) {
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false);
       await page.screenshot({ path: `${output}/teams-${locale}-list-${state}-${size}.png`, fullPage: true });
     };
-    try {
-      await expect(page.getByRole("alert")).toHaveText(t("teamsAdmin.listFailed"));
-      await expect(button("common.actions.retry")).toBeEnabled();
-      await expect(button("teamsAdmin.createTeam")).toHaveCount(0);
-      await expect(empty).toHaveCount(0);
-      await expect(choose).toHaveCount(0);
-      assert.ok(await page.evaluate(() => { const alert = document.querySelector(".settings-feedback.error"); return alert.parentElement.getBoundingClientRect().bottom - alert.getBoundingClientRect().bottom >= 12; }), "the load-failure alert touches the bottom of its card");
-      await capture("failed");
+    await expect(page.getByRole("alert")).toHaveText(t("teamsAdmin.listFailed"));
+    await expect(button("common.actions.retry")).toBeEnabled();
+    await expect(button("teamsAdmin.createTeam")).toHaveCount(0);
+    await expect(empty).toHaveCount(0);
+    await expect(choose).toHaveCount(0);
+    assert.ok(await page.evaluate(() => { const alert = document.querySelector(".settings-feedback.error"); return alert.parentElement.getBoundingClientRect().bottom - alert.getBoundingClientRect().bottom >= 12; }), "the load-failure alert touches the bottom of its card");
+    await capture("failed");
 
-      await button("common.actions.retry").click();
-      await expect(team).toBeVisible();
-      await expect(choose).toBeVisible();
-      await expect(button("teamsAdmin.createTeam")).toBeEnabled();
-      await expect(page.getByRole("alert")).toHaveCount(0);
-      await expect(empty).toHaveCount(0);
-      await capture("retried-populated");
+    await button("common.actions.retry").click();
+    await expect(team).toBeVisible();
+    await expect(choose).toBeVisible();
+    await expect(button("teamsAdmin.createTeam")).toBeEnabled();
+    await expect(page.getByRole("alert")).toHaveCount(0);
+    await expect(empty).toHaveCount(0);
+    await capture("retried-populated");
 
-      fixture.teams.length = 0;
-      await test.open();
-      await expect(empty).toBeVisible();
-      await expect(choose).toHaveCount(0);
-      await expect(button("teamsAdmin.createTeam")).toBeEnabled();
-      await expect(team).toHaveCount(0);
-      await expect(button("common.actions.retry")).toHaveCount(0);
-      await capture("empty");
-    } finally { await test.context.close(); }
+    fixture.teams.length = 0;
+    await test.open();
+    await expect(empty).toBeVisible();
+    await expect(choose).toHaveCount(0);
+    await expect(button("teamsAdmin.createTeam")).toBeEnabled();
+    await expect(team).toHaveCount(0);
+    await expect(button("common.actions.retry")).toHaveCount(0);
+    await capture("empty");
+    await trace.closeContext(test.context);
   }
 }
 
@@ -266,7 +267,7 @@ async function teamsJourney(locale) {
     await expect(button("teamsAdmin.createTeam")).toBeDisabled(); assert.equal(await page.evaluate(key => sessionStorage.getItem(key), storageKey), "{");
     results.push({ surface: "teams", locale, mode: "simulated_bridge", evidence_scope: "exploratory_ui", status: "passed", writes: fixture.writes });
   } catch (failure) { results.push({ surface: "teams", locale, mode: "simulated_bridge", evidence_scope: "exploratory_ui", status: "failed", error_class: failure.name }); throw failure; }
-  finally { await test.context.close(); }
+  await trace.closeContext(test.context);
 }
 
 async function mailboxJourney(surface, locale) {
@@ -368,7 +369,7 @@ async function mailboxJourney(surface, locale) {
     await expect(button("mailboxes.create")).toBeDisabled(); assert.equal(await page.evaluate(key => sessionStorage.getItem(key), storageKey), "{");
     results.push({ surface, locale, mode: "simulated_bridge", evidence_scope: "exploratory_ui", status: "passed", writes: fixture.writes });
   } catch (failure) { results.push({ surface, locale, mode: "simulated_bridge", evidence_scope: "exploratory_ui", status: "failed", error_class: failure.name }); throw failure; }
-  finally { await test.context.close(); }
+  await trace.closeContext(test.context);
 }
 
 try {
@@ -378,7 +379,10 @@ try {
     for (const surface of ["settings", "administration"]) await mailboxJourney(surface, locale);
   }
   console.log("Synthetic administration component journeys passed for both locales; provider/native qualification remains separate.");
+} catch (error) {
+  await trace.retainFailure();
+  throw error;
 } finally {
-  await writeFile(`${output}/synthetic-ui-results.json`, JSON.stringify({ mode: "simulated_bridge", evidence_scope: "exploratory_ui", cases: results }, null, 2));
   await browser.close();
+  await writeFile(`${output}/synthetic-ui-results.json`, JSON.stringify({ mode: "simulated_bridge", evidence_scope: "exploratory_ui", cases: results }, null, 2));
 }

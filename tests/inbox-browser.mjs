@@ -6,6 +6,7 @@ import { chromium, expect } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 import { formatNumber } from "../lib/i18n/format.ts";
 import { languageTag } from "../lib/i18n/locales.ts";
+import { syntheticBrowserTrace } from "./helpers/synthetic-browser-trace.mjs";
 
 async function assertMobileAssignment(page, locale) {
   const result = await page.locator("#inbox-team").evaluate(team => {
@@ -29,9 +30,10 @@ const output = process.env.WASALX_SYNTHETIC_UI_OUTPUT ?? "output/playwright/inbo
 const articleCreatedAt = "2026-10-17T22:30:00.000Z";
 await mkdir(output, { recursive: true });
 const browser = await chromium.launch({ ...(process.env.WASALX_VISUAL_BROWSER_PATH ? { executablePath: process.env.WASALX_VISUAL_BROWSER_PATH } : {}), headless: true });
+const trace = syntheticBrowserTrace(browser, base, output);
 try {
   for (const locale of ["en", "ar"]) {
-    const context = await browser.newContext({ locale: locale === "ar" ? "en-US" : "ar-SA", viewport: { width: 1440, height: 1000 } });
+    const context = await trace.newContext({ locale: locale === "ar" ? "en-US" : "ar-SA", viewport: { width: 1440, height: 1000 } });
     const attachmentName = locale === "ar" ? "إرفاق ملفات" : "Attach files";
     const noAttachments = locale === "ar" ? "لا توجد ملفات مرفقة" : "No files attached";
     const attachFiles = page => page.getByRole("button", { name: attachmentName, exact: true });
@@ -495,6 +497,9 @@ try {
     await expect(page.locator("[data-article-id]")).toHaveCount(0);
     console.log(`${locale}: held ARTICLES ${deliverLateArticles ? "answered late" : "aborted"} after access denial`);
     console.log(`${locale}: drafts survive outage/reply, stale pagination and post-denial detail fenced, corrupt recovery rejected, unknown result/reload reconciled, mobile/keyboard/RTL passed; writes=${writes}`);
-    await context.close();
+    await trace.closeContext(context);
   }
+} catch (error) {
+  await trace.retainFailure();
+  throw error;
 } finally { await browser.close(); }

@@ -1104,10 +1104,6 @@ test("Hosted browser jobs retain Playwright diagnostics on failure or cancellati
       name: "application-e2e-${{ matrix.locale }}-${{ matrix.suite.roles }}${{ matrix.suite.owner_part && format('-{0}', matrix.suite.owner_part) || '' }}",
       paths: ["output/playwright/application*/*/report/**", "output/playwright/application*/*/results/**"],
     },
-    storybook: {
-      name: "storybook-audit",
-      paths: ["test-results/storybook", "output/playwright/design-system", "output/playwright/inbox/synthetic"],
-    },
   };
   for (const [job, { name, paths }] of Object.entries(diagnostics)) {
     const upload = jobs[job].steps.find(step =>
@@ -1117,6 +1113,56 @@ test("Hosted browser jobs retain Playwright diagnostics on failure or cancellati
     assert.deepEqual(upload.with.path.trim().split("\n"), paths, job);
     assert.equal(upload.with["retention-days"], 7, job);
   }
+});
+
+test("Storybook and Zammad publish failure evidence only", async () => {
+  const { jobs } = parse(await read(".github/workflows/ci.yml"));
+  const zammad = parse(await read(".github/workflows/zammad-compatibility.yml"));
+  for (const [job, name, paths] of [
+    [jobs.storybook, "storybook-audit", ["test-results/storybook", "output/playwright/design-system", "output/playwright/inbox/synthetic"]],
+    [zammad.jobs.compatibility, "zammad-compatibility-failure", ["output/zammad-compat/*/native-mobile-public-failure.json"]],
+  ]) {
+    const uploads = job.steps.filter(step => step.uses?.startsWith("actions/upload-artifact@"));
+    assert.equal(uploads.length, 1, name);
+    assert.equal(uploads[0].if, "failure()", name);
+    assert.equal(uploads[0].with.name, name);
+    assert.deepEqual(uploads[0].with.path.trim().split("\n"), paths);
+    assert.equal(uploads[0].with["retention-days"], 7);
+  }
+});
+
+test("Public child traces omit browser data and preserve failure locations", () => {
+  execFileSync(process.platform === "win32" ? "python" : "python3", ["-I", "-B", "-c", `
+import io, json, runpy
+from zipfile import ZipFile
+
+raw, output = io.BytesIO(), io.BytesIO()
+marker = "OMIT_PRIVATE_TRACE_DATA"
+with ZipFile(raw, "w") as archive:
+    events = [
+        {"type": "context-options", "options": {"storageState": marker}},
+        {"type": "before", "callId": "call@1", "method": "fill", "params": {"value": marker}},
+        {"type": "after", "callId": "call@1", "error": {"message": marker}},
+        {"type": "console", "text": marker},
+    ]
+    archive.writestr("trace.trace", "\\n".join(map(json.dumps, events)))
+    archive.writestr("trace.network", marker)
+    archive.writestr("resources/body", marker)
+    archive.writestr("trace.stacks", json.dumps({
+        "files": [f"/{marker}/tests/inbox-browser.mjs", f"/{marker}/elsewhere.js"],
+        "stacks": [[1, [[0, 23, 4, marker], [1, 10, 8, marker]]]],
+    }))
+runpy.run_path("tests/helpers/public-browser-trace.py")["public_trace"](raw, output)
+with ZipFile(output) as archive:
+    assert set(archive.namelist()) == {"trace.trace", "trace.stacks"}
+    assert not any(marker.encode() in archive.read(name) for name in archive.namelist())
+    events = [json.loads(line) for line in archive.read("trace.trace").splitlines()]
+    assert [event["type"] for event in events] == ["context-options", "before", "after"]
+    assert events[1]["method"] == "fill" and events[2]["error"]["name"] == "Error"
+    assert json.loads(archive.read("trace.stacks")) == {
+        "files": ["tests/inbox-browser.mjs", ""], "stacks": [[1, [[0, 23, 4, ""]]]],
+    }
+`], { cwd: repository, windowsHide: true });
 });
 
 test("Successful owner fixture shards retain every named journey PNG", async t => {
