@@ -54,15 +54,6 @@ The installer checks out the selected SHA and uses that commit's images.
 Manual runs with a commit input require the complete publication for that exact
 main SHA. RC tag runs require the publication for the commit the tag resolves to.
 
-PR installer rehearsals use the PR's checked-out merge tree for installer
-scripts and configuration. The rehearsal and PR pull-tooling check use a signed
-image fixture from the newest complete, green `main` publication in the PR
-base's first five first-parent commits, including the base. The job summary
-labels the fixture and records the PR base, image commit, and publishing run.
-Selection of an older publication also emits a warning. The run logs the image
-source and installer tree and fails if the bounded search finds no eligible
-publication.
-
 A failed pull verification or rehearsal logs the failing command, exit code,
 and a redacted reason. The diagnostics artifact keeps phase timings and
 installer control messages. Raw registry responses, credentials, and Compose

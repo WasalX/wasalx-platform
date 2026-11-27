@@ -41,7 +41,7 @@ const tabletOnly = /(?:^|\s)@tablet-only(?:\s|$)/u;
 
 export default defineConfig({
   testDir: "./tests/e2e",
-  testMatch: platformUrl ? ["meta-cost-operator.spec.ts", "meta-transition-operator.spec.ts"] : language === "ar" ? ["arabic.spec.ts", "public-site.spec.ts", "meta-billing-diagnostic.spec.ts", "meta-account-policy.spec.ts", "meta-account-transition.spec.ts", "meta-managed-policy.spec.ts", "meta-cost.spec.ts", "meta-cost-statements.spec.ts", "meta-account-transition-execution.spec.ts", "meta-transition-operator.spec.ts"] : ["application.spec.ts", "public-site.spec.ts", "meta-billing-diagnostic.spec.ts", "meta-account-policy.spec.ts", "meta-account-transition.spec.ts", "meta-managed-policy.spec.ts", "meta-cost.spec.ts", "meta-cost-statements.spec.ts", "meta-account-transition-execution.spec.ts", "meta-transition-operator.spec.ts"],
+  testMatch: platformUrl ? ["meta-cost-operator.spec.ts", "meta-transition-operator.spec.ts", "meta-deletion-operator.spec.ts"] : language === "ar" ? ["arabic.spec.ts", "public-site.spec.ts", "meta-billing-diagnostic.spec.ts", "meta-account-policy.spec.ts", "meta-account-transition.spec.ts", "meta-managed-policy.spec.ts", "meta-cost.spec.ts", "meta-cost-statements.spec.ts", "meta-account-transition-execution.spec.ts", "meta-transition-operator.spec.ts"] : ["application.spec.ts", "public-site.spec.ts", "meta-billing-diagnostic.spec.ts", "meta-account-policy.spec.ts", "meta-account-transition.spec.ts", "meta-managed-policy.spec.ts", "meta-cost.spec.ts", "meta-cost-statements.spec.ts", "meta-account-transition-execution.spec.ts", "meta-transition-operator.spec.ts"],
   outputDir: resolve(artifactRoot, "results", role),
   fullyParallel: false,
   forbidOnly: true,
@@ -90,7 +90,7 @@ export default defineConfig({
     },
     {
       name: "mobile-390",
-      grepInvert: tabletOnly,
+      grepInvert: /(?:^|\s)@(?:tablet|desktop)-only(?:\s|$)/u,
       use: {
         browserName: "chromium",
         deviceScaleFactor: 1,

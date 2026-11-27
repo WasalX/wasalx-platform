@@ -4,6 +4,7 @@ import { createDemoWorkspace } from "../../app/marketing-workspace.ts";
 import { englishMarketingMessages } from "../../lib/i18n/messages/en/marketing.ts";
 import { arabicMarketingMessages } from "../../lib/i18n/messages/ar/marketing.ts";
 import { createTranslator } from "../../lib/i18n/translate.ts";
+import { journeyCapturePath } from "./journey-captures.mjs";
 
 const locale = process.env.WASALX_E2E_LOCALE ?? "en";
 const arabic = locale === "ar";
@@ -868,6 +869,21 @@ test("public access pages keep safe invitation fallbacks and keyboard navigation
   await page.goto("/invitations/accept#token=invalid");
   await expect(page).toHaveURL(/\/invitations\/accept$/u);
   await expect(page.locator("main h1")).toHaveText(arabic ? "رابط الدعوة مو كامل" : "This invitation link is incomplete");
+  const invitation = page.locator(".public-access-shell");
+  const capture = (theme: "light" | "dark-preview") => page.screenshot({
+    path: journeyCapturePath("invitation-incomplete", testInfo.project.name, theme, locale),
+    fullPage: true,
+    animations: "disabled",
+    caret: "hide",
+    scale: "css",
+  });
+  await expect(invitation).toHaveCSS("color-scheme", "light");
+  await capture("light");
+  // The public route ships in light mode. Preview its existing dark tokens in this test only.
+  await invitation.evaluate(shell => shell.classList.replace("theme-light", "theme-dark"));
+  await expect(invitation).toHaveCSS("color-scheme", "dark");
+  await capture("dark-preview");
+  await invitation.evaluate(shell => shell.classList.replace("theme-dark", "theme-light"));
   await page.route("**/api/invitations/accept/start", route => route.fulfill({ status: 503, json: {} }));
   await page.goto(`/invitations/accept#token=${"a".repeat(43)}`);
   await expect(page.locator("main h1")).toHaveText(arabic ? "ما قدرنا نفتح الدعوة الحين" : "We can’t open the invitation right now");

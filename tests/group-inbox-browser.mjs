@@ -567,7 +567,20 @@ try {
 
     // Both themes/locale layouts, mobile chooser focus and keyboard controls.
     for (const theme of ["light", "dark"]) {
-      if (theme === "dark") { await page.goto(`${story}&globals=theme:dark`, { waitUntil: "networkidle" }); await choose("Operations B"); }
+      if (theme === "dark") {
+        await page.goto(`${story}&globals=theme:dark`, { waitUntil: "networkidle" });
+        // A group that finishes loading after the operator moved focus must not take focus back.
+        const lateShow = state.hold("GROUP_SHOW", input => input.group_id === B), showsBefore = state.count("GROUP_SHOW");
+        if (await group().locator(".wx-group-back").isVisible()) await button("groups.back").click();
+        await group().getByRole("button", { name: /Operations B/u }).click();
+        await expect.poll(() => state.count("GROUP_SHOW")).toBe(showsBefore + 1);
+        await groupsMode.focus();
+        lateShow.resolve();
+        await expect(group().getByRole("heading", { name: "Operations B" })).toBeVisible();
+        await expect(page.locator("#wx-group-message")).toBeEnabled();
+        await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+        await expect(groupsMode).toBeFocused();
+      }
       await page.evaluate(() => document.fonts.ready);
       for (const [name, width, height] of [["desktop", 1440, 1000], ["mobile", 390, 844], ["zoom-equivalent", 720, 500]]) {
         await page.setViewportSize({ width, height });

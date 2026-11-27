@@ -17,4 +17,5 @@
 .readiness dd { margin: 0; text-align: end; overflow-wrap: anywhere; }
 .actions { display: flex; flex-wrap: wrap; gap: var(--wx-space-2); }
 .actions > button { min-height: 44px; white-space: normal; }
+.actions > button[aria-disabled="true"] { cursor: not-allowed; opacity: .5; }
 @media (max-width: 520px) { .actions > button { flex: 1 1 100%; } }
