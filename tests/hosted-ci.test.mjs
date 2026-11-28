@@ -2506,13 +2506,15 @@ test("source style checks added and renamed source files", async t => {
   await write(".pre-commit-config.yaml", await read(".pre-commit-config.yaml"));
   await write("scripts/filter-source-files.rb", await read("scripts/filter-source-files.rb"));
   await write("existing.ts", "export const version = 1;\n");
+  await write("Existing.java", "class Existing {}\n");
   await write("original.txt", "#!/bin/sh\nprintf 'renamed file with identical contents\\n'\n");
   commit();
 
   const selected = [
     "button component.tsx", "style.css", "worker.py", "test.rb", "view.sql", "deploy.sh",
     "deploy.ash", "deploy.dash", "deploy.ksh", "deploy.mksh", "deploy.cbsd", "deploy.TCSH", "Gemfile",
-    "scripts/hosted-ci-baseline.mjs",
+    "scripts/hosted-ci-baseline.mjs", "Added.java", "Dockerfile.worker", "infra/docker/Dockerfile.zammad",
+    "nested/config.yaml", "nested/settings.yml",
   ];
   for (const path of [...selected, "README.md", "next-env.d.ts", "cloudflare-env.d.ts",
     "services/control-api/migrations/000_fixture.SQL"]) {
@@ -2525,6 +2527,7 @@ test("source style checks added and renamed source files", async t => {
     selected.push("entrypoint");
   }
   await write("existing.ts", "export const version = 2;\n");
+  await write("Existing.java", "class Existing { int version = 2; }\n");
   await rename(join(directory, "original.txt"), join(directory, "renamed.sh"));
   commit();
   assert.match(git("diff", "--name-status", "HEAD^1", "HEAD"), /^R100\toriginal\.txt\trenamed\.sh$/mu);

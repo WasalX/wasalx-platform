@@ -6,12 +6,38 @@ repos:
         name: Prettier
         entry: pnpm run format:check
         language: system
-        files: '\.(?:[cm]?[jt]sx?|css)$'
+        files: '\.(?:[cm]?[jt]sx?|css|ya?ml)$'
       - id: stylelint
         name: Stylelint
         entry: pnpm exec stylelint
         language: system
         types: [css]
+      - id: java-format
+        name: Google Java Format
+        entry: bash .github/run-source-style-java.sh
+        language: system
+        types: [java]
+        args:
+          - https://github.com/google/google-java-format/releases/download/v2.0.0/google-java-format-2.0.0-all-deps.jar
+          - c78feb48c549fa7114b7ea11db3b456808f7b371ffe84e6643a44dd2f9588639
+          - --dry-run
+          - --set-exit-if-changed
+          - --cleanup=false
+      - id: java-lint
+        name: Checkstyle
+        entry: bash .github/run-source-style-java.sh
+        language: system
+        types: [java]
+        args:
+          - https://github.com/checkstyle/checkstyle/releases/download/checkstyle-14.4.0/checkstyle-14.4.0-all.jar
+          - c0a521e54eabd1ece4ff7bd84cf231b012615745ed3aa4fb27ab0ca73097250c
+          - -c
+          - .github/checkstyle.xml
+      - id: hadolint
+        name: Hadolint
+        entry: docker.io/hadolint/hadolint:v2.15.1-alpine@sha256:a1d49ae1a4e83c1dbad26b8c1ad7588c8bd1e04f4866b34ad3cac50335198552 hadolint
+        language: docker_image
+        files: '(?i:(^|/)Dockerfile(?:\.[^/]+)?$|\.dockerfile$)'
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: c60c980e561ed3e73101667fe8365c609d19a438 # v0.15.9
     hooks:
