@@ -5,14 +5,13 @@ ARG TARGETARCH=amd64
 ENV GOPROXY=https://proxy.golang.org,direct
 # The module proxy can reset HTTP/2 streams during a cold build.
 ENV GODEBUG=http2client=0
-ADD https://github.com/prometheus/alertmanager.git#085f0ef7eb41da24cab8cd000f1345b6250f2edb /src
-ADD --checksum=sha256:990d0be563b733bd0eae180dd609591164028f80cdf47ee8c1c3a1bfafff8d23 \
-  https://github.com/prometheus/alertmanager/releases/download/v0.34.0/alertmanager-web-ui-0.34.0.tar.gz /tmp/ui.tar.gz
+ADD https://github.com/prometheus/alertmanager.git#cc2a702d3833dcdb115465827b2820cdef8a0a38 /src
+ADD --checksum=sha256:c1d5fc13bcfe8acac52993ce77378f60507c04a933182feb99524f948d6b1dd4 \
+  https://github.com/prometheus/alertmanager/releases/download/v0.35.1/alertmanager-web-ui-0.35.1.tar.gz /tmp/ui.tar.gz
 RUN tar -xzf /tmp/ui.tar.gz -C /src/ui/app
 WORKDIR /src
-RUN go get google.golang.org/grpc@v1.83.2
 RUN CGO_ENABLED=0 GOOS="$TARGETOS" GOARCH="$TARGETARCH" go build -mod=mod -trimpath -tags netgo \
-      -ldflags='-s -w -X github.com/prometheus/common/version.Version=0.34.0 -X github.com/prometheus/common/version.Revision=dd880f3d3ce50aab11167f2f45ba16ce8d1ff73a -X github.com/prometheus/common/version.Branch=HEAD' \
+      -ldflags='-s -w -X github.com/prometheus/common/version.Version=0.35.1 -X github.com/prometheus/common/version.Revision=cc2a702d3833dcdb115465827b2820cdef8a0a38 -X github.com/prometheus/common/version.Branch=HEAD' \
       -o /alertmanager ./cmd/alertmanager
 
 FROM gcr.io/distroless/static-debian13:nonroot@sha256:8ce6dd87e9823c5b48dcfb2c8604714ccb351ce59607327bcc4957448da279b5
