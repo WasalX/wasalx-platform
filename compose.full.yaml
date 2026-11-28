@@ -870,7 +870,7 @@ services:
 
   otel-collector:
     profiles: [full]
-    image: otel/opentelemetry-collector-contrib:0.165.0@sha256:e40d61f10c9a617cca1ffd1be4d7e2b3a4b0f0001798ff07e58cabe82e618cea
+    image: otel/opentelemetry-collector-contrib:0.166.0@sha256:3e18fe04181de50bdd72e23ad4a4d6214b54351e63d496f1c58127cc4541ad7f
     command: [--config=/etc/otelcol-contrib/config.yaml]
     volumes:
       - ./infra/docker/full/otel/collector.yaml:/etc/otelcol-contrib/config.yaml:ro
@@ -910,7 +910,7 @@ services:
 
   alertmanager:
     profiles: [full]
-    image: prom/alertmanager:v0.35.0@sha256:e638797febd034838eca8b98cdbd46f951e9bf7f178777aa8669167406a9946c
+    image: prom/alertmanager:v0.35.1@sha256:4e3d029e69c7f61dd53a2b31a3dc427a2b81736cffca185c0854075e07969e36
     command:
       - --config.file=/etc/alertmanager/alertmanager.yaml
       - --storage.path=/alertmanager
