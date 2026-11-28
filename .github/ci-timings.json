@@ -16,7 +16,7 @@
     "window_end": "2026-11-28T12:04:33Z",
     "main_push_runs": 20,
     "merge_group_runs": 24,
-    "p95_basis": "Successful first-attempt CI jobs. Main pushes did not run either download. Nearest-rank p95 uses step durations in seconds, pooled across jobs using the same step. Job work subtracts the download duration from the job duration and uses the highest leg p95 for matrix jobs.",
+    "p95_basis": "Successful first-attempt jobs. The window and event counts above describe the browser and PostgreSQL cohort. The published image receipts use their main-push CI runs, and the image manifest uses successful alias workflow runs. Nearest-rank p95 uses step durations in seconds, pooled across jobs using the same step. Job work subtracts the download duration from the job duration and uses the highest leg p95 for matrix jobs.",
     "steps": {
       "download-portal-browser": {
         "runs": 24,
@@ -83,34 +83,112 @@
           "46141078980": [1],
           "46142861934": [1]
         }
+      },
+      "download-image-published": {
+        "runs": 24,
+        "first_run": 46060557434,
+        "last_run": 46148009505,
+        "p95_minutes": 0.0333,
+        "timeout_minutes": 1,
+        "samples_seconds": {
+          "46060557434": [1],
+          "46070369749": [2],
+          "46073996449": [1],
+          "46074946951": [2],
+          "46079335300": [1],
+          "46080892137": [1],
+          "46084903447": [0],
+          "46092346215": [1],
+          "46094978769": [1],
+          "46098349986": [1],
+          "46130874092": [1],
+          "46134327669": [0],
+          "46135304374": [1],
+          "46135626027": [1],
+          "46136149161": [1],
+          "46136364626": [0],
+          "46138728870": [1],
+          "46139042188": [1],
+          "46142037707": [2],
+          "46142859673": [0],
+          "46146094199": [1],
+          "46146560406": [1],
+          "46146806245": [2],
+          "46148009505": [1]
+        }
+      },
+      "download-images-manifest": {
+        "runs": 24,
+        "first_run": 46057086434,
+        "last_run": 46147360016,
+        "p95_minutes": 0.0167,
+        "timeout_minutes": 1,
+        "samples_seconds": {
+          "46057086434": [1],
+          "46060607852": [1],
+          "46061479509": [1],
+          "46071344781": [0],
+          "46074888355": [0],
+          "46075876765": [1],
+          "46080130523": [1],
+          "46081687939": [1],
+          "46085609465": [1],
+          "46093078271": [0],
+          "46095614258": [1],
+          "46099064557": [1],
+          "46131539028": [1],
+          "46134938809": [1],
+          "46135992930": [1],
+          "46136308058": [1],
+          "46136822936": [1],
+          "46137341977": [1],
+          "46139768776": [1],
+          "46142686491": [1],
+          "46143402185": [1],
+          "46146760479": [0],
+          "46147313997": [1],
+          "46147360016": [1]
+        }
       }
     },
     "job_work": {
-      "portal-integration": {
+      "ci.yml/portal-integration": {
         "runs": 24,
         "first_run": 46058246569,
         "last_run": 46142861934,
         "p95_minutes": 2.5167
       },
-      "platform-operator-e2e": {
+      "ci.yml/platform-operator-e2e": {
         "runs": 24,
         "first_run": 46058246569,
         "last_run": 46142861934,
         "p95_minutes": 2.65,
         "slowest_leg": "Platform Operator E2E (en)"
       },
-      "application-e2e": {
+      "ci.yml/application-e2e": {
         "runs": 24,
         "first_run": 46058246569,
         "last_run": 46142861934,
         "p95_minutes": 9.85,
         "slowest_leg": "Application E2E (en, tenant_admin,supervisor)"
       },
-      "integration-coverage": {
+      "ci.yml/integration-coverage": {
         "runs": 24,
         "first_run": 46058246569,
         "last_run": 46142861934,
         "p95_minutes": 0.5167
+      },
+      "branch-image.yml/manifest": {
+        "runs": 24,
+        "first_run": 46060557434,
+        "last_run": 46148009505,
+        "p95_minutes": 0.15
+      },
+      "main-image-aliases.yml/aliases": {
+        "runs": 24,
+        "first_run": 46057086434,
+        "last_run": 46147360016,
+        "p95_minutes": 2.0833
       }
     }
   },
