@@ -337,7 +337,7 @@
       "runs": 78,
       "first_run": 45920172165,
       "last_run": 46071940182,
-      "p95_minutes": 2.6,
+      "p95_minutes": 3.9333,
       "legs": {
         "connector-worker": { "runs": 78, "p95_minutes": 2.3 },
         "control-api": { "runs": 78, "p95_minutes": 2.4167 },
@@ -356,7 +356,22 @@
         "tenant-workspace-controller": { "runs": 78, "p95_minutes": 1.9667 },
         "workspace-configurator": { "runs": 78, "p95_minutes": 1.0333 },
         "workspace-provider": { "runs": 78, "p95_minutes": 1.2167 },
-        "zammad": { "runs": 78, "p95_minutes": 2.6 },
+        "zammad": {
+          "runs": 7,
+          "p95_minutes": 3.9333,
+          "measured_at": "2026-11-28",
+          "sample_basis": "Nearest-rank p95 of successful first-attempt Zammad image jobs on add-on pin changes in PRs #315 and #697. PR and merge-group jobs share the image build steps. The timed-out job is excluded from the p95.",
+          "samples": [
+            { "run": 46056125932, "job": 140699711872, "event": "pull_request", "seconds": 228 },
+            { "run": 46060082998, "job": 140712252941, "event": "pull_request", "seconds": 216 },
+            { "run": 46062824720, "job": 140721026820, "event": "pull_request", "seconds": 220 },
+            { "run": 46067623271, "job": 140736741300, "event": "pull_request", "seconds": 236 },
+            { "run": 46070042017, "job": 140744587217, "event": "merge_group", "seconds": 214 },
+            { "run": 46145521972, "job": 140980651234, "event": "pull_request", "seconds": 234 },
+            { "run": 46146948590, "job": 140985060365, "event": "pull_request", "seconds": 196 }
+          ],
+          "timed_out": { "run": 46148913529, "job": 140990982668, "event": "merge_group", "limit_minutes": 4 }
+        },
         "zammad-memcached": { "runs": 78, "p95_minutes": 0.75 },
         "zammad-nginx": { "runs": 78, "p95_minutes": 0.5833 },
         "zammad-redis": { "runs": 78, "p95_minutes": 0.6333 }
