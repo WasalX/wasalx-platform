@@ -8,19 +8,49 @@ import {createHash,createHmac,timingSafeEqual} from 'node:crypto';
 import {pathToFileURL} from 'node:url';
 
 // Only the owned ingress acknowledgement is retained; arbitrary response text is discarded.
-async function ingressReceipt(response){
-  if(!/^application\/json(?:;|$)/i.test(response.headers.get('content-type')??'')){await response.body?.cancel();return;}
-  if(!response.body)return;
-  const reader=response.body.getReader();let size=0;const chunks=[];
-  try{
-    while(true){const {done,value}=await reader.read();if(done)break;size+=value.byteLength;if(size>4096){await reader.cancel();return;}chunks.push(Buffer.from(value));}
-    const value=JSON.parse(Buffer.concat(chunks).toString('utf8'));
-    if(value&&typeof value.accepted==='boolean'&&typeof value.duplicate==='boolean'&&typeof value.event_id==='string'&&/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value.event_id))return{accepted:value.accepted,duplicate:value.duplicate,event_id:value.event_id};
-  }catch{/* A missing or malformed receipt never changes the observed HTTP status. */}
-  finally{reader.releaseLock();}
+async function ingressReceipt(response, signal) {
+  if (!response.body) return;
+  const reader = response.body.getReader();
+  // Close pending reads even if Fetch has not propagated the abort to the body.
+  let cancellation;
+  const cancel = () => {
+    cancellation ??= reader.cancel(signal.reason);
+  };
+  signal.addEventListener('abort', cancel, { once: true });
+  try {
+    if (signal.aborted || !/^application\/json(?:;|$)/i.test(response.headers.get('content-type') ?? '')) {
+      cancel();
+      return;
+    }
+    let size = 0;
+    const chunks = [];
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > 4096) {
+        cancel();
+        return;
+      }
+      chunks.push(Buffer.from(value));
+    }
+    if (signal.aborted) return;
+    const value = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    if (value && typeof value.accepted === 'boolean' && typeof value.duplicate === 'boolean' &&
+        typeof value.event_id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value.event_id)) {
+      return { accepted: value.accepted, duplicate: value.duplicate, event_id: value.event_id };
+    }
+  } finally {
+    signal.removeEventListener('abort', cancel);
+    try {
+      if (cancellation) await cancellation;
+    } finally {
+      reader.releaseLock();
+    }
+  }
 }
 
-export function createWahaSimulation({additionalDiscoveryGroupIds=[],participantRoster=[],inboundMediaFixtures=[],mediaBaseUrl, stateFile,apiKey,session,groupId,phone,version,outcomes=[],initialState="WORKING",healthStatus="ok",directChatIds=[],now=()=>Date.now(),webhookDestinations=[],isolatedWebhookMapping=false,webhookTimeoutMs=5000,initialExists=true,qrFixtures=[],qrDurationsMs=[60000,20000,20000,20000,20000,20000]}) {
+export function createWahaSimulation({additionalDiscoveryGroupIds=[],participantRoster=[],inboundMediaFixtures=[],mediaBaseUrl, stateFile,apiKey,session,groupId,phone,version,outcomes=[],initialState="WORKING",healthStatus="ok",directChatIds=[],now=()=>Date.now(),webhookDestinations=[],isolatedWebhookMapping=false,webhookTimeoutMs=5000,webhookTimers={setTimeout,clearTimeout},initialExists=true,qrFixtures=[],qrDurationsMs=[60000,20000,20000,20000,20000,20000]}) {
   assert(typeof apiKey==='string'&&apiKey.length>=16);
 // eslint-disable-next-line no-control-regex -- Intentionally reject unsafe control bytes at the simulator boundary.
   assert(typeof session==='string'&&session.length>0&&session.length<=128&&!/[\x00-\x1f\x7f]/.test(session));assert(/^\d+@g\.us$/.test(groupId));assert(/^\d{6,20}$/.test(phone));assert(version);
@@ -204,19 +234,20 @@ export function createWahaSimulation({additionalDiscoveryGroupIds=[],participant
       const headers={'content-type':'application/json','x-webhook-hmac-algorithm':'sha512','x-webhook-hmac':createHmac('sha512',w.hmac.key).update(saved.bytes).digest('hex'),'x-webhook-timestamp':String(saved.timestamp)};
       const controller = new AbortController();
       // Keep the deadline alive until the receipt body is consumed, even after fetch returns headers.
-      const deadline = setTimeout(() => {
+      const deadline = webhookTimers.setTimeout(() => {
         controller.abort(new DOMException('Webhook request timed out', 'TimeoutError'));
       }, webhookTimeoutMs);
       try {
         const response = await fetch(webhookDestination(w.url), {
           method: 'POST', headers, body: saved.bytes, redirect: 'error', signal: controller.signal,
         });
-        const receipt = await ingressReceipt(response);
+        // A missing or unreadable receipt never changes the observed HTTP status.
+        const receipt = await ingressReceipt(response, controller.signal).catch(() => undefined);
         results.push({ status: response.status, outcome: 'http-response', ...(receipt ? { receipt } : {}) });
       } catch (error) {
         results.push({ status: null, outcome: error?.name === 'TimeoutError' ? 'timeout' : 'network-or-redirect-error' });
       } finally {
-        clearTimeout(deadline);
+        webhookTimers.clearTimeout(deadline);
       }
     }
     saved.results=results;persist();
