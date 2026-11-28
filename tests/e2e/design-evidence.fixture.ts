@@ -1,6 +1,12 @@
-import { expect, type Page, type TestInfo } from "@playwright/test";
+import { expect, type Locator, type Page, type TestInfo } from "@playwright/test";
 import { getMessages } from "../../lib/i18n/messages";
 import { journeyCapturePath } from "./journey-captures.mjs";
+
+// Whether each element is set in the mono font.
+const usesMono = (target: Locator) =>
+  target.evaluateAll((elements) =>
+    elements.map((element) => /mono/iu.test(getComputedStyle(element).fontFamily)),
+  );
 
 export async function captureTenantDesign(
   page: Page,
@@ -74,10 +80,48 @@ export async function captureTenantDesign(
         ).toBeGreaterThanOrEqual(12);
         expect(prefix.x + prefix.width).toBeLessThanOrEqual(slug.x + 1);
         await expect(page.locator(".profile b")).toHaveCSS("direction", "ltr");
+        // The version badge is a copyable mono value in one script: a Latin "v" and Latin digits.
+        await expect(ready.settings.locator(".settings-version")).toHaveText(/^v[0-9]+$/u);
       }
       await expect(page.locator('[data-application-ready="true"]')).toHaveClass(
         `theme-${theme}`,
       );
+      if (view === "overview" || view === "cases") {
+        // Durations, states and counts use the interface font; mono is only for values an operator copies.
+        const counts =
+          view === "overview"
+            ? [page.locator(".health-row > strong")]
+            : [
+                page.getByRole("region", { name: messages["cases.summary.label"], exact: true }).locator("strong"),
+                page.getByRole("textbox", { name: messages["cases.search.label"], exact: true }).locator("xpath=../../span"),
+              ];
+        for (const target of counts) {
+          const mono = await usesMono(target);
+          expect(mono.length).toBeGreaterThan(0);
+          expect(mono).not.toContain(true);
+        }
+      }
+      if (view === "cases") {
+        const references = await usesMono(ready.cases.locator(".mono"));
+        expect(references.length).toBeGreaterThan(0);
+        expect(references).not.toContain(false);
+      }
+      if (view === "overview" || view === "cases" || view === "groups") {
+        // A table's header band spans its whole scroll wrapper, with no empty scrollbar gutter at the inline end.
+        const shortfalls = await page.locator(".table-scroll").evaluateAll((wrappers) =>
+          wrappers.flatMap((wrapper) => {
+            const row = wrapper.querySelector("thead tr")?.getBoundingClientRect();
+            return row && row.height > 0 ? [wrapper.getBoundingClientRect().width - row.width] : [];
+          }),
+        );
+        if (testInfo.project.name === "desktop") expect(shortfalls.length).toBeGreaterThan(0);
+        for (const shortfall of shortfalls) expect(shortfall).toBeLessThanOrEqual(1);
+      }
+      if (view === "groups") {
+        // The search shortcut hint names the modifier key this platform uses.
+        const apple = await page.evaluate(() => /Mac|iPhone|iPad/u.test(navigator.platform));
+        await expect(page.locator(".search kbd")).toHaveText(apple ? "⌘ K" : "Ctrl K");
+      }
       const screen = view === "overview" ? "shell" : view;
       await page.screenshot({
         path: journeyCapturePath(
@@ -91,6 +135,7 @@ export async function captureTenantDesign(
       if (view === "settings") {
         const tab = (name: keyof typeof messages) =>
           page.getByRole("tab", { name: messages[name], exact: true });
+        const general = (await ready.settings.boundingBox())!;
         await tab("tenant.settings.sections.privacy").click();
         const privacy = page.getByRole("tabpanel", {
           name: messages["tenant.settings.sections.privacy"],
@@ -115,6 +160,9 @@ export async function captureTenantDesign(
         expect(
           Math.abs(card.y - panel.y - panel.height - 16),
         ).toBeLessThanOrEqual(1);
+        // Every Settings section fills the same column, so General is as wide as Privacy & retention.
+        expect(Math.abs(general.x - panel.x)).toBeLessThanOrEqual(1);
+        expect(Math.abs(general.width - panel.width)).toBeLessThanOrEqual(1);
         await page.screenshot({
           path: journeyCapturePath(
             "tenant-settings-privacy",
