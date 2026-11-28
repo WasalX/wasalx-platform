@@ -186,7 +186,35 @@ export async function captureTenantDesign(
       }
       if (view === "groups") {
         // The search shortcut hint names a key every platform accepts, not the Mac-only Command key.
-        await expect(page.locator(".search kbd")).toHaveText("Ctrl K");
+        const hint = page.locator(".search kbd");
+        await expect(hint).toHaveText("Ctrl K");
+        // The input can shrink, so it never pushes the hint out of the search box.
+        await expect(page.locator(".search input")).toHaveCSS("min-width", "0px");
+        if (testInfo.project.name === "mobile-390") {
+          // A touch phone has no shortcut key, so the hint is hidden in both languages.
+          await expect(hint).toBeHidden();
+          // The select-all bar above the cards carries the header background across its full width.
+          const bar = await page
+            .locator(".table-scroll")
+            .filter({ has: ready.groups })
+            .locator("thead tr")
+            .evaluate((row) => ({
+              bar: getComputedStyle(row).backgroundColor,
+              cell: getComputedStyle(row.querySelector("th.select-column")!).backgroundColor,
+            }));
+          expect(bar.bar).not.toBe("rgba(0, 0, 0, 0)");
+          expect(bar.bar).toBe(bar.cell);
+        } else {
+          // The hint sits whole inside the search box at its inline end, in both directions.
+          const [box, key] = await Promise.all(
+            [page.locator(".search"), hint].map(async (target) => (await target.boundingBox())!),
+          );
+          expect(key.x).toBeGreaterThanOrEqual(box.x);
+          expect(key.x + key.width).toBeLessThanOrEqual(box.x + box.width);
+          const [left, right] = [key.x - box.x, box.x + box.width - key.x - key.width];
+          const [startGap, endGap] = locale === "ar" ? [right, left] : [left, right];
+          expect(endGap).toBeLessThan(startGap);
+        }
       }
       const screen = view === "overview" ? "shell" : view;
       await capture(`tenant-${screen}`);
