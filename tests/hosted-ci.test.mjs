@@ -1179,20 +1179,44 @@ test("Hosted browser jobs retain Playwright diagnostics on failure or cancellati
   }
 });
 
-test("Storybook and Zammad publish failure evidence only", async () => {
+test("Storybook and Zammad restrict artifact uploads to failure evidence and passing Zammad panel PNGs", async () => {
   const { jobs } = parse(await read(".github/workflows/ci.yml"));
   const zammad = parse(await read(".github/workflows/zammad-compatibility.yml"));
-  for (const [job, name, paths] of [
-    [jobs.storybook, "storybook-audit", ["test-results/storybook", "output/playwright/design-system", "output/playwright/inbox/synthetic"]],
-    [zammad.jobs.compatibility, "zammad-compatibility-failure", ["output/zammad-compat/*/native-mobile-public-failure.json"]],
-  ]) {
-    const uploads = job.steps.filter(step => step.uses?.startsWith("actions/upload-artifact@"));
-    assert.equal(uploads.length, 1, name);
-    assert.equal(uploads[0].if, "failure()", name);
-    assert.equal(uploads[0].with.name, name);
-    assert.deepEqual(uploads[0].with.path.trim().split("\n"), paths);
-    assert.equal(uploads[0].with["retention-days"], 7);
-  }
+  const artifactUploads = job => job.steps.filter(step => step.uses?.startsWith("actions/upload-artifact@"));
+  const assertFailureUpload = (step, name, paths) => {
+    assert.equal(step.if, "failure()", name);
+    assert.equal(step.with.name, name);
+    assert.deepEqual(step.with.path.trim().split("\n"), paths);
+    assert.equal(step.with["retention-days"], 7);
+  };
+
+  const storybookUploads = artifactUploads(jobs.storybook);
+  assert.equal(storybookUploads.length, 1, "storybook-audit");
+  assertFailureUpload(storybookUploads[0], "storybook-audit", [
+    "test-results/storybook", "output/playwright/design-system", "output/playwright/inbox/synthetic",
+  ]);
+
+  const captureName = "zammad-agent-panel-captures";
+  const assertZammadUploads = (uploads) => {
+    assert.equal(uploads.length, 2, "Zammad artifact upload count");
+    const capture = uploads.find(step => step.with?.name === captureName);
+    assert(capture, captureName);
+    assertFailureUpload(uploads.find(step => step !== capture), "zammad-compatibility-failure", [
+      "output/zammad-compat/*/native-mobile-public-failure.json",
+    ]);
+    assert.equal(Object.hasOwn(capture, "if"), false, captureName);
+    assert.equal(capture.with.path, "output/zammad-compat/*/agent-panel/*.png", "Zammad capture path");
+    assert.equal(capture.with["if-no-files-found"], "error", captureName);
+    assert.equal(capture.with["retention-days"], 7, captureName);
+  };
+
+  const zammadUploads = artifactUploads(zammad.jobs.compatibility);
+  assertZammadUploads(zammadUploads);
+
+  const widenedUploads = structuredClone(zammadUploads);
+  widenedUploads.find(step => step.with.name === captureName).with.path = "output/zammad-compat/*/agent-panel/*";
+  assert.throws(() => assertZammadUploads(widenedUploads), /Zammad capture path/u);
+  assert.throws(() => assertZammadUploads([...zammadUploads, zammadUploads[0]]), /Zammad artifact upload count/u);
 });
 
 test("Public child traces omit browser data and preserve failure locations", () => {
