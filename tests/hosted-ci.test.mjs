@@ -1413,12 +1413,13 @@ test("critical review uses the base policy and checks PR and queue verdicts", as
   const run = async ({
     files = [changed], comments = [[go]], current = [file(blob)], earlier = current,
     queue = false, badRef = false, staleEntry = false, failure, override = {}, expected,
+    liveBase = base, liveBranch = "main", liveHead = head,
   }) => {
     const number = queue ? 205 : 104;
     const ref = queue
       ? "refs/heads/gh-readonly-queue/main/" + (badRef ? "group-" : "pr-") + number + "-" + head
       : "refs/pull/" + number + "/merge";
-    const pr = { number, state: "open", head: { sha: head }, base: { sha: base }, changed_files: files.length };
+    const pr = { number, state: "open", head: { sha: head }, base: { sha: base, ref: "main" }, changed_files: files.length };
     const group = { base_ref: "refs/heads/main", base_sha: base, head_sha: candidate, head_ref: ref };
     const pull = origin + "/pulls/" + number;
     const commentsEndpoint = origin + "/issues/" + number + "/comments?per_page=100";
@@ -1426,7 +1427,7 @@ test("critical review uses the base policy and checks PR and queue verdicts", as
       [baseDirectory]: installed,
       [origin + "/contents/" + policyPath + "?ref=" + base]: policy,
       [origin + "/contents/.github/critical-review.py?ref=" + base]: script,
-      [pull]: pr,
+      [pull]: { ...pr, head: { sha: liveHead }, base: { sha: liveBase, ref: liveBranch } },
       [pull + "/files?per_page=100"]: [files],
       [commentsEndpoint]: comments,
       [origin + "/git/commits/" + head]: { sha: head, tree: { sha: headTree } },
@@ -1462,6 +1463,7 @@ test("critical review uses the base policy and checks PR and queue verdicts", as
   const stale = /changed critical paths/u;
   const malformed = /malformed verdict/u;
   const apiError = /Critical review gate failed/u;
+  const moved = /no longer matches the event's head or base/u;
   const cases = [
     ["docs only with no comment API call", { files: [docs], failure: "comments" }],
     ["webhook ingress change missing a verdict", { comments: [], expected: missing }],
@@ -1471,6 +1473,10 @@ test("critical review uses the base policy and checks PR and queue verdicts", as
     }],
     ["verdict from an unlisted account", { comments: [[verdict(go.body, reviewer + 1)]], expected: missing }],
     ["GO on the exact PR head", {}],
+    ["GO on the same PR head after the base advances", { liveBase: reviewed }],
+    ["advanced base still requires a verdict under the event policy", { liveBase: reviewed, comments: [], expected: missing }],
+    ["a rerun rejects a moved PR head", { liveHead: reviewed, expected: moved }],
+    ["a rerun rejects a different target branch", { liveBranch: "other", expected: moved }],
     ["GO followed by a noncritical edit", { comments: [[priorGo]], files: [changed, docs] }],
     ["newest verdict is NO_GO", { comments: [[go], [noGo]], expected: /NO_GO/u }],
     ["new GO supersedes a NO_GO", { comments: [[noGo], [go]] }],
@@ -1501,12 +1507,32 @@ test("critical review uses the base policy and checks PR and queue verdicts", as
     ["docs-only queue entry ignores earlier entries", { queue: true, files: [docs], failure: "comments" }],
     ["unresolvable queue ref", { queue: true, badRef: true, expected: /Merge-group ref/u }],
     ["stale queue entry", { queue: true, staleEntry: true, expected: /merge-group candidate/u }],
+    ["queue rejects a live PR base that differs from the candidate", { queue: true, liveBase: reviewed, expected: moved }],
     ["incomplete base installation fails closed", { override: { [baseDirectory]: installed.slice(0, 1) }, expected: 1 }],
   ];
   for (const [name, input] of cases) await t.test(name, () => run(input));
 
   for (const criticalPath of [
+    "packages/core/src/meta-account-policy.ts",
+    "packages/core/src/meta-account-relation.ts",
+    "packages/core/src/meta-account-transition-context.ts",
+    "packages/core/src/meta-account-transition-execution.ts",
+    "packages/core/src/meta-account-transition-observation.ts",
+    "packages/core/src/meta-billing-diagnostic.ts",
+    "packages/core/src/meta-coexistence.ts",
+    "packages/core/src/meta-cost.ts",
+    "packages/core/src/meta-routing.ts",
+    "packages/core/src/meta-signup.ts",
+    "packages/core/src/meta-template-inventory.ts",
+    "packages/core/src/meta-test-phone-policy.ts",
+    "services/control-api/src/meta-account-policy.ts",
+    "services/control-api/src/meta-account-transition.ts",
+    "services/control-api/src/meta-add-access-activation.ts",
+    "services/control-api/src/meta-connection-binding.ts",
     "services/control-api/src/meta-deletion.service.ts",
+    "services/control-api/src/meta-legacy-migration.ts",
+    "services/control-api/src/meta-number-release.ts",
+    "services/control-api/src/waha-workers.service.ts",
     "app/api/meta-deletion/status/route.ts",
     "services/control-api/src/invitation-token.service.ts",
     "services/control-api/src/native-membership.controller.ts",

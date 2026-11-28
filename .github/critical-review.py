@@ -91,7 +91,7 @@ def event_pr(event_name, event, repository, ref, candidate, base):
             or ref != f"refs/pull/{number}/merge"
         ):
             raise ValueError("Pull request does not match the event")
-        return number, commit_sha(head)
+        return number, commit_sha(head), pr["base"]["ref"]
 
     if event_name != "merge_group":
         raise ValueError("Unsupported critical review event")
@@ -131,7 +131,7 @@ def event_pr(event_name, event, repository, ref, candidate, base):
         or entry["headCommit"]["oid"] != candidate
     ):
         raise ValueError(f"PR #{number} no longer matches the merge-group candidate")
-    return number, commit_sha(pr["headRefOid"])
+    return number, commit_sha(pr["headRefOid"]), branch
 
 
 def pr_snapshot(endpoint, number):
@@ -144,19 +144,24 @@ def pr_snapshot(endpoint, number):
         or not 0 <= count <= 3000
     ):
         raise ValueError(f"PR #{number} has no complete changed-file snapshot")
-    return commit_sha(pr["head"]["sha"]), commit_sha(pr["base"]["sha"]), count
+    return commit_sha(pr["head"]["sha"]), pr["base"]["ref"], commit_sha(pr["base"]["sha"]), count
 
 
-def changed_paths(endpoint, number, head, expected_base):
+def changed_paths(endpoint, number, head, branch, expected_base):
     snapshot = pr_snapshot(endpoint, number)
-    if snapshot[0] != head or (expected_base and snapshot[1] != expected_base):
+    live_head, live_branch, live_base, count = snapshot
+    if (
+        live_head != head
+        or live_branch != branch
+        or (expected_base is not None and live_base != expected_base)
+    ):
         raise ValueError(f"PR #{number} no longer matches the event's head or base")
     pages = github("--paginate", "--slurp", f"{endpoint}/files?per_page=100")
     files = [file for page in pages for file in page]
     paths = {file["filename"] for file in files}
     if (
         len(files) != len(paths)
-        or len(files) != snapshot[2]
+        or len(files) != count
         or pr_snapshot(endpoint, number) != snapshot
     ):
         raise ValueError(
@@ -218,7 +223,7 @@ def critical_entries(repo, commit, paths):
 
 def check(event_name, event, repository, ref, candidate, base):
     repo = f"repos/{repository}"
-    number, head = event_pr(
+    number, head, branch = event_pr(
         event_name, event, repository, ref, commit_sha(candidate), commit_sha(base)
     )
     reviewer_ids, patterns = load_policy(repo, base)
@@ -226,7 +231,9 @@ def check(event_name, event, repository, ref, candidate, base):
         f"{repo}/pulls/{number}",
         number,
         head,
-        base if event_name == "pull_request" else None,
+        branch,
+        # PR reruns keep the event's policy and head even when the base branch advances.
+        base if event_name == "merge_group" else None,
     )
     critical = {
         path for path in paths if any(pattern.fullmatch(path) for pattern in patterns)
