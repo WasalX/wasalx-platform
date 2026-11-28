@@ -956,7 +956,7 @@ jobs:
     if: ${{ !cancelled() && github.event_name == 'merge_group' && needs.changes.outputs.images == 'true' }}
     name: Build ${{ matrix.image }}${{ matrix.pending && ' (pending add-on source)' || '' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 4
+    timeout-minutes: 5
     strategy:
       fail-fast: false
       max-parallel: 21

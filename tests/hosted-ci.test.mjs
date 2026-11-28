@@ -285,9 +285,15 @@ test("CI job timeouts are covered by the measured limits", async () => {
     images,
     "pr-images": images,
   };
-  const measuredP95 = ({ p95_minutes: p95, runs }, id) => {
+  const measuredP95 = ({ p95_minutes: p95, runs, samples }, id) => {
     assert(Number.isFinite(p95) && p95 > 0, id);
     assert(Number.isInteger(runs) && runs >= 5, id);
+    if (samples) {
+      assert.equal(samples.length, runs, id);
+      const seconds = samples.map(sample => sample.seconds).sort((a, b) => a - b);
+      const nearestRank = Math.ceil(runs * 0.95);
+      assert.equal(p95, Number((seconds[nearestRank - 1] / 60).toFixed(4)), id);
+    }
     return p95;
   };
   const downloads = timing.artifact_downloads;
