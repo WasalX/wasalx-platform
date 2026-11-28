@@ -13,8 +13,8 @@ import { exportJWK, generateKeyPair, SignJWT } from "jose";
 import { Client } from "pg";
 
 const root = fileURLToPath(new URL("../..", import.meta.url));
-const postgresImage = "postgres:17.10-alpine3.23@sha256:8189a1f6e40904781fc9e2612687877791d21679866db58b1de996b31fc312e4";
-const redisImage = "redis:8.4.1-alpine@sha256:e55195a3afbb812a14306909caad6583a1ab6c79f393f53490e42cb2111084a9";
+const postgresImage = "postgres:17.12-alpine3.23@sha256:57a828ad76b719bbed499fc30f71754bbe37d78c8c4c990a1a2096380b8d7ca5";
+const redisImage = "redis:8.12.0-alpine@sha256:5af80107c1eeecb484a2269b80a26d12bfa6521787da4663bd9f19f60a163483";
 export const tenantId = "10000000-0000-4000-8000-000000000001";
 export const tenantName = "Invitation Proof Workspace";
 export const invitationToken = Buffer.alloc(32, 7).toString("base64url");
