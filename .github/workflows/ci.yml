@@ -538,14 +538,14 @@ jobs:
         with: &source-hook-cache-inputs
           path: ~/.cache/pre-commit
           key: pre-commit-${{ runner.os }}-${{ runner.arch }}-${{ steps.source-hook-runtime.outputs.versions }}-${{ env.PRE_COMMIT_VERSION }}-${{ hashFiles('.pre-commit-config.yaml', '.rubocop.yml') }}
-      - name: Check eligible source style
+      - name: Check added source style
         if: matrix.mode == 'lint'
         shell: bash
         env:
           STYLE_BASE: ${{ github.event_name == 'pull_request' && 'HEAD^1' || github.event.merge_group.base_sha }}
         run: |
           # Pre-commit installs environments before applying its file filters.
-          git diff --name-status --no-renames --diff-filter=AMT -z "$STYLE_BASE" HEAD |
+          git diff --name-only --no-renames --diff-filter=A -z "$STYLE_BASE" HEAD |
             ruby scripts/filter-source-files.rb |
             xargs -0 -r pipx run --python python3 --spec "pre-commit==$PRE_COMMIT_VERSION" pre-commit run --show-diff-on-failure --files
       - name: Prove Java, Dockerfile and YAML source hooks
