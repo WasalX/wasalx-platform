@@ -14,6 +14,7 @@ export const arabicCommonMessages = {
   "common.actions.retry": "إعادة المحاولة",
   "common.actions.refresh": "تحديث",
   "common.actions.remove": "إزالة",
+  "common.shortcut.search": "Ctrl K",
   "common.actions.signIn": "تسجيل الدخول",
   "common.actions.goHome": "الانتقال إلى الصفحة الرئيسية",
   "common.actions.save": "حفظ",

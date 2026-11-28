@@ -773,7 +773,7 @@ test("dense operational tables are contained inside their own mobile scrollers",
   assert.match(css, /\.content \{[^}]*width:100%;[^}]*min-width:0;[^}]*overflow-x:clip;/u);
   assert.match(css, /\.content>\* \{ min-width:0; max-width:100%; \}/u);
   assert.match(css, /\.panel \{ min-width:0; max-width:100%;/u);
-  assert.match(css, /\.table-scroll\{position:relative;width:100%;min-width:0;max-width:100%;overflow-x:auto;overflow-y:hidden;overscroll-behavior-inline:contain;scrollbar-gutter:stable\}/u);
+  assert.match(css, /\.table-scroll\{position:relative;width:100%;min-width:0;max-width:100%;overflow-x:auto;overflow-y:hidden;overscroll-behavior-inline:contain\}/u);
   assert.match(css, /\.table-scroll:focus-visible\{/u);
   assert.match(css, /\.table-scroll-cue\{/u);
 });

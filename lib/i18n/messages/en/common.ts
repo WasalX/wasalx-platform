@@ -13,6 +13,7 @@ export const englishCommonMessages = {
   "common.actions.retry": "Try again",
   "common.actions.refresh": "Refresh",
   "common.actions.remove": "Remove",
+  "common.shortcut.search": "Ctrl K",
   "common.actions.signIn": "Sign in",
   "common.actions.goHome": "Go to home page",
   "common.actions.save": "Save",

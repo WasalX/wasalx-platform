@@ -265,6 +265,7 @@ export function Toolbar({
   placeholder: string;
   children?: React.ReactNode;
 }) {
+  const { t } = useI18n();
   const searchRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
     const focusSearch = (event: KeyboardEvent) => {
@@ -287,7 +288,8 @@ export function Toolbar({
           onChange={(e) => setQuery(e.target.value)}
           placeholder={placeholder}
         />
-        <kbd aria-hidden="true">⌘ K</kbd>
+        {/* The handler above accepts Ctrl+K on every platform, so one hint is true everywhere. */}
+        <kbd aria-hidden="true">{t("common.shortcut.search")}</kbd>
       </label>
       {children}
     </div>
