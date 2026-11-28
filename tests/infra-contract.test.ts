@@ -888,12 +888,19 @@ exit ${status}
   }
 });
 
-test("workspace configurator resolves the repository-pinned pnpm and fails on tool drift", async () => {
+test("workspace configurator uses the root lockfile and repository-pinned pnpm", async () => {
   const root = JSON.parse(await read("package.json"));
   const configurator = JSON.parse(await read("services/workspace-configurator/package.json"));
   assert.equal(configurator.packageManager, root.packageManager);
   const version = root.packageManager.split("@")[1];
-  assert.ok((await read("Dockerfile.workspace-configurator")).includes(`test "$(pnpm --version)" = "${version}"`));
+  const dockerfile = await read("Dockerfile.workspace-configurator");
+  assert.ok(dockerfile.includes(`test "$(pnpm --version)" = "${version}"`));
+  assert.match(dockerfile, /COPY package\.json pnpm-lock\.yaml pnpm-workspace\.yaml \.\//u);
+  assert.match(
+    dockerfile,
+    /pnpm install --frozen-lockfile --prefer-offline --filter @wasalx\/workspace-configurator\.\.\./u,
+  );
+  await assert.rejects(read("services/workspace-configurator/pnpm-lock.yaml"), { code: "ENOENT" });
 });
 
 test("Docker smoke fails before BuildKit when host disk is unsafe", async () => {
