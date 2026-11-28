@@ -1286,6 +1286,157 @@ test("Successful owner fixture shards retain every named journey PNG", async t =
   }
 });
 
+test("critical review uses the base policy and checks PR and queue verdicts", async t => {
+  const { jobs } = parse(await read(".github/workflows/ci.yml"));
+  const gate = jobs["ci-gate"];
+  const step = gate.steps.find(row => row.name === "Require the critical-path review verdict");
+  assert.deepEqual(gate.permissions, { contents: "read", "pull-requests": "read" });
+  assert.equal(step.if, "github.event_name == 'pull_request' || github.event_name == 'merge_group'");
+  assert.equal(step.env.GH_TOKEN, "${{ github.token }}");
+  assert.equal(step.env.REVIEW_BASE, "${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}");
+  assert.equal(step["continue-on-error"], undefined);
+
+  const directory = await mkdtemp(join(tmpdir(), "wasalx-critical-review-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const fixture = join(directory, "responses.json");
+  const eventPath = join(directory, "event.json");
+  await writeFile(join(directory, "gh"), [
+    "#!/usr/bin/env bash",
+    "set -euo pipefail",
+    'test "$1" = api',
+    "shift",
+    'if [[ "$1" == graphql ]]; then',
+    '  endpoint="graphql:${!#}"',
+    'elif [[ "${2:-}" == --jq ]]; then',
+    '  jq -e --arg key "$1" \'.[$key]\' "$REVIEW_FIXTURE" | jq -r "$3"',
+    '  exit',
+    'else',
+    '  endpoint="${!#}"',
+    'fi',
+    'jq -er --arg key "$endpoint" \'.[$key]\' "$REVIEW_FIXTURE"',
+  ].join("\n"), { mode: 0o755 });
+
+  const [base, head, reviewed, candidate, headTree, reviewedTree, blob, otherBlob] =
+    Array.from("abcdef01", char => char.repeat(40));
+  const repo = "example/fixture";
+  const origin = "repos/" + repo;
+  const policyPath = ".github/critical-paths.json";
+  const installed = ["critical-paths.json", "critical-review.py"].map(name => ({ type: "file", name }));
+  const baseDirectory = origin + "/contents/.github?ref=" + base;
+  const candidateDirectory = origin + "/contents/.github?ref=" + candidate;
+  const policy = JSON.parse(await read(policyPath));
+  const script = await read(".github/critical-review.py");
+  const [reviewer] = policy.reviewerAccountIds;
+  assert.equal(reviewer, 357558349);
+
+  const filename = "services/control-api/src/webhook-security.ts";
+  const changed = { filename, status: "modified" };
+  const docs = { filename: "README.md", status: "modified" };
+  const verdict = (body, id = reviewer) => ({ id: 1, user: { id }, body });
+  const go = verdict("VERDICT: GO " + head);
+  const priorGo = verdict("VERDICT: GO " + reviewed);
+  const noGo = verdict("VERDICT: NO_GO " + reviewed);
+  const file = (sha, mode = "100644") => ({ path: filename, type: "blob", mode, sha });
+  const tree = (sha, entries) => ({ sha, tree: entries, truncated: false });
+
+  const run = async ({
+    files = [changed], comments = [[go]], current = [file(blob)], earlier = current,
+    queue = false, badRef = false, staleEntry = false, failure, override = {}, expected,
+  }) => {
+    const number = queue ? 205 : 104;
+    const ref = queue
+      ? "refs/heads/gh-readonly-queue/main/" + (badRef ? "group-" : "pr-") + number + "-" + head
+      : "refs/pull/" + number + "/merge";
+    const pr = { number, state: "open", head: { sha: head }, base: { sha: base }, changed_files: files.length };
+    const group = { base_ref: "refs/heads/main", base_sha: base, head_sha: candidate, head_ref: ref };
+    const pull = origin + "/pulls/" + number;
+    const commentsEndpoint = origin + "/issues/" + number + "/comments?per_page=100";
+    const responses = {
+      [baseDirectory]: installed,
+      [origin + "/contents/" + policyPath + "?ref=" + base]: policy,
+      [origin + "/contents/.github/critical-review.py?ref=" + base]: script,
+      [pull]: pr,
+      [pull + "/files?per_page=100"]: [files],
+      [commentsEndpoint]: comments,
+      [origin + "/git/commits/" + head]: { sha: head, tree: { sha: headTree } },
+      [origin + "/git/commits/" + reviewed]: { sha: reviewed, tree: { sha: reviewedTree } },
+      [origin + "/git/trees/" + headTree + "?recursive=1"]: tree(headTree, current),
+      [origin + "/git/trees/" + reviewedTree + "?recursive=1"]: tree(reviewedTree, earlier),
+      "graphql:number=205": {
+        data: { repository: { pullRequest: {
+          headRefOid: head,
+          mergeQueueEntry: { baseCommit: { oid: base }, headCommit: { oid: staleEntry ? head : candidate } },
+        } } },
+      },
+      ...override,
+    };
+    if (failure === "files") delete responses[pull + "/files?per_page=100"];
+    if (failure === "comments") delete responses[commentsEndpoint];
+    if (failure === "commit") delete responses[origin + "/git/commits/" + reviewed];
+    if (failure === "snapshot") responses[pull].changed_files += 1;
+    await writeFile(fixture, JSON.stringify(responses));
+    await writeFile(eventPath, JSON.stringify(queue ? { merge_group: group } : { pull_request: pr }));
+    const result = runWorkflowScript(step.run, {
+      PATH: directory + ":" + process.env.PATH, REVIEW_FIXTURE: fixture, RUNNER_TEMP: directory,
+      REVIEW_BASE: base, GITHUB_REPOSITORY: repo, GITHUB_REF: ref, GITHUB_SHA: candidate,
+      GITHUB_EVENT_NAME: queue ? "merge_group" : "pull_request", GITHUB_EVENT_PATH: eventPath,
+    }, directory);
+    assert.ifError(result.error);
+    assert.equal(result.status, expected instanceof RegExp ? 1 : expected ?? 0, result.stdout + result.stderr);
+    if (expected instanceof RegExp) assert.match(result.stderr, expected);
+    return result.stdout;
+  };
+
+  const missing = /needs a VERDICT: GO/u;
+  const stale = /changed critical paths/u;
+  const malformed = /malformed verdict/u;
+  const apiError = /Critical review gate failed/u;
+  const cases = [
+    ["docs only with no comment API call", { files: [docs], failure: "comments" }],
+    ["critical change missing a verdict", { comments: [], expected: missing }],
+    ["verdict from an unlisted account", { comments: [[verdict(go.body, reviewer + 1)]], expected: missing }],
+    ["GO on the exact PR head", {}],
+    ["GO followed by a noncritical edit", { comments: [[priorGo]], files: [changed, docs] }],
+    ["newest verdict is NO_GO", { comments: [[go], [noGo]], expected: /NO_GO/u }],
+    ["new GO supersedes a NO_GO", { comments: [[noGo], [go]] }],
+    ["newer non-verdict comment is ignored", { comments: [[go], [verdict("Review notes only")]] }],
+    ["newer untrusted verdict is ignored", { comments: [[go], [verdict(noGo.body, reviewer + 1)]] }],
+    ["an abbreviated SHA fails over an older GO", { comments: [[go], [verdict("VERDICT: GO abc")]], expected: malformed }],
+    ["two verdict lines in one comment", { comments: [[verdict(go.body + "\n" + noGo.body)]], expected: malformed }],
+    ["a change after a GO", { comments: [[priorGo]], earlier: [file(otherBlob)], expected: stale }],
+    ["a file mode change after a GO", { comments: [[priorGo]], earlier: [file(blob, "100755")], expected: stale }],
+    ["a deletion after a GO", { comments: [[priorGo]], current: [], earlier: [file(blob)], expected: stale }],
+    ["a deletion already covered by a GO", { comments: [[priorGo]], current: [], earlier: [] }],
+    ["a critical path renamed out of scope", {
+      files: [{ ...docs, status: "renamed", previous_filename: filename }], comments: [], expected: missing,
+    }],
+    ["a proposed path list cannot remove its own review", {
+      files: [{ filename: policyPath, status: "modified" }], comments: [], expected: missing,
+      override: { [origin + "/contents/" + policyPath + "?ref=" + head]: { ...policy, classes: {} } },
+    }],
+    ["failed files API call", { failure: "files", expected: apiError }],
+    ["failed comments API call", { failure: "comments", expected: apiError }],
+    ["unavailable reviewed commit", { comments: [[priorGo]], failure: "commit", expected: apiError }],
+    ["truncated commit tree", {
+      comments: [[priorGo]], expected: /complete tree/u,
+      override: { [origin + "/git/trees/" + reviewedTree + "?recursive=1"]: { ...tree(reviewedTree, []), truncated: true } },
+    }],
+    ["incomplete file snapshot", { failure: "snapshot", expected: /snapshot is incomplete/u }],
+    ["queue entry selects its own PR and head", { queue: true }],
+    ["docs-only queue entry ignores earlier entries", { queue: true, files: [docs], failure: "comments" }],
+    ["unresolvable queue ref", { queue: true, badRef: true, expected: /Merge-group ref/u }],
+    ["stale queue entry", { queue: true, staleEntry: true, expected: /merge-group candidate/u }],
+    ["incomplete base installation fails closed", { override: { [baseDirectory]: installed.slice(0, 1) }, expected: 1 }],
+  ];
+  for (const [name, input] of cases) await t.test(name, () => run(input));
+
+  await t.test("the first installation requires both files and manual workflow review", async () => {
+    const override = { [baseDirectory]: [], [candidateDirectory]: installed };
+    assert.match(await run({ override }), /requires manual workflow review/u);
+    await run({ override: { ...override, [candidateDirectory]: installed.slice(0, 1) }, expected: 1 });
+  });
+});
+
 test("CI gate requires each event's jobs and rejects unplanned skips, failures, and cancellations", async t => {
   const { jobs } = parse(await read(".github/workflows/ci.yml"));
   const { "ci-gate": gate, checks } = jobs;
@@ -2273,12 +2424,14 @@ test("source hook environments use the same runtime-specific key and save only o
 });
 
 test("source gate settings are critical and pending RuboCop cops are enabled", async () => {
-  const critical = (await read("AGENTS.md")).split("\n").find(line => line.startsWith("- **Repo settings,"));
-  for (const name of [".pre-commit-config.yaml", ".rubocop.yml", "eslint.config.mjs", ".gitignore",
-    "package.json", "prettier", "stylelint", ".prettierignore", ".stylelintignore"]) {
-    assert(critical.includes("`" + name + "`"), name);
+  const path = ".github/critical-paths.json";
+  const policy = JSON.parse(await read(path));
+  const critical = policy.classes["repo-settings-branch-protection-and-release-gates"];
+  for (const name of [".pre-commit-config.yaml", ".rubocop.yml", "eslint.config.*", ".gitignore",
+    "package.json", "prettier.config.*", "stylelint.config.*", ".prettierignore", ".stylelintignore"]) {
+    assert(critical.includes(name), name);
   }
-  assert.match(critical, /any added formatter or linter configuration or ignore file/u);
+  for (const file of ["AGENTS.md", "DELIVERY.md"]) assert((await read(file)).includes("(" + path + ")"), file);
   assert.equal(parse(await read(".rubocop.yml")).AllCops.NewCops, "enable");
 });
 

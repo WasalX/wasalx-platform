@@ -1,0 +1,91 @@
+{
+  "reviewerAccountIds": [
+    357558349
+  ],
+  "classes": {
+    "production": [
+      "Dockerfile.*",
+      ".dockerignore",
+      "compose*.yaml",
+      "infra/**",
+      "release/**",
+      "zammad-addon.json",
+      "scripts/dev-install/**"
+    ],
+    "secrets-and-credentials": [
+      ".github/workflows/**",
+      ".env*",
+      "tools/*secret-sidecar.mjs",
+      "services/*/src/*secret*.ts",
+      "services/control-api/src/*credential*.ts",
+      "services/control-api/src/meta-webhook-apps.ts",
+      "services/control-api/src/webhook-security.ts",
+      "packages/core/src/secret-reference.ts"
+    ],
+    "personal-and-customer-data": [
+      "services/*/migrations/**",
+      "scripts/dr/**",
+      "app/auth/**",
+      "app/platform/auth/**",
+      "app/api/audit/**",
+      "app/api/privacy/**",
+      "app/api/support-access/**",
+      "app/api/team/workspace-access/**",
+      "app/api/connections/_authorization.ts",
+      "app/api/connections/*/auth/**",
+      "app/webhooks/**",
+      "lib/*oidc*.ts",
+      "lib/*session*.ts",
+      "lib/*request-auth.ts",
+      "lib/portal-security.ts",
+      "packages/core/src/service-auth.ts",
+      "packages/core/src/tenant-permissions.ts",
+      "services/control-api/src/*auth*.ts",
+      "services/control-api/src/audit*.ts",
+      "services/control-api/src/permission.guard.ts",
+      "services/control-api/src/privacy*.ts",
+      "services/control-api/src/session.controller.ts",
+      "services/control-api/src/support-access*.ts",
+      "services/control-api/src/webhook-ingress.controller.ts",
+      "services/connector-worker/src/*privacy*.ts",
+      "services/workspace-configurator/src/backup-runtime.ts"
+    ],
+    "making-anything-public": [
+      ".github/workflows/branch-image.yml",
+      ".github/workflows/main-image-aliases.yml",
+      ".github/workflows/mirror-images.yml",
+      ".github/workflows/release.yml",
+      "tests/no-agent-instruction-files.test.mjs"
+    ],
+    "hosts-networks-and-firewalls": [
+      "infra/**",
+      "compose*.yaml",
+      "scripts/dev-install/**"
+    ],
+    "repo-settings-branch-protection-and-release-gates": [
+      ".github/**",
+      "scripts/release/**",
+      "scripts/public-privacy.py",
+      "scripts/affected-unit-tests.mjs",
+      "scripts/filter-source-files.rb",
+      "scripts/hosted-ci*",
+      "scripts/test-unit.mjs",
+      "scripts/test-quarantine.json",
+      "tests/hosted-ci.test.mjs",
+      "tests/test_public_privacy.py",
+      ".gitignore",
+      ".pre-commit-config.yaml",
+      ".rubocop.yml",
+      ".prettierignore",
+      ".prettierrc*",
+      ".stylelintignore",
+      ".stylelintrc*",
+      ".eslintignore",
+      ".eslintrc*",
+      "eslint.config.*",
+      "prettier.config.*",
+      "stylelint.config.*",
+      "package.json"
+    ]
+  }
+}

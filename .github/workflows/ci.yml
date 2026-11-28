@@ -1066,7 +1066,9 @@ jobs:
     needs: [changes, workflow-lint, storybook, privacy, dependency-review, checks, full-unit, images, pr-images, installer-portal, integration, portal-integration, application-e2e, platform-operator-e2e, keycloak-identity, integration-coverage, infra-validate, dev-install-dryrun, zammad-compatibility]
     runs-on: ubuntu-slim
     timeout-minutes: 1
-    permissions: {}
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
       - name: Require checks and the applicable image lane
         env:
@@ -1154,3 +1156,30 @@ jobs:
             *:*:success|pull_request:false:skipped|merge_group:false:skipped) ;;
             *) echo 'Infrastructure validation did not pass.'; exit 1 ;;
           esac
+      - name: Require the critical-path review verdict
+        if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REVIEW_BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+        run: |
+          [[ "$REVIEW_BASE" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
+          review_files() {
+            gh api "repos/$GITHUB_REPOSITORY/contents/.github?ref=$1" --jq '
+              [.[] | select(.name == "critical-paths.json" or .name == "critical-review.py") |
+                (.type + ":" + .name)] | sort | join(" ")'
+          }
+          expected='file:critical-paths.json file:critical-review.py'
+          base_files=$(review_files "$REVIEW_BASE")
+          if [[ -z "$base_files" ]]; then
+            # The first installation goes through the manual workflow-file review.
+            candidate_files=$(review_files "$GITHUB_SHA")
+            test "$candidate_files" = "$expected"
+            echo 'Critical-path policy installation requires manual workflow review.'
+          else
+            test "$base_files" = "$expected"
+            script="$RUNNER_TEMP/critical-review.py"
+            gh api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/$GITHUB_REPOSITORY/contents/.github/critical-review.py?ref=$REVIEW_BASE" > "$script"
+            python3 -I -B "$script"
+          fi
