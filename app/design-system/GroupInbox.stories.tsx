@@ -3,6 +3,7 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 import { getMessages } from "../../lib/i18n/messages";
 import { I18nProvider } from "../I18nProvider";
 import { InboxWorkspace } from "../InboxWorkspace";
+import "../globals.css";
 
 const headers = { "content-type": "application/json" };
 function Workspace({ locale = "en", canWrite = true, lifecycle = false }: { locale?: "en" | "ar"; canWrite?: boolean; lifecycle?: boolean }) {
