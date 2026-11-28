@@ -113,10 +113,12 @@ test('Account change uses four deliberate actions and recovers the exact saved o
   await button(page,'initiate').click();expect(f.writes).toHaveLength(0);
   f.setHandler(async(route,action,requestRevision)=>{f.set({...f.get(),canCancel:false,canRefresh:false,execution:{...f.get().execution!,revision:2,state:'RESERVED',actions:{initiate:false,complete:false,observe:false,reconcile:false,cancel:false},pendingAction:{operationId,action,state:'QUEUED',requestRevision,requestKey:route.request().headers()['idempotency-key']!}}});await f.lost(route);});
   page.once('dialog',dialog=>dialog.accept());await button(page,'initiate').focus();await page.keyboard.press('Enter');
-  await expect(section(page).getByText(copy('execution.heldRequest'),{exact:true})).toBeVisible();expect(f.writes).toHaveLength(1);
+  await expect(section(page).getByText(copy('execution.heldRequest'),{exact:true})).toBeVisible();
+  await expect.poll(()=>f.writes).toHaveLength(1);
   await page.reload();await expect(section(page).getByText(copy('execution.heldRequest'),{exact:true})).toBeVisible();expect(f.writes).toHaveLength(1);
   await section(page).getByRole('button',{name:copy('execution.resolve'),exact:true}).click();
-  await expect(section(page).getByText(copy('execution.heldRequest'),{exact:true})).toBeVisible();expect(f.resolutions).toHaveLength(1);expect(f.writes).toHaveLength(1);
+  await expect(section(page).getByText(copy('execution.heldRequest'),{exact:true})).toBeVisible();
+  await expect.poll(()=>f.resolutions).toHaveLength(1);expect(f.writes).toHaveLength(1);
   const pending=f.get().execution!.pendingAction!;
   f.set({...f.get(),execution:{...f.get().execution!,revision:3,pendingAction:{...pending,state:'SUCCEEDED',requestKey:'44000000-0000-4000-8000-000000000099'}}});
   await f.refresh();await expect(section(page).getByText(copy('execution.heldRequest'),{exact:true})).toBeVisible();expect(f.writes).toHaveLength(1); // Another tab's same-revision result is not this request.
@@ -161,6 +163,7 @@ test('Account change holds malformed or uncorrelated results and clears inaccess
   await page.evaluate(()=>{(window as unknown as {__restoreTransitionStorage:()=>void}).__restoreTransitionStorage();});await f.refresh();await expect(button(page,'initiate')).toBeEnabled();
   f.setHandler(async route=>{await route.fulfill({status:202,json:{id:planId,duplicate:false}});}); // Missing durable operation ID is not acceptance proof.
   page.once('dialog',dialog=>dialog.accept());await button(page,'initiate').click();await expect(section(page).getByText(copy('execution.heldRequest'),{exact:true})).toBeVisible();
+  await expect.poll(()=>f.writes).toHaveLength(1);
   await f.refresh();await expect(button(page,'initiate')).toBeDisabled();expect(f.writes).toHaveLength(1);
   await page.reload();await expect(section(page).getByText(copy('execution.heldRequest'),{exact:true})).toBeVisible();expect(f.writes).toHaveLength(1);
   f.set({...f.get(),execution:{...f.get().execution!,revision:4,state:'HELD',reasons:['PROVIDER_OUTCOME_UNRESOLVED'],actions:{initiate:false,complete:false,observe:true,reconcile:false,cancel:false},
@@ -207,12 +210,13 @@ test('An unadmitted request is resolved with its original key without repeating 
   const f=await fixture(page);f.setHandler(async route=>{await f.lost(route);});
   await page.goto(`/app?view=connections&connection=${connection}`);await expect(button(page,'initiate')).toBeEnabled();
   page.once('dialog',dialog=>dialog.accept());await button(page,'initiate').click();await expect(section(page).getByText(copy('execution.heldRequest'),{exact:true})).toBeVisible();
+  await expect.poll(()=>f.writes).toHaveLength(1);
   await page.reload();await expect(section(page).getByText(copy('execution.heldRequest'),{exact:true})).toBeVisible();expect(f.resolutions).toHaveLength(0);
   // Missing persisted request identity cannot release the held original request.
   f.setResolveHandler(async route=>{await route.fulfill({json:{id:planId,operationId,duplicate:true,pendingAction:{operationId,action:'INITIATE',state:'CANCELLED'}}});});
   await section(page).getByRole('button',{name:copy('execution.resolve'),exact:true}).click();
   await expect(section(page).getByText(copy('execution.heldRequest'),{exact:true})).toBeVisible();await expect(button(page,'initiate')).toBeDisabled();
-  expect(f.resolutions).toHaveLength(1);expect(f.writes).toHaveLength(1);
+  await expect.poll(()=>f.resolutions).toHaveLength(1);expect(f.writes).toHaveLength(1);
   // The resolution response can itself be lost; an exact terminal GET is sufficient, never a resend.
   f.setResolveHandler(async(route,action,requestRevision)=>{f.set({...f.get(),execution:{...f.get().execution!,revision:2,pendingAction:{operationId,action,state:'CANCELLED',requestRevision,requestKey:route.request().headers()['idempotency-key']!}}});await f.lost(route);});
   await section(page).getByRole('button',{name:copy('execution.resolve'),exact:true}).click();await expect(section(page).getByText(copy('execution.heldRequest'),{exact:true})).toHaveCount(0);

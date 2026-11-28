@@ -108,7 +108,8 @@ export async function metaRoutingJourney(page: Page, locale: "en" | "ar", role: 
   await testInfo.attach("routing-confirmation", { body: await page.screenshot(), contentType: "image/png" });
   expect((await new AxeBuilder({ page }).include('[aria-labelledby="meta-thread-title"]').withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze()).violations).toEqual([]);
   await dialog.getByRole("button", { name: t("confirmAction"), exact: true }).click();
-  await expect(dialog.getByText(t("outcomeHold"), { exact: true })).toBeVisible(); expect(writes).toHaveLength(1);
+  await expect(dialog.getByText(t("outcomeHold"), { exact: true })).toBeVisible();
+  await expect.poll(() => writes).toHaveLength(1);
   const original = writes[0];
   view = { ...view, correlation: { state: "ABSENT" } };
   dialog = await open(); expect(readKeys.at(-1)).toBe(original.key);
@@ -136,7 +137,8 @@ export async function metaRoutingJourney(page: Page, locale: "en" | "ar", role: 
   malformedTerminal = true;
   await dialog.getByRole("button", { name: t("action.release"), exact: true }).click();
   await dialog.getByRole("button", { name: t("confirmAction"), exact: true }).click();
-  await expect(dialog.getByText(t("outcomeHold"), { exact: true })).toBeVisible(); expect(writes).toHaveLength(3);
+  await expect(dialog.getByText(t("outcomeHold"), { exact: true })).toBeVisible();
+  await expect.poll(() => writes).toHaveLength(3);
   view = { ...view, correlation: { state: "ABSENT" } };
   dialog = await open(); expect(readKeys.at(-1)).toBe(writes[2].key);
   await expect(dialog.getByText(t("outcomeHold"), { exact: true })).toBeVisible(); expect(writes).toHaveLength(3);
@@ -148,7 +150,8 @@ export async function metaRoutingJourney(page: Page, locale: "en" | "ar", role: 
   denied = true;
   await dialog.getByRole("button", { name: t("action.release"), exact: true }).click();
   await dialog.getByRole("button", { name: t("confirmAction"), exact: true }).click();
-  await expect(dialog.getByText(t("outcomeHold"), { exact: true })).toBeVisible(); expect(writes).toHaveLength(4);
+  await expect(dialog.getByText(t("outcomeHold"), { exact: true })).toBeVisible();
+  await expect.poll(() => writes).toHaveLength(4);
   view = { ...view, correlation: { state: "ABSENT" } }; await dialog.getByRole("button", { name: t("refresh"), exact: true }).click();
   await expect(dialog.getByText(t("outcomeHold"), { exact: true })).toBeVisible(); expect(writes).toHaveLength(4);
   view = { ...view, correlation: { state: "MATCHED", action: action(writes[3].body, "FAILED"), command: writes[3].body } };
