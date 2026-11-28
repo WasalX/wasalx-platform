@@ -17,6 +17,32 @@ const bash = process.platform === "win32"
     .filter((candidate): candidate is string => Boolean(candidate)).find(existsSync) ?? "bash"
   : "bash";
 
+test("CI and Zammad fixture image pins match Compose", async () => {
+  const { services } = parseYaml(await read("compose.yaml"));
+  const { services: full } = parseYaml(await read("compose.full.yaml"), { merge: true, logLevel: "error" });
+  const integration = [services.postgres.image, services.redis.image];
+  const zammad = [
+    full["zammad-postgresql"].image,
+    full["zammad-redis"].image,
+    full["zammad-memcached"].image,
+  ];
+  const expected = {
+    ".github/workflows/ci.yml": integration,
+    "scripts/release/ci-postgres-runtime.sh": [services.postgres.image],
+    "tests/ci-postgres-runtime.py": [services.postgres.image],
+    "tests/multitenant-e2e.test.mjs": integration,
+    "tests/support/signed-platform-fixture.mjs": integration,
+    "scripts/check-zammad-rails-load.mjs": zammad,
+    "tests/zammad-image-browser-compat.test.mjs": zammad,
+    "scripts/release/installer-dev-simulator.compose.yaml": [full["keycloak-bootstrap"].image],
+  };
+  const imageRef = /(?:^|[\s="'|\x60])((?:postgres|redis|memcached|node):\d[\w.-]*(?:@sha256:[a-f0-9]+)?)(?=[\s"',;|\x60]|$)/gmu;
+  for (const [path, images] of Object.entries(expected)) {
+    const pins = Array.from((await read(path)).matchAll(imageRef), ([, pin]) => pin);
+    assert.deepEqual(pins.sort(), [...images].sort(), path);
+  }
+});
+
 test("production ingress defaults to the chart services and still honors an operator allowlist", async () => {
   const dir = await mkdtemp(join(tmpdir(), "wasalx-ingress-"));
   try {

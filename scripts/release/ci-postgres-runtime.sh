@@ -7,7 +7,7 @@ set -euo pipefail
 [[ $GITHUB_RUN_ID =~ ^[1-9][0-9]*$ && $GITHUB_RUN_ATTEMPT =~ ^[1-9][0-9]*$ && $GITHUB_JOB == postgres ]]
 name="wasalx-ci-postgres-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${GITHUB_JOB}"
 owner="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${GITHUB_JOB}"
-image=postgres:17.10-alpine3.23@sha256:8189a1f6e40904781fc9e2612687877791d21679866db58b1de996b31fc312e4
+image=postgres:17.12-alpine3.23@sha256:57a828ad76b719bbed499fc30f71754bbe37d78c8c4c990a1a2096380b8d7ca5
 scratch=$(mktemp -d "$RUNNER_TEMP/wasalx-ci-postgres.XXXXXX")
 cidfile="$scratch/container.cid"
 identity_format='{{.Id}}|{{.Name}}|{{.Config.Image}}|{{index .Config.Labels "io.wasalx.ci-postgres-owner"}}|{{index .Config.Labels "io.wasalx.candidate-sha"}}'

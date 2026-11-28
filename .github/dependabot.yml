@@ -80,6 +80,8 @@ updates:
     ignore:
       - dependency-name: "node"
         update-types: ["version-update:semver-major"]
+      # Hold PostgreSQL 18 while #681 restores the base and OS update path.
+      - dependency-name: "chainguard/postgres"
       # Keycloak is upgraded by hand: its Dockerfile pins versioned CLI and library jars.
       - dependency-name: "keycloak/keycloak"
     groups:

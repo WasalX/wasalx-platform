@@ -101,19 +101,19 @@ export function railsLoadModel(image, baseImage) {
   return {
     services: {
       "zammad-postgresql": {
-        image: "postgres:17.10-alpine@sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193",
+        image: "postgres:17.12-alpine@sha256:f9cf3e1f0066f0eb0c48707d864f0ac5941e9ff454a072077d97a4d278d07d73",
         ...cap("1g", 1), tmpfs: ["/var/lib/postgresql/data"],
         environment: { POSTGRES_DB: "zammad_production", POSTGRES_USER: "zammad", POSTGRES_PASSWORD: "rails-load-fixture" },
         command: ["postgres", "-c", "fsync=off", "-c", "synchronous_commit=off", "-c", "full_page_writes=off"],
         healthcheck: { test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U zammad -d zammad_production"], interval: "2s", timeout: "3s", retries: 30 },
       },
       "zammad-redis": {
-        image: "redis:8.10-alpine@sha256:978f0e01593e65eed801f2402944efcd936d43b5027e4908a7897baf88ed6241",
+        image: "redis:8.12-alpine@sha256:5af80107c1eeecb484a2269b80a26d12bfa6521787da4663bd9f19f60a163483",
         ...cap("256m", 0.5), tmpfs: ["/data"],
         healthcheck: { test: ["CMD", "redis-cli", "ping"], interval: "2s", timeout: "3s", retries: 30 },
       },
       "zammad-memcached": {
-        image: "memcached:1.6.45-alpine@sha256:c29847751abb41f4c268c84fb3087fee05d4edcbda44409ccb5086e26148e8a7",
+        image: "memcached:1.6.45-alpine@sha256:084fb554292d1447bc2c68b80c2331b98834514f56c866bc21a61be3c2ee376d",
         ...cap("256m", 0.5),
         healthcheck: { test: ["CMD", "nc", "-z", "127.0.0.1", "11211"], interval: "2s", timeout: "3s", retries: 30 },
       },

@@ -202,6 +202,25 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
                     self.assertNotIn("contactEmailSha256", receipt)
                 self.assertNotIn("synthetic-contact", raw_receipt)
 
+    def test_foundation_postgres_build_rejects_postgresql_19(self):
+        row = {"image": "foundation-postgres", "dockerfile": "Dockerfile.foundation-postgres"}
+
+        def archive_source(args, **kwargs):
+            with tarfile.open(args[5].removeprefix("--output="), "w") as archive:
+                archive.add(ROOT / row["dockerfile"], arcname=row["dockerfile"])
+
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(images, "catalog", return_value=[row]), \
+                patch.object(images, "coordinates", return_value=("a" * 40, "b" * 40)), \
+                patch.object(images, "run", side_effect=["1794938086", "postgres (PostgreSQL) 19.0"]), \
+                patch.object(images.subprocess, "run", side_effect=archive_source), \
+                patch.object(images, "registry_output"), \
+                patch.object(images, "inspect_image", return_value={}):
+            receipt = Path(directory) / "receipt.json"
+            with self.assertRaisesRegex(ValueError, "foundation-postgres must run PostgreSQL 18"):
+                images.build(row["image"], receipt)
+            self.assertFalse(receipt.exists())
+
     def test_loaded_config_checks_exported_bytes_and_manifest_binding(self):
         raw = b'{"os":"linux","architecture":"amd64","config":{"Labels":{}}}'
         digest = images.sha256(raw)

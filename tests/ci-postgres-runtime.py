@@ -73,7 +73,7 @@ if args[0]=='create':
         parent=int(next(line.split()[1] for line in status.splitlines() if line.startswith('PPid:')))
         os.kill(parent, 15)
 elif args[0]=='inspect':
-    identity='foreign' if mode=='foreign' else 'b'*64+'|/wasalx-ci-postgres-1-2-postgres|postgres:17.10-alpine3.23@sha256:8189a1f6e40904781fc9e2612687877791d21679866db58b1de996b31fc312e4|1-2-postgres|'+'a'*40
+    identity='foreign' if mode=='foreign' else 'b'*64+'|/wasalx-ci-postgres-1-2-postgres|postgres:17.12-alpine3.23@sha256:57a828ad76b719bbed499fc30f71754bbe37d78c8c4c990a1a2096380b8d7ca5|1-2-postgres|'+'a'*40
     if mode.startswith('cancel-wrong-') and (root/'ready').exists():
         fields=identity.split('|')
         fields[{'id':0,'name':1,'image':2,'owner':3,'sha':4}[mode.removeprefix('cancel-wrong-')]]='foreign'
