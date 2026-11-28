@@ -3,30 +3,36 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const themes = ["light", "dark"];
-const viewports = ["desktop", "mobile-390"];
 const locales = ["en", "ar"];
+const standardViewports = { desktop: "desktop", "mobile-390": "mobile-390" };
+const standardCapture = { themes, viewports: standardViewports };
 const captures = {
-  "workspace-access-ready": themes,
-  "tenant-shell": themes,
-  "tenant-inbox": themes,
-  "tenant-cases": themes,
-  "tenant-settings": themes,
-  "tenant-settings-privacy": themes,
-  "tenant-groups": themes,
-  "invitation-incomplete": ["light", "dark-preview"],
-  "workflow-automation-list": themes,
-  "workflow-automation-edit": themes,
-  "client-routing-list": themes,
-  "client-routing-edit": themes,
-  "message-delivery-list": themes,
-  "message-delivery-detail": themes,
+  "workspace-access-ready": standardCapture,
+  "tenant-shell": standardCapture,
+  "tenant-shell-menu-open": { themes, viewports: { desktop: "mobile-390" } },
+  "tenant-shell-collapsed-rail": { themes, viewports: { desktop: "tablet-820" } },
+  "tenant-inbox": standardCapture,
+  "tenant-cases": standardCapture,
+  "tenant-settings": standardCapture,
+  "tenant-settings-privacy": standardCapture,
+  "tenant-groups": standardCapture,
+  "invitation-incomplete": {
+    ...standardCapture,
+    themes: ["light", "dark-preview"],
+  },
+  "workflow-automation-list": standardCapture,
+  "workflow-automation-edit": standardCapture,
+  "client-routing-list": standardCapture,
+  "client-routing-edit": standardCapture,
+  "message-delivery-list": standardCapture,
+  "message-delivery-detail": standardCapture,
 };
 
 export function journeyCapturePath(capture, viewport, theme, locale) {
+  const entry = Object.hasOwn(captures, capture) ? captures[capture] : undefined;
   if (
-    !Object.hasOwn(captures, capture) ||
-    !captures[capture].includes(theme) ||
-    !viewports.includes(viewport) ||
+    !entry?.themes.includes(theme) ||
+    !Object.values(entry.viewports).includes(viewport) ||
     !locales.includes(locale)
   ) {
     throw new Error(
@@ -36,13 +42,17 @@ export function journeyCapturePath(capture, viewport, theme, locale) {
   return `output/playwright/journey-captures/${capture}-${viewport}-${theme}-${locale}.png`;
 }
 
-export function journeyCapturePaths(locale, viewport) {
-  const selectedViewports = viewport === undefined ? viewports : [viewport];
-  return Object.entries(captures).flatMap(([capture, captureThemes]) =>
-    selectedViewports.flatMap((captureViewport) =>
-      captureThemes.map((theme) =>
-        journeyCapturePath(capture, captureViewport, theme, locale),
-      ),
+export function journeyCapturePaths(locale, shard) {
+  if (shard !== undefined && !Object.hasOwn(standardViewports, shard)) {
+    throw new Error(`Unknown journey capture shard: ${shard}`);
+  }
+  return Object.entries(captures).flatMap(([capture, { themes, viewports }]) =>
+    Object.entries(viewports).flatMap(([owner, viewport]) =>
+      shard === undefined || shard === owner
+        ? themes.map((theme) =>
+            journeyCapturePath(capture, viewport, theme, locale),
+          )
+        : [],
     ),
   );
 }
