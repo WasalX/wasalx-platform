@@ -1204,7 +1204,9 @@ test("Storybook and Zammad restrict artifact uploads to failure evidence and pas
     const capture = uploads.find(step => step.with?.name === captureName);
     assert(capture, captureName);
     assertFailureUpload(uploads.find(step => step !== capture), "zammad-compatibility-failure", [
-      "output/zammad-compat/*/native-mobile-public-failure.json",
+      "output/zammad-compat/*/native-*-failure.json",
+      "output/zammad-compat/*/native-*-failure.png",
+      "output/zammad-compat/*/cleanup-diagnostics.json",
     ]);
     assert.equal(Object.hasOwn(capture, "if"), false, captureName);
     assert.equal(capture.with.path, "output/zammad-compat/*/agent-panel/*.png", "Zammad capture path");

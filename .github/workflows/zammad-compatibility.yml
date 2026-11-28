@@ -83,6 +83,9 @@ jobs:
         if: failure()
         with:
           name: zammad-compatibility-failure
-          path: output/zammad-compat/*/native-mobile-public-failure.json
+          path: |
+            output/zammad-compat/*/native-*-failure.json
+            output/zammad-compat/*/native-*-failure.png
+            output/zammad-compat/*/cleanup-diagnostics.json
           if-no-files-found: ignore
           retention-days: 7
