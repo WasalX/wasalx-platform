@@ -1414,6 +1414,34 @@ ${lint.run}`, {});
   assert.match(await readFile(summary, "utf8"), /Event workflow_dispatch ran both full unit shards/u);
 });
 
+test("browser jobs restore the pinned Playwright Chromium build before downloading it", async () => {
+  const { jobs } = parse(await read(".github/workflows/ci.yml"));
+  const path = "${{ github.workspace }}/.wrangler/ci-chromium";
+  const onMiss = "steps.chromium-cache.outputs.cache-hit != 'true'";
+  for (const id of ["storybook", "portal-browser-build", "keycloak-identity", "seed-caches"]) {
+    const job = jobs[id];
+    const restoreIndex = job.steps.findIndex(step => step.id === "chromium-cache");
+    assert(restoreIndex > 0, id);
+    const [version, restore, install] = job.steps.slice(restoreIndex - 1, restoreIndex + 2);
+    assert.equal(version.id, "playwright-version", id);
+    assert.match(version.run, /require\('@playwright\/test\/package\.json'\)\.version/u, id);
+    assert.match(restore.uses, /^actions\/cache\/restore@[a-f0-9]{40}$/u, id);
+    assert.deepEqual(restore.with, {
+      path,
+      key: "playwright-chromium-no-shell-${{ runner.os }}-${{ runner.arch }}-${{ steps.playwright-version.outputs.version }}",
+    }, id);
+    assert.equal(install.if, onMiss, id);
+    assert.equal(install.env.PLAYWRIGHT_BROWSERS_PATH, path, id);
+    assert.equal(install.run, "pnpm exec playwright install --no-shell chromium", id);
+    if (id !== "seed-caches") assert.equal(job.env.PLAYWRIGHT_BROWSERS_PATH, path, id);
+  }
+  const seed = jobs["seed-caches"].steps;
+  const save = seed[seed.findIndex(step => step.name === "Install Playwright Chromium") + 1];
+  assert.match(save.uses, /^actions\/cache\/save@[a-f0-9]{40}$/u);
+  assert.equal(save.if, onMiss);
+  assert.deepEqual(save.with, { path, key: "${{ steps.chromium-cache.outputs.cache-primary-key }}" });
+});
+
 test("main pushes only publish and seed caches", async () => {
   const { jobs } = parse(await read(".github/workflows/ci.yml"));
   const mainPush = "github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'WasalX/wasalx-platform'";
@@ -1451,7 +1479,11 @@ test("main pushes only publish and seed caches", async () => {
   const prepare = jobs["workflow-lint"].steps.find(step => step.name === "Prepare pinned actionlint");
   const sourceRuntime = seed.steps.find(step => step.id === "source-hook-runtime");
   const sourceInstall = seed.steps.find(step => step.name === "Install source hook environments");
-  assert.deepEqual(seed.steps.flatMap(step => step.run ?? []), [lint, prepare.run, sourceRuntime.run, sourceInstall.run]);
+  const playwrightVersion = jobs.storybook.steps.find(step => step.id === "playwright-version");
+  const chromiumInstall = jobs.storybook.steps.find(step => step.name === "Install Playwright Chromium");
+  assert.deepEqual(seed.steps.flatMap(step => step.run ?? []), [
+    lint, prepare.run, sourceRuntime.run, sourceInstall.run, playwrightVersion.run, chromiumInstall.run,
+  ]);
   const eslintSave = seed.steps.find(step => step.uses?.startsWith("actions/cache/save@")
     && step.with.path === ".git/hosted-eslint-cache");
   assert.equal(eslintSave.if, "steps.eslint-cache.outputs.cache-hit != 'true'");
