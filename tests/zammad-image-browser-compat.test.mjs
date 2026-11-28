@@ -5,7 +5,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { EventEmitter, once } from "node:events";
 import { createServer } from "node:http";
 import { isIP } from "node:net";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -401,7 +401,9 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
   const template = { id: "341", name: "order_update", language: "ar", text: "طلب {{1}}",
     parameterCount: 1, semanticSha256: "a".repeat(64) };
   const templateDeliveryId = "14000000-0000-4000-8000-000000000098";
-  const templateWindowExpiry = "2020-01-01T00:00:00.000Z";
+  const fixtureMessageAt = "2026-08-20T10:00:00.000Z";
+  const serviceWindowDuration = 24 * 60 * 60_000;
+  const templateWindowExpiry = new Date(Date.parse(fixtureMessageAt) + serviceWindowDuration).toISOString();
   const earlierDeliveryId = "14000000-0000-4000-8000-000000000097";
   try {
     const replyPreviewPath = "/internal/v1/zammad/reply-preview";
@@ -432,7 +434,7 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
         { id: closedMessageId, participant_name: "Noura", message_text: "Resolved shipment SHIP-40", from_me: false, provider_timestamp: "2026-08-20T10:03:00.000Z", latest_mutation: null, quote_allowed: true, ticket_creatable: false, linked_to_ticket: true },
         { id: linkMessageId, participant_name: "Fatima", message_text: "Link shipment SHIP-43", from_me: false, provider_timestamp: "2026-08-20T10:02:00.000Z", latest_mutation: null, quote_allowed: true, ticket_creatable: true, linked_to_ticket: false },
         { id: createMessageId, participant_name: "Omar", message_text: "Create shipment SHIP-42", from_me: false, provider_timestamp: "2026-08-20T10:01:00.000Z", latest_mutation: null, quote_allowed: true, ticket_creatable: true, linked_to_ticket: false },
-        { id: existingMessageId, participant_name: "Sara", message_text: "Existing shipment SHIP-41", from_me: false, provider_timestamp: "2026-08-20T10:00:00.000Z", latest_mutation: null, quote_allowed: true, ticket_creatable: false, linked_to_ticket: true },
+        { id: existingMessageId, participant_name: "Sara", message_text: "Existing shipment SHIP-41", from_me: false, provider_timestamp: fixtureMessageAt, latest_mutation: null, quote_allowed: true, ticket_creatable: false, linked_to_ticket: true },
         ...Array.from({ length: 46 }, (_, index) => ({ id: `16000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`, participant_name: "Archive", message_text: `Earlier message ${index}`, from_me: false, provider_timestamp: `2026-08-19T09:${String(index).padStart(2, "0")}:00.000Z`, latest_mutation: null, quote_allowed: true, ticket_creatable: true, linked_to_ticket: false })),
       ];
       let value;
@@ -1745,24 +1747,28 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
 
     // Mirror only native ownership fields; this is not a real WasalX bot/provider-engine cycle.
     const directMarker = 'WX-NATIVE-DIRECT-RESET'; const directBody = `تم استلام طلبكم. ${directMarker}`;
-    const seedDirectTicket = async ({ title, participant, provider, article }) => {
+    const seedDirectTicket = async ({ title, participant, provider, article, createdAt = null }) => {
+      const timestamp = createdAt === null ? 'nil' : JSON.stringify(createdAt);
       const seeded = await dockerAsync(directory, project, 'exec', '-T', 'zammad-railsserver', 'bundle', 'exec', 'rails', 'runner', `
         require 'json'; original = Ticket.find(${Number(state.ticketId)})
         t = Ticket.create!(title: ${JSON.stringify(title)}, group_id: original.group_id,
           customer_id: original.customer_id, state_id: Ticket::State.find_by!(name: 'open').id,
           created_by_id: original.customer_id, updated_by_id: original.customer_id,
+          created_at: ${timestamp}, updated_at: ${timestamp},
           wasalx_connection_id: '${connectionId}', wasalx_group_id: ${JSON.stringify(participant)},
           wasalx_group_name: 'Direct fixture customer', wasalx_provider: ${JSON.stringify(provider)},
           wasalx_correlation_status: 'OPEN', wasalx_bot_conversation: 'true', wasalx_bot_state: 'HUMAN')
         direct_article = Ticket::Article.create!(ticket: t, sender: Ticket::Article::Sender.find_by!(name: 'Customer'),
           type: Ticket::Article::Type.find_by!(name: 'wasalx group message'), internal: false,
           content_type: 'text/plain', body: ${JSON.stringify(article)}, preferences: { 'wasalx_origin' => 'provider' },
-          created_by_id: original.customer_id, updated_by_id: original.customer_id)
+          created_by_id: original.customer_id, updated_by_id: original.customer_id,
+          created_at: ${timestamp}, updated_at: ${timestamp})
         # A persisted provider article can legitimately have no native Message-ID.
         # Clear it after callbacks, then prove the actual GraphQL/browser fallback.
         direct_article.update_columns(message_id: nil, message_id_md5: nil)
         raise 'Empty native Message-ID fixture was not persisted' unless direct_article.reload.message_id.nil?
-        puts JSON.generate(id: t.id, article_id: direct_article.id, message_id: direct_article.message_id)
+        puts JSON.generate(id: t.id, article_id: direct_article.id, message_id: direct_article.message_id,
+          ticket_created_at: t.reload.created_at.utc.iso8601(3), article_created_at: direct_article.created_at.utc.iso8601(3))
       `);
       const fixture = JSON.parse(seeded.split('\n').find(line => line.startsWith('{')));
       assert.equal(fixture.message_id, null);
@@ -1902,7 +1908,7 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
     const templateTitle = 'Direct template ticket';
     const templateArticle = 'Direct template request';
     const templateFixture = await seedDirectTicket({
-      title: templateTitle, participant: '12125550104', provider: 'META', article: templateArticle,
+      title: templateTitle, participant: '12125550104', provider: 'META', article: templateArticle, createdAt: fixtureMessageAt,
     });
     assert.notEqual(templateFixture.id, directFixture.id);
     state.templateTicketId = templateFixture.id;
@@ -2439,16 +2445,22 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
       };
 
       await openPanel(state.ticketId);
-      const trigger = capturePage.getByRole("link", {
+      const trigger = operations.getByRole("link", {
         name: arabic ? "عرض الرسالة التي أنشأت التذكرة" : "Show triggering message",
         exact: true,
       });
+      await trigger.waitFor({ state: "visible" });
       assert.equal(await operations.locator("dd[data-state]").count(), 0, "The group fixture has no direct customer-service window");
       await capture("zammad-group-ticket-panel", trigger);
 
       const minute = 60_000;
       await capturePage.clock.install({ time: Date.parse(templateWindowExpiry) - 90 * minute });
       await openPanel(state.templateTicketId);
+      const captureTime = await capturePage.evaluate(() => Date.now());
+      for (const createdAt of [templateFixture.ticket_created_at, templateFixture.article_created_at]) {
+        const age = captureTime - Date.parse(createdAt);
+        assert.ok(age >= 0 && age < serviceWindowDuration, "The capture clock must be within a day of the persisted fixture");
+      }
       for (const [windowState, elapsedMinutes] of [["open", 0], ["closing", 60], ["closed", 31]]) {
         // Fast-forward fires the panel's clock interval without replaying every poll.
         if (elapsedMinutes) await capturePage.clock.fastForward(elapsedMinutes * minute);
@@ -2584,6 +2596,7 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
         throw error;
       } finally { await matrixContext.close(); }
     }
+    assert.equal((await readdir(captureDirectory)).filter(name => name.endsWith(".png")).length, 40);
     state.liveMessages = [];
     await setNativeLocale(agentEmail, "en-us");
     const containerIds = docker(directory, project, "ps", "--all", "--quiet").split(/\s+/u).filter(Boolean);
