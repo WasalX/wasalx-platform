@@ -313,6 +313,8 @@ jobs:
         name: Restore Playwright Chromium cache
         id: chromium-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        env:
+          SEGMENT_DOWNLOAD_TIMEOUT_MINS: '1'
         with:
           path: *ci-chromium-path
           key: playwright-chromium-no-shell-${{ runner.os }}-${{ runner.arch }}-${{ steps.playwright-version.outputs.version }}
@@ -398,6 +400,8 @@ jobs:
           corepack install
           echo "PNPM_STORE_PATH=$(pnpm store path --silent)" >> "$GITHUB_ENV"
       - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        env:
+          SEGMENT_DOWNLOAD_TIMEOUT_MINS: '1'
         with:
           path: ${{ env.PNPM_STORE_PATH }}
           key: pnpm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('candidate/pnpm-lock.yaml', 'candidate/pnpm-workspace.yaml', 'candidate/package.json', 'candidate/patches/**') }}

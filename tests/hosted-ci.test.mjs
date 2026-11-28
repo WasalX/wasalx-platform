@@ -1440,6 +1440,16 @@ test("browser jobs restore the pinned Playwright Chromium build before downloadi
   assert.match(save.uses, /^actions\/cache\/save@[a-f0-9]{40}$/u);
   assert.equal(save.if, onMiss);
   assert.deepEqual(save.with, { path, key: "${{ steps.chromium-cache.outputs.cache-primary-key }}" });
+
+  for (const [id, job] of Object.entries(jobs)) {
+    for (const step of job.steps ?? []) {
+      if (!step.with?.path?.includes(".wrangler/ci-chromium")) continue;
+      if (step.uses?.startsWith("actions/cache/restore@")) {
+        assert.equal(step.env?.SEGMENT_DOWNLOAD_TIMEOUT_MINS, "1", id);
+      }
+      if (id !== "seed-caches") assert(!/^actions\/cache(?:\/save)?@/u.test(step.uses ?? ""), id);
+    }
+  }
 });
 
 test("main pushes only publish and seed caches", async () => {
@@ -1508,6 +1518,11 @@ test("CI restores pnpm caches and builds cleanly in the merge queue", async t =>
   assert.equal(eslintRestore.with["fail-on-cache-miss"], undefined);
   const modules = action.runs.steps.find(step => step.id === "modules");
   const store = action.runs.steps.find(step => step.id === "store");
+  const comparisonStore = jobs["typescript-comparison"].steps.find(step => step.with?.path === "${{ env.PNPM_STORE_PATH }}");
+  for (const step of [modules, store, comparisonStore]) {
+    assert.match(step.uses, /^actions\/cache\/restore@/u);
+    assert.equal(step.env?.SEGMENT_DOWNLOAD_TIMEOUT_MINS, "1", step.id ?? step.with.path);
+  }
   assert(action.runs.steps.indexOf(modules) < action.runs.steps.indexOf(store));
   assert(store?.if.includes("steps.modules.outputs.cache-hit != 'true'"));
   assert.equal(modules.with.key, "${{ steps.pnpm.outputs.dependency-key }}");
