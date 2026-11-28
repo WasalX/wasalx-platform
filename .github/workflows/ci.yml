@@ -988,6 +988,13 @@ jobs:
           PUBLIC_ADDON_SOURCE: ${{ toJSON(matrix.addonSource) }}
           PUBLIC_CONTACT_EMAIL: ${{ matrix.image == 'portal' && vars.PUBLIC_CONTACT_EMAIL || '' }}
         run: python3 scripts/release/images-by-digest.py build --cache read --image "$IMAGE" --output "records/$IMAGE.json"
+      - name: Verify foundation PostgreSQL compatibility
+        if: matrix.image == 'foundation-postgres'
+        env:
+          IMAGE: ${{ matrix.image }}
+        run: |
+          reference=$(jq -er .reference "records/$IMAGE.json")
+          bash scripts/release/test-foundation-postgres.sh "$reference"
       - name: Record pending add-on source
         if: matrix.pending
         env:

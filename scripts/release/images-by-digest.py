@@ -186,6 +186,8 @@ def changed_images(rows, paths, *, pull_request=False):
         sources = context_sources((ROOT / dockerfile).read_text())
         if sources is None:  # An unsupported Dockerfile context may depend on any path.
             return rows
+        if row["image"] == "foundation-postgres":
+            sources.add("scripts/release/test-foundation-postgres.sh")
         inputs[row["image"]] = sources | {dockerfile}
 
     ignored = ("README.md", "docs/*", ".github/workflows/deploy.yml", ".github/dependabot.yml",

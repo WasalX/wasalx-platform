@@ -335,6 +335,7 @@ set -- 'example=1.2.3'
         rows = images.matrix()["include"]
         narrow = {
             "Dockerfile.foundation-postgres": "foundation-postgres",
+            "scripts/release/test-foundation-postgres.sh": "foundation-postgres",
             "app/page.tsx": "portal",
             "services/invitation-mailer/src/removed.ts": "invitation-mailer",
             "scripts/release/patch-keycloak-jackson.py": "foundation-keycloak",
