@@ -9,17 +9,17 @@ ADD https://github.com/zammad/zammad.git#8facd9250f4e1634124965eb0ba79a78a3fcdc1
 FROM ${NODE_IMAGE} AS node-toolchain
 RUN npm install --global pnpm@10.33.3 && npm cache clean --force
 WORKDIR /src
-ADD https://github.com/WasalX/wasalx-zammad-addon.git#52895b6a9d1eaa9776f02b87fb3db4cc34f94737 /src
+ADD https://github.com/WasalX/wasalx-zammad-addon.git#93f397df91ef87dd25d31c4a484eba9c03832629 /src
 COPY scripts/build-zammad-package.mjs ./scripts/build-zammad-package.mjs
 RUN node scripts/build-zammad-package.mjs
 
 FROM ${ZAMMAD_BASE_IMAGE} AS package-source
-ARG WASALX_PACKAGE_VERSION=0.5.90
-ARG WASALX_PACKAGE_SHA256=ada61793c1ff01354081e751edeb8a4015aea5c2bba3dec57a2b33cb909bdc32
+ARG WASALX_PACKAGE_VERSION=0.5.91
+ARG WASALX_PACKAGE_SHA256=d711e150f015376fbe77c1a64c67ff006e19069213c5c53e0d8c7a084d79b9e2
 USER 0:0
 COPY --from=node-toolchain /usr/local/lib/node_modules /usr/local/lib/node_modules
 COPY --from=node-toolchain /usr/local/bin /usr/local/bin
-COPY --chown=1000:1000 --from=node-toolchain /src/build/zammad/wasalx-0.5.90.zpm /tmp/wasalx.zpm
+COPY --chown=1000:1000 --from=node-toolchain /src/build/zammad/wasalx-0.5.91.zpm /tmp/wasalx.zpm
 
 COPY --chown=1000:1000 infra/docker/full/zammad/unpack-zpm.mjs /tmp/unpack-zpm.mjs
 COPY --chown=1000:1000 scripts/prepare-zammad-typecheck.mjs /tmp/prepare-zammad-typecheck.mjs
@@ -77,8 +77,8 @@ RUN rm -rf \
       /usr/local/lib/ruby/gems/3.4.0/specifications/default/erb-4.0.4.gemspec
 
 FROM cgr.dev/chainguard/ruby:latest-dev@sha256:81ffd347cb0945b44479dc0d2603803eb465c7984c1f5c8ba93eea58fc8a0c7f
-ARG WASALX_PACKAGE_VERSION=0.5.90
-ARG WASALX_PACKAGE_SHA256=ada61793c1ff01354081e751edeb8a4015aea5c2bba3dec57a2b33cb909bdc32
+ARG WASALX_PACKAGE_VERSION=0.5.91
+ARG WASALX_PACKAGE_SHA256=d711e150f015376fbe77c1a64c67ff006e19069213c5c53e0d8c7a084d79b9e2
 
 USER 0:0
 RUN apk update && apk add --no-cache \
