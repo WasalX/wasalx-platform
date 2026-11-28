@@ -189,6 +189,8 @@ def changed_images(rows, paths, *, pull_request=False):
         if row["image"] == "foundation-postgres":
             sources.add("scripts/release/test-foundation-postgres.sh")
         inputs[row["image"]] = sources | {dockerfile}
+        if row["image"] == "zammad-redis":
+            inputs[row["image"]].add("compose.full.yaml")
 
     ignored = ("README.md", "docs/*", ".github/workflows/deploy.yml", ".github/dependabot.yml",
                "scripts/hosted-ci*.mjs", "scripts/hosted-ci*.json", "scripts/test-unit.mjs", "tests/hosted-ci.test.mjs")
@@ -494,6 +496,20 @@ def build(image, output, cache="off"):
             version = run("docker", "run", "--rm", "--network", "none", "--pull", "never", reference, "--version")
             require(version.startswith("postgres (PostgreSQL) 18."),
                     f"foundation-postgres must run PostgreSQL 18, got {version!r}")
+            print(version)
+        if image == "zammad-redis":
+            compose_pin = run(
+                "ruby", "-ryaml", "-e",
+                'puts YAML.safe_load_file(ARGV.fetch(0), aliases: true).fetch("services").fetch("zammad-redis").fetch("image")',
+                str(context / "compose.full.yaml"),
+            )
+            expected = re.fullmatch(rf"redis:(\d+\.\d+)(?:\.\d+)?(?:-[\w.-]+)?@{DIGEST.pattern}", compose_pin)
+            require(expected, f"zammad-redis compose image must pin a Redis major.minor and digest, got {compose_pin!r}")
+            version = run("docker", "run", "--rm", "--network", "none", "--pull", "never",
+                          "--entrypoint", "redis-server", reference, "--version")
+            actual = re.match(r"Redis server v=(\d+\.\d+)\.\d+(?:\s|$)", version)
+            require(actual and actual[1] == expected[1],
+                    f"zammad-redis must match Compose Redis {expected[1]}.x, got {version!r}")
             print(version)
     receipt = {"image": image, "reference": reference, "commit": commit, "tree": tree, "status": "built",
                "platform": "linux/amd64", "sourceArchiveDigest": archive_digest, "addonSource": addon,

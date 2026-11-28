@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { chmod, mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, posix } from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -268,7 +268,8 @@ test("tracked tests belong to a named CI runner or the test allowlist", async ()
 });
 
 test("CI job timeouts are covered by the measured limits", async () => {
-  const workflow = ".github/workflows/ci.yml";
+  const workflowDir = ".github/workflows";
+  const workflow = workflowDir + "/ci.yml";
   const { jobs } = parse(await read(workflow));
   const timing = JSON.parse(await read(".github/ci-timings.json"));
   assert.equal(timing.workflow, workflow);
@@ -300,6 +301,43 @@ test("CI job timeouts are covered by the measured limits", async () => {
     assert.equal(sample.timeout_minutes, Math.max(1, Math.ceil(p95 * 1.25)), id);
   }
   const observedDownloads = new Set();
+  const retryBudgets = new Map();
+  for (const file of await readdir(join(repository, workflowDir))) {
+    if (!/\.ya?ml$/u.test(file)) continue;
+    const path = workflowDir + "/" + file;
+    const workflowJobs = path === workflow ? jobs : parse(await read(path)).jobs;
+    for (const [id, job] of Object.entries(workflowJobs)) {
+      const label = file + "/" + id;
+      const steps = job.steps ?? [];
+      const downloadsInJob = steps.filter(step => /^actions\/download-artifact@/iu.test(step.uses));
+      let downloadMinutes = 0;
+      for (let index = 0; index < downloadsInJob.length; index += 2) {
+        const [first, retry] = downloadsInJob.slice(index, index + 2);
+        assert(Object.hasOwn(downloads.steps, first.id), label + " has an unbounded artifact download");
+        const timeout = downloads.steps[first.id].timeout_minutes;
+        observedDownloads.add(first.id);
+        assert.equal(first["timeout-minutes"], timeout, label);
+        assert.equal(first["continue-on-error"], true, label);
+        assert.equal(first.if, undefined, label);
+        assert(retry && steps[steps.indexOf(first) + 1] === retry, label + " must retry immediately");
+        assert.equal(retry.if, "steps." + first.id + ".outcome == 'failure'", label);
+        assert.equal(retry.uses, first.uses, label);
+        assert.deepEqual(retry.with, first.with, label);
+        assert.equal(retry["timeout-minutes"], timeout, label);
+        assert.equal(retry["continue-on-error"], undefined, label);
+        downloadMinutes += 2 * timeout;
+      }
+      const work = downloads.job_work[label];
+      assert.equal(Boolean(work), downloadMinutes > 0, label);
+      if (work) {
+        const retryBudget = Math.ceil(measuredP95(work, label) + downloadMinutes);
+        assert(job["timeout-minutes"] >= retryBudget, label + " job timeout must cover both download attempts");
+        retryBudgets.set(label, retryBudget);
+      }
+    }
+  }
+  assert.deepEqual([...observedDownloads].sort(), Object.keys(downloads.steps).sort());
+  assert.deepEqual([...retryBudgets.keys()].sort(), Object.keys(downloads.job_work).sort());
   for (const [id, job] of Object.entries(jobs)) {
     const record = timing.jobs[id];
     let p95 = measuredP95(record, id);
@@ -314,33 +352,11 @@ test("CI job timeouts are covered by the measured limits", async () => {
       p95 = Math.max(...legs.map(leg => measuredP95(record.legs[leg], id + "/" + leg)));
       assert.equal(record.p95_minutes, p95, id);
     }
-    const steps = job.steps;
-    const downloadsInJob = steps.filter(step => step.uses?.startsWith("actions/download-artifact@"));
-    let downloadMinutes = 0;
-    for (let index = 0; index < downloadsInJob.length; index += 2) {
-      const [first, retry] = downloadsInJob.slice(index, index + 2);
-      assert(Object.hasOwn(downloads.steps, first.id), id + " has an unbounded artifact download");
-      const timeout = downloads.steps[first.id].timeout_minutes;
-      observedDownloads.add(first.id);
-      assert.equal(first["timeout-minutes"], timeout, id);
-      assert.equal(first["continue-on-error"], true, id);
-      assert.equal(first.if, undefined, id);
-      assert(retry && steps[steps.indexOf(first) + 1] === retry, id + " must retry immediately");
-      assert.equal(retry.if, "steps." + first.id + ".outcome == 'failure'", id);
-      assert.equal(retry.uses, first.uses, id);
-      assert.deepEqual(retry.with, first.with, id);
-      assert.equal(retry["timeout-minutes"], timeout, id);
-      assert.equal(retry["continue-on-error"], undefined, id);
-      downloadMinutes += 2 * timeout;
-    }
-    const work = downloads.job_work[id];
-    assert.equal(Boolean(work), downloadMinutes > 0, id);
     // The ci-gate timing sample predates the verdict verifier's API calls.
     const timeout = id === "ci-gate" ? 3 : Math.ceil(p95 * 1.25);
-    const retryBudget = work ? Math.ceil(measuredP95(work, id) + downloadMinutes) : 0;
+    const retryBudget = retryBudgets.get("ci.yml/" + id) ?? 0;
     assert.equal(job["timeout-minutes"], Math.max(timeout, retryBudget), id);
   }
-  assert.deepEqual([...observedDownloads].sort(), Object.keys(downloads.steps).sort());
 
   const { publish } = timing.jobs;
   assert.equal(publish.workflow, ".github/workflows/branch-image.yml");
