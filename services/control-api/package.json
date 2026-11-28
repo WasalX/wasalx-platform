@@ -12,9 +12,9 @@
   "dependencies": {
     "@wasalx/core": "workspace:*",
     "@wasalx/observability": "workspace:*",
-    "@nestjs/common": "^11.2.11",
-    "@nestjs/core": "^11.2.11",
-    "@nestjs/platform-fastify": "^11.2.11",
+    "@nestjs/common": "^11.2.12",
+    "@nestjs/core": "^11.2.12",
+    "@nestjs/platform-fastify": "^11.2.12",
     "bullmq": "^5.81.6",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.15.1",
