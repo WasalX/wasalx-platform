@@ -92,20 +92,20 @@ const connectionNeedsAttention = (row: RecordRow) =>
   || (connectionDisplayState(row) === "WORKING" && !connectionIsReady(row));
 
 const NAV = [
-  ["overview", "tenant.navigation.overview", "⌂"],
-  ["inbox", "inbox.title", "◇"],
-  ["connections", "tenant.navigation.connections", "↗"],
-  ["groups", "tenant.navigation.groups", "#"],
-  ["rules", "tenant.navigation.rules", "⌘"],
-  ["automation", "tenant.navigation.automation", "B"],
-  ["plugins", "tenant.navigation.plugins", "◇"],
-  ["routing", "tenant.navigation.routing", "↳"],
-  ["cases", "tenant.navigation.cases", "◇"],
-  ["deliveries", "tenant.navigation.deliveries", "⇢"],
-  ["team", "tenant.navigation.team", "◎"],
-  ["support", "tenant.navigation.support", "⌁"],
-  ["audit", "tenant.navigation.audit", "◫"],
-  ["settings", "tenant.navigation.settings", "⚙"],
+  ["overview", "tenant.navigation.overview", "group"],
+  ["inbox", "inbox.title", "chat"],
+  ["connections", "tenant.navigation.connections", "link"],
+  ["groups", "tenant.navigation.groups", "groups"],
+  ["rules", "tenant.navigation.rules", "filter"],
+  ["automation", "tenant.navigation.automation", "bot"],
+  ["plugins", "tenant.navigation.plugins", "plugin"],
+  ["routing", "tenant.navigation.routing", "route"],
+  ["cases", "tenant.navigation.cases", "ticket"],
+  ["deliveries", "tenant.navigation.deliveries", "send"],
+  ["team", "tenant.navigation.team", "person"],
+  ["support", "tenant.navigation.support", "support"],
+  ["audit", "tenant.navigation.audit", "clock"],
+  ["settings", "tenant.navigation.settings", "settings"],
 ] as const;
 
 const SESSION_EXPIRED_EVENT = "wasalx:session-expired";
@@ -937,7 +937,7 @@ function TenantWasalXApp({
                 aria-label={t(key)}
                 title={t(key)}
               >
-                <span className="nav-icon">{icon}</span>
+                <span className="nav-icon"><MarketingIcon name={icon} /></span>
                 <span className="nav-label">{t(key)}</span>
                 {id === "connections" && connectionActionCount ? (
                   <em>{formatNumber(connectionActionCount, locale)}</em>
