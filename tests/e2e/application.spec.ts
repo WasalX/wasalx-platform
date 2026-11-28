@@ -22,6 +22,7 @@ import type { TeamAccessData } from "../../lib/control-plane-data";
 import { expectAxeClean } from "../helpers/axe";
 import { captureTenantDesign, verifyRuleModalLabels } from "./design-evidence.fixture";
 import { registerConnectionListJourneys } from "./connection-list.fixture";
+import { registerRoutingBotActionJourneys } from "./routing-bot-actions.fixture";
 import {
   consumeExpectedTeamActionError,
   registerTeamActionJourneys,
@@ -321,6 +322,9 @@ async function open(page: Page, view = "overview") {
 }
 
 registerTeamActionJourneys("en", role, open);
+registerRoutingBotActionJourneys("en", role, open, (page, path) =>
+  expectNetworkFailure(page, new RegExp(`${escapeRegExp(path)}$`, "u")),
+);
 if (role === "tenant_owner") {
   registerConnectionListJourneys("en", open);
   test("owner captures tenant surfaces in light and dark", async ({ page }, testInfo) => {

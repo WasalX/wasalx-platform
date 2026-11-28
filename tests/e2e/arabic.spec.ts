@@ -21,6 +21,7 @@ import { registerOperationsScreenshots } from "./operations-screenshots.fixture"
 import { expectAxeClean } from "../helpers/axe";
 import { captureTenantDesign, verifyRuleModalLabels } from "./design-evidence.fixture";
 import { registerConnectionListJourneys } from "./connection-list.fixture";
+import { registerRoutingBotActionJourneys } from "./routing-bot-actions.fixture";
 import {
   consumeExpectedTeamActionError,
   registerTeamActionJourneys,
@@ -124,13 +125,13 @@ const titleKey: Record<string, keyof typeof arabicMessages> = {
   settings: "tenant.title.settings",
 };
 
-const expectedBackendErrors = new WeakMap<Page, Array<{ url: string; status: number }>>();
+const expectedBackendErrors = new WeakMap<Page, Array<{ url: string; status: number | string }>>();
 const problems = new WeakMap<Page, string[]>();
 test.beforeEach(async ({ page }) => {
   await installMetaRoutingReadFixture(page);
   await installWorkspaceReadFixture(page, role);
   const observed: string[] = [];
-  const backendErrors: Array<{ url: string; status: number }> = [];
+  const backendErrors: Array<{ url: string; status: number | string }> = [];
   problems.set(page, observed);
   expectedBackendErrors.set(page, backendErrors);
   page.on("console", (message) => {
@@ -157,6 +158,12 @@ async function open(page: Page, view: string) {
 }
 
 registerTeamActionJourneys("ar", role, open);
+registerRoutingBotActionJourneys("ar", role, open, (page, path, status) =>
+  expectedBackendErrors.get(page)?.push({
+    url: new URL(path, page.url()).href,
+    status,
+  }),
+);
 if (role === "tenant_owner") {
   registerConnectionListJourneys("ar", open);
   test("owner captures tenant surfaces in light and dark", async ({ page }, testInfo) => {
