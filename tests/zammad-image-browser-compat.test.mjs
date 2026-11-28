@@ -2,7 +2,6 @@ import {requiredOperatorInput} from "../scripts/release/operator-input.mjs";
 import assert from "node:assert/strict";
 import { execFile, execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { EventEmitter, once } from "node:events";
 import { createServer } from "node:http";
 import { isIP } from "node:net";
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
@@ -363,20 +362,6 @@ function capturePageErrors(page) {
     frame: String(error?.stack ?? "").split(/\r?\n/u).find((line) => line.trim().startsWith("at "))?.trim().slice(0, 200) ?? null }));
 }
 
-async function withNativeDiagnostic(t, label, collect, action, confirm = true) {
-  let passed = false;
-  try {
-    await action();
-    passed = true;
-  } finally {
-    try {
-      const state = await collect();
-      const pageErrors = passed ? undefined : nativePageErrors.slice(-10);
-      if (!passed || confirm) t.diagnostic(`native ${label} ${JSON.stringify({ passed, ...state, pageErrors })}`);
-    } catch { /* A diagnostic must never replace the journey result. */ }
-  }
-}
-
 test("package upgrade, route, and group workspace operate in the immutable Zammad image", { timeout: 1_800_000 }, async (t) => {
   const nativeCloseScenario = await readFile(join(process.cwd(), "tests", "native-close-rails-scenario.rb"), "utf8");
   const project = `wasalx-zammad-${randomUUID()}`;
@@ -387,6 +372,23 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
   process.stdout.write(`${JSON.stringify({ fixture: "native-project-admission", ...admission })}\n`);
   const directory = await mkdtemp(join(tmpdir(), "wasalx-zammad-browser-"));
   const evidenceDirectory = join(process.cwd(), "output", "zammad-compat", image.replaceAll(/[^a-z0-9.-]/giu, "_"));
+  const withNativeDiagnostic = async (label, collect, action, confirm = true) => {
+    let passed = false;
+    try {
+      await action();
+      passed = true;
+    } finally {
+      try {
+        const state = await collect();
+        const pageErrors = passed ? undefined : nativePageErrors.slice(-10);
+        if (!passed || confirm) t.diagnostic(`native ${label} ${JSON.stringify({ passed, ...state, pageErrors })}`);
+        if (!passed) {
+          const path = join(evidenceDirectory, `native-${label.replaceAll(" ", "-")}-failure.json`);
+          await writeFile(path, JSON.stringify({ passed, ...state, pageErrorKinds: pageErrors.map(({ kind }) => kind) }, null, 2));
+        }
+      } catch { /* A diagnostic must never replace the journey result. */ }
+    }
+  };
   const port = await availablePort();
   const fixtureEndpointAddress = fixtureEndpoint();
   let browser;
@@ -1363,7 +1365,6 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
         };
       }, machineUiSeed.group_id);
       await withNativeDiagnostic(
-        t,
         "queue chooser",
         async () => ({
           scenario: scenario.name,
@@ -1433,32 +1434,6 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
     const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, timezoneId: "Asia/Riyadh" });
     const page = await context.newPage();
     capturePageErrors(page);
-    const desktopFormResets = new EventEmitter();
-    page.on("websocket", (socket) => {
-      if (new URL(socket.url()).pathname !== "/cable") return;
-      const resetRequests = new Map();
-      socket.on("framesent", ({ payload }) => {
-        const frame = JSON.parse(String(payload));
-        if (frame.command === "unsubscribe") resetRequests.delete(frame.identifier);
-        if (frame.command !== "message") return;
-        const { operationName, variables } = JSON.parse(frame.data);
-        const formId = variables?.meta?.formId;
-        const article = variables?.data?.article;
-        // The form updater can coalesce the reset with a ticket refresh in the same tick.
-        if (operationName === "formUpdater" && formId && !article?.articleType && !article?.body) {
-          resetRequests.set(frame.identifier, formId);
-        }
-      });
-      socket.on("framereceived", ({ payload }) => {
-        const { identifier, message } = JSON.parse(String(payload));
-        const formId = resetRequests.get(identifier);
-        if (!formId || !message?.result) return;
-        resetRequests.delete(identifier);
-        if (message.result.data?.formUpdater?.flags?.newArticlePresent === false) {
-          desktopFormResets.emit(`reset:${formId}`);
-        }
-      });
-    });
     const entryResponse = await fetch(`${zammadOrigin}/?from=wasalx`, { redirect: "manual" });
     assert.equal(entryResponse.status, 302);
     const entryLocation = new URL(entryResponse.headers.get("location") ?? "", entryResponse.url);
@@ -1655,15 +1630,10 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
     const ticketUpdateOperation = /^ticketUpdate$/iu;
     const isTicketUpdate = (request, url = request.url()) => new URL(url).pathname.endsWith('/graphql')
       && request.method() === 'POST' && ticketUpdateOperation.test(request.postDataJSON()?.operationName ?? '');
-    const submitReplyTicket = async (articleExpected) => {
-      let reset;
+    const submitReplyTicket = async (articleExpected, marker = replyMarker) => {
       if (articleExpected) {
         const formId = await page.locator('#ticketArticleReplyForm [name="body"][data-form-id]').getAttribute("data-form-id");
         assert.ok(formId, "The native desktop reply must belong to a FormKit form");
-        // A pending draft refresh can outlive ticketUpdate. Wait for Zammad's reset query for this form.
-        reset = once(desktopFormResets, `reset:${formId}`, { signal: AbortSignal.timeout(30_000) }).catch((cause) => {
-          throw new Error("The native desktop reply form did not acknowledge its reset", { cause });
-        });
       }
       await Promise.all([
         page.waitForResponse(response => isTicketUpdate(response.request(), response.url()), { timeout: 60_000 }).then(async (response) => {
@@ -1673,11 +1643,11 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
           assert.equal(response.request().postDataJSON()?.variables?.input?.article != null, articleExpected);
         }),
         page.getByRole('button', { name: 'Update', exact: true }).click(),
-        reset,
       ]);
+      if (articleExpected) await assertReplyReset(marker);
     };
     const assertReplyReset = async (marker = replyMarker) => {
-      await withNativeDiagnostic(t, "desktop reply reset", () => readNativeDiagnostic(page.evaluate((text) => ({
+      await withNativeDiagnostic("desktop reply reset", () => readNativeDiagnostic(page.evaluate((text) => ({
         panelOpen: Boolean(document.getElementById("ticketArticleReplyForm")),
         remainingDrafts: [...document.querySelectorAll("[contenteditable]")]
           .filter(node => node.textContent.includes(text))
@@ -1686,6 +1656,8 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
             inHiddenForm: Boolean(node.closest("#wrapper-form-ticket-edit")),
           })),
       }), marker)), async () => {
+        // Zammad unmounts the composer when its new-article flag clears.
+        await page.locator('#ticketArticleReplyForm').waitFor({ state: 'detached', timeout: 30_000 });
         await page.waitForFunction(marker => ![...document.querySelectorAll('[contenteditable="true"]')]
           .some(node => node.textContent.includes(marker)), marker, { timeout: 30_000 });
         await page.getByRole('button', { name: 'Discard unsaved reply', exact: true }).waitFor({ state: 'hidden', timeout: 30_000 });
@@ -1705,7 +1677,7 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
     await submitReplyTicket(true);
     const afterReply = await replySnapshot(); const addedReply = afterReply.rows.filter(row => !beforeReply.rows.some(old => old.id === row.id));
     assert.equal(afterReply.state, 'open'); assert.equal(addedReply.length, 1);
-    assert.equal(addedReply[0].matches && addedReply[0].pdf, true); await assertReplyReset();
+    assert.equal(addedReply[0].matches && addedReply[0].pdf, true);
     const outboundStart = state.requests.length;
     // Only this new article's owned job is invoked, once. No scheduler, retry or unrelated queue execution.
     const communicateReply = async (articleId) => {
@@ -1849,8 +1821,8 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
         return { matched, methodMatched, operationMatched, bodyReadable, updateInBatch,
           articlePresent: operationMatched ? payload?.variables?.input?.article != null : null };
       });
-      await withNativeDiagnostic(t, 'direct reply', async () => ({ articleExpected, ...collectRequest(), form: await collectForm() }),
-        () => submitReplyTicket(articleExpected), articleExpected);
+      await withNativeDiagnostic('direct reply', async () => ({ articleExpected, ...collectRequest(), form: await collectForm() }),
+        () => submitReplyTicket(articleExpected, directMarker), articleExpected);
     };
     const directMutations = [];
     const recordDirectMutation = request => {
@@ -1866,7 +1838,6 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
       assert.equal(directSaved.state, 'closed'); assert.equal(directSaved.rows.length, 1);
       assert.equal(directSaved.rows[0].matches, true);
       assert.equal(directSaved.rows[0].in_reply_to, `wasalx-article:${directFixture.article_id}`);
-      await assertReplyReset(directMarker);
       const directOutboundStart = state.requests.length; await communicateReply(directSaved.rows[0].id);
       const directOutputs = () => state.requests.slice(directOutboundStart).filter(request => request.method === 'POST'
         && request.path === '/internal/v1/zammad/outbound' && Number(request.body.ticket_id) === state.directReplyTicketId);
@@ -1951,7 +1922,7 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
       await stateField.getByText(openState, { exact: true }).waitFor({ state: 'visible' });
       await templateBubble.hover();
       await templateBubble.getByRole('button', { name: reply, exact: true }).click();
-      await withNativeDiagnostic(t, 'template composer', async () => ({
+      await withNativeDiagnostic('template composer', async () => ({
         sidebarMounted: (await page.getByRole('button', { name: operationsLabel, exact: true }).count()) > 0,
         panelAllowsTemplates: panel.connection.provider === 'META' && panel.ticket.bot_state === 'HUMAN'
           && Date.parse(panel.service_window_expires_at) < Date.now(),
@@ -1994,7 +1965,7 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
       templateReceipt = { status: response.status(), body: await response.json() };
       await route.abort();
     }, { times: 1 });
-    await withNativeDiagnostic(t, 'template lost response', async () => ({
+    await withNativeDiagnostic('template lost response', async () => ({
       templateReceipt,
       dialogStatus: (await templateDialog.getByRole('status').textContent({ timeout: 1_000 }))?.slice(0, 300) ?? null,
     }), async () => {
@@ -2297,7 +2268,7 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
         return { pathMatched, methodMatched, fullDraft, matched: pathMatched && methodMatched && fullDraft,
           obsoletePreview: pathMatched && methodMatched && typeof body === 'string' && !fullDraft && mobileDraft.startsWith(body.trim()) };
       });
-      await withNativeDiagnostic(t, 'mobile preview', async () => ({ ...collectPreview(), editor: await collectEditor() }), async () => {
+      await withNativeDiagnostic('mobile preview', async () => ({ ...collectPreview(), editor: await collectEditor() }), async () => {
         const draftEditor = reply.locator('[contenteditable="true"]');
         // Move focus after the first input to exercise the partial-draft regression.
         await draftEditor.evaluate((editor) => {
@@ -2770,11 +2741,10 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
       command: (args) => execFileSync("docker", args, { encoding: "utf8", timeout: 120_000, maxBuffer: 64 * 1024,
         env: { ...process.env, WASALX_ZAMMAD_TEST_IMAGE: image }, stdio: ["ignore", "pipe", "pipe"] }),
       removeWorkspace: () => rm(directory, { recursive: true, force: true }),
-      writeDiagnostics: async (value) => {
-        const diagnostics = JSON.stringify(value, null, 2);
-        await writeFile(join(directory, "cleanup-diagnostics.json"), diagnostics, { mode: 0o600 });
+      writeDiagnostics: async ({ workspace, ...diagnostics }) => {
+        await writeFile(join(directory, "cleanup-diagnostics.json"), JSON.stringify({ workspace, ...diagnostics }, null, 2), { mode: 0o600 });
         await mkdir(evidenceDirectory, { recursive: true });
-        await writeFile(join(evidenceDirectory, "cleanup-diagnostics.json"), diagnostics, { mode: 0o600 });
+        await writeFile(join(evidenceDirectory, "cleanup-diagnostics.json"), JSON.stringify(diagnostics, null, 2), { mode: 0o600 });
       },
     });
   }
