@@ -1329,7 +1329,7 @@ test("critical review uses the base policy and checks PR and queue verdicts", as
   const [reviewer] = policy.reviewerAccountIds;
   assert.equal(reviewer, 357558349);
 
-  const filename = "services/control-api/src/webhook-security.ts";
+  const filename = "services/control-api/src/webhook-ingress.controller.ts";
   const changed = { filename, status: "modified" };
   const docs = { filename: "README.md", status: "modified" };
   const verdict = (body, id = reviewer) => ({ id: 1, user: { id }, body });
@@ -1393,7 +1393,11 @@ test("critical review uses the base policy and checks PR and queue verdicts", as
   const apiError = /Critical review gate failed/u;
   const cases = [
     ["docs only with no comment API call", { files: [docs], failure: "comments" }],
-    ["critical change missing a verdict", { comments: [], expected: missing }],
+    ["webhook ingress change missing a verdict", { comments: [], expected: missing }],
+    ["Zammad internal ticket context change missing a verdict", {
+      files: [{ filename: "services/control-api/src/zammad-internal.controller.ts", status: "modified" }],
+      comments: [], expected: missing,
+    }],
     ["verdict from an unlisted account", { comments: [[verdict(go.body, reviewer + 1)]], expected: missing }],
     ["GO on the exact PR head", {}],
     ["GO followed by a noncritical edit", { comments: [[priorGo]], files: [changed, docs] }],

@@ -47,6 +47,7 @@
       "services/control-api/src/session.controller.ts",
       "services/control-api/src/support-access*.ts",
       "services/control-api/src/webhook-ingress.controller.ts",
+      "services/control-api/src/zammad-internal.controller.ts",
       "services/connector-worker/src/*privacy*.ts",
       "services/workspace-configurator/src/backup-runtime.ts"
     ],
@@ -72,6 +73,8 @@
       "scripts/test-unit.mjs",
       "scripts/test-quarantine.json",
       "tests/hosted-ci.test.mjs",
+      "tests/source-endpoint-allowlist.json",
+      "tests/source-endpoint-literals.test.mjs",
       "tests/test_public_privacy.py",
       ".gitignore",
       ".pre-commit-config.yaml",
