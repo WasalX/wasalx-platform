@@ -31,6 +31,11 @@ export async function captureTenantDesign(
   };
   await open(page, "overview");
   for (const theme of ["dark", "light"]) {
+    const capture = (name: string, viewport = testInfo.project.name) =>
+      page.screenshot({
+        path: journeyCapturePath(name, viewport, theme, locale),
+        animations: "disabled",
+      });
     await page.evaluate(
       (value) => localStorage.setItem("wasalx.theme", value),
       theme,
@@ -181,18 +186,65 @@ export async function captureTenantDesign(
       }
       if (view === "groups") {
         // The search shortcut hint names a key every platform accepts, not the Mac-only Command key.
-        await expect(page.locator(".search kbd")).toHaveText("Ctrl K");
+        const hint = page.locator(".search kbd");
+        await expect(hint).toHaveText("Ctrl K");
+        // The input can shrink, so it never pushes the hint out of the search box.
+        await expect(page.locator(".search input")).toHaveCSS("min-width", "0px");
+        if (testInfo.project.name === "mobile-390") {
+          // A touch phone has no shortcut key, so the hint is hidden in both languages.
+          await expect(hint).toBeHidden();
+          // The select-all bar above the cards carries the header background across its full width.
+          const bar = await page
+            .locator(".table-scroll")
+            .filter({ has: ready.groups })
+            .locator("thead tr")
+            .evaluate((row) => ({
+              bar: getComputedStyle(row).backgroundColor,
+              cell: getComputedStyle(row.querySelector("th.select-column")!).backgroundColor,
+            }));
+          expect(bar.bar).not.toBe("rgba(0, 0, 0, 0)");
+          expect(bar.bar).toBe(bar.cell);
+        } else {
+          // The hint sits whole inside the search box at its inline end, in both directions.
+          const [box, key] = await Promise.all(
+            [page.locator(".search"), hint].map(async (target) => (await target.boundingBox())!),
+          );
+          expect(key.x).toBeGreaterThanOrEqual(box.x);
+          expect(key.x + key.width).toBeLessThanOrEqual(box.x + box.width);
+          const [left, right] = [key.x - box.x, box.x + box.width - key.x - key.width];
+          const [startGap, endGap] = locale === "ar" ? [right, left] : [left, right];
+          expect(endGap).toBeLessThan(startGap);
+        }
       }
       const screen = view === "overview" ? "shell" : view;
-      await page.screenshot({
-        path: journeyCapturePath(
-          `tenant-${screen}`,
-          testInfo.project.name,
-          theme,
-          locale,
-        ),
-        animations: "disabled",
-      });
+      await capture(`tenant-${screen}`);
+      if (view === "overview" && testInfo.project.name === "desktop") {
+        const desktopViewport = page.viewportSize()!;
+        await page.setViewportSize({ width: 390, height: 844 });
+        await page
+          .getByRole("button", {
+            name: messages["tenant.sidebar.openNavigation"],
+            exact: true,
+          })
+          .click();
+        const menu = page.getByRole("dialog", {
+          name: messages["tenant.navigation.primary"],
+          exact: true,
+        });
+        await expect(menu.getByRole("navigation")).toBeVisible();
+        await capture("tenant-shell-menu-open", "mobile-390");
+        await menu
+          .getByRole("button", {
+            name: messages["tenant.sidebar.closeNavigation"],
+            exact: true,
+          })
+          .click();
+        await expect(menu).toHaveCount(0);
+        await page.setViewportSize({ width: 820, height: 1_180 });
+        await expect(page.locator(".sidebar")).toHaveCSS("width", "72px");
+        await capture("tenant-shell-collapsed-rail", "tablet-820");
+        await page.setViewportSize(desktopViewport);
+      }
       if (view === "settings") {
         const tab = (name: keyof typeof messages) =>
           page.getByRole("tab", { name: messages[name], exact: true });
@@ -224,15 +276,7 @@ export async function captureTenantDesign(
         // Every Settings section fills the same column, so General is as wide as Privacy & retention.
         expect(Math.abs(general.x - panel.x)).toBeLessThanOrEqual(1);
         expect(Math.abs(general.width - panel.width)).toBeLessThanOrEqual(1);
-        await page.screenshot({
-          path: journeyCapturePath(
-            "tenant-settings-privacy",
-            testInfo.project.name,
-            theme,
-            locale,
-          ),
-          animations: "disabled",
-        });
+        await capture("tenant-settings-privacy");
         // The selected tab persists in session storage; the next theme starts on General.
         await tab("tenant.settings.sections.general").click();
         await expect(ready.settings).toBeVisible();
