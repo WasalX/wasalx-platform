@@ -75,6 +75,66 @@ export async function captureTenantDesign(
         expect(prefix.x + prefix.width).toBeLessThanOrEqual(slug.x + 1);
         await expect(page.locator(".profile b")).toHaveCSS("direction", "ltr");
       }
+      if (view === "groups") {
+        const table = page.locator(".table-scroll").filter({ has: ready.groups });
+        // A chip is one pill that holds its whole label and stays inside its cell, at every width.
+        const spilledChips = await table.locator(".tag").evaluateAll((tags) =>
+          tags
+            .filter((tag) => {
+              const box = tag.getBoundingClientRect();
+              const cell = tag.closest("td")!.getBoundingClientRect();
+              return (
+                tag.getClientRects().length !== 1 ||
+                tag.scrollWidth > tag.clientWidth + 1 ||
+                box.left < cell.left - 1 ||
+                box.right > cell.right + 1
+              );
+            })
+            .map((tag) => (tag as HTMLElement).innerText),
+        );
+        expect(spilledChips).toEqual([]);
+        if (testInfo.project.name === "mobile-390") {
+          // Phones stack each group into a card with no sideways scroll; the Active switch and
+          // Configure share the last row, Configure at the inline end, in both directions.
+          const cards = await table.evaluate((region) => ({
+            overflow: region.scrollWidth - region.clientWidth,
+            rows: [...region.querySelectorAll("tbody tr")]
+              .filter((row) => row.querySelector(".switch"))
+              .map((row) => {
+                const style = getComputedStyle(row);
+                const box = row.getBoundingClientRect();
+                const control = row
+                  .querySelector(".group-activation-control")!
+                  .getBoundingClientRect();
+                const action = row
+                  .querySelector(".group-row-action button")!
+                  .getBoundingClientRect();
+                const detail = row
+                  .querySelector(".tag")!
+                  .getBoundingClientRect();
+                return {
+                  grid: style.display === "grid",
+                  lastRow:
+                    control.top >= detail.bottom &&
+                    action.top < control.bottom &&
+                    control.top < action.bottom,
+                  gap:
+                    style.direction === "rtl"
+                      ? action.left - box.left - parseFloat(style.paddingLeft)
+                      : box.right -
+                        parseFloat(style.paddingRight) -
+                        action.right,
+                };
+              }),
+          }));
+          expect(cards.overflow).toBeLessThanOrEqual(0);
+          expect(cards.rows.length).toBeGreaterThan(0);
+          for (const card of cards.rows) {
+            expect(card).toMatchObject({ grid: true, lastRow: true });
+            expect(Math.abs(card.gap)).toBeLessThanOrEqual(1);
+          }
+        }
+      }
       await expect(page.locator('[data-application-ready="true"]')).toHaveClass(
         `theme-${theme}`,
       );
