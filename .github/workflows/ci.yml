@@ -288,6 +288,8 @@ jobs:
       needs.changes.result != 'success' || needs.changes.outputs.storybook != 'false') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 8
+    env: &ci-chromium-env
+      PLAYWRIGHT_BROWSERS_PATH: &ci-chromium-path ${{ github.workspace }}/.wrangler/ci-chromium
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -301,8 +303,24 @@ jobs:
         run: pnpm run build:storybook
       - name: Check the built story index
         run: node --test tests/storybook-static-contract.test.mjs
-      - name: Install Playwright Chromium
+      - &playwright-version
+        name: Read the installed Playwright version
+        id: playwright-version
+        run: |
+          version=$(node -p "require('@playwright/test/package.json').version")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - &restore-ci-chromium
+        name: Restore Playwright Chromium cache
+        id: chromium-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: *ci-chromium-path
+          key: playwright-chromium-no-shell-${{ runner.os }}-${{ runner.arch }}-${{ steps.playwright-version.outputs.version }}
+      - &install-ci-chromium
+        name: Install Playwright Chromium
+        if: steps.chromium-cache.outputs.cache-hit != 'true'
         env:
+          PLAYWRIGHT_BROWSERS_PATH: *ci-chromium-path
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '0'
         run: pnpm exec playwright install --no-shell chromium
       - name: Audit stories and compare design system screenshots
@@ -612,6 +630,15 @@ jobs:
         with:
           path: ~/.cache/pre-commit
           key: ${{ steps.source-hooks-cache.outputs.cache-primary-key }}
+      - *playwright-version
+      - *restore-ci-chromium
+      - *install-ci-chromium
+      - name: Save Playwright Chromium cache
+        if: steps.chromium-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: *ci-chromium-path
+          key: ${{ steps.chromium-cache.outputs.cache-primary-key }}
 
   integration:
     needs: changes
@@ -682,18 +709,16 @@ jobs:
       needs.changes.outputs.application-e2e != 'false') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 2
-    env: &portal-browser-env
-      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.wrangler/ci-chromium
+    env: *ci-chromium-env
     steps:
       - *integration-checkout
       - *integration-node
       - *integration-pnpm
       - name: Build the portal
         run: pnpm run build
-      - name: Install Playwright Chromium
-        env:
-          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '0'
-        run: pnpm exec playwright install --no-shell chromium
+      - *playwright-version
+      - *restore-ci-chromium
+      - *install-ci-chromium
       - name: Package portal and Chromium
         run: tar -czf portal-browser.tar.gz dist packages/observability/dist .wrangler/ci-chromium
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -709,7 +734,7 @@ jobs:
       ${{ !cancelled() && needs.portal-browser-build.result == 'success' &&
       (github.event_name != 'pull_request' || needs.changes.result != 'success' ||
       needs.changes.outputs.integration != 'false') }}
-    env: *portal-browser-env
+    env: *ci-chromium-env
     runs-on: ubuntu-24.04
     timeout-minutes: 4
     steps:
@@ -764,7 +789,7 @@ jobs:
     name: Application E2E (${{ matrix.locale }}, ${{ matrix.suite.roles }}${{ matrix.suite.owner_part && format(', {0}', matrix.suite.owner_part) || '' }})
     runs-on: ubuntu-24.04
     timeout-minutes: 13
-    env: *portal-browser-env
+    env: *ci-chromium-env
     strategy:
       fail-fast: false
       matrix:
@@ -819,7 +844,7 @@ jobs:
     name: Platform Operator E2E (${{ matrix.locale }})
     runs-on: ubuntu-24.04
     timeout-minutes: 4
-    env: *portal-browser-env
+    env: *ci-chromium-env
     strategy:
       fail-fast: false
       matrix:
@@ -845,14 +870,14 @@ jobs:
       needs.changes.result != 'success' || needs.changes.outputs.keycloak-identity != 'false') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    env: *ci-chromium-env
     steps:
       - *integration-checkout
       - *integration-node
       - *integration-pnpm
-      - name: Install Playwright Chromium
-        env:
-          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '0'
-        run: pnpm exec playwright install --no-shell chromium
+      - *playwright-version
+      - *restore-ci-chromium
+      - *install-ci-chromium
       - name: Build the pinned Keycloak image and run the isolated identity cases
         env:
           KEYCLOAK_IMAGE: wasalx/ci-keycloak:${{ github.run_id }}-${{ github.run_attempt }}
