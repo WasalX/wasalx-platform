@@ -1,7 +1,19 @@
 # syntax=docker/dockerfile:1.7
-FROM cgr.dev/chainguard/postgres:latest@sha256:9cc085289d7ef0174f35f2ff1e514624c3305c4a26215d8e89e3e277e3377d03
+FROM cgr.dev/chainguard/wolfi-base:latest@sha256:5172a213d2bba8b1c9ca11957db65562b52b0f9844583a0347318ea5fd8e3aa5
 ARG WASALX_CANDIDATE_SHA=unfrozen
 ARG WASALX_CANDIDATE_TREE=unfrozen
 LABEL org.opencontainers.image.revision="${WASALX_CANDIDATE_SHA}" \
       io.wasalx.source.tree="${WASALX_CANDIDATE_TREE}"
+ENV LANG=en_US.UTF-8 PGDATA=/var/lib/postgresql/data
+RUN apk add --no-cache \
+      'postgresql-18=18.7-r1' 'postgresql-18-client=18.7-r1' 'postgresql-18-contrib=18.7-r1' \
+      'postgresql-18-oci-entrypoint=18.7-r1' 'libpq-18=18.7-r1' 'pgaudit-18=18.1-r0' \
+      'glibc-2.44-locale-en=2.44-r30' 'posix-libc-utils-2.44=2.44-r30' \
+      'icu79-data-full=79.1-r2' 'libicu79=79.1-r2' 'gosu=1.20-r1' \
+    && addgroup -S -g 70 postgres \
+    && adduser -S -D -h /home/postgres -s /sbin/nologin -u 70 -G postgres postgres \
+    && install -d -m 0700 -o postgres -g postgres "$PGDATA" \
+    && install -d -m 3775 -o postgres -g postgres /var/run/postgresql
+WORKDIR /home/postgres
+ENTRYPOINT ["/usr/bin/docker-entrypoint.sh", "postgres"]
 USER 70:70
