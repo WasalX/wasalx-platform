@@ -2437,9 +2437,9 @@ test("PR unit selection catches a hidden transitive regression and falls back on
   assert(jobs["ci-gate"].needs.includes("full-unit"));
 });
 
-test("source style checks added and renamed source files", async t => {
+test("source style checks additions, rename destinations and modified Java", async t => {
   const { env, jobs } = parse(await read(".github/workflows/ci.yml"));
-  const step = jobs.checks.steps.find(step => step.name === "Check added source style");
+  const step = jobs.checks.steps.find(step => step.name === "Check eligible source style");
   assert.equal(step.if, "matrix.mode == 'lint'");
   assert.equal(step.env.STYLE_BASE, "${{ github.event_name == 'pull_request' && 'HEAD^1' || github.event.merge_group.base_sha }}");
   assert.equal(jobs.checks.if, "github.event_name == 'pull_request' || github.event_name == 'merge_group'");
@@ -2460,13 +2460,17 @@ test("source style checks added and renamed source files", async t => {
   await write(".pre-commit-config.yaml", await read(".pre-commit-config.yaml"));
   await write("scripts/filter-source-files.rb", await read("scripts/filter-source-files.rb"));
   await write("existing.ts", "export const version = 1;\n");
+  await write("Existing.java", "class Existing {}\n");
+  await write("Dockerfile.existing", "FROM scratch\n");
+  await write("deleted.yaml", "version: 1\n");
   await write("original.txt", "#!/bin/sh\nprintf 'renamed file with identical contents\\n'\n");
   commit();
 
   const selected = [
     "button component.tsx", "style.css", "worker.py", "test.rb", "view.sql", "deploy.sh",
     "deploy.ash", "deploy.dash", "deploy.ksh", "deploy.mksh", "deploy.cbsd", "deploy.TCSH", "Gemfile",
-    "scripts/hosted-ci-baseline.mjs",
+    "scripts/hosted-ci-baseline.mjs", "Added.java", "Dockerfile.worker", "infra/docker/Dockerfile.zammad",
+    "nested/config.yaml", "nested/settings.yml",
   ];
   for (const path of [...selected, "README.md", "next-env.d.ts", "cloudflare-env.d.ts",
     "services/control-api/migrations/000_fixture.SQL"]) {
@@ -2479,6 +2483,9 @@ test("source style checks added and renamed source files", async t => {
     selected.push("entrypoint");
   }
   await write("existing.ts", "export const version = 2;\n");
+  await write("Existing.java", "class Existing { int version = 2; }\n");
+  await write("Dockerfile.existing", "FROM busybox\n");
+  await rm(join(directory, "deleted.yaml"));
   await rename(join(directory, "original.txt"), join(directory, "renamed.sh"));
   commit();
   assert.match(git("diff", "--name-status", "HEAD^1", "HEAD"), /^R100\toriginal\.txt\trenamed\.sh$/mu);
@@ -2491,7 +2498,7 @@ test("source style checks added and renamed source files", async t => {
   const execute = STYLE_BASE => runWorkflowScript(run, { PRE_COMMIT_VERSION: env.PRE_COMMIT_VERSION, STYLE_BASE }, directory);
   const result = execute("HEAD^1");
   assert.equal(result.status, 0, result.stderr);
-  assert.deepEqual(result.stdout.split("\0").filter(Boolean).sort(), [...selected, "renamed.sh"].sort());
+  assert.deepEqual(result.stdout.split("\0").filter(Boolean).sort(), [...selected, "renamed.sh", "Existing.java"].sort());
   const empty = execute("HEAD");
   assert.equal(empty.status, 0, empty.stderr);
   assert.equal(empty.stdout, "");

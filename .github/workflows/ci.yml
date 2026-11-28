@@ -538,16 +538,46 @@ jobs:
         with: &source-hook-cache-inputs
           path: ~/.cache/pre-commit
           key: pre-commit-${{ runner.os }}-${{ runner.arch }}-${{ steps.source-hook-runtime.outputs.versions }}-${{ env.PRE_COMMIT_VERSION }}-${{ hashFiles('.pre-commit-config.yaml', '.rubocop.yml') }}
-      - name: Check added source style
+      - name: Check eligible source style
         if: matrix.mode == 'lint'
         shell: bash
         env:
           STYLE_BASE: ${{ github.event_name == 'pull_request' && 'HEAD^1' || github.event.merge_group.base_sha }}
         run: |
           # Pre-commit installs environments before applying its file filters.
-          git diff --name-only --no-renames --diff-filter=A -z "$STYLE_BASE" HEAD |
+          git diff --name-status --no-renames --diff-filter=AMT -z "$STYLE_BASE" HEAD |
             ruby scripts/filter-source-files.rb |
             xargs -0 -r pipx run --python python3 --spec "pre-commit==$PRE_COMMIT_VERSION" pre-commit run --show-diff-on-failure --files
+      - name: Prove Java, Dockerfile and YAML source hooks
+        if: matrix.mode == 'lint'
+        shell: bash
+        run: |
+          proof=$(mktemp -d .source-style-proof.XXXXXX)
+          trap 'rm -rf -- "$proof"' EXIT
+          mkdir -p "$proof"/{good,bad}
+          printf 'class Fixture {}\n' > "$proof/good/Fixture.java"
+          printf 'class Fixture{}\n' > "$proof/bad/Fixture.java"
+          printf 'import java.util.List;\n\nclass Fixture {}\n' > "$proof/bad/Unused.java"
+          printf 'FROM scratch\n' > "$proof/good/Dockerfile.fixture"
+          printf 'FROM busybox\n' > "$proof/bad/Dockerfile.fixture"
+          printf 'enabled: true\n' > "$proof/good/fixture.yaml"
+          printf 'enabled:    true\n' > "$proof/bad/fixture.yaml"
+
+          pre_commit=(pipx run --python python3 --spec "pre-commit==$PRE_COMMIT_VERSION" pre-commit run --color never)
+          prove_hook() {
+            local hook=$1 good=$2 bad=$3 diagnostic=$4 status=0 output
+            "${pre_commit[@]}" "$hook" --files "$proof/good/$good" | tee "$proof/result"
+            grep -q '[.]Passed$' "$proof/result"
+            output=$("${pre_commit[@]}" "$hook" --files "$proof/bad/$bad") || status=$?
+            printf '%s\n' "$output"
+            [[ "$status" == 1 ]]
+            grep -Fq -- "$diagnostic" <<< "$output"
+          }
+
+          prove_hook java-format Fixture.java Fixture.java "$proof/bad/Fixture.java"
+          prove_hook java-lint Fixture.java Unused.java UnusedImports
+          prove_hook hadolint Dockerfile.fixture Dockerfile.fixture DL3006
+          prove_hook prettier fixture.yaml fixture.yaml 'Code style issues found'
       - name: Typecheck
         if: matrix.mode == 'typecheck'
         run: pnpm exec tsc --noEmit
