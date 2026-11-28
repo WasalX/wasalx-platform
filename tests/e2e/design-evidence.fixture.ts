@@ -94,8 +94,8 @@ export async function captureTenantDesign(
         );
         expect(spilledChips).toEqual([]);
         if (testInfo.project.name === "mobile-390") {
-          // Phones stack each group into a card: no sideways scroll, and the Active
-          // switch ends the card's first row at the inline end, in both directions.
+          // Phones stack each group into a card with no sideways scroll; the Active switch and
+          // Configure share the last row, Configure at the inline end, in both directions.
           const cards = await table.evaluate((region) => ({
             overflow: region.scrollWidth - region.clientWidth,
             rows: [...region.querySelectorAll("tbody tr")]
@@ -106,25 +106,31 @@ export async function captureTenantDesign(
                 const control = row
                   .querySelector(".group-activation-control")!
                   .getBoundingClientRect();
+                const action = row
+                  .querySelector(".group-row-action button")!
+                  .getBoundingClientRect();
                 const detail = row
                   .querySelector(".tag")!
                   .getBoundingClientRect();
                 return {
                   grid: style.display === "grid",
-                  firstRow: control.bottom <= detail.top,
+                  lastRow:
+                    control.top >= detail.bottom &&
+                    action.top < control.bottom &&
+                    control.top < action.bottom,
                   gap:
                     style.direction === "rtl"
-                      ? control.left - box.left - parseFloat(style.paddingLeft)
+                      ? action.left - box.left - parseFloat(style.paddingLeft)
                       : box.right -
                         parseFloat(style.paddingRight) -
-                        control.right,
+                        action.right,
                 };
               }),
           }));
           expect(cards.overflow).toBeLessThanOrEqual(0);
           expect(cards.rows.length).toBeGreaterThan(0);
           for (const card of cards.rows) {
-            expect(card).toMatchObject({ grid: true, firstRow: true });
+            expect(card).toMatchObject({ grid: true, lastRow: true });
             expect(Math.abs(card.gap)).toBeLessThanOrEqual(1);
           }
         }
