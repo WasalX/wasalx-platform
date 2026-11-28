@@ -22,6 +22,10 @@ import type { TeamAccessData } from "../../lib/control-plane-data";
 import { expectAxeClean } from "../helpers/axe";
 import { captureTenantDesign, verifyRuleModalLabels } from "./design-evidence.fixture";
 import { registerConnectionListJourneys } from "./connection-list.fixture";
+import {
+  consumeExpectedTeamActionError,
+  registerTeamActionJourneys,
+} from "./team-actions.fixture";
 import { expect, test, type Page } from "@playwright/test";
 
 const role = process.env.WASALX_E2E_ROLE ?? "tenant_owner";
@@ -289,6 +293,7 @@ test.beforeEach(async ({ page }) => {
   expectedNetworkErrors.set(page, []);
   page.on("console", (message) => {
     if (message.type() === "error") {
+      if (consumeExpectedTeamActionError(page, message)) return;
       if (consumeExpectedNumberReleaseDenial(page, message) || consumeExpectedPrivacyResponse(page, message) || consumeExpectedActivationDenial(page, message) || consumeExpectedDirectSetupDenial(page, message) || consumeExpectedSignupDenial(page, message) || consumeExpectedReconnectDenial(page, message) || consumeExpectedCoexistenceDenial(page, message) || consumeExpectedAddAccessDenial(page, message) || consumeExpectedRoutingDenial(page, message) || consumeExpectedTemplateDenial(page, message) || consumeExpectedLegacyDenial(page, message) || consumeExpectedObservationFailure(page, message)) return;
       const location = message.location().url;
       if (
@@ -315,6 +320,7 @@ async function open(page: Page, view = "overview") {
   await expect(page).toHaveTitle(`${titles[view]} · WasalX`);
 }
 
+registerTeamActionJourneys("en", role, open);
 if (role === "tenant_owner") {
   registerConnectionListJourneys("en", open);
   test("owner captures tenant surfaces in light and dark", async ({ page }, testInfo) => {
