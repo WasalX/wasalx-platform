@@ -7,6 +7,113 @@
   "window_start": "2026-11-26T16:15:52Z",
   "window_end": "2026-11-27T21:44:24Z",
   "p95_basis": "Successful first attempts of CI runs, using job start and completion timestamps. Nearest-rank p95 across all samples or the highest event p95 with at least five observations, whichever is higher. Matrix job p95 is its highest leg p95.",
+  "artifact_downloads": {
+    "measured_at": "2026-11-28",
+    "runs": 44,
+    "first_run": 46058246569,
+    "last_run": 46142861934,
+    "window_start": "2026-11-27T19:39:36Z",
+    "window_end": "2026-11-28T12:04:33Z",
+    "main_push_runs": 20,
+    "merge_group_runs": 24,
+    "p95_basis": "Successful first-attempt CI jobs. Main pushes did not run either download. Nearest-rank p95 uses step durations in seconds, pooled across jobs using the same step. Job work subtracts the download duration from the job duration and uses the highest leg p95 for matrix jobs.",
+    "steps": {
+      "download-portal-browser": {
+        "runs": 24,
+        "first_run": 46058246569,
+        "last_run": 46142861934,
+        "p95_minutes": 0.15,
+        "timeout_minutes": 1,
+        "samples_seconds": {
+          "46058246569": [3, 3, 4, 4, 5, 6, 6, 6, 6, 15, 18],
+          "46069237245": [3, 3, 3, 3, 4, 4, 4, 6, 7, 8, 9],
+          "46070042017": [3, 3, 3, 4, 4, 4, 4, 5, 5, 6, 9],
+          "46071940182": [2, 3, 3, 4, 4, 6, 6, 6, 7, 7, 8],
+          "46073727032": [2, 2, 2, 3, 3, 5, 6, 7, 8, 9, 22],
+          "46077718356": [2, 2, 2, 2, 3, 4, 5, 6, 6, 6, 6],
+          "46079890741": [2, 2, 2, 3, 3, 3, 4, 4, 5, 5, 6],
+          "46082954120": [2, 3, 3, 3, 4, 4, 5, 5, 6, 7, 7],
+          "46091380937": [3, 3, 3, 4, 4, 5, 6, 7, 7, 8, 18],
+          "46093614691": [2, 2, 2, 2, 3, 3, 3, 3, 6, 6, 8],
+          "46097098660": [3, 3, 3, 3, 4, 4, 5, 5, 6, 6, 10],
+          "46129963225": [3, 3, 3, 3, 3, 4, 6, 6, 6, 6, 6],
+          "46132757022": [2, 2, 3, 3, 3, 3, 3, 5, 5, 5, 6],
+          "46133638301": [2, 2, 2, 2, 3, 3, 3, 3, 4, 5, 8],
+          "46134620406": [2, 2, 2, 2, 3, 4, 5, 6, 7, 10, 33],
+          "46134926068": [2, 2, 2, 2, 3, 3, 4, 4, 5, 5, 6],
+          "46135398017": [2, 2, 3, 3, 4, 4, 5, 6, 7, 7, 10],
+          "46137782724": [3, 3, 4, 4, 4, 4, 4, 4, 6, 8, 9],
+          "46138042743": [2, 2, 3, 3, 4, 4, 7, 7, 8, 9, 11],
+          "46140324259": [2, 2, 2, 3, 3, 3, 4, 4, 4, 4, 10],
+          "46140347232": [2, 2, 3, 3, 3, 3, 3, 3, 5, 5, 5],
+          "46141052813": [2, 3, 3, 3, 4, 5, 6, 6, 7, 8, 9],
+          "46141078980": [2, 2, 3, 3, 3, 3, 4, 4, 4, 6, 9],
+          "46142861934": [2, 2, 3, 3, 3, 3, 4, 5, 6, 6, 12]
+        }
+      },
+      "download-postgres-scenarios": {
+        "runs": 24,
+        "first_run": 46058246569,
+        "last_run": 46142861934,
+        "p95_minutes": 0.0333,
+        "timeout_minutes": 1,
+        "samples_seconds": {
+          "46058246569": [2],
+          "46069237245": [2],
+          "46070042017": [1],
+          "46071940182": [0],
+          "46073727032": [2],
+          "46077718356": [1],
+          "46079890741": [1],
+          "46082954120": [1],
+          "46091380937": [1],
+          "46093614691": [1],
+          "46097098660": [1],
+          "46129963225": [2],
+          "46132757022": [1],
+          "46133638301": [1],
+          "46134620406": [0],
+          "46134926068": [1],
+          "46135398017": [1],
+          "46137782724": [0],
+          "46138042743": [1],
+          "46140324259": [1],
+          "46140347232": [1],
+          "46141052813": [1],
+          "46141078980": [1],
+          "46142861934": [1]
+        }
+      }
+    },
+    "job_work": {
+      "portal-integration": {
+        "runs": 24,
+        "first_run": 46058246569,
+        "last_run": 46142861934,
+        "p95_minutes": 2.5167
+      },
+      "platform-operator-e2e": {
+        "runs": 24,
+        "first_run": 46058246569,
+        "last_run": 46142861934,
+        "p95_minutes": 2.65,
+        "slowest_leg": "Platform Operator E2E (en)"
+      },
+      "application-e2e": {
+        "runs": 24,
+        "first_run": 46058246569,
+        "last_run": 46142861934,
+        "p95_minutes": 9.85,
+        "slowest_leg": "Application E2E (en, tenant_admin,supervisor)"
+      },
+      "integration-coverage": {
+        "runs": 24,
+        "first_run": 46058246569,
+        "last_run": 46142861934,
+        "p95_minutes": 0.5167
+      }
+    }
+  },
   "jobs": {
     "changes": {
       "runs": 152,

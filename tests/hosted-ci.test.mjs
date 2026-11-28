@@ -290,6 +290,16 @@ test("CI job timeouts are covered by the measured limits", async () => {
     assert(Number.isInteger(runs) && runs >= 5, id);
     return p95;
   };
+  const downloads = timing.artifact_downloads;
+  for (const [id, sample] of Object.entries(downloads.steps)) {
+    const seconds = Object.values(sample.samples_seconds).flat().sort((a, b) => a - b);
+    assert(seconds.length >= 20 && seconds.every(value => Number.isInteger(value) && value >= 0), id);
+    assert.equal(Object.keys(sample.samples_seconds).length, sample.runs, id);
+    const p95 = seconds[Math.ceil(seconds.length * 0.95) - 1] / 60;
+    assert.equal(sample.p95_minutes, Number(p95.toFixed(4)), id);
+    assert.equal(sample.timeout_minutes, Math.max(1, Math.ceil(p95 * 1.25)), id);
+  }
+  const observedDownloads = new Set();
   for (const [id, job] of Object.entries(jobs)) {
     const record = timing.jobs[id];
     let p95 = measuredP95(record, id);
@@ -304,10 +314,33 @@ test("CI job timeouts are covered by the measured limits", async () => {
       p95 = Math.max(...legs.map(leg => measuredP95(record.legs[leg], id + "/" + leg)));
       assert.equal(record.p95_minutes, p95, id);
     }
+    const steps = job.steps;
+    const downloadsInJob = steps.filter(step => step.uses?.startsWith("actions/download-artifact@"));
+    let downloadMinutes = 0;
+    for (let index = 0; index < downloadsInJob.length; index += 2) {
+      const [first, retry] = downloadsInJob.slice(index, index + 2);
+      assert(Object.hasOwn(downloads.steps, first.id), id + " has an unbounded artifact download");
+      const timeout = downloads.steps[first.id].timeout_minutes;
+      observedDownloads.add(first.id);
+      assert.equal(first["timeout-minutes"], timeout, id);
+      assert.equal(first["continue-on-error"], true, id);
+      assert.equal(first.if, undefined, id);
+      assert(retry && steps[steps.indexOf(first) + 1] === retry, id + " must retry immediately");
+      assert.equal(retry.if, "steps." + first.id + ".outcome == 'failure'", id);
+      assert.equal(retry.uses, first.uses, id);
+      assert.deepEqual(retry.with, first.with, id);
+      assert.equal(retry["timeout-minutes"], timeout, id);
+      assert.equal(retry["continue-on-error"], undefined, id);
+      downloadMinutes += 2 * timeout;
+    }
+    const work = downloads.job_work[id];
+    assert.equal(Boolean(work), downloadMinutes > 0, id);
     // The ci-gate timing sample predates the verdict verifier's API calls.
     const timeout = id === "ci-gate" ? 3 : Math.ceil(p95 * 1.25);
-    assert.equal(job["timeout-minutes"], timeout, id);
+    const retryBudget = work ? Math.ceil(measuredP95(work, id) + downloadMinutes) : 0;
+    assert.equal(job["timeout-minutes"], Math.max(timeout, retryBudget), id);
   }
+  assert.deepEqual([...observedDownloads].sort(), Object.keys(downloads.steps).sort());
 
   const { publish } = timing.jobs;
   assert.equal(publish.workflow, ".github/workflows/branch-image.yml");
