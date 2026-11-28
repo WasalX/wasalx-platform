@@ -21,7 +21,10 @@ import { registerOperationsScreenshots } from "./operations-screenshots.fixture"
 import { expectAxeClean } from "../helpers/axe";
 import { captureTenantDesign, verifyRuleModalLabels } from "./design-evidence.fixture";
 import { registerConnectionListJourneys } from "./connection-list.fixture";
-import { consumeExpectedTeamActionError, registerTeamActionJourneys } from "./team-actions.fixture";
+import {
+  consumeExpectedTeamActionError,
+  registerTeamActionJourneys,
+} from "./team-actions.fixture";
 import { expect, test, type Page } from "@playwright/test";
 import { arabicMessages } from "../../lib/i18n/messages/ar/index.ts";
 
