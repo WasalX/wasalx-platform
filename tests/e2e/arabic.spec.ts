@@ -21,6 +21,7 @@ import { registerOperationsScreenshots } from "./operations-screenshots.fixture"
 import { expectAxeClean } from "../helpers/axe";
 import { captureTenantDesign, verifyRuleModalLabels } from "./design-evidence.fixture";
 import { registerConnectionListJourneys } from "./connection-list.fixture";
+import { consumeExpectedTeamActionError, registerTeamActionJourneys } from "./team-actions.fixture";
 import { expect, test, type Page } from "@playwright/test";
 import { arabicMessages } from "../../lib/i18n/messages/ar/index.ts";
 
@@ -130,6 +131,7 @@ test.beforeEach(async ({ page }) => {
   problems.set(page, observed);
   expectedBackendErrors.set(page, backendErrors);
   page.on("console", (message) => {
+    if (consumeExpectedTeamActionError(page, message)) return;
     if (message.text().startsWith("Failed to load resource:")) {
       const index = backendErrors.findIndex(({ url, status }) =>
         url === message.location().url && message.text().includes(String(status)));
@@ -151,6 +153,7 @@ async function open(page: Page, view: string) {
   await expect(page).toHaveTitle(`${title} · WasalX`);
 }
 
+registerTeamActionJourneys("ar", role, open);
 if (role === "tenant_owner") {
   registerConnectionListJourneys("ar", open);
   test("owner captures tenant surfaces in light and dark", async ({ page }, testInfo) => {
