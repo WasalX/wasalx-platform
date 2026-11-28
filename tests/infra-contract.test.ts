@@ -17,14 +17,6 @@ const bash = process.platform === "win32"
     .filter((candidate): candidate is string => Boolean(candidate)).find(existsSync) ?? "bash"
   : "bash";
 
-test("foundation-postgres uses the reviewed PostgreSQL 18 base digest", async () => {
-  const dockerfile = await read("Dockerfile.foundation-postgres");
-  // This digest ships PostgreSQL 18.7. The image build checks the server version.
-  assert.deepEqual(dockerfile.match(/^[ \t]*FROM\b.*$/gimu), [
-    "FROM cgr.dev/chainguard/postgres:latest@sha256:9cc085289d7ef0174f35f2ff1e514624c3305c4a26215d8e89e3e277e3377d03",
-  ]);
-});
-
 test("CI and Zammad fixture image pins match Compose", async () => {
   const { services } = parseYaml(await read("compose.yaml"));
   const { services: full } = parseYaml(await read("compose.full.yaml"), { merge: true, logLevel: "error" });

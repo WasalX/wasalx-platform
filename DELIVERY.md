@@ -100,7 +100,7 @@ The byte-line scan exempts PNGs directly in the Linux visual baseline directory 
 
 ### Rollback
 
-- A Redis minor upgrade can raise the on-disk RDB format. An older Redis image cannot read data written in the newer format.
+- A Redis minor upgrade can raise the on-disk RDB format. An older Redis image cannot read data written in the newer format. Restore a pre-upgrade Redis backup before starting the older image.
 - **DEV** — Run the authorized overlay discard from the [DEV installer runbook](scripts/dev-install/README.md). Verify the restored base is healthy and preserve the rollback receipt.
 - **Staging and production** — Redeploy the digests in `images-manifest.json` from the last good release for that environment through its deploy gate. No workflow performs this deploy yet; `deploy.yml` records it, and a `prod` dispatch waits for the `prod` reviewer's approval. Use a release candidate tag for `stg` and a stable tag for `prod`. Record the rollback with the [`deploy.yml`](.github/workflows/deploy.yml) `workflow_dispatch`. Set `environment` to `stg` or `prod` and use the same last good tag for the dispatch ref and the `ref` input. Omit the DEV-only receipt code. Run the health checks and retain the result with the deployment record. See the [release procedure](docs/release.md).
 
