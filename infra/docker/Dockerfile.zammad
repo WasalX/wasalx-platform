@@ -76,7 +76,7 @@ RUN rm -rf \
       /usr/local/lib/ruby/gems/3.4.0/specifications/net-imap-0.5.8.gemspec \
       /usr/local/lib/ruby/gems/3.4.0/specifications/default/erb-4.0.4.gemspec
 
-FROM cgr.dev/chainguard/ruby:latest-dev@sha256:a3687c10cbff6873ed5401da21b8902e270e813ce807a9f4a2df57613ba4121d
+FROM cgr.dev/chainguard/ruby:latest-dev@sha256:81ffd347cb0945b44479dc0d2603803eb465c7984c1f5c8ba93eea58fc8a0c7f
 ARG WASALX_PACKAGE_VERSION=0.5.90
 ARG WASALX_PACKAGE_SHA256=ada61793c1ff01354081e751edeb8a4015aea5c2bba3dec57a2b33cb909bdc32
 
