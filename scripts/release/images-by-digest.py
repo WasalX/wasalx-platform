@@ -488,6 +488,11 @@ def build(image, output, cache="off"):
                         "--label", "org.opencontainers.image.revision=" + commit,
                         "--label", "io.wasalx.source.tree=" + tree, str(context), capture_stdout=False)
         inspection = inspect_image(reference, row, commit, tree, directory, licenses)
+        if image == "foundation-postgres":
+            version = run("docker", "run", "--rm", "--network", "none", "--pull", "never", reference, "--version")
+            require(version.startswith("postgres (PostgreSQL) 18."),
+                    f"foundation-postgres must run PostgreSQL 18, got {version!r}")
+            print(version)
     receipt = {"image": image, "reference": reference, "commit": commit, "tree": tree, "status": "built",
                "platform": "linux/amd64", "sourceArchiveDigest": archive_digest, "addonSource": addon,
                "dockerfileDigest": dockerfile_digest, "inspection": inspection}

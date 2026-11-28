@@ -80,6 +80,8 @@ updates:
     ignore:
       - dependency-name: "node"
         update-types: ["version-update:semver-major"]
+      # The latest tag can move between PostgreSQL majors. Review and pin updates by hand.
+      - dependency-name: "cgr.dev/chainguard/postgres"
       # Keycloak is upgraded by hand: its Dockerfile pins versioned CLI and library jars.
       - dependency-name: "keycloak/keycloak"
     groups:

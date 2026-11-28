@@ -17,6 +17,38 @@ const bash = process.platform === "win32"
     .filter((candidate): candidate is string => Boolean(candidate)).find(existsSync) ?? "bash"
   : "bash";
 
+test("foundation-postgres uses the reviewed PostgreSQL 18 base digest", async () => {
+  const dockerfile = await read("Dockerfile.foundation-postgres");
+  // This digest ships PostgreSQL 18.7. The image build checks the server version.
+  assert.deepEqual(dockerfile.match(/^[ \t]*FROM\b.*$/gimu), [
+    "FROM cgr.dev/chainguard/postgres:latest@sha256:9cc085289d7ef0174f35f2ff1e514624c3305c4a26215d8e89e3e277e3377d03",
+  ]);
+});
+
+test("CI and Zammad fixture image pins match Compose", async () => {
+  const { services } = parseYaml(await read("compose.yaml"));
+  const { services: full } = parseYaml(await read("compose.full.yaml"), { merge: true, logLevel: "error" });
+  const integration = [services.postgres.image, services.redis.image];
+  const zammad = [
+    full["zammad-postgresql"].image,
+    full["zammad-redis"].image,
+    full["zammad-memcached"].image,
+  ];
+  const expected = {
+    ".github/workflows/ci.yml": integration,
+    "scripts/release/ci-postgres-runtime.sh": [services.postgres.image],
+    "tests/multitenant-e2e.test.mjs": integration,
+    "scripts/check-zammad-rails-load.mjs": zammad,
+    "tests/zammad-image-browser-compat.test.mjs": zammad,
+    "scripts/release/installer-dev-simulator.compose.yaml": [full["keycloak-bootstrap"].image],
+  };
+  const imageRef = /(?:^|[\s="'\x60])((?:postgres|redis|memcached|node):\d[\w.-]*(?:@sha256:[a-f0-9]+)?)(?=[\s"',;\x60]|$)/gmu;
+  for (const [path, images] of Object.entries(expected)) {
+    const pins = Array.from((await read(path)).matchAll(imageRef), ([, pin]) => pin);
+    assert.deepEqual(pins.sort(), [...images].sort(), path);
+  }
+});
+
 test("production ingress defaults to the chart services and still honors an operator allowlist", async () => {
   const dir = await mkdtemp(join(tmpdir(), "wasalx-ingress-"));
   try {
