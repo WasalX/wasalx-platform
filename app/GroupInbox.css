@@ -53,8 +53,4 @@
   .wx-group-list > ul { max-block-size: none; }
   .wx-group-messages p { font-size: var(--wx-font-size-4); }
 }
-.wx-inbox-switch { display: flex; flex-wrap: wrap; gap: var(--wx-space-2); margin-block-end: var(--wx-space-4); }
-.wx-inbox-switch [aria-pressed="true"] { border-color: var(--wx-color-accent); background: var(--wx-color-surface-selected); }
-@media (any-pointer: coarse) {
-  .wx-inbox-switch .wx-button { min-inline-size: 44px; min-block-size: 44px; }
-}
+.wx-inbox-switch { margin-block-end: var(--wx-space-4); }

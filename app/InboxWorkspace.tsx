@@ -13,9 +13,9 @@ export function InboxWorkspace({ mode, selectedGroup, selectedMessage = null, se
 }) {
   const { t } = useI18n();
   return <section aria-label={t("inbox.title")}>
-    <nav className="wx-inbox-switch" aria-label={t("inbox.workspace")}>
-      <button type="button" className="wx-button" aria-pressed={mode === "tickets"} onClick={() => selectMode("tickets")}>{t("inbox.conversations")}</button>
-      <button type="button" className="wx-button" aria-pressed={mode === "groups"} onClick={() => selectMode("groups")}>{t("inbox.groupConversations")}</button>
+    <nav className="tabs wx-inbox-switch" aria-label={t("inbox.workspace")}>
+      <button type="button" className={mode === "tickets" ? "active" : ""} aria-pressed={mode === "tickets"} onClick={() => selectMode("tickets")}>{t("inbox.conversations")}</button>
+      <button type="button" className={mode === "groups" ? "active" : ""} aria-pressed={mode === "groups"} onClick={() => selectMode("groups")}>{t("inbox.groupConversations")}</button>
     </nav>
     <div hidden={mode !== "tickets"}>
       <Inbox mutationHeaders={mutationHeaders} targetTicketNumber={selectedTicket} selectTicket={selectTicket}

@@ -623,10 +623,15 @@ try {
         await page.keyboard.press("Tab");
         await expect(groupsMode).toBeFocused();
         await expect(groupsMode).toHaveAttribute("aria-pressed", "true");
-        await expect(groupsMode).toHaveCSS("display", "flex");
-        await expect(groupsMode).toHaveCSS("align-items", "center");
         await expect(groupsMode).toHaveCSS("outline-width", "2px");
         await expect(groupsMode).toHaveCSS("outline-style", "solid");
+        // Inbox views are a one-line `.tabs` strip (DESIGN.md Tabs): inset focus ring, current view marked by colour and underline.
+        await expect(groupsMode).toHaveCSS("outline-offset", "-2px");
+        await expect(groupsMode).toHaveClass(/(^| )active( |$)/u);
+        const strip = await page.locator(".wx-inbox-switch").evaluate(nav => ({ height: nav.getBoundingClientRect().height,
+          tabs: [...nav.children].map(tab => ({ top: tab.getBoundingClientRect().top, color: getComputedStyle(tab).color })) }));
+        assert.ok(strip.tabs.length === 2 && strip.height <= 51 && Math.abs(strip.tabs[0].top - strip.tabs[1].top) <= 1
+          && strip.tabs[0].color !== strip.tabs[1].color, `${locale}:${theme}:${name}: inbox views are not a one-line tab strip: ${JSON.stringify(strip)}`);
         // Card actions (DESIGN.md): one row in reading order on desktop; an equal full-width stack at 760 px and below.
         const actionRows = await group().locator(".wx-group-messages button").evaluateAll((buttons, names) => [...new Set(buttons
           .filter(item => names.includes(item.textContent)).map(item => item.parentElement))].map(row => ({ rtl: getComputedStyle(row).direction === "rtl",
