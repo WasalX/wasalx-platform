@@ -131,7 +131,7 @@ Open an issue and follow the [merge rules](#branching-and-merging) for the PR to
 
 - Maintain Dependabot alerts, CodeQL, secret scanning with push protection, and private vulnerability reporting. Report vulnerabilities through the [security policy](SECURITY.md) and handle sensitive alerts privately.
 - Group Dependabot updates using [.github/dependabot.yml](.github/dependabot.yml). Hold stateful major upgrades for PostgreSQL, Elasticsearch, and Jaeger for a planned compatibility and data migration review. Apply the additional version holds in the configuration.
-- [Foundation PostgreSQL](Dockerfile.foundation-postgres) pins its PostgreSQL 18 packages separately from the Wolfi base digest so Dependabot can update the base. Its [CI image lane](.github/workflows/ci.yml) checks the PostgreSQL major, compares image contents, opens a volume initialized by the previous image, and verifies collation versions, index integrity, dump/restore and fresh initialization.
+- [Foundation PostgreSQL](Dockerfile.foundation-postgres) pins its PostgreSQL 18 and collation packages separately from the Wolfi base digest so Dependabot can update the base. Its [CI image lane](.github/workflows/ci.yml) checks the PostgreSQL major, compares image contents, opens a volume initialized by the previous image, and verifies collation versions, index integrity, dump/restore and fresh initialization.
 - Keep deploy secrets in the environment that uses them. Assign a rotation owner, rotate exposed credentials immediately, and rotate GitHub App private keys annually.
 - Follow the high and critical alert release criteria in [docs/release.md](docs/release.md).
 

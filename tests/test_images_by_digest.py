@@ -10,6 +10,7 @@ import json
 from pathlib import Path
 import re
 import runpy
+import shlex
 import sys
 import tarfile
 import tempfile
@@ -201,6 +202,23 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
                 else:
                     self.assertNotIn("contactEmailSha256", receipt)
                 self.assertNotIn("synthetic-contact", raw_receipt)
+
+    def test_foundation_postgres_apk_installs_only_exact_versions(self):
+        dockerfile = (ROOT / "Dockerfile.foundation-postgres").read_text(encoding="utf-8")
+        commands = [
+            shlex.split(command)
+            for line in images.instructions(dockerfile)
+            if line.startswith("RUN ")
+            for command in re.split(r"&&|\|\||;", line[4:])
+        ]
+        installs = [command[2:] for command in commands if command[:2] == ["apk", "add"]]
+        self.assertTrue(installs)
+        for args in installs:
+            packages = [arg for arg in args if arg != "--no-cache"]
+            self.assertTrue(packages)
+            for package in packages:
+                with self.subTest(package=package):
+                    self.assertRegex(package, r"^[a-z0-9_.+-]+=[0-9][a-zA-Z0-9_.+-]*-r[0-9]+$")
 
     def test_foundation_postgres_build_rejects_postgresql_19(self):
         row = {"image": "foundation-postgres", "dockerfile": "Dockerfile.foundation-postgres"}

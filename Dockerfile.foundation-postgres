@@ -8,7 +8,8 @@ ENV LANG=en_US.UTF-8 PGDATA=/var/lib/postgresql/data
 RUN apk add --no-cache \
       'postgresql-18=18.7-r1' 'postgresql-18-client=18.7-r1' 'postgresql-18-contrib=18.7-r1' \
       'postgresql-18-oci-entrypoint=18.7-r1' 'libpq-18=18.7-r1' 'pgaudit-18=18.1-r0' \
-      glibc-2.44-locale-en icu79-data-full posix-libc-utils-2.44 gosu \
+      'glibc-2.44-locale-en=2.44-r30' 'posix-libc-utils-2.44=2.44-r30' \
+      'icu79-data-full=79.1-r2' 'libicu79=79.1-r2' 'gosu=1.20-r1' \
     && addgroup -S -g 70 postgres \
     && adduser -S -D -h /home/postgres -s /sbin/nologin -u 70 -G postgres postgres \
     && install -d -m 0700 -o postgres -g postgres "$PGDATA" \

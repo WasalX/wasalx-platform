@@ -57,7 +57,8 @@ after=$(create_fixture --mount "$data_mount" "$candidate" -c listen_addresses=12
 containers+=("$after")
 
 inventory() {
-  docker export "$1" | tar -tf - | LC_ALL=C sort >"$scratch/$2.paths"
+  docker export "$1" | LC_ALL=C tar --numeric-owner -tvf - |
+    awk '{$3 = $4 = $5 = ""; print}' | LC_ALL=C sort >"$scratch/$2.files"
   docker cp "$1:/lib/apk/db/installed" - | tar -xOf - |
     awk '/^P:/ { name = substr($0, 3) } /^V:/ { print name "=" substr($0, 3) }' |
     LC_ALL=C sort >"$scratch/$2.packages"
@@ -68,7 +69,7 @@ inventory() {
 }
 inventory "$before" before
 inventory "$after" after
-for report in paths packages; do
+for report in files packages; do
   diff -u "$scratch/before.$report" "$scratch/after.$report" || [[ $? == 1 ]]
 done
 diff -u "$scratch/before.contract" "$scratch/after.contract"
@@ -120,6 +121,8 @@ SQL
 }
 
 start_fixture "$before"
+cluster_id=$(sql "$before" postgres -Atc 'SELECT system_identifier FROM pg_control_system()')
+[[ $cluster_id =~ ^[0-9]+$ ]]
 baseline=$(collations "$before")
 printf 'Baseline collation provider, locale and version:\n%s\n' "$baseline"
 [[ $baseline == c\|*en_US* && $baseline == *$'\ni|en-US-x-icu|'* ]]
@@ -127,15 +130,19 @@ docker stop --signal SIGINT --time 10 "$before" >/dev/null
 [[ $(docker inspect --format '{{.State.ExitCode}}' "$before") == 0 ]]
 
 start_fixture "$after"
+[[ $(sql "$after" postgres -Atc 'SELECT system_identifier FROM pg_control_system()') == "$cluster_id" ]]
+echo 'Candidate started on the same PostgreSQL cluster initialized by the previous image.'
 actual=$(collations "$after")
 printf 'Existing volume collation provider, locale and version:\n%s\n' "$actual"
 [[ $actual == "$baseline" ]]
 check_data "$after" image_compat
+echo 'amcheck passed on the existing volume text and ICU indexes.'
 test "$(sql "$after" image_compat -Atc "SELECT count(*) FROM pg_available_extensions WHERE name = 'pgaudit'")" = 1
 client "$after" pg_dump -Fc image_compat >"$scratch/image_compat.dump"
 client "$after" createdb image_restored
 client "$after" pg_restore --exit-on-error -d image_restored <"$scratch/image_compat.dump"
 check_data "$after" image_restored
+echo 'pg_dump/pg_restore round trip preserved rows and passed amcheck on both restored indexes.'
 
 fresh=$(create_fixture --mount type=volume,dst=/var/lib/postgresql/data "$candidate" -c listen_addresses=127.0.0.1)
 containers+=("$fresh")
