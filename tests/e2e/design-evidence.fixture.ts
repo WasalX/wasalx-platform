@@ -107,11 +107,13 @@ export async function captureTenantDesign(
         expect(references).not.toContain(false);
       }
       if (view === "overview" || view === "cases" || view === "groups") {
-        // A table's header band spans its whole scroll wrapper, with no empty scrollbar gutter at the inline end.
+        // A visible table header band spans its whole scroll wrapper, with no empty scrollbar gutter at the inline end.
+        // Phone cards keep their header row only for screen readers, clipped to 1 px.
         const shortfalls = await page.locator(".table-scroll").evaluateAll((wrappers) =>
           wrappers.flatMap((wrapper) => {
-            const row = wrapper.querySelector("thead tr")?.getBoundingClientRect();
-            return row && row.height > 0 ? [wrapper.getBoundingClientRect().width - row.width] : [];
+            const head = wrapper.querySelector("thead");
+            if (!head || head.getBoundingClientRect().height <= 1) return [];
+            return [wrapper.getBoundingClientRect().width - head.querySelector("tr")!.getBoundingClientRect().width];
           }),
         );
         if (testInfo.project.name === "desktop") expect(shortfalls.length).toBeGreaterThan(0);
