@@ -221,6 +221,46 @@ jq() { "$TEST_PYTHON" -c 'import json, sys; print(json.dumps(bool(json.load(sys.
                 images.build(row["image"], receipt)
             self.assertFalse(receipt.exists())
 
+    def test_zammad_redis_build_requires_the_compose_major_minor(self):
+        row = {"image": "zammad-redis", "dockerfile": "Dockerfile.zammad-redis"}
+        compose = f"services:\n  zammad-redis:\n    image: redis:8.19-alpine@sha256:{'a' * 64}\n".encode()
+        real_run = subprocess.run
+
+        def run_command(args, **kwargs):
+            if args[0] == "ruby":
+                return real_run(args, **kwargs)
+            if args[:2] == ("git", "log"):
+                return subprocess.CompletedProcess(args, 0, stdout="1794938086")
+            if args[:2] == ("docker", "run"):
+                self.assertEqual(args[-1], "--version")
+                self.assertEqual(args[args.index("--entrypoint") + 1], "redis-server")
+                return subprocess.CompletedProcess(args, 0, stdout=version)
+            with tarfile.open(args[5].removeprefix("--output="), "w") as archive:
+                archive.add(ROOT / row["dockerfile"], arcname=row["dockerfile"])
+                member = tarfile.TarInfo("compose.full.yaml")
+                member.size = len(compose)
+                archive.addfile(member, io.BytesIO(compose))
+
+        for version, matches in [
+            ("Redis server v=8.19.1 sha=00000000:0", True),
+            ("Redis server v=8.20.0 sha=00000000:0", False),
+            ("Redis server v=9.0.0 sha=00000000:0", False),
+        ]:
+            with self.subTest(version=version), tempfile.TemporaryDirectory() as directory, \
+                    patch.object(images, "catalog", return_value=[row]), \
+                    patch.object(images, "coordinates", return_value=("a" * 40, "b" * 40)), \
+                    patch.object(images.subprocess, "run", side_effect=run_command), \
+                    patch.object(images, "registry_output"), \
+                    patch.object(images, "inspect_image", return_value={}):
+                receipt = Path(directory) / "receipt.json"
+                if matches:
+                    images.build(row["image"], receipt)
+                    self.assertTrue(receipt.is_file())
+                else:
+                    with self.assertRaisesRegex(ValueError, r"zammad-redis must match Compose Redis 8\.19\.x"):
+                        images.build(row["image"], receipt)
+                    self.assertFalse(receipt.exists())
+
     def test_loaded_config_checks_exported_bytes_and_manifest_binding(self):
         raw = b'{"os":"linux","architecture":"amd64","config":{"Labels":{}}}'
         digest = images.sha256(raw)
@@ -335,6 +375,7 @@ set -- 'example=1.2.3'
         rows = images.matrix()["include"]
         narrow = {
             "Dockerfile.foundation-postgres": "foundation-postgres",
+            "compose.full.yaml": "zammad-redis",
             "app/page.tsx": "portal",
             "services/invitation-mailer/src/removed.ts": "invitation-mailer",
             "scripts/release/patch-keycloak-jackson.py": "foundation-keycloak",
@@ -571,6 +612,23 @@ set -- 'example=1.2.3'
                 source = (ROOT / path).read_text(encoding="utf-8")
                 self.assertIsNone(generated_archive.search(source),
                                   "Use a commit-pinned Git source or a checksum-pinned release asset")
+
+    def test_production_observability_source_versions_match_compose(self):
+        services = mirrors.load_compose((ROOT / mirrors.COMPOSE).read_bytes())["services"]
+        for image, service in (("otel", "otel-collector"), ("alertmanager", "alertmanager")):
+            with self.subTest(image=image):
+                tag = services[service]["image"].split("@", 1)[0].rsplit(":", 1)[1]
+                version = tag.removeprefix("v")
+                dockerfile = (ROOT / f"Dockerfile.production-{image}").read_text(encoding="utf-8")
+                if image == "otel":
+                    self.assertIn(f"\n  version: {version}\n", dockerfile)
+                    self.assertIn(f"\n  otelcol_version: {version}\n", dockerfile)
+                    self.assertIn(f'org.opencontainers.image.version="{version}"', dockerfile)
+                    components = re.findall(r"(?m)^\s*- gomod: \S+ v(\S+)$", dockerfile)
+                    self.assertEqual(set(components), {version})
+                else:
+                    self.assertIn(f"/releases/download/v{version}/alertmanager-web-ui-{version}.tar.gz ", dockerfile)
+                    self.assertIn(f"version.Version={version} ", dockerfile)
 
     def test_go_module_transport_is_scoped_to_the_build(self):
         for image in ("alertmanager", "cloudflared", "otel", "prometheus"):
