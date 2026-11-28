@@ -120,9 +120,8 @@ export async function captureTenantDesign(
         for (const shortfall of shortfalls) expect(shortfall).toBeLessThanOrEqual(1);
       }
       if (view === "groups") {
-        // The search shortcut hint names the modifier key this platform uses.
-        const apple = await page.evaluate(() => /Mac|iPhone|iPad/u.test(navigator.platform));
-        await expect(page.locator(".search kbd")).toHaveText(apple ? "⌘ K" : "Ctrl K");
+        // The search shortcut hint names a key every platform accepts, not the Mac-only Command key.
+        await expect(page.locator(".search kbd")).toHaveText("Ctrl K");
       }
       const screen = view === "overview" ? "shell" : view;
       await page.screenshot({

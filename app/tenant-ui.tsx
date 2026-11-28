@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { InlineConfirmation, ModalDialog } from "./ModalDialog";
 import { operatorFailureMessage, operatorLocalFailure } from "../lib/operator-ui.ts";
 import { useI18n, useRelativeClock } from "./I18nProvider";
@@ -254,8 +254,6 @@ export function DirtyCloseConfirmation({ guard }: { guard: ReturnType<typeof use
   );
 }
 
-const subscribeNever = () => () => {};
-
 export function Toolbar({
   query,
   setQuery,
@@ -267,9 +265,8 @@ export function Toolbar({
   placeholder: string;
   children?: React.ReactNode;
 }) {
+  const { t } = useI18n();
   const searchRef = useRef<HTMLInputElement>(null);
-  // The server cannot know the platform, so it renders Ctrl and Apple devices switch to Command after hydration.
-  const apple = useSyncExternalStore(subscribeNever, () => /Mac|iPhone|iPad/u.test(navigator.platform), () => false);
   useEffect(() => {
     const focusSearch = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLocaleLowerCase("en") === "k") {
@@ -291,7 +288,8 @@ export function Toolbar({
           onChange={(e) => setQuery(e.target.value)}
           placeholder={placeholder}
         />
-        <kbd aria-hidden="true">{apple ? "⌘ K" : "Ctrl K"}</kbd>
+        {/* The handler above accepts Ctrl+K on every platform, so one hint is true everywhere. */}
+        <kbd aria-hidden="true">{t("common.shortcut.search")}</kbd>
       </label>
       {children}
     </div>
