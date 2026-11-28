@@ -1288,12 +1288,20 @@ test("Successful owner fixture shards retain every named journey PNG", async t =
 
   for (const locale of ["en", "ar"]) {
     const viewports = ["desktop", "mobile-390"];
+    const responsiveShellPaths = ["light", "dark"].flatMap(theme => [
+      `tenant-shell-menu-open-mobile-390-${theme}-${locale}.png`,
+      `tenant-shell-collapsed-rail-tablet-820-${theme}-${locale}.png`,
+    ].map(name => `output/playwright/journey-captures/${name}`));
     const allPaths = journeyCapturePaths(locale);
     assert.deepEqual(viewports.flatMap(viewport => journeyCapturePaths(locale, viewport)).sort(), allPaths.sort());
     assert.equal(new Set(allPaths).size, allPaths.length);
     for (const viewport of viewports) {
       const paths = journeyCapturePaths(locale, viewport);
       assert(paths.length > 1);
+      assert.deepEqual(
+        paths.filter(path => responsiveShellPaths.includes(path)).sort(),
+        viewport === "desktop" ? responsiveShellPaths.toSorted() : [],
+      );
       for (const path of paths) {
         await mkdir(join(directory, posix.dirname(path)), { recursive: true });
         await writeFile(join(directory, path), "synthetic capture");
@@ -1305,12 +1313,12 @@ test("Successful owner fixture shards retain every named journey PNG", async t =
       assert.equal(complete.status, 0, complete.stderr);
       assert.equal(await readFile(output, "utf8"), `paths<<CAPTURES\n${paths.join("\n")}\nCAPTURES\n`);
 
-      const [first] = paths;
-      await rename(join(directory, first), join(directory, first.replace(/\.png$/u, "-renamed.png")));
+      const missing = viewport === "desktop" ? responsiveShellPaths[0] : paths[0];
+      await rename(join(directory, missing), join(directory, missing.replace(/\.png$/u, "-renamed.png")));
       await rm(output);
       const partial = runWorkflowScript(verify.run, env, directory);
       assert.equal(partial.status, 1, partial.stderr);
-      assert(partial.stderr.includes(first), partial.stderr);
+      assert(partial.stderr.includes(missing), partial.stderr);
       await assert.rejects(readFile(output), { code: "ENOENT" });
     }
   }
