@@ -348,14 +348,12 @@ export function registerRoutingBotActionJourneys(
       const run = card.getByRole("button", {
         name: t("routing.sources.qualify"),
       });
-      const notice = page
-        .getByRole("status")
-        .getByText(
-          t("routing.notice.qualificationRequested", {
-            source: directory.name,
-          }),
-          { exact: true },
-        );
+      const requested = t("routing.notice.qualificationRequested", {
+        source: directory.name,
+      });
+      const notice = page.getByRole("status").getByText(requested, {
+        exact: true,
+      });
       const notRun = card.getByText(t("routing.sources.qualificationNotRun"), {
         exact: true,
       });
