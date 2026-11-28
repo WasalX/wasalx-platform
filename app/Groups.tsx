@@ -218,7 +218,7 @@ export function Groups({
         {selected.size && canToggle ? <div className="bulk-action-bar" role="region" aria-label={t("tenant.group.bulk.actionsLabel")}><span><b>{t("tenant.group.bulk.selected", { count: formatNumber(selected.size, locale) })}</b><small>{t("tenant.group.bulk.selectionSummary", { active: formatNumber(selectedRows.filter((row) => Boolean(row.enabled)).length, locale), paused: formatNumber(selectedRows.filter((row) => !row.enabled).length, locale) })}</small>{bulkSelectionTooLarge?<small className="danger-text" role="status">{t("tenant.group.bulk.limit", { count: formatNumber(100, locale) })}</small>:selectedActivationCodes.length?<small className="danger-text">{t("tenant.group.bulk.notReady")}</small>:null}</span><div><button className="button small secondary" onClick={() => setSelected(new Set())}>{t("tenant.group.bulk.clear")}</button><button className="button small secondary" disabled={bulkSelectionTooLarge} onClick={() => setBulkAction(false)}>{t("tenant.group.bulk.pauseSelectedOpen")}</button><button className="button small primary" disabled={bulkSelectionTooLarge||selectedActivationCodes.length>0} onClick={() => setBulkAction(true)}>{t("tenant.group.bulk.activateSelectedOpen")}</button></div></div> : null}
         {bulkFeedback ? <div className={`bulk-feedback ${bulkFeedback.tone}`} role={bulkFeedback.tone === "error" ? "alert" : "status"}><span>{bulkFeedback.tone === "success" ? "✓" : "!"}</span><p>{bulkFeedback.message}</p><button className="text-button" aria-label={t("tenant.group.bulk.dismissLabel")} onClick={() => setBulkFeedback(null)}>{t("tenant.connection.dismiss")}</button></div> : null}
         <WideTable>
-          <table>
+          <table className="stacked-table group-table">
             <thead>
               <tr>
                 {canToggle ? <th className="select-column"><label><input type="checkbox" checked={allVisibleSelected} aria-label={t(allVisibleSelected ? "tenant.group.selection.clearVisible" : "tenant.group.selection.selectVisible")} onChange={toggleVisible} /></label></th> : null}
@@ -244,16 +244,16 @@ export function Groups({
                       </span>
                     </div>
                   </td>
-                  <td>
+                  <td data-label={t("tenant.group.columns.destination")}>
                     <span className="tag"><bdi dir="auto">{(() => {
                       return groupDestination(row.zammad_group, t);
                     })()}</bdi></span>
                   </td>
-                  <td>
+                  <td data-label={t("tenant.group.columns.rule")}>
                     <b><bdi dir="auto">{String(row.rule_name) === "Not configured" ? t("tenant.group.destinationNotConfigured") : String(row.rule_name)}</bdi></b>
                   </td>
-                  <td>{row.members === null ? <span title={t("tenant.group.membersUnavailable")}>—</span> : Number.isFinite(Number(row.members)) ? formatNumber(Number(row.members), locale) : <bdi dir="auto">{String(row.members)}</bdi>}</td>
-                  <td><RelativeTime value={row.last_message_at} pastOnly/></td>
+                  <td data-label={t("tenant.group.columns.members")}>{row.members === null ? <span title={t("tenant.group.membersUnavailable")}>—</span> : Number.isFinite(Number(row.members)) ? formatNumber(Number(row.members), locale) : <bdi dir="auto">{String(row.members)}</bdi>}</td>
+                  <td data-label={t("tenant.group.columns.lastMessage")}><RelativeTime value={row.last_message_at} pastOnly/></td>
                   <td>
                     <div className="group-activation-control">
                     <button
