@@ -25,21 +25,13 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - name: Mask the pull request opener
-        if: github.event_name == 'pull_request'
-        run: |
-          # The runner logs step environment values before executing the shell.
-          opener=$(jq -r '.pull_request.user.login // empty' "$GITHUB_EVENT_PATH")
-          if [[ -n "$opener" ]]; then
-            printf '::add-mask::%s\n' "$opener"
-          fi
       - name: Require an allowed pull request opener
         if: github.event_name == 'pull_request'
         env:
-          PR_OPENER: ${{ github.event.pull_request.user.login }}
           PR_OPENER_ALLOWLIST: ${{ vars.PR_OPENER_ALLOWLIST || 'tree-publisher[bot],dependabot[bot]' }}
         run: |
-          if [[ -z "$PR_OPENER" ]] || ! tr ',[:space:]' '\n' <<< "$PR_OPENER_ALLOWLIST" | grep -Fx -- "$PR_OPENER" >/dev/null; then
+          opener=$(jq -r '.pull_request.user.login // empty' "$GITHUB_EVENT_PATH" 2>/dev/null) || opener=
+          if [[ -z "$opener" ]] || ! tr ',[:space:]' '\n' <<< "$PR_OPENER_ALLOWLIST" | grep -Fx -- "$opener" >/dev/null; then
             echo '::error::PR opener allowlist rule failed.'
             exit 1
           fi
