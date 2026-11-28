@@ -173,7 +173,20 @@ test("app source has no fullwidth plus, which has no glyph in the app fonts, and
   assert.match(icon, /plus: "M12 5v14M5 12h14"/u);
   assert.match(icon, /aria-hidden="true"/u);
   for (const [name, source] of Object.entries({ app, rules, team, settings })) assert.match(source, /<MarketingIcon name="plus" ?\/>/u, `${name} uses the shared plus icon`);
-  assert.match(globals, /:is\(\.connect-number-action,\.icon-action\)>\.marketing-icon\{inline-size:var\(--wx-icon-size-inline\);block-size:var\(--wx-icon-size-inline\)/u);
+  assert.match(globals, /:is\(\.connect-number-action,\.icon-action,\.nav-icon\)>\.marketing-icon\{inline-size:var\(--wx-icon-size-inline\);block-size:var\(--wx-icon-size-inline\)/u);
+});
+
+test("every sidebar navigation item has its own shared line icon, never a text glyph", async () => {
+  const [icon, app, globals] = await Promise.all(["app/MarketingIcon.tsx", "app/WasalXApp.tsx", "app/globals.css"].map(read));
+  const nav = app.match(/const NAV = \[([\s\S]*?)\] as const;/u)?.[1];
+  assert.ok(nav, "WasalXApp.tsx declares NAV");
+  const items = [...nav.matchAll(/\["([^"]+)", "[^"]+", "([^"]*)"\]/gu)].map(([, id, name]) => ({ id, name }));
+  assert.equal(items.length, nav.match(/\[/gu).length, "every NAV entry is an [id, label key, icon name] triple");
+  const lineIcons = new Set([...icon.matchAll(/^ {2}([a-z]+): "[Mm]/gmu)].map(([, name]) => name));
+  for (const { id, name } of items) assert.ok(lineIcons.has(name), `${id} uses a MarketingIcon line icon, not the text glyph "${name}"`);
+  assert.equal(new Set(items.map(({ name }) => name)).size, items.length, "each navigation item has a distinct icon");
+  assert.match(app, /<span className="nav-icon"><MarketingIcon name=\{icon\} \/><\/span>/u, "navigation renders the shared aria-hidden icon");
+  assert.match(globals, /\[dir="rtl"\] \.marketing-icon-send\{transform:scaleX\(-1\)\}/u, "the direction-bearing send icon mirrors in Arabic");
 });
 
 test("every app stylesheet uses color, type, radius, elevation and spacing tokens", async () => {
