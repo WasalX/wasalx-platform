@@ -401,6 +401,7 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
   const template = { id: "341", name: "order_update", language: "ar", text: "طلب {{1}}",
     parameterCount: 1, semanticSha256: "a".repeat(64) };
   const templateDeliveryId = "14000000-0000-4000-8000-000000000098";
+  const templateWindowExpiry = "2020-01-01T00:00:00.000Z";
   const earlierDeliveryId = "14000000-0000-4000-8000-000000000097";
   try {
     const replyPreviewPath = "/internal/v1/zammad/reply-preview";
@@ -505,7 +506,7 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
         delivery_retry_requires_confirmation: false, last_heartbeat_at: "2026-08-20T10:04:00.000Z",
         last_provider_event_at: "2026-08-20T10:03:00.000Z", delivery_updated_at: "2026-08-20T10:03:00.000Z",
         ...(url.pathname === `/internal/v1/zammad/tickets/${state.templateTicketId}/context` ? {
-          provider: "META", bot_state: "HUMAN", service_window_expires_at: "2020-01-01T00:00:00.000Z",
+          provider: "META", bot_state: "HUMAN", service_window_expires_at: templateWindowExpiry,
           // An unrelated older send updates the general panel while the
           // selected template is still queued.
           delivery_id: state.templateToken ? earlierDeliveryId : null,
@@ -1937,7 +1938,7 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
       const panel = await panelResponse.json();
       assert.equal(panel.connection.provider, 'META');
       assert.equal(panel.ticket.bot_state, 'HUMAN');
-      assert.equal(Date.parse(panel.service_window_expires_at), Date.parse('2020-01-01T00:00:00.000Z'));
+      assert.equal(Date.parse(panel.service_window_expires_at), Date.parse(templateWindowExpiry));
       await page.getByRole('heading', { name: templateTitle, exact: true }).first().waitFor({ state: 'visible' });
       const stateField = page.getByRole('combobox', { name: stateLabel, exact: true });
       if (!(await stateField.isVisible())) await page.getByRole('button', { name: sidebar, exact: true }).click();
@@ -2395,6 +2396,79 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
 
     for (const scenario of scenarios.slice(1)) legacyGrantUiProofs.push(await proveNativeQueueGrant(scenario));
     await setNativeLocale(bootstrapEmail, "en-us");
+    const captureDirectory = join(evidenceDirectory, "agent-panel");
+    await mkdir(captureDirectory, { recursive: true });
+    const captureAgentPanel = async (capturePage, scenario) => {
+      const locale = scenario.locale === "ar" ? "ar" : "en";
+      const arabic = locale === "ar";
+      const viewport = scenario.mobile ? "mobile-390" : "desktop";
+      const app = scenario.mobile ? "mobile" : "desktop";
+      const operationsLabel = arabic ? "عمليات WasalX" : "WasalX operations";
+      const panel = capturePage.locator('[data-test-id="wasalx-ticket-panel"]');
+      const windowLine = capturePage.locator('[data-test-id="wasalx-service-window"]');
+      const openPanel = async (ticketId) => {
+        const panelRoute = scenario.mobile ? "/information/whatsapp-groups" : "";
+        await capturePage.goto(`${zammadOrigin}/${app}/tickets/${ticketId}${panelRoute}`, { waitUntil: "domcontentloaded" });
+        if (!scenario.mobile) {
+          await capturePage.getByRole("button", { name: arabic ? "تذكرة" : "Ticket", exact: true }).click();
+          await capturePage.getByRole("button", { name: operationsLabel, exact: true }).click();
+        }
+        await panel.waitFor();
+        assert.deepEqual(await capturePage.evaluate(() => ({
+          lang: document.documentElement.lang,
+          dir: document.documentElement.dir,
+          width: innerWidth,
+        })), { lang: scenario.locale, dir: arabic ? "rtl" : "ltr", width: scenario.viewport.width });
+      };
+      const capture = async (screen, target) => {
+        let lightBackground;
+        for (const theme of ["light", "dark"]) {
+          await capturePage.emulateMedia({ colorScheme: theme });
+          if (!scenario.mobile) {
+            await capturePage.locator(`html[data-theme="${theme}"]`).waitFor();
+          }
+          await target.scrollIntoViewIfNeeded();
+          const background = await panel.evaluate((element) => getComputedStyle(element).backgroundColor);
+          if (theme === "light") lightBackground = background;
+          else assert.notEqual(background, lightBackground, `${screen} must render both panel themes`);
+          const path = join(captureDirectory, `${screen}-${viewport}-${theme}-${locale}.png`);
+          const png = await capturePage.screenshot({ path, animations: "disabled" });
+          assert.ok(png.length > 0, `Empty screenshot for ${screen}/${viewport}/${theme}/${locale}`);
+        }
+      };
+
+      await openPanel(state.ticketId);
+      const trigger = capturePage.getByRole("link", {
+        name: arabic ? "عرض الرسالة التي أنشأت التذكرة" : "Show triggering message",
+        exact: true,
+      });
+      assert.equal(await windowLine.count(), 0, "The group fixture has no direct customer-service window");
+      await capture("zammad-group-ticket-panel", trigger);
+
+      const minute = 60_000;
+      for (const [windowState, minutesAfterExpiry] of [["open", -90], ["closing", -30], ["closed", 1]]) {
+        // Freeze Date before mounting so the panel derives the state while native timers keep running.
+        await capturePage.clock.setFixedTime(Date.parse(templateWindowExpiry) + minutesAfterExpiry * minute);
+        await openPanel(state.templateTicketId);
+        await capturePage.getByText(arabic ? "دعم بشري" : "Human support", { exact: true }).waitFor();
+        const value = windowLine.locator(`[data-state="${windowState}"]`);
+        await capture(`zammad-direct-window-${windowState}`, value);
+      }
+
+      const templateAction = capturePage.getByRole("button", {
+        name: arabic ? "إرسال قالب واتساب" : "Send WhatsApp template", exact: true,
+      });
+      if (!scenario.mobile) {
+        const bubble = capturePage.getByText(templateArticle, { exact: true }).last()
+          .locator("xpath=ancestor::div[contains(@class, 'group/article')][1]");
+        await bubble.hover();
+        await bubble.getByRole("button", { name: arabic ? "الرد عبر واتساب" : "Reply on WhatsApp", exact: true }).click();
+        // The desktop action belongs to the current reply form's closed-window message list.
+        await capturePage.locator('#ticketArticleReplyForm ul:has([id$="-wasalxServiceWindowClosed"]) > li')
+          .getByRole("button", { name: arabic ? "إرسال قالب واتساب" : "Send WhatsApp template", exact: true }).waitFor();
+      }
+      await capture("zammad-direct-template-action", templateAction);
+    };
     const followLatestProofs = [];
     for (const [index, scenario] of scenarios.entries()) {
       await setNativeLocale(agentEmail, scenario.locale);
@@ -2499,6 +2573,9 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
           returnToLatest: true, outboundMutations: 0, readCursorMutations: mutations.length };
         followLatestProofs.push(proof);
         await writeFile(join(evidenceDirectory, `native-groups-${scenario.name}.json`), JSON.stringify(proof, null, 2));
+        phase = "agent-panel-captures";
+        await matrixPage.setViewportSize(scenario.viewport);
+        await captureAgentPanel(matrixPage, scenario);
       } catch (error) {
         await matrixPage.screenshot({ path: join(evidenceDirectory, `native-groups-${scenario.name}-failure.png`), fullPage: false }).catch(() => undefined);
         await writeFile(join(evidenceDirectory, `native-groups-${scenario.name}-failure.json`), JSON.stringify({ ...scenario, phase, samples, error: String(error) }, null, 2));
