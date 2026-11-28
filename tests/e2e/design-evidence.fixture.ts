@@ -77,21 +77,17 @@ export async function captureTenantDesign(
       }
       if (view === "groups") {
         const table = page.locator(".table-scroll").filter({ has: ready.groups });
-        // A chip's label stays inside its pill at every width.
+        // A chip is one pill that holds its whole label and stays inside its cell, at every width.
         const spilledChips = await table.locator(".tag").evaluateAll((tags) =>
           tags
             .filter((tag) => {
-              if (tag.getClientRects().length !== 1) return true;
               const box = tag.getBoundingClientRect();
-              const range = document.createRange();
-              range.selectNodeContents(tag);
-              return [...range.getClientRects()].some(
-                (line) =>
-                  line.width > 0 &&
-                  (line.left < box.left - 1 ||
-                    line.right > box.right + 1 ||
-                    line.top < box.top - 1 ||
-                    line.bottom > box.bottom + 1),
+              const cell = tag.closest("td")!.getBoundingClientRect();
+              return (
+                tag.getClientRects().length !== 1 ||
+                tag.scrollWidth > tag.clientWidth + 1 ||
+                box.left < cell.left - 1 ||
+                box.right > cell.right + 1
               );
             })
             .map((tag) => (tag as HTMLElement).innerText),
