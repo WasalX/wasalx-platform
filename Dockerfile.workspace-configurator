@@ -8,14 +8,16 @@ ENV XDG_CACHE_HOME=/pnpm/cache
 RUN corepack enable && corepack prepare pnpm@11.16.0 --activate
 WORKDIR /workspace
 COPY infra/docker/pnpm.npmrc ./.npmrc
-WORKDIR /workspace/services/workspace-configurator
-COPY services/workspace-configurator/package.json services/workspace-configurator/pnpm-lock.yaml ./
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY patches ./patches
+COPY services/workspace-configurator/package.json ./services/workspace-configurator/package.json
 RUN --mount=type=cache,id=wasalx-pnpm-v11,target=/pnpm/store,sharing=locked \
     --mount=type=cache,id=pnpm-metadata,target=/pnpm/cache,sharing=locked \
     test "$(pnpm --version)" = "11.16.0" \
-    && pnpm install --frozen-lockfile --ignore-workspace --prefer-offline
+    && pnpm install --frozen-lockfile --prefer-offline --filter @wasalx/workspace-configurator...
 
 FROM dependencies AS build
+WORKDIR /workspace/services/workspace-configurator
 COPY tsconfig.json /workspace/tsconfig.json
 COPY services/workspace-configurator/tsconfig.json ./tsconfig.json
 COPY services/workspace-configurator/src ./src
