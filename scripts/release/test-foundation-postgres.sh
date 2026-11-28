@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Last foundation-postgres base before the Wolfi switch.
-previous=cgr.dev/chainguard/postgres@sha256:9cc085289d7ef0174f35f2ff1e514624c3305c4a26215d8e89e3e2777d03
+previous=cgr.dev/chainguard/postgres:latest@sha256:9cc085289d7ef0174f35f2ff1e514624c3305c4a26215d8e89e3e277e3377d03
 candidate=$1
 scratch=$(mktemp -d)
 volume=
