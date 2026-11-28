@@ -42,6 +42,8 @@
       "services/connector-worker/src/meta-managed-funding*.ts",
       "services/connector-worker/src/meta-template-preparation*.ts",
       "services/connector-worker/src/routing-sync-*.ts",
+      "services/connector-worker/src/waha-rollout-preflight-bootstrap.ts",
+      "services/connector-worker/src/waha-rollout-preflight.ts",
       "services/connector-worker/src/waha-worker-registry*.ts",
       "services/control-api/src/*credential*.ts",
       "services/control-api/src/invitation-token.service.ts",

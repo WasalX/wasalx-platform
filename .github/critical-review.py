@@ -147,15 +147,11 @@ def pr_snapshot(endpoint, number):
     return commit_sha(pr["head"]["sha"]), pr["base"]["ref"], commit_sha(pr["base"]["sha"]), count
 
 
-def changed_paths(endpoint, number, head, branch, expected_base):
+def changed_paths(endpoint, number, head, branch):
     snapshot = pr_snapshot(endpoint, number)
-    live_head, live_branch, live_base, count = snapshot
-    if (
-        live_head != head
-        or live_branch != branch
-        or (expected_base is not None and live_base != expected_base)
-    ):
-        raise ValueError(f"PR #{number} no longer matches the event's head or base")
+    live_head, live_branch, _, count = snapshot
+    if live_head != head or live_branch != branch:
+        raise ValueError(f"PR #{number} no longer matches the event's head or target branch")
     pages = github("--paginate", "--slurp", f"{endpoint}/files?per_page=100")
     files = [file for page in pages for file in page]
     paths = {file["filename"] for file in files}
@@ -227,14 +223,7 @@ def check(event_name, event, repository, ref, candidate, base):
         event_name, event, repository, ref, commit_sha(candidate), commit_sha(base)
     )
     reviewer_ids, patterns = load_policy(repo, base)
-    paths = changed_paths(
-        f"{repo}/pulls/{number}",
-        number,
-        head,
-        branch,
-        # PR reruns keep the event's policy and head even when the base branch advances.
-        base if event_name == "merge_group" else None,
-    )
+    paths = changed_paths(f"{repo}/pulls/{number}", number, head, branch)
     critical = {
         path for path in paths if any(pattern.fullmatch(path) for pattern in patterns)
     }

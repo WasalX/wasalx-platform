@@ -1463,7 +1463,7 @@ test("critical review uses the base policy and checks PR and queue verdicts", as
   const stale = /changed critical paths/u;
   const malformed = /malformed verdict/u;
   const apiError = /Critical review gate failed/u;
-  const moved = /no longer matches the event's head or base/u;
+  const moved = /no longer matches the event's head or target branch/u;
   const cases = [
     ["docs only with no comment API call", { files: [docs], failure: "comments" }],
     ["webhook ingress change missing a verdict", { comments: [], expected: missing }],
@@ -1507,7 +1507,7 @@ test("critical review uses the base policy and checks PR and queue verdicts", as
     ["docs-only queue entry ignores earlier entries", { queue: true, files: [docs], failure: "comments" }],
     ["unresolvable queue ref", { queue: true, badRef: true, expected: /Merge-group ref/u }],
     ["stale queue entry", { queue: true, staleEntry: true, expected: /merge-group candidate/u }],
-    ["queue rejects a live PR base that differs from the candidate", { queue: true, liveBase: reviewed, expected: moved }],
+    ["queue accepts a stale REST base when the queue entry matches", { queue: true, liveBase: reviewed }],
     ["incomplete base installation fails closed", { override: { [baseDirectory]: installed.slice(0, 1) }, expected: 1 }],
   ];
   for (const [name, input] of cases) await t.test(name, () => run(input));
@@ -1525,6 +1525,8 @@ test("critical review uses the base policy and checks PR and queue verdicts", as
     "packages/core/src/meta-signup.ts",
     "packages/core/src/meta-template-inventory.ts",
     "packages/core/src/meta-test-phone-policy.ts",
+    "services/connector-worker/src/waha-rollout-preflight-bootstrap.ts",
+    "services/connector-worker/src/waha-rollout-preflight.ts",
     "services/control-api/src/meta-account-policy.ts",
     "services/control-api/src/meta-account-transition.ts",
     "services/control-api/src/meta-add-access-activation.ts",
