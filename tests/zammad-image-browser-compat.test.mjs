@@ -2406,9 +2406,7 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
       const operationsLabel = arabic ? "عمليات WasalX" : "WasalX operations";
       // Zammad strips Vue template test IDs from the production image.
       const panel = capturePage.locator("[data-wasalx-ticket-sidebar]");
-      const windowLine = capturePage.getByText(arabic ? "نافذة خدمة العملاء" : "Customer-service window", {
-        exact: true,
-      }).locator("..");
+      const operations = panel.locator("..");
       const openPanel = async (ticketId) => {
         const panelRoute = scenario.mobile ? "/information/whatsapp-groups" : "";
         await capturePage.goto(`${zammadOrigin}/${app}/tickets/${ticketId}${panelRoute}`, { waitUntil: "domcontentloaded" });
@@ -2445,17 +2443,16 @@ test("package upgrade, route, and group workspace operate in the immutable Zamma
         name: arabic ? "عرض الرسالة التي أنشأت التذكرة" : "Show triggering message",
         exact: true,
       });
-      assert.equal(await windowLine.count(), 0, "The group fixture has no direct customer-service window");
+      assert.equal(await operations.locator("dd[data-state]").count(), 0, "The group fixture has no direct customer-service window");
       await capture("zammad-group-ticket-panel", trigger);
 
       const minute = 60_000;
       await capturePage.clock.install({ time: Date.parse(templateWindowExpiry) - 90 * minute });
       await openPanel(state.templateTicketId);
-      await capturePage.getByText(arabic ? "دعم بشري" : "Human support", { exact: true }).waitFor();
       for (const [windowState, elapsedMinutes] of [["open", 0], ["closing", 60], ["closed", 31]]) {
         // Fast-forward fires the panel's clock interval without replaying every poll.
         if (elapsedMinutes) await capturePage.clock.fastForward(elapsedMinutes * minute);
-        const value = windowLine.locator(`dd[data-state="${windowState}"]`);
+        const value = operations.locator(`dd[data-state="${windowState}"]`);
         await capture(`zammad-direct-window-${windowState}`, value);
       }
 
