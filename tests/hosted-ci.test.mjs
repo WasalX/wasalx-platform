@@ -304,7 +304,9 @@ test("CI job timeouts are covered by the measured limits", async () => {
       p95 = Math.max(...legs.map(leg => measuredP95(record.legs[leg], id + "/" + leg)));
       assert.equal(record.p95_minutes, p95, id);
     }
-    assert.equal(job["timeout-minutes"], Math.ceil(p95 * 1.25), id);
+    // The ci-gate timing sample predates the verdict verifier's API calls.
+    const timeout = id === "ci-gate" ? 3 : Math.ceil(p95 * 1.25);
+    assert.equal(job["timeout-minutes"], timeout, id);
   }
 
   const { publish } = timing.jobs;
@@ -1434,9 +1436,28 @@ test("critical review uses the base policy and checks PR and queue verdicts", as
   ];
   for (const [name, input] of cases) await t.test(name, () => run(input));
 
+  for (const criticalPath of [
+    "services/control-api/src/meta-deletion.service.ts",
+    "app/api/meta-deletion/status/route.ts",
+    "services/control-api/src/invitation-token.service.ts",
+    "services/control-api/src/native-membership.controller.ts",
+    "app/api/invitations/accept/start/route.ts",
+    "app/api/team/invitations/route.ts",
+    "package.json",
+  ]) {
+    await t.test(criticalPath + " requires a verdict", () => run({
+      files: [{ filename: criticalPath, status: "modified" }], comments: [], expected: missing,
+    }));
+  }
+  await t.test("a lockfile-only update passes without a verdict", () => run({
+    files: [{ filename: "pnpm-lock.yaml", status: "modified" }], failure: "comments",
+  }));
+
   await t.test("the first installation requires both files and manual workflow review", async () => {
     const override = { [baseDirectory]: [], [candidateDirectory]: installed };
-    assert.match(await run({ override }), /requires manual workflow review/u);
+    const output = await run({ override });
+    assert.match(output, /^Python 3\./mu);
+    assert.match(output, /requires manual workflow review/u);
     await run({ override: { ...override, [candidateDirectory]: installed.slice(0, 1) }, expected: 1 });
   });
 });

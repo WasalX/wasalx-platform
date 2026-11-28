@@ -64,11 +64,18 @@ Live-provider qualification is a separate release milestone.
 
 ## Critical paths
 
-The [critical-path configuration](.github/critical-paths.json) maps the review classes to WasalX paths. Follow the [independent review procedure](DELIVERY.md#branching-and-merging) for critical changes, including changes that delete, skip, or weaken coverage. The server is the exposure boundary for personal data. Displaying fields an API already returns does not by itself require review.
+Critical changes get one independent full-diff review at the exact head. Tests verify fixes for findings. See the [review procedure](DELIVERY.md#branching-and-merging) and the [CI-enforced path list](.github/critical-paths.json). An unlisted change still requires review if it falls in a critical class.
+
+- **Production** covers production configuration, deploys, and production data.
+- **Secrets and credentials** includes how secrets are stored, read, scoped, or rotated, including the secret sidecar and token helpers.
+- **Real people's or customer data** includes migrations, deletion and retention, audit logs and history, backups and restore, sign-in and permissions, and personal data an API response, export, or outbound message carries. The server is the exposure boundary for personal data. Displaying fields an API already returns does not by itself require review.
+- **Making anything public** covers publishing artifacts or project material and the checks that prevent accidental publication.
+- **Hosts, networks, and firewalls** includes host, network, and access-control configuration.
+- **Repo settings, branch protection, and release gates** includes rulesets, required checks, CI and release scripts, the privacy deny check, source-gate settings, and deleting, skipping, or weakening a test. Every change to `package.json` needs a verdict because it contains source-gate settings.
 
 WasalX records no safety-critical domain rules.
 
-Everything else, such as features, fixes, docs, `DESIGN.md`, UI, added or changed tests, dependency changes, and refactors, gets no review. The thread that made the change opens its own PR and merges it once required CI is green.
+Everything else, such as features, fixes, docs, `DESIGN.md`, UI, added or changed tests, lockfile-only dependency updates, and refactors, gets no review. The thread that made the change opens its own PR and merges it once required CI is green.
 
 ## Data safety
 

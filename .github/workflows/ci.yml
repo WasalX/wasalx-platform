@@ -1065,7 +1065,7 @@ jobs:
     if: always() && github.event_name != 'push'
     needs: [changes, workflow-lint, storybook, privacy, dependency-review, checks, full-unit, images, pr-images, installer-portal, integration, portal-integration, application-e2e, platform-operator-e2e, keycloak-identity, integration-coverage, infra-validate, dev-install-dryrun, zammad-compatibility]
     runs-on: ubuntu-slim
-    timeout-minutes: 1
+    timeout-minutes: 3
     permissions:
       contents: read
       pull-requests: read
@@ -1172,7 +1172,8 @@ jobs:
           expected='file:critical-paths.json file:critical-review.py'
           base_files=$(review_files "$REVIEW_BASE")
           if [[ -z "$base_files" ]]; then
-            # The first installation goes through the manual workflow-file review.
+            # Verify the slim runner before the first installation makes the verifier active.
+            python3 --version
             candidate_files=$(review_files "$GITHUB_SHA")
             test "$candidate_files" = "$expected"
             echo 'Critical-path policy installation requires manual workflow review.'
