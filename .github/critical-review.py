@@ -159,8 +159,12 @@ def changed_paths(endpoint, number, head, expected_base):
         or len(files) != snapshot[2]
         or pr_snapshot(endpoint, number) != snapshot
     ):
-        raise ValueError(f"PR #{number} changed-file snapshot is incomplete or has moved")
-    paths.update(file["previous_filename"] for file in files if file["status"] == "renamed")
+        raise ValueError(
+            f"PR #{number} changed-file snapshot is incomplete or has moved"
+        )
+    paths.update(
+        file["previous_filename"] for file in files if file["status"] == "renamed"
+    )
     if any(
         not isinstance(path, str)
         or "\0" in path
@@ -224,7 +228,9 @@ def check(event_name, event, repository, ref, candidate, base):
         head,
         base if event_name == "pull_request" else None,
     )
-    critical = {path for path in paths if any(pattern.fullmatch(path) for pattern in patterns)}
+    critical = {
+        path for path in paths if any(pattern.fullmatch(path) for pattern in patterns)
+    }
     if not critical:
         print(f"PR #{number} changes no listed critical paths.")
         return
@@ -250,5 +256,11 @@ if __name__ == "__main__":
             os.environ["GITHUB_SHA"],
             os.environ["REVIEW_BASE"],
         )
-    except (KeyError, TypeError, ValueError, OSError, subprocess.SubprocessError) as exc:
+    except (
+        KeyError,
+        TypeError,
+        ValueError,
+        OSError,
+        subprocess.SubprocessError,
+    ) as exc:
         sys.exit(f"Critical review gate failed: {exc}")
