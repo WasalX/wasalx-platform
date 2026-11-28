@@ -98,7 +98,7 @@ export function loadConfiguratorConfig(
 
   if (action === "package") {
     const packageVersion = required(environment, "WASALX_PACKAGE_VERSION");
-    if (packageVersion !== "0.5.90") fail("PACKAGE_VERSION_UNSUPPORTED");
+    if (packageVersion !== "0.5.91") fail("PACKAGE_VERSION_UNSUPPORTED");
 
     const packageSha256 = required(environment, "WASALX_PACKAGE_SHA256").toLowerCase();
     if (!SHA256.test(packageSha256)) fail("PACKAGE_SHA256_INVALID");
@@ -108,7 +108,7 @@ export function loadConfiguratorConfig(
       zammadToken: credential(environment, "ZAMMAD_SERVICE_TOKEN"),
       packageVersion,
       packageSha256,
-      packagePath: absolutePath(environment.WASALX_PACKAGE_PATH ?? "/app/artifacts/wasalx-0.5.90.zpm"),
+      packagePath: absolutePath(environment.WASALX_PACKAGE_PATH ?? "/app/artifacts/wasalx-0.5.91.zpm"),
 
     };
   }
